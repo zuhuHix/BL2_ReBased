@@ -6,7 +6,7 @@ implements the note). The decision number is pending from the hub (three digits)
 **What:** `docs/verification/NATIVE_COPY_COMPONENT_PASS.md` (new) and one row in `docs/verification/NATIVE_INDEX.md`.
 NATIVE_COPY_ANIM_TREE.md (#551 at 4a363c0c) section 2 step 5 left these steps unread, and NATIVE_SET_SKELETAL_MESH.md
 (#583 at 231bbaed) does not read them either. The lane was first briefed to implement the step, then switched to
-analyst when no note gave the rule (hub, 2026-11-20).
+analyst when no note gave the rule (hub, 2026-11-19).
 
 **Sources:**
 - the script (the native `InitSkelControls` only);
@@ -38,9 +38,25 @@ This is a reading of the data, not a saved oracle.
 **Proposed Off answer:**
 - a write-free preflight, with #569's layer refusals unchanged;
 - a NotPorted refusal for a non-empty `MorphSets`;
-- NotRead refusals for more than 255 lists and for a looping chain;
+- NotRead refusals for more than 255 lists and for a template control whose `ControlTickTag` equals the component's
+  next control tag (`TickTag` + 2), parallel to #561's `TAG_COLLISION`;
 - `VmError::Script` for a missing or mistyped field;
-- the writes in the note's order, and 13 tests on invented skeletons.
+- the writes in the note's order, `InitTag` and the two per-node arrays included, and 15 tests on invented skeletons.
+
+**Review r1 of #598, folded in** (all UNVERIFIED):
+1. The loop refusal is dropped: #561's copy gather (`controls()`, #557's chain rule) already refuses a looping chain
+   as `VmError::Script` before the first write, so this step never sees one. Test 9 now checks that.
+2. The preflight walks the template's lists and controls through the copy plan (one to one, slot values kept), from
+   their saved `ControlTickTag`s. The new control tag is the component's `TickTag` + 2. A collision with it is refused
+   (`NotYet { NotRead }`, tested), so no control is dropped silently. Test 6 now covers only a tag set earlier in the
+   same build.
+3. The note names both refusals this replaces: #575's `COMPONENT_PASS` (`NotRead`) and `BONE_ARRAYS` (`LayerAbsent`,
+   `MESH_LAYER`).
+4. A post-physics control is tagged and listed before its chain's walk stops, and the stop applies whether or not it
+   was newly listed. Test 7 covers a shared post-physics control.
+5. `InitTag` and the two per-node arrays are this lane's writes, placed before #575's per-node loop: #561 and #575
+   write neither.
+6. Dates: 2026-11-19 throughout.
 
 Maya's next stop is then #551 rule 4, the owner's event.
 

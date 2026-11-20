@@ -1,4 +1,4 @@
-# The tree initialisation's last steps: the component pass and the per-bone control arrays (2026-11-20)
+# The tree initialisation's last steps: the component pass and the per-bone control arrays (2026-11-19)
 
 AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-COPY-COMPONENT-PASS (decision 2026-11-19-NNN, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented earlier, unrelated slice
@@ -118,9 +118,12 @@ has none.
       - **listed once:** if its `ControlTickTag` is not the component's `TickTag`, it is set to it and the control is
         appended to `SkelControlTickArray`. A control reached a second time (shared by two chains) is not appended
         again, and a control whose tag already equals the new `TickTag` is not appended either;
-      - **post-physics:** if `bPostPhysicsController` is set, `PostPhysSkelControlIndex` is first given one byte per
-        bone, every one 255, unless it already has entries. Then `PostPhysSkelControlIndex[bone]` = i and **the walk of
-        this chain stops**, so controls after the first post-physics one are not tagged or listed.
+      - **post-physics:** the tag-and-list step above comes first, so the post-physics control itself is tagged and
+        listed (once, as any other control). Then, if its `bPostPhysicsController` is set, `PostPhysSkelControlIndex` is
+        first given one byte per bone, every one 255, unless it already has entries, and
+        `PostPhysSkelControlIndex[bone]` = i. **The walk of this chain then stops**, whether or not that control was
+        newly listed (a post-physics control shared with an earlier chain stops this one too), so the controls after
+        it are not tagged or listed.
 7. The bone index is checked against the array's length (an engine assertion). The lookup never gives a bone outside
    the mesh, so this cannot fail on consistent data.
 
@@ -150,7 +153,9 @@ one `TickTag` step. Nothing is loaded. No script runs, nothing random is drawn, 
 
 ## 6. Proposed Off answer (for a separate implementer)
 
-**Every rule below is UNVERIFIED.** It replaces the refusal #575's implementation raises for #551 section 2 step 5.
+**Every rule below is UNVERIFIED.** It replaces the two refusals #575's implementation raises for #551 section 2
+step 5, and the implementer removes both: `COMPONENT_PASS` (`NotYet { NotRead }`) and `BONE_ARRAYS` (`NotYet
+{ LayerAbsent }` with `body_composition::MESH_LAYER`).
 It runs after #566's per-node initialisation and before #551's rule 4 (the owner's event). Like the rest of #551's
 answer, it is planned in the preflight, which writes and loads nothing, and written only after the whole preflight
 passed.
@@ -172,27 +177,46 @@ passed.
    - each list's `BoneName` must be a name and its `ControlHead` an object reference or None, else `VmError::Script`.
      Names are looked up with `ReferenceSkeleton::bone_index`, as NATIVE_PER_BONE_WEIGHTS.md section 6 does. A None
      name finds nothing;
-   - each control reached must be resident (it is one of #551's copies) and must have the three control fields with
-     their kinds, else `VmError::Script`;
-   - **a chain that reaches a control twice:** `NotYet { NotRead }`, "the per-bone control arrays: a NextControl
-     chain that loops". The engine's walk would not end; no installed tree is known to have one. A control shared by
-     two different chains is fine.
+   - **when it runs:** the copies and the new `Animations` exist only in #561's write phase, so the preflight walks
+     the **template's** `SkelControlLists` and controls, read through the copy plan. The plan maps each template
+     control to its copy one to one (`NextControl` included), and a copy keeps its template's slot values, so the
+     template's `BoneName`s, chains, `bPostPhysicsController`s and saved `ControlTickTag`s are what the copies will
+     hold. The simulated tags start from those saved values. The new control tag is the component's `TickTag` + 2:
+     #551 step 3 raises it once and section 4 step 5 once more. The writes then go to the copies;
+   - each template control reached must have the three control fields with their kinds, else `VmError::Script`.
+     Residency is #561's: its gather already checks every control it reaches;
+   - **a template control whose `ControlTickTag` equals the component's next control tag** (`TickTag` + 2):
+     `NotYet { NotRead }`, "the per-bone control arrays: a template control whose ControlTickTag equals the
+     component's next control tag (how the game keeps the copies' tags apart was not read)". It parallels #561's
+     `TAG_COLLISION` for nodes: the copy keeps the saved tag, so the tag rule would skip the control and it would be
+     dropped from the tick list silently;
+   - **a looping chain needs no refusal here.** #561's copy gather (`controls()` in `anim_tree_copy.rs`, #557's chain
+     rule) already walks every chain of every `SkelControlLists` entry before the first write, and refuses a control
+     reached twice within one chain as `VmError::Script`. A tree that reaches this step has no loop. A control shared
+     by two different chains is fine.
 
    The preflight walks the lists with the rule of section 4, simulating the tags, so it knows every write before the
    first one.
 
-**Writes, in order** (only when the whole preflight passed):
-1. `SkelControlIndex`, `PostPhysSkelControlIndex` and `SkelControlTickArray` emptied;
-2. when the build runs:
+**Writes, in order** (only when the whole preflight passed). #561 and #575 write neither `InitTag` nor the two
+per-node arrays, so they are this lane's writes too, at the places section 1 found them:
+1. **before #575's per-node loop** (#551 step 4):
+   - `InitTag` = the root's `NodeInitTag` + 1, the root being the new `Animations`. In the engine it comes before the
+     tick list (#551 step 3). Neither the tick list nor the per-node loop reads `InitTag` (by fit, UNVERIFIED), so
+     writing it after the tick list and before the loop gives the same values;
+   - `AnimTickRelevancyArray` = n zeros and `AnimTickWeightsArray` = n entries of 0.0, n being the tick list's
+     length (each emptied first);
+2. after the per-node loop: `SkelControlIndex`, `PostPhysSkelControlIndex` and `SkelControlTickArray` emptied;
+3. when the build runs:
    - `SkelControlIndex` = bone count × 255;
    - `TickTag` + 1;
    - per list as section 4 says: the index byte, each newly tagged control's `ControlTickTag` and its append, and
      `PostPhysSkelControlIndex` (sized to bone count × 255 on its first use, then the entry).
 
-The component pass writes nothing for an empty `MorphSets` (the port keeps no map). The writes found on the way
-(section 1: `InitTag`, the two per-node arrays) belong to #551's steps 2 to 4, and their implementer should add them
-there. **Port convention, UNVERIFIED:** `AnimTickWeightsArray`'s n entries hold 0.0, because the engine does not set
-them at that point.
+The component pass writes nothing for an empty `MorphSets` (the port keeps no map). The preflight checks that
+`InitTag`, `AnimTickRelevancyArray` and `AnimTickWeightsArray` exist with the kinds of the field list above, else
+`VmError::Script`, and that the root has a `NodeInitTag`. **Port convention, UNVERIFIED:** `AnimTickWeightsArray`'s n
+entries hold 0.0, because the engine does not set them at that point.
 
 **The counters.** These are heap writes under #518. Every refusal above is raised in the preflight, before the
 initialisation's first write, so none of them takes the "stopped after partial writes: " prefix.
@@ -208,17 +232,23 @@ counter unchanged):
 3. two lists on one bone: the first list's index; the second list's controls neither tagged nor listed;
 4. a None `BoneName` and a name not in the skeleton: those lists skipped, the later lists keep their own indices;
 5. one control shared by two chains: listed once;
-6. a control whose `ControlTickTag` already equals the new `TickTag`: walked but not listed;
-7. a post-physics control in the middle of a chain: `PostPhysSkelControlIndex` = bone count × 255 with that bone's
-   entry = the list index, and the controls after it not listed. A second post-physics list keeps the earlier
-   entries;
+6. a control whose tag was set earlier in the same build (a control shared with an earlier chain): walked but not
+   listed again;
+7. a post-physics control in the middle of a chain: it is tagged and listed, `PostPhysSkelControlIndex` = bone
+   count × 255 with that bone's entry = the list index, and the controls after it not listed. A second post-physics
+   list keeps the earlier entries. A post-physics control shared with an earlier chain: not listed again, the later
+   list's bone still gets its `PostPhysSkelControlIndex` entry, and that chain's walk still stops there;
 8. 256 lists: the byte-limit refusal, nothing written;
-9. a looping chain: the loop refusal, nothing written;
+9. a looping chain is still refused by the copy's gather (`VmError::Script`), nothing written;
 10. a non-empty `MorphSets`: the NotPorted refusal before any write; an empty one: no write;
 11. #569's refusals (a cold mesh, a mesh that is not a `SkeletalMesh`) passed through unchanged;
 12. Maya-shaped: 27 invented bone names, 4 lists and 5 controls arranged as section 5 describes, giving section 5's
     three arrays;
-13. Reference binds nothing new.
+13. Reference binds nothing new;
+14. a template control whose `ControlTickTag` equals the component's `TickTag` + 2: the collision refusal, nothing
+    written;
+15. `InitTag` = the root's `NodeInitTag` + 1, and the two per-node arrays at the tick list's length (zeros, and 0.0),
+    stale entries removed, written before the per-node loop.
 
 ## 7. Maya's next stop
 
