@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-TREE-INIT-OWNER-EVENT (decision 2026-11-19-NNN, number pending). The script natives
+//! Owner: lane IMPL-TREE-INIT-OWNER-EVENT (decision 2026-11-19-254, number pending). The script natives
 //! `SkeletalMeshComponent.FindAnimNode(name)` and `FindSkelControl(name)` in `ParityMode::Off`, read-only, on the
 //! component's own (instanced) tree. AI-assisted (Claude Code).
 //!

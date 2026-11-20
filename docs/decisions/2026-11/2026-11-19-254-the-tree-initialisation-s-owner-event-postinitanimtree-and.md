@@ -116,3 +116,5 @@ Every rule is still UNVERIFIED.
    toolkit has no tested form of, and unguarded it would read a None context in the tests where `BodyClass` is None.
 
 Every rule is still UNVERIFIED.
+
+Landing (hub ruling, 2026-11-20): #641 (landed first) declares `ParentAnimComponent` in `ow-world`'s body composition test fixture as well, so the class loader refused the fixture with two declarations; this lane's duplicate declaration is dropped and its comment ("The initialisation's own gate") moved onto the one declaration. Test fixture only; no rule change.
