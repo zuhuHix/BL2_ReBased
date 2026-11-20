@@ -1,6 +1,6 @@
 # The body composition's socket and bone tables (2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODYCOMP-SOCKET-BONE-TABLES (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODYCOMP-SOCKET-BONE-TABLES (decision 2026-11-19-244, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented #618 and the copy pass
 (#608), which come before this step; those are different rules. It implements nothing here.
 
