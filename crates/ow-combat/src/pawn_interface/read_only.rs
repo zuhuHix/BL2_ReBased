@@ -224,7 +224,8 @@ fn controller_steps(
 /// The leaf name of interface class `iface` (a plain read; a class with no layout is `NotRead`).
 fn interface_name(vm: &Vm, iface: ClassId) -> Result<String, VmError> {
     let Some(layout) = vm.space.classes.get_layout(iface) else {
-        return Err(NotYet::not_read(format!("the interface class {iface:?} is not resolved at set-up"), RECORD).into());
+        // A read-only-only refusal: the dispatch's record (review r2 of #648).
+        return Err(NotYet::not_read(format!("the interface class {iface:?} is not resolved at set-up"), ow_vm::api::DISPATCH_RECORD).into());
     };
     let path = layout.path().to_string();
     Ok(path.rsplit_once('.').map_or(path.clone(), |(_, leaf)| leaf.to_string()))
@@ -242,7 +243,8 @@ pub fn field(vm: &Vm, o: ObjRef, name: &str, who: &str) -> Result<Option<ObjRef>
     if vm.defs.is_unloaded(&vm.space, o) {
         return Err(NotYet::not_read(
             format!("{who}'s QueryInterface reads {name} of an unloaded {}: reading it is a load", class_path(vm, class)),
-            RECORD,
+            // A read-only-only refusal: the dispatch's record (review r2 of #648).
+            ow_vm::api::DISPATCH_RECORD,
         )
         .into());
     }

@@ -25,6 +25,13 @@ use crate::error::VmError;
 /// The record of the read-only rules.
 pub const READ_ONLY_RECORD: &str = "docs/verification/NATIVE_GEARBOXMIND_QUERYINTERFACE.md";
 
+/// The record of the read-only dispatch's **own** refusals (review r2 of #648): an unloaded receiver, a rule with no
+/// read-only form, an interface-table entry not resolved yet, and a world with no code layer. Each is a place where
+/// the ordinary dispatch may load or resolve and answer, so a caller that asks read-only ahead of the ordinary path
+/// can tell them from a rule's own refusal, which carries its rule's record.
+pub const DISPATCH_RECORD: &str =
+    "docs/verification/NATIVE_GEARBOXMIND_QUERYINTERFACE.md, section 5 (the read-only dispatch's own refusals)";
+
 impl Vm {
     /// Binds `class`'s read-only `QueryInterface` answer, and the same rule as its ordinary answer
     /// ([`Vm::register_interface_rule`]), which runs it with the running chain's questions as its guard. A class with
@@ -85,7 +92,7 @@ impl Vm {
                     self.path_of(own)
                 ),
                 "the code layer (package class exports)",
-                READ_ONLY_RECORD,
+                DISPATCH_RECORD,
             )
             .into());
         }
@@ -106,7 +113,7 @@ impl Vm {
                     "the interface table of {} has an entry not resolved at set-up (resolving it is a load)",
                     code.class(at).path
                 ),
-                READ_ONLY_RECORD,
+                DISPATCH_RECORD,
             )
             .into()),
         }
@@ -143,7 +150,7 @@ impl Vm {
             if self.interface_rules.contains_key(&c) {
                 return Err(NotYet::not_ported(
                     format!("{}'s QueryInterface rule is not ported read-only", self.path_of(c)),
-                    READ_ONLY_RECORD,
+                    DISPATCH_RECORD,
                 )
                 .into());
             }
@@ -188,7 +195,7 @@ fn refuse_unloaded(vm: &Vm, this: ObjRef) -> Result<(), VmError> {
                 vm.path_of(class),
                 vm.space.names.text(vm.space.heap.get(this)?.name)
             ),
-            READ_ONLY_RECORD,
+            DISPATCH_RECORD,
         )
         .into());
     }

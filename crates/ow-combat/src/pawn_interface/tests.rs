@@ -250,12 +250,13 @@ impl Env {
     }
 }
 
-/// A `NotYet { NotRead }` of `Controller`'s read-only rule naming `words`.
+/// A `NotYet { NotRead }` of the read-only dispatch's own, met through `Controller`'s read-only rule, naming `words`
+/// (its record is the dispatch's since review r2 of #648).
 fn not_read_gm(r: Result<Option<ObjRef>, VmError>, words: &str) {
     match r {
         Err(VmError::NotYet(n)) => {
             assert_eq!(n.missing, Missing::NotRead, "{n}");
-            assert_eq!(n.record, read_only::RECORD);
+            assert_eq!(n.record, ow_vm::api::DISPATCH_RECORD);
             assert!(n.what.contains(words), "{n}");
         }
         other => panic!("expected NotYet naming {words:?}, got {other:?}"),

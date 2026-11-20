@@ -1011,9 +1011,10 @@ fn the_store_path_is_reported_before_the_provider_guard() {
 // Lane PREFLIGHT-ORDER-LINK9-CAST: the AI component resolver's question, asked read-only before the first write
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The invented open answer's text and record.
+/// The invented open answer's text, and the record the real read-only rules carry (review r2 of #648: the same
+/// string as `ow_vm::api::READ_ONLY_RECORD`, so the filter must not drop it).
 const OPEN: &str = "Toy.AIPawn's invented open QueryInterface answer is not read";
-const OPEN_RECORD: &str = "an invented record";
+const OPEN_RECORD: &str = ow_combat::pawn_interface::read_only::RECORD;
 
 /// How a `Toy.AIPawn`'s read-only rule answers.
 #[derive(Clone, Copy)]
@@ -1035,7 +1036,7 @@ fn ai_pawn(x: &mut Fx, answer: Answer, ordinary_only: bool) -> ObjRef {
             Answer::Yes => Ok(Some(this)),
             Answer::No => Ok(None),
             Answer::Open => Err(ow_core::NotYet::not_read(OPEN, OPEN_RECORD).into()),
-            Answer::DispatchOwn => Err(ow_core::NotYet::not_read("an invented entry not resolved", ow_vm::api::READ_ONLY_RECORD).into()),
+            Answer::DispatchOwn => Err(ow_core::NotYet::not_read("an invented entry not resolved", ow_vm::api::DISPATCH_RECORD).into()),
         }
     };
     if ordinary_only {
@@ -1121,4 +1122,24 @@ fn an_open_context_does_not_refuse_other_chains() {
     let e = x.evaluator(&[(0, Some(first)), (0, Some(cold))], 1);
     assert!(!x.eval(e, Some(pawn)).unwrap());
     assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the cold definition stays unloaded");
+}
+
+/// Review r2 of #648, item 2 (guarding r1's item 1): on a context whose answer is open, a cold receiver and a reached
+/// definition not loaded yet, neither naming the AI resolver, are not refused with the open answer.
+#[test]
+fn cold_receivers_and_definitions_are_not_preflighted() {
+    let mut x = fx_all(true, None, true);
+    let pawn = ai_pawn(&mut x, Answer::Open, false);
+    let cold = x.cold_evaluator();
+    if let Err(VmError::NotYet(n)) = x.eval(cold, Some(pawn)) {
+        assert!(!n.what.contains(OPEN), "{n}");
+    }
+    let mut x = fx();
+    let pawn = ai_pawn(&mut x, Answer::Open, false);
+    let held = x.held("Held");
+    let e = x.evaluator(&[(0, Some(held))], 0);
+    if let Err(VmError::NotYet(n)) = x.eval(e, Some(pawn)) {
+        assert!(!n.what.contains(OPEN), "{n}");
+    }
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, held), "the definition was reached and loaded, not preflighted");
 }

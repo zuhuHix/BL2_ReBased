@@ -13,7 +13,8 @@ from the hub; NNN is a placeholder.
   that question through the read-only dispatch #602 added (`Vm::query_interface_read_only`). It asks only for a
   reached, resident definition with a context whose chain's first set entry (None entries skipped) is the AI
   component resolver. Only a rule's own `NotYet` is returned, text and kind kept: one whose record is not the
-  read-only dispatch's (`ow_vm::api::READ_ONLY_RECORD`, now re-exported). So an open answer refuses before any write
+  read-only dispatch's own (`ow_vm::api::DISPATCH_RECORD`, new in review r2 of #648: the rules share
+  `READ_ONLY_RECORD`, so filtering on that dropped them). So an open answer refuses before any write
   and is not marked.
 - **Left to the dispatch** (review r1 of #648), where a refusal stays marked as before:
   - a cold receiver or a definition not loaded yet: their chains are unknown, and asking anyway refused player
@@ -21,19 +22,22 @@ from the hub; NNN is a placeholder.
   - a chain that does not read as resolvers (the reads after the load report it);
   - an answer, yes or no, since the resolver asks again when it runs;
   - the read-only dispatch's own refusals (an entry not resolved yet, an unloaded stand-in, no code layer, a rule
-    with no read-only form): the ordinary path may load and answer there;
+    with no read-only form), now under `DISPATCH_RECORD` in `ow-vm`'s `interface_read_only.rs`, and the two
+    read-only-only refusals of `ow-combat`'s `pawn_interface/read_only.rs` (an unloaded object's field, an interface
+    class with no layout), which carry it too: the ordinary path may load and answer there;
   - any other error;
   - an `IAIInterface` class that is not loaded;
   - an AI component resolver after another resolver, which asks a context the earlier resolvers have changed;
   - a nested evaluator, which checks its own definitions.
 - **GearboxMind's answer is not invented.** #602 (decision 2026-11-19-238) answers it read-only now. This lane only
   asks the existing dispatch earlier.
-- **Verified by:** three `ow-skills` tests on invented classes with an invented rule:
+- **Verified by:** four `ow-skills` tests on invented classes with an invented rule:
   - an open answer refuses before the first write, its text unmarked, with #518's three counters and the name
     table's length unchanged and the resolver not run, also after a leading None entry;
   - a bound answer (yes or no), a rule with no read-only form, and a refusal carrying the dispatch's record each go
     through, and the resolver runs;
-  - on an open context, a chain without the AI resolver answers as before, a later AI resolver entry is left to the
+  - on an open context carrying the real rules' record, a chain without the AI resolver answers as before, a cold
+    receiver and a reached unloaded definition are not refused with the open answer, a later AI resolver entry is left to the
     dispatch, and a short-circuited cold definition stays unloaded with no refusal.
   The slice result is in the GATES row.
 - **UNVERIFIED** in the running game, as every rule is. These are the port's choices, not readings:

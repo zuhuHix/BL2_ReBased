@@ -45,7 +45,7 @@ use crate::error::VmError;
 
 #[path = "interface_read_only.rs"]
 mod interface_read_only;
-pub use interface_read_only::READ_ONLY_RECORD;
+pub use interface_read_only::{DISPATCH_RECORD, READ_ONLY_RECORD};
 use crate::services::Services;
 
 // ---------------------------------------------------------------------------------------------------------------

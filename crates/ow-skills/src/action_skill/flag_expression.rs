@@ -573,8 +573,8 @@ fn may_ask_ai_first(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
 /// The preflight of the AI component resolver's first question (lane PREFLIGHT-ORDER-LINK9-CAST): the context's
 /// `QueryInterface(IAIInterface)` through the read-only dispatch ([`Vm::query_interface_read_only`]), before the next
 /// load, so a question with no bound answer refuses before the evaluator's first write rather than after it. Only a
-/// rule's own `NotYet` is returned, text and kind kept: one whose record is not the read-only dispatch's
-/// ([`ow_vm::api::READ_ONLY_RECORD`]). The dispatch's own refusals (an entry not resolved yet, an unloaded stand-in,
+/// rule's own `NotYet` is returned, text and kind kept: one whose record is not the read-only dispatch's own
+/// ([`ow_vm::api::DISPATCH_RECORD`]; the rules keep their records, review r2 of #648). The dispatch's own refusals (an entry not resolved yet, an unloaded stand-in,
 /// no code layer, a rule with no read-only form) are where the ordinary path may load and answer, so they are left to
 /// it (review r1 of #648, item 2), as are an answer, any other error, and an interface class that is not loaded.
 fn ai_question(vm: &Vm, context: ObjRef) -> Result<(), VmError> {
@@ -582,7 +582,7 @@ fn ai_question(vm: &Vm, context: ObjRef) -> Result<(), VmError> {
         return Ok(());
     };
     match vm.query_interface_read_only(&mut ow_vm::api::InterfaceAsking::default(), context, iface) {
-        Err(VmError::NotYet(n)) if n.record != ow_vm::api::READ_ONLY_RECORD => Err(n.into()),
+        Err(VmError::NotYet(n)) if n.record != ow_vm::api::DISPATCH_RECORD => Err(n.into()),
         _ => Ok(()),
     }
 }

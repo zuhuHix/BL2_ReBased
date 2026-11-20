@@ -132,10 +132,15 @@ read-only, so the preflight passes and the cast reaches that call. The old "afte
 on this base. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN; logs under ignored `local/p2/link9-preflight/`. **Review r1 of #648:** the preflight now asks only for a resident
 definition whose first set resolver is the AI component resolver, and passes on only a rule's own `NotYet` (not one
-with `ow_vm::api::READ_ONLY_RECORD`, now re-exported). `cargo test -p ow-skills --lib flag_expression` 23 passed / 0
+with the read-only dispatch's own record). `cargo test -p ow-skills --lib flag_expression` 23 passed / 0
 failed; `cargo test -p ow-vm -p ow-skills -j 2` 371 passed / 0 failed / 2 ignored; clippy: no warning in the touched files. Off `--slice-gate`
 strict: 4 ok / 9 NotYet / 1 error, each of the 14 links the same result and first stop as main 241a6c4 built the same
-way.
+way. **Review r2 of #648:** the dispatch's own refusals get `ow_vm::api::DISPATCH_RECORD` (`ow-vm`
+`interface_read_only.rs`, and two read-only-only refusals in `ow-combat` `pawn_interface/read_only.rs`), since the
+rules share `READ_ONLY_RECORD`; the filter now keeps the rules' refusals. `cargo test -p ow-vm -p ow-combat -p
+ow-skills -j 2 --no-fail-fast` 642 passed / 0 failed / 4 ignored; clippy: no warning in the touched files. Off `--slice-gate` strict, release build under the lock, on main b9dfca8b
+with this branch merged in: 4 ok / 10 NotYet / 0 error, each of the 14 links the same result and first stop as
+b9dfca8b alone built the same way (link 9: `cast`, the unloaded `PawnAttributeContextResolver_0` handle).
 
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
