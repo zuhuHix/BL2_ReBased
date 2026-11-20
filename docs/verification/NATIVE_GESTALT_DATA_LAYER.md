@@ -43,6 +43,11 @@ itself. Its members, in declared order:
 | `GestaltPartMatricesContainer` | `GestaltPartMatrices` reference |
 | `ReferencePoseBounds` | `BoxSphereBounds` (`Origin`, `BoxExtent`, `SphereRadius`) |
 
+The orders in this table, and in each nested struct, are the declared ones from the layout tool, and the code's
+offsets follow them. #588's member list and #591's struct fields were not in declared order: #588 puts
+`ReferencePoseBounds` before `GestaltPartMatricesContainer`, and #591 lists the fragment and accessory fields in other
+orders.
+
 **The match is by offset, not by position.**
 - Both natives address the container from one fixed base in the component. Every write and every copied member
   falls at the offset the tool computes for one member, with that member's size.
@@ -66,7 +71,8 @@ The routine, with G the gestalt definition and N the name list, in order:
 3. **`LODModelData` := empty**, nested fragment arrays included.
 4. **`SocketMappings` := empty.**
 5. **G's `GestaltSkeletalMesh` None: stop here.** The bounds, the accessory list and the matrices object are left as
-   they were.
+   they were. No bound native reaches this branch: `BuildCompositeMesh` calls the routine only on its gestalt path,
+   where that mesh is set, and `InitGestaltMeshDataFromParts` stays unbound (no script calls it, section 4).
 6. **`LODModelData` := one empty `GestaltLODModel` per entry of G's `GestaltInfos`**, the same count and order.
 7. **`ReferencePoseBounds` := a constant start.**
    - `Origin` and `BoxExtent` both take one engine constant vector. It is held in data that is zero in the image and
@@ -89,15 +95,27 @@ The routine, with G the gestalt definition and N the name list, in order:
       `SkeletalMeshFragmentName` equals n:
       - **the current `SphereRadius` not above 0:** `ReferencePoseBounds` := that entry's `ReferencePoseBounds`,
         whole;
-      - **otherwise, the union:**
-        - each box is taken as the per-axis minimum and maximum of `Origin − BoxExtent` and `Origin + BoxExtent`, so
-          a negative extent still gives a box. The new box is their union;
-        - the new `Origin` is its centre, and the new `BoxExtent` its half size;
-        - the new `SphereRadius` is the smaller of the new box's half diagonal (the length of the new `BoxExtent`)
-          and the larger of (the old origin's distance to the new origin + the old radius) and (the entry origin's
-          distance to the new origin + the entry radius).
+      - **otherwise, the union** (below).
 
-        All of it is single-precision float with square roots. This is the stock UE3 bounds sum.
+**The union, in operation order.** The current bounds are origin O, extent E and radius R; the entry's are origin P,
+extent F and radius S. Each line is per axis, and every operation is single precision: the code uses scalar SSE
+throughout, and its three roots are single-precision square roots.
+1. `lo := min(O − E, O + E)` and `hi := max(O − E, O + E)`.
+2. Fold in `P − F`, then `P + F`: `lo := min(lo, ·)` and `hi := max(hi, ·)`.
+3. `h := (hi − lo) × 0.5` (the half size), then `c := h + lo` (the centre, in that form).
+4. The new `BoxExtent` is h and the new `Origin` is c.
+5. `D := sqrt((h.y·h.y + h.x·h.x) + h.z·h.z)`: the squares are summed y, x, z, as the expression orders them.
+6. `A := sqrt(((O.y − c.y)² + (O.x − c.x)²) + (O.z − c.z)²) + R`.
+7. `B := sqrt(((P.y − c.y)² + (P.x − c.x)²) + (P.z − c.z)²) + S`.
+8. `M := A` when `B ≤ A`, else `B`.
+9. The new `SphereRadius` is `M` when `M < D`, else `D`.
+
+**Which rule this is.** The binary shows a **normalised per-axis box**: the minimum and maximum of both ends on each
+axis. That equals the stock UE3 bounds sum whenever no extent is negative, and differs from it only when one is.
+
+**For the port.** Form each sum in f32. Take the root through `ow_core::num::sqrt_f64` and cast it back to f32, as
+`ow-world` `placement.rs` `box_cylinder` does (rule N3). A double-precision root of an f32 value, rounded to f32, gives
+the correctly rounded single-precision root. Bit parity with the game is still **UNVERIFIED**.
 
 **Untouched by the fill:** `GestaltAccessoryList` and `GestaltPartMatricesContainer` (the accessory natives' state; not
 read here). **Loads:** none. G is read as it is in memory, and only allocations happen. **Draws:** none.
@@ -147,19 +165,41 @@ and draw-free, in this order; the first failure is the answer:
 1. **C's slot:**
    - C's class declares `GestaltData` as a `GestaltDataContainer`, with the seven members of section 1 at their
      declared types, nested structs included. Otherwise a `VmError::Script` naming the member;
-   - the slot is held whole, otherwise `NotYet { NotRead }`, "WillowWeapon.BuildCompositeMesh: the component's
-     GestaltData is not held whole (a decode is a write)" (refusal F1).
+   - **refusal F1, the slot held whole.** It has three named sub-cases, matching #596's `held_whole`
+     (`crates/ow-inventory/src/gestalt.rs` at 79a87949):
+     - **F1(i)**, a store definition whose slots were never decoded (slotless, and `is_loaded`): `NotYet { NotRead }`,
+       #596's `NOT_DECODED` reading, here "BuildCompositeMesh: a component whose properties the store has not decoded
+       (a decode is a write)";
+     - **F1(ii)**, a slotless stand-in that never loads (slotless, not a loaded definition). **Hub ruling on #603:**
+       once the layer exists, it gets #596's `STAND_IN` refusal, `NotYet { NotRead }`, "an object the store cannot
+       load", in both natives: "BuildCompositeMesh: a definition that is a stand-in with no properties (an object the
+       store cannot load)" here, and the copy's text below. It never gets the "a decode is a write" text. Until the
+       layer exists it stays `LayerAbsent(GESTALT_LAYER)`, as #596 has it today;
+     - **F1(iii)**, a slot that is present but incomplete or of the wrong shape (#596's `complete` false): a
+       `VmError::Script` naming `GestaltData`, "BuildCompositeMesh: the component's GestaltData does not match its
+       declaration". The declaration was checked just before. A resident object's slot is written only through the
+       heap's own write rules and decoded through `to_value`, so a slot that does not match is malformed data, not a
+       missing layer or an unread rule.
+     - Order: F1 comes before F2.
 2. **G's arrays:**
    - `GestaltSkeletalMesh` (an object);
    - `GestaltInfos` (an array of `GestaltInfo`, each `Parts`, an array of `GestaltPart` with a name
      `SkeletalMeshFragmentName` and the ints `MaterialIndex`, `FirstIndex` and `NumPrimitives`);
    - `GestaltSocketMappings` (entries with the names `SkeletalMeshFragmentName`, `OriginalSocketName` and
      `MangledSocketName`);
-   - `GestaltPartBounds` (entries with a name `SkeletalMeshFragmentName` and a `BoxSphereBounds`).
+   - `GestaltPartBounds` (entries with a name `SkeletalMeshFragmentName` and a `BoxSphereBounds` named
+     `ReferencePoseBounds`).
 
-   A wrong declaration is a `VmError::Script` naming the field. Arrays the heap does not hold decoded are
-   `NotYet { NotRead }`, "WillowWeapon.BuildCompositeMesh: the gestalt definition's arrays are not decoded (a decode
-   is a write)" (refusal F2).
+   A wrong declaration is a `VmError::Script` naming the field.
+
+   **Refusal F2: undecoded definition arrays.** The heap value alone cannot show that an array was not decoded.
+   `ow-object` `to_value` puts a struct's defaults over any field that does not type, so a nested `Parts` left raw by
+   the package walker lands in the heap as an empty array. The signal is the walk itself. Each of G's three arrays
+   must have decoded from its tag with no `PropValue::Raw` (or delegate) anywhere in its tree. That is the test
+   `ow-items` `registry.rs` (`decode_from`) applies to the package walker's entries, and reading the package's tags
+   is write-free. Failing it is `NotYet { NotRead }`, "BuildCompositeMesh: the gestalt definition's arrays did not
+   decode whole (a decode is a write)" (F2). The store's own per-property decode outcome would serve as well, if the
+   store exposes one; on main it does not.
 3. **The start constant:** the zero vector, as a port input labelled UNVERIFIED (section 2, step 7). No refusal.
 4. **The new value:** section 2's steps worked out on a copy of C's current value. `GestaltAccessoryList` and
    `GestaltPartMatricesContainer` are kept; when G's `GestaltSkeletalMesh` is None, so are the bounds. Floats go
@@ -170,13 +210,27 @@ and draw-free, in this order; the first failure is the answer:
 runs between those writes, so one atomic write leaves the same state. Then #588's answer (the shared mesh) is
 returned.
 
-**The copy** (`InitGestaltMeshDataFromOther`): #591 section 5 as it stands. Its check 4 ("both slots held whole") uses
-the same test as refusal F1, with the text "SkeletalMeshComponent.InitGestaltMeshDataFromOther: a GestaltData slot
-is not held whole (a decode is a write)". Its write is one whole-slot copy.
+**The copy** (`InitGestaltMeshDataFromOther`): #591 section 5 as it stands. Its check 4 ("both slots held whole") runs
+F1's three sub-cases on the receiver and then on the argument, with #596's prefix:
+- F1(i): #596's `NOT_DECODED`, "InitGestaltMeshDataFromOther: a component whose properties the store has not decoded
+  (a decode is a write)";
+- F1(ii): "InitGestaltMeshDataFromOther: a component that is a stand-in with no properties (an object the store cannot
+  load)", `NotRead` (the hub's ruling; `LayerAbsent(GESTALT_LAYER)` until the layer exists);
+- F1(iii): a `VmError::Script`, "InitGestaltMeshDataFromOther: a GestaltData slot that does not match its
+  declaration".
 
-**Records:** F1, F2 and the copy's text use the record `docs/verification/NATIVE_GESTALT_DATA_LAYER.md`. #588's and
-#591's own refusals keep their texts and records. #596's two `LayerAbsent` refusals are removed once the layer
-exists.
+Its write is one whole-slot copy. The self-copy keeps #591's rule: success with nothing written, before check 4.
+
+**What goes away in #596's `gestalt.rs` when the layer lands.** Four `LayerAbsent(GESTALT_LAYER)` sites:
+- the fill's answer (`build_composite_mesh`'s gestalt path);
+- the copy's answer (`init_gestalt_mesh_data`'s last line);
+- the two inside `held_whole`: the slotless stand-in (it becomes F1(ii)'s `NotRead`) and the incomplete slot (it
+  becomes F1(iii)'s data error).
+
+`MERGE_LAYER` (the merge of two or more meshes) stays.
+
+**Records:** F1(ii), F1(iii) and F2 use the record `docs/verification/NATIVE_GESTALT_DATA_LAYER.md`. F1(i) and
+#596's `STAND_IN` keep #596's texts and records, as do #588's and #591's own refusals.
 
 **The counters:** both natives refuse only before their single write, so they never mark a refusal "stopped after
 partial writes: "; the caller's earlier writes can (#518's counters).
@@ -194,14 +248,25 @@ partial writes: "; the caller's earlier writes can (#518's counters).
      distance sum is;
    - a negative extent handled;
    - exact single-precision results.
-3. **`GestaltSkeletalMesh` None:** names and mesh written, both arrays emptied, bounds and the other two members
-   kept.
+3. **`GestaltSkeletalMesh` None**, by calling the fill routine directly (no bound native reaches it, and
+   `InitGestaltMeshDataFromParts` stays unbound): names and mesh written, both arrays emptied, bounds and the other two
+   members kept.
 4. **No match at all:** empty fragment lists per LOD, no mappings, bounds at the start constant with radius 0.
-5. **The refusals:** F1, F2 and a wrong member declaration, each before any write, with #518's three counters
-   unchanged.
-6. **The copy:** after a fill, `InitGestaltMeshDataFromOther` gives an equal value, the two references the same
-   objects; and F1's copy text for a slot not held whole.
-7. **Reference** binds nothing.
+5. **The refusals,** each before any write, with #518's three counters unchanged:
+   - F1(i), F1(ii) and F1(iii);
+   - F2, including a definition whose nested `Parts` stays raw in the walk: it must refuse F2, not fill empty
+     fragments;
+   - a wrong member declaration;
+   - F1 and F2 both failing: F1 wins.
+6. **A refill:** a second fill on the same component replaces the LOD and socket data, and the bounds restart from
+   the start constant.
+7. **A first matching bounds entry with radius ≤ 0:** the next match is copied whole, not unioned.
+8. **Name numbers:** a fragment named `X_1` does not match a list name `X`, and the reverse.
+9. **The copy:**
+   - after a fill, `InitGestaltMeshDataFromOther` gives an equal value, the two references the same objects;
+   - a copy from a slot-short stand-in is F1(ii);
+   - a self-copy with the layer present still writes nothing.
+10. **Reference** binds nothing.
 
 ## 7. The probe
 
@@ -224,8 +289,8 @@ The landing run's card PRs move it. The probes of #588 and #591 show what follow
    - where the game draws from `LODModelData`.
 2. **UNVERIFIED:** the component's base offset (one fit, consistent with every access); whether duplicate names occur
    in real name lists.
-3. **To check first (implementer):** whether the heap holds `GestaltData` and the definition's three arrays decoded
-   (section 6).
+3. **To check first (implementer):** whether the heap holds `GestaltData` whole for a resident component, and how F2's
+   walk signal is reached from the definition's export (section 6).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

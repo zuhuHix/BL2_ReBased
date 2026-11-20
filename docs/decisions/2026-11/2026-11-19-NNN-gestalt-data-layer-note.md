@@ -27,3 +27,21 @@ maintainer gives one. Docs only: no code, no dependency, and no bounds check cha
 - **Probe:** installed Off `--slice-gate`, strict, on main 3ad58b08: ok 2, notyet 10, error 2. Link 8 passes 1 of 5
   steps and stops at `init` on `CacheWeaponCard`'s slot count, before these natives.
 - **Clean room:** a different lane implements this note.
+
+## Edits: review r1 of #603
+
+- **F1 is split into #596's three sub-cases.** (i) undecoded is `NotRead` "a decode is a write"; (ii) a stand-in that
+  never loads is `STAND_IN` `NotRead` once the layer exists (hub ruling), and `LayerAbsent` until then; (iii) an
+  incomplete slot is a data error. The note names the four `LayerAbsent` sites in `gestalt.rs` that go; `MERGE_LAYER`
+  stays.
+- **F2's signal is the package walk** (no `PropValue::Raw` in any of the three arrays' trees, as `ow-items` uses),
+  because `to_value` fills defaults over raw nested fields. There is a test with a raw nested `Parts`.
+- **The bounds union in operation order**, single precision throughout: the code's roots are single-precision square
+  roots. The port's root goes through `sqrt_f64` and is cast back. The binary's rule is a normalised per-axis box.
+  Bit parity is UNVERIFIED.
+- **Smaller fixes:**
+  - the declared member order is noted against #588's and #591's;
+  - the None branch is reached only by a direct call;
+  - #596's text prefixes are used;
+  - six tests are added;
+  - the bounds field's name is given.
