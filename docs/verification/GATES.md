@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
+(Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
+NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
+ow-world -p ow-cli --locked -j 4` 1,092 passed / 0 failed / 10 ignored; `cargo test --workspace --locked -j 4` 2,475
+passed / 0 failed / 46 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build, under
+the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and stops in `cast` at the unbound
+`FlagExpressionEvaluator.Evaluate(object)` (1 of 2 steps). ctest and verify_packages not run (no C++ change). No
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/nounrep-impl/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

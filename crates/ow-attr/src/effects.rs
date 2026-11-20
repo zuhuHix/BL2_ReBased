@@ -72,6 +72,8 @@ pub(crate) fn check_modifier_chain(
     op: crate::api::ProbeOp,
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
+    // #518's rule (kept when #523 was rebased onto it): the probe may load a resolver handle, and the caller that
+    // counts loads as writes tracks them with #518's counters (`DefStore::load_transitions`).
     for entry in value_chain(cx, attr)? {
         let Some(r) = entry else { break };
         eval::ensure_loaded(cx, r)?;
@@ -79,6 +81,15 @@ pub(crate) fn check_modifier_chain(
         resolver.probe_storage(sys, r, context, op, cx)?;
     }
     Ok(())
+}
+
+/// The caller-side write scope of an Off add, remove or set-base (review r1 of #523, item 4; review r2: the one
+/// tracker of [`eval::tracked`], shared with the read fold).
+fn write_scope<T>(
+    cx: &mut EvalCx<'_>,
+    op: impl FnOnce(&mut EvalCx<'_>) -> Result<T, AttrError>,
+) -> Result<T, AttrError> {
+    eval::tracked(cx, op)
 }
 
 /// [`new_modifier`] for a caller outside this crate (the slot natives make their own modifiers).
@@ -137,19 +148,23 @@ pub(crate) fn add_modifier(
     suppress_notify: bool,
     cx: &mut EvalCx<'_>,
 ) -> Result<AddModifierOutcome, AttrError> {
-    add_chain(
-        sys,
-        attr,
-        context,
-        modifier,
-        suppress_notify,
-        cx,
-        &mut false,
-    )
+    write_scope(cx, |cx| add_chain(sys, attr, context, modifier, suppress_notify, cx, &mut false))
 }
 
 /// [`AttributeSystem::remove_modifier`].
 pub(crate) fn remove_modifier(
+    sys: &AttributeSystem,
+    attr: ObjRef,
+    context: Option<ObjRef>,
+    modifier: ObjRef,
+    suppress_notify: bool,
+    cx: &mut EvalCx<'_>,
+) -> Result<RemoveModifierOutcome, AttrError> {
+    write_scope(cx, |cx| remove_chain(sys, attr, context, modifier, suppress_notify, cx))
+}
+
+/// The remove through the chain ([`remove_modifier`]).
+fn remove_chain(
     sys: &AttributeSystem,
     attr: ObjRef,
     context: Option<ObjRef>,
@@ -188,8 +203,10 @@ pub(crate) fn set_base(
     suppress_notify: bool,
     cx: &mut EvalCx<'_>,
 ) -> Result<bool, AttrError> {
-    let contexts = sys.resolve_contexts(attr, source, cx)?;
-    set_base_in(sys, attr, &contexts, value, suppress_notify, cx)
+    write_scope(cx, |cx| {
+        let contexts = sys.resolve_contexts(attr, source, cx)?;
+        set_base_in(sys, attr, &contexts, value, suppress_notify, cx)
+    })
 }
 
 /// The sets of [`set_base`] on contexts already resolved.

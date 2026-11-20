@@ -507,6 +507,11 @@ impl<'a> EvalCx<'a> {
         self.depth.set(self.depth.get().saturating_add(1));
     }
 
+    /// Whether no value fold or write scope is running (the outermost scope opens the heap watch).
+    pub(crate) fn outermost(&self) -> bool {
+        self.depth.get() == 0
+    }
+
     /// Leaves a value fold.
     pub(crate) fn leave_fold(&self) {
         self.depth.set(self.depth.get().saturating_sub(1));

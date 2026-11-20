@@ -259,6 +259,7 @@ pub(crate) fn add_to(
     cx: &mut EvalCx<'_>,
 ) -> Result<AddModifierOutcome, AttrError> {
     let forms = cx.forms;
+    let mut pending = None;
     let outcome = {
         let space: &mut ObjectSpace = cx.world.parts().space;
         let m = read_modifier(space, modifier)?;
@@ -291,9 +292,18 @@ pub(crate) fn add_to(
                 owner,
                 state,
                 index,
-            } => noun::add(space, owner, state, index, modifier)?,
+            } => {
+                let (outcome, w) = noun::add(space, owner, state, index, modifier)?;
+                pending = w;
+                outcome
+            }
         }
     };
+    // A noun write is planned and checked first, then signalled and made (NATIVE_NOUN_ATTRIBUTES.md section 10.5).
+    if let Some(w) = pending {
+        cx.note_writes();
+        noun::commit(cx.world.parts().space, w)?;
+    }
     if outcome.succeeded() {
         notify_storage(s, suppress_notify, cx)?;
     }
@@ -324,7 +334,14 @@ pub(crate) fn remove_from(
             owner,
             state,
             index,
-        } => return noun::remove(cx.world.parts().space, owner, state, index, modifier),
+        } => {
+            let (outcome, w) = noun::remove(cx.world.parts().space, owner, state, index, modifier)?;
+            if let Some(w) = w {
+                cx.note_writes();
+                noun::commit(cx.world.parts().space, w)?;
+            }
+            return Ok(outcome);
+        }
     };
     let count = {
         let space: &mut ObjectSpace = cx.world.parts().space;
@@ -354,6 +371,7 @@ pub(crate) fn set_base_of(
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
     let forms = cx.forms;
+    let mut pending = None;
     {
         let space: &mut ObjectSpace = cx.world.parts().space;
         match s {
@@ -378,8 +396,12 @@ pub(crate) fn set_base_of(
                 owner,
                 state,
                 index,
-            } => noun::set_base(space, owner, state, index, v)?,
+            } => pending = Some(noun::set_base(space, owner, state, index, v)?),
         }
+    }
+    if let Some(w) = pending {
+        cx.note_writes();
+        noun::commit(cx.world.parts().space, w)?;
     }
     notify_storage(s, suppress_notify, cx)
 }

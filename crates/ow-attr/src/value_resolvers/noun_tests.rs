@@ -397,7 +397,8 @@ impl Noun {
     /// The `NounState` of `ctx`, element by element.
     fn entries(&self, ctx: ObjRef) -> Vec<Entry> {
         let space = &self.fx.w.space;
-        let p = space.prop(self.mind, "NounState").unwrap();
+        let class = space.heap.get(ctx).unwrap().class;
+        let p = space.prop(class, "NounState").unwrap();
         let items = space.read(ctx, PropAddr::scalar(p)).unwrap().clone();
         let f = |e: &Value, n: &str| crate::eval::field(space, e, n).unwrap().clone();
         items
@@ -891,9 +892,9 @@ fn off_applied_effects_stay_on_the_noun_stack_until_removed() {
 }
 
 #[test]
-fn off_a_replicated_strategy_on_a_provider_is_not_ported() {
-    // Section 4 table rows 3 to 5: the outcome needs what the note marks as not read (which arrays a provider hands
-    // over; the replicated-copy-changed call). Nothing is created.
+fn off_a_replicated_strategy_on_an_unread_class_is_not_read() {
+    // Section 10.5, preflight step 3: the fixture's mind (`Test.WillowMind`) is not a class the note reads, so its
+    // arrays and change call are unknown for strategies 1 and 2. Nothing is created.
     for strategy in [1, 2] {
         let mut n = off();
         let default = n.fx.k(0.0);
@@ -903,16 +904,16 @@ fn off_a_replicated_strategy_on_a_provider_is_not_ported() {
         let m = n.modifier(PRE, 1.0);
         assert_eq!(
             missing(n.value(attr, mind).unwrap_err()),
-            Missing::NotPorted
+            Missing::NotRead
         );
-        assert_eq!(missing(n.base(attr, mind).unwrap_err()), Missing::NotPorted);
+        assert_eq!(missing(n.base(attr, mind).unwrap_err()), Missing::NotRead);
         assert_eq!(
             missing(n.add(attr, mind, m).unwrap_err()),
-            Missing::NotPorted
+            Missing::NotRead
         );
         assert_eq!(
             missing(n.set_base(attr, mind, 1.0).unwrap_err()),
-            Missing::NotPorted
+            Missing::NotRead
         );
         assert!(n.entries(mind).is_empty());
     }
@@ -930,9 +931,9 @@ fn off_a_strategy_outside_the_table_is_not_read() {
 }
 
 #[test]
-fn off_an_entry_with_a_replicated_slot_reads_but_is_not_written() {
-    // Section 5 "Mirror": writing needs the provider's replicated array and its change call (not read). Reads are
-    // the entry's own fields.
+fn off_an_entry_with_a_replicated_slot_on_an_unread_class_reads_but_is_not_written() {
+    // Section 10.5, preflight step 3: a write to a slotted entry on an unread class needs its replicated array and
+    // change call (not read). Reads are the entry's own fields.
     let mut n = off();
     let default = n.fx.k(0.0);
     let attr = n.attr("Attribute_A", default);
@@ -951,11 +952,11 @@ fn off_an_entry_with_a_replicated_slot_reads_but_is_not_written() {
     let m = n.modifier(PRE, 1.0);
     assert_eq!(
         missing(n.add(attr, mind, m).unwrap_err()),
-        Missing::NotPorted
+        Missing::NotRead
     );
     assert_eq!(
         missing(n.set_base(attr, mind, 1.0).unwrap_err()),
-        Missing::NotPorted
+        Missing::NotRead
     );
     assert_eq!(n.entries(mind), before);
 }
@@ -1015,3 +1016,6 @@ fn off_the_chain_check_refuses_a_replicated_slot_it_would_rewrite() {
         assert_eq!(n.entries(mind), vec![e.clone()], "unchanged");
     }
 }
+
+#[path = "noun_replication_tests.rs"]
+mod replication;

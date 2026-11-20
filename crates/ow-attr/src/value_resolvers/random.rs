@@ -81,6 +81,10 @@ fn draw(sys: &AttributeSystem, cx: &mut EvalCx<'_>, resolver: ObjRef, context: O
     let integer = flag("bUseIntegerRandomization", &required(cx, resolver, "bUseIntegerRandomization")?)?;
     let low = bound(sys, cx, resolver, context, "LowerBound")?;
     let high = bound(sys, cx, resolver, context, "UpperBound")?;
+    // A draw is a write in Off (review r2 of #523, the hub's ruling).
+    if crate::eval::parity(cx) == ow_core::ParityMode::Off {
+        cx.note_writes();
+    }
     if !integer {
         let r = f32::from(cx.world.rng(CrtStream::AttributeVariance)?.rand15());
         return Ok(low + r / 32767.0 * (high - low));

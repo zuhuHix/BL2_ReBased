@@ -234,6 +234,42 @@ pub fn class_path(space: &ObjectSpace, obj: ObjRef) -> String {
     }
 }
 
+
+/// The heap's committed-write count and the store's load-transition count (the hub's tracker design, review r2 of
+/// #523 and #518). RNG draws note themselves at the draw (no draw counter here).
+fn counters(cx: &mut EvalCx<'_>) -> (u64, u64) {
+    let WorldParts { space, defs, .. } = cx.world.parts();
+    (space.heap.committed_writes(), defs.as_ref().map_or(0, |d| d.load_transitions()))
+}
+
+/// One write tracker for a whole Off operation (review r2 of #523, the hub's ruling, in #518's shape: a definition
+/// load, a committed heap change or an RNG draw is a write). The outermost scope opens a heap change watch
+/// records the heap's committed-write count and the store's load-transition count and starts a fresh write count;
+/// nested scopes share it. When the outermost scope closes, a moved counter is a write; a draw notes itself
+/// ([`random_between`], the random resolver), and a resolver that writes notes itself too. A `NotYet` leaving the scope after a write is prefixed once, kind kept; any other error,
+/// and everything under Reference, is unchanged.
+pub(crate) fn tracked<T>(
+    cx: &mut EvalCx<'_>,
+    op: impl FnOnce(&mut EvalCx<'_>) -> Result<T, AttrError>,
+) -> Result<T, AttrError> {
+    if parity(cx) != ow_core::ParityMode::Off {
+        return op(cx);
+    }
+    let start = cx.outermost().then(|| counters(cx));
+    cx.enter_fold();
+    let result = op(cx);
+    cx.leave_fold();
+    if let Some(start) = start
+        && counters(cx) != start
+    {
+        cx.note_writes();
+    }
+    match result {
+        Err(e) if cx.wrote() => Err(after_partial_writes(e)),
+        other => other,
+    }
+}
+
 /// Property `name` of `obj` (element 0), loaded first; `Ok(None)` when the object's class (its whole super chain)
 /// has no property of that name.
 pub fn property(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Option<Value>, AttrError> {
@@ -625,6 +661,9 @@ fn fold(
     base: bool,
     cx: &mut EvalCx<'_>,
 ) -> Result<f32, AttrError> {
+    if parity(cx) == ow_core::ParityMode::Off {
+        return tracked(cx, |cx| fold_chain(sys, attr, context, base, cx));
+    }
     cx.enter_fold();
     let result = fold_chain(sys, attr, context, base, cx);
     cx.leave_fold();
@@ -964,6 +1003,10 @@ pub(crate) fn random_between(
     integer: bool,
     cx: &mut EvalCx<'_>,
 ) -> Result<f32, AttrError> {
+    // A draw is a write in Off (review r2 of #523, the hub's ruling).
+    if parity(cx) == ow_core::ParityMode::Off {
+        cx.note_writes();
+    }
     let draw = f64::from(cx.world.rng(CrtStream::AttributeVariance)?.rand15()) / 32768.0;
     if !integer {
         // progression.cpp: low + float(draw) * (high - low), single precision.
