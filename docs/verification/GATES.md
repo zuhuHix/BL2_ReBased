@@ -9,7 +9,7 @@ NATIVE_SET_ANIM_TREE_TEMPLATE.md (df863aff; the section 5 ruling at 466350b): th
 --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,413 passed / 0 failed / 46 ignored (8 new);
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors; links 6 and 7 get past the
 native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMeshComponent.SetForceRefPose(bool)`.
-ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN
+ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
