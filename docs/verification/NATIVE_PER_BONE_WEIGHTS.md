@@ -1,6 +1,6 @@
 # The per-bone weight builders of `AnimNodeBlendPerBone` and `WillowAnimNodeFeatherBlend` (2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-PER-BONE-WEIGHT-BUILDERS (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-PER-BONE-WEIGHT-BUILDERS (decision 2026-11-19-197, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented earlier, unrelated slice
 lanes (#570, the body composition's made-Mesh step). It does not implement this note, and it read no native code for
 those lanes.
