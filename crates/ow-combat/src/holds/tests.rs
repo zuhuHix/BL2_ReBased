@@ -393,9 +393,7 @@ fn get_ai_component_answers_the_mind_s_own_component() {
     }
 }
 
-/// A call with no receiver, or on a class outside `GearboxMind` (here a controller), is a `VmError::Script`. A mind
-/// class without `AIComponent`, or a value of another kind, cannot be built here: every `GearboxMind` subclass
-/// inherits the object field, and the heap refuses a write of another kind.
+/// A call with no receiver, or on a class outside `GearboxMind` (here a controller), is a `VmError::Script`.
 #[test]
 fn get_ai_component_refuses_malformed_calls_as_script_errors() {
     let mut e = Env::new(ParityMode::Off);
@@ -407,6 +405,30 @@ fn get_ai_component_refuses_malformed_calls_as_script_errors() {
     let controller = e.make(e.controller, "ToyController");
     let err = e.vm.call(f, Some(controller), vec![]).unwrap_err();
     assert!(matches!(&err, VmError::Script { message, .. } if message.contains("is not a GearboxMind")), "{err:?}");
+}
+
+/// A `GearboxMind` class that declares no `AIComponent`, and one whose `AIComponent` is an int holding an int: each a
+/// `VmError::Script` naming the problem, with nothing written, made, loaded or drawn. Each case defines its own
+/// `GearboxMind` (the class path is defined once per class table).
+#[test]
+fn a_mind_without_an_object_ai_component_is_a_script_error() {
+    for (props, value, wanted) in [
+        (vec![], None, "declares no AIComponent"),
+        (vec![("AIComponent", PropKind::Int)], Some(Value::Int(3)), "not an object"),
+    ] {
+        let mut e = Env::new(ParityMode::Off);
+        register(&mut e.vm).unwrap();
+        let root = e.vm.space.classes.by_path("Toy.ToyObject").unwrap();
+        let mind_class = class(&mut e.vm, MIND, root, &props);
+        let mind = e.make(mind_class, "ToyMind_3");
+        if let Some(v) = value {
+            set(&mut e.vm, mind, "AIComponent", v).unwrap();
+        }
+        let before = fingerprint(&e.vm);
+        let err = e.call("GetAIComponent", mind, vec![]).unwrap_err();
+        assert!(matches!(&err, VmError::Script { message, .. } if message.contains(wanted)), "{wanted}: {err:?}");
+        assert_eq!(fingerprint(&e.vm), before, "{wanted}: nothing written, made, loaded or drawn");
+    }
 }
 
 /// Under Reference this pack binds nothing (the `hit.rs` stand-in answers there); a key bound first keeps its binding.

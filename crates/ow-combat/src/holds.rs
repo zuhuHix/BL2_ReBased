@@ -30,7 +30,7 @@
 //! read: `NotYet { NotRead }`, as before. Damage-reader behavior is not proven.
 //!
 //! **`GearboxMind.GetAIComponent`** (lane IMPL-GEARBOXMIND-GETAICOMPONENT, decision 2026-11-19-NNN), coded from
-//! `docs/verification/NATIVE_GEARBOXMIND_GETAICOMPONENT.md` alone (the note at 4b83f1c5; clean room: lane
+//! `docs/verification/NATIVE_GEARBOXMIND_GETAICOMPONENT.md` alone (the note as final at 660d0b32; clean room: lane
 //! ANALYST-GEARBOXMIND-GETAICOMPONENT wrote it). In Off it is [`get_ai_component`]: the mind's own `AIComponent`, read
 //! by name and returned as it is, None included. It writes, loads and draws nothing, and the returned handle is not
 //! loaded either. UNVERIFIED in the running game.

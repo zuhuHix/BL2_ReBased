@@ -71,8 +71,8 @@ C++ change). No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p
 `GearboxMind.GetAIComponent` in Off from NATIVE_GEARBOXMIND_GETAICOMPONENT.md as final at 660d0b32 (`ow-combat`
 `holds::get_ai_component`): the mind's own `AIComponent` by a plain heap read, an unloaded mind `NotYet { NotRead }`, a
 template component (outer `Origin::Default` or `Default__...`) `NotYet { NotRead }`, both also in the Off hold preflight;
-Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,669 passed / 0 failed / 48 ignored (5
-new `ow-combat` and 1 new `ow-ai` hold tests, #518's counters checked); `crate_edges_test.py` OK. Installed Off
+Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,670 passed / 0 failed / 48 ignored (6 new
+hold tests, 5 in `ow-combat` and 1 in `ow-ai`, and 1 renamed; #518's counters checked); `crate_edges_test.py` OK. Installed Off
 `--slice-gate` strict: 2 ok / 10 NotYet / 2 errors, all 14 rows byte-identical with and without the binding. Link 9
 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun `ReplicationStrategy` 2 refusal ("stopped
 after partial writes: NounAttributeValueResolver with ReplicationStrategy 2 on a provider..."), before the flag
