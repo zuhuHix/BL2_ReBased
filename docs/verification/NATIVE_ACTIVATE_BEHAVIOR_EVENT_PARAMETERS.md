@@ -1,6 +1,6 @@
 # BehaviorKernel.ActivateBehaviorEventFromScript with Parameters (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-ACTIVATE-BEHAVIOR-EVENT-PARAMETERS (decision 2026-11-19-NNN,
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-ACTIVATE-BEHAVIOR-EVENT-PARAMETERS (decision 2026-11-19-160,
 a placeholder), for slice link 9. **Analyst only:** a different lane implements it (clean room). This lane's author
 implemented other behavior-kernel and spawn rules earlier, but not this native's script route, and will not implement
 this note.
