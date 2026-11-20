@@ -930,7 +930,7 @@ fn a_failed_template_is_refused_before_any_write() {
 // The animation-node lookups (NATIVE_ANIM_NODE_LOOKUP.md at b09720f6, lane IMPL-ANIM-NODE-LOOKUP)
 // ---------------------------------------------------------------------------------------------------------------
 
-use crate::world::anim_node_lookup::{Settled, TICK_ORDER, check};
+use crate::world::anim_node_lookup::{Settled, check};
 
 /// An invented template tree, made of runtime objects (loaded, so the template settles what it can).
 struct Anim {
@@ -1040,18 +1040,19 @@ fn no_tree_settles_everything_and_the_mesh_step_reaches_the_rendering_hooks() {
     let skel = skel_with(&mut e, None);
     let p = mesh_pawn(&mut e, skel);
     let body = body_of(&e, p);
-    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: false });
+    assert_eq!(check(&e.vm, skel, Some(body), None).unwrap(), Settled::default());
     let (missing, what) = refused(&mut e, p);
     assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
     assert_eq!(what, RENDER_HOOKS);
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None), "untouched");
 }
 
-/// Rule 3, a settled tree: an `ArmBoneBlend` node that is not an `AnimNodeBlendPerBone`, a `LeftHandGrip` control that
-/// is not the kept class, no `AimOffset` node, two `WillowFootIK` controls on the second list: every field settles,
-/// and `bUsingFootIK` is true.
+/// Lane FIX-BODY-COMPOSITION-LOOKUP-STALE: the lookups search the planned copy, so a tree with no planned copy (this
+/// fixture switches the copy's check off: its classes declare none of the copy's fields) is #529's refusal unchanged,
+/// whatever the tree holds, write-free. The rules themselves are tested on the copy's fixture
+/// (anim_tree_copy_tests.rs, "the body composition's lookups over the copy").
 #[test]
-fn a_tree_with_nothing_kept_settles_and_finds_the_foot_ik() {
+fn a_tree_with_no_planned_copy_is_the_refusal() {
     let mut e = env();
     let t = Anim::new(&mut e);
     let arm = t.node(&mut e, "AnimNode", "ArmBoneBlend", 1);
@@ -1065,11 +1066,13 @@ fn a_tree_with_nothing_kept_settles_and_finds_the_foot_ik() {
     let p = mesh_pawn(&mut e, skel);
     let body = body_of(&e, p);
     let before = Counters::read(&e.vm);
-    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
+    match check(&e.vm, skel, Some(body), None) {
+        Err(VmError::NotYet(n)) => assert!(is_anim_refusal(&n.missing, &n.what), "{n}"),
+        other => panic!("expected #529's refusal, got {other:?}"),
+    }
     assert_eq!(Counters::read(&e.vm), before, "the check writes nothing");
     let (missing, what) = refused(&mut e, p);
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
-    assert_eq!(what, RENDER_HOOKS);
+    assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
 }
 
 /// Review r1 of #561, item 8: with the attach's tree-copy check on (lane IMPL-COPY-ANIM-TREE), the same settled tree
@@ -1096,7 +1099,7 @@ fn with_the_copy_check_on_the_copy_refuses_before_the_lookups() {
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
 }
 
-/// Rule 4: each kept find needs the instance's node, and so does a slot node; each is #529's refusal, write-free.
+/// With no planned copy, a kept find and a slot node are #529's refusal too (as before this lane), write-free.
 #[test]
 fn a_kept_find_or_a_slot_node_is_the_refusal() {
     // (node class, node name, control class, control name, head look-at name)
@@ -1121,57 +1124,6 @@ fn a_kept_find_or_a_slot_node_is_the_refusal() {
         let (missing, what) = refused(&mut e, p);
         assert!(is_anim_refusal(&missing, &what), "{node_class} {control_class}: {missing:?} {what}");
         assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
-    }
-}
-
-/// Rule 3: of two nodes with one name, the lower saved tick index is found. With the plain node first the field
-/// settles; with the kept node first it refuses. The kept node is first in `Children` both times.
-#[test]
-fn the_first_match_is_by_saved_tick_order() {
-    for (plain_tick, kept_tick, refuses) in [(1, 2, false), (2, 1, true)] {
-        let mut e = env();
-        let t = Anim::new(&mut e);
-        let kept = t.node(&mut e, "WillowAnimNodeAimOffset", "AimOffset", kept_tick);
-        let plain = t.node(&mut e, "AnimNode", "AimOffset", plain_tick);
-        t.children(&mut e, t.root, &[kept, plain]);
-        let skel = skel_with(&mut e, Some(t.root));
-        let p = mesh_pawn(&mut e, skel);
-        let (missing, what) = refused(&mut e, p);
-        assert_eq!(is_anim_refusal(&missing, &what), refuses, "{plain_tick} {kept_tick}: {what}");
-    }
-}
-
-/// Section 1: a None node name matches the first node whose `NodeName` is None, the root here (not a kept class), so
-/// a nameless kept `AimOffset` node later in the order is not found. A None control name answers None at once, so a
-/// nameless kept look-at control is not found either.
-#[test]
-fn none_names_match_the_root_and_no_control() {
-    let mut e = env();
-    let t = Anim::new(&mut e);
-    let aim = t.node(&mut e, "WillowAnimNodeAimOffset", "None", 1);
-    t.children(&mut e, t.root, &[aim]);
-    t.controls(&mut e, &[&[("WillowSkelControl_LookAtActor", "None")]]);
-    let skel = skel_with(&mut e, Some(t.root));
-    let p = mesh_pawn(&mut e, skel);
-    aim_offset_named(&mut e, p, "None");
-    let body = body_of(&e, p);
-    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: false });
-}
-
-/// Rule 3: saved tick indices that are not a full, distinct order 0 to n - 1 are `NotRead`, write-free.
-#[test]
-fn a_saved_tick_order_that_is_not_full_is_not_read() {
-    for ticks in [[1, 1], [1, 5]] {
-        let mut e = env();
-        let t = Anim::new(&mut e);
-        let a = t.node(&mut e, "AnimNode", "A", ticks[0]);
-        let b = t.node(&mut e, "AnimNode", "B", ticks[1]);
-        t.children(&mut e, t.root, &[a, b]);
-        let skel = skel_with(&mut e, Some(t.root));
-        let p = mesh_pawn(&mut e, skel);
-        let (missing, what) = refused(&mut e, p);
-        assert_eq!(missing, Missing::NotRead);
-        assert_eq!(what, TICK_ORDER);
     }
 }
 

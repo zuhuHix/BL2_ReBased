@@ -723,9 +723,10 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         return Err(not_read(MESH_NOT_SKELETAL));
                     }
                     // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
-                    crate::world::anim_tree_copy::attach_check(vm, template)?;
-                    // NATIVE_ANIM_NODE_LOOKUP.md section 5: the template's answers, with nothing loaded.
-                    let settled = crate::world::anim_node_lookup::check(vm, template, body_class)?;
+                    let copy = crate::world::anim_tree_copy::attach_plan(vm, template)?;
+                    // NATIVE_ANIM_NODE_LOOKUP.md sections 1 and 2, over the planned copy (lane
+                    // FIX-BODY-COMPOSITION-LOOKUP-STALE), with nothing loaded.
+                    let settled = crate::world::anim_node_lookup::check(vm, template, body_class, copy.as_ref())?;
                     let rest = Rest { owner, owner_class, class, authority, mesh_for_collision };
                     post.mesh = Some(mesh_rest(vm, &rest, idx, settled.foot_ik, template)?);
                     assigned_mesh = true;

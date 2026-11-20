@@ -1953,3 +1953,161 @@ fn a_maya_shaped_tree_gives_the_note_s_arrays() {
     assert_eq!(listed(&x, comp, &all), all.to_vec());
     assert_eq!(x.get(comp, "TickTag"), Value::Int(2), "two above its value before");
 }
+
+// ---- Lane FIX-BODY-COMPOSITION-LOOKUP-STALE: the body composition's lookups over the copy ---------------------------
+
+use crate::world::anim_node_lookup::{NO_BODY_CLASS, NO_TICK_LIST, Settled, apply, lookups};
+
+/// An invented body class with `AimOffsetNodeName` and `HeadLookAtName` (None by default).
+fn body_class(x: &mut Fx, aim: &str, head: &str) -> ObjRef {
+    let object = x.object;
+    let path = "Test.ToyBodyClass";
+    if x.vm.space.classes.by_path(path).is_none() {
+        class(&mut x.vm, path, object, &[("AimOffsetNodeName", PropKind::Name), ("HeadLookAtName", PropKind::Name)]);
+    }
+    let b = x.obj(path);
+    let (aim, head) = (x.vm.space.names.intern(aim), x.vm.space.names.intern(head));
+    x.set(b, "AimOffsetNodeName", Value::Name(aim));
+    x.set(b, "HeadLookAtName", Value::Name(head));
+    b
+}
+
+/// The control class `path` (defined under `SkelControlBase` on first use), one control of it named `name`.
+fn control_of(x: &mut Fx, path: &str, name: &str) -> ObjRef {
+    if x.vm.space.classes.by_path(path).is_none() {
+        let base = x.vm.space.classes.by_path("Engine.SkelControlBase").unwrap();
+        class(&mut x.vm, path, base, &[]);
+    }
+    let c = x.obj(path);
+    let n = x.vm.space.names.intern(name);
+    x.set(c, "ControlName", Value::Name(n));
+    c
+}
+
+fn named(x: &mut Fx, o: ObjRef, name: &str) {
+    let n = x.vm.space.names.intern(name);
+    x.set(o, "NodeName", Value::Name(n));
+}
+
+/// The lookups over `t`'s planned copy on `comp`, with the counters unchanged.
+fn looked_up(x: &Fx, comp: ObjRef, root: ObjRef, body: Option<ObjRef>) -> Result<Settled, VmError> {
+    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let before = counts(x);
+    let p = plan(&x.vm, comp, root).unwrap();
+    let r = lookups(&x.vm, &p, body);
+    assert_eq!(counts(x), before, "the lookups write, draw and load nothing");
+    r
+}
+
+/// The note's section 1 on the planned copy: of two nodes named `AimOffset`, the first in tick order is found; the
+/// plain one first gives None (not the kept class), the kept one first gives it.
+#[test]
+fn a_node_lookup_takes_the_first_in_tick_order_and_keeps_only_its_class() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let aim = x.obj(AIM_OFFSET_CLASS);
+    let (t, comp) = with_node(&mut x, aim);
+    named(&mut x, aim, "AimOffset");
+    named(&mut x, t.a, "AimOffset");
+    let body = body_class(&mut x, "AimOffset", "None");
+    let p = plan(&x.vm, comp, t.root).unwrap();
+    let a_at = p.order.iter().position(|&n| n == t.a).unwrap();
+    let aim_at = p.order.iter().position(|&n| n == aim).unwrap();
+    assert!(a_at < aim_at, "the fixture puts A first");
+    assert_eq!(looked_up(&x, comp, t.root, Some(body)).unwrap().aim_offset, None, "A first: not the kept class");
+    named(&mut x, t.a, "Other");
+    assert_eq!(looked_up(&x, comp, t.root, Some(body)).unwrap().aim_offset, Some(aim));
+}
+
+/// Controls in list order: `LeftHandGrip` and the head look-at of their kept classes are found, `bUsingFootIK` is set
+/// by a `WillowFootIK` control of any class, and a find of another class is None (`ArmBoneBlend` on a plain node).
+#[test]
+fn control_lookups_and_foot_ik_follow_the_lists() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    named(&mut x, t.b, "ArmBoneBlend");
+    let grip = control_of(&mut x, "WillowGame.SkelControlLeftHandGripWeapon", "LeftHandGrip");
+    let look = control_of(&mut x, "WillowGame.WillowSkelControl_LookAtActor", "HeadLook");
+    let foot = control_of(&mut x, "WillowGame.WillowSkelControl_FootPlacement", "WillowFootIK");
+    x.set(grip, "NextControl", Value::Object(Some(look)));
+    set_lists(&mut x, t.root, &[(None, Some(grip)), (None, Some(foot))]);
+    let body = body_class(&mut x, "None", "HeadLook");
+    let s = looked_up(&x, comp, t.root, Some(body)).unwrap();
+    assert_eq!(s.arm_bone_blend, None, "found, but not an AnimNodeBlendPerBone");
+    assert_eq!(s.left_hand_ik, Some(grip));
+    assert_eq!(s.head_look_at, Some(look));
+    assert!(s.foot_ik);
+    let body = body_class(&mut x, "None", "None");
+    assert_eq!(looked_up(&x, comp, t.root, Some(body)).unwrap().head_look_at, None, "a None name: no search");
+}
+
+/// `SlotNodes`: the tick list's `AnimNodeSlot` nodes (a subclass is matched by its class chain, as `is_kind` reads
+/// it), in tick order; a None `AimOffsetNodeName`
+/// matches the first node with no name (the root, not the kept class).
+#[test]
+fn slot_nodes_are_the_tick_list_s_slots_in_tick_order() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let slot = x.obj("Engine.AnimNodeSlot");
+    let (t, comp) = with_node(&mut x, slot);
+    slots_of(&mut x, slot, &[(None, 1.0, false, 1.0)]);
+    let body = body_class(&mut x, "None", "None");
+    let s = looked_up(&x, comp, t.root, Some(body)).unwrap();
+    assert_eq!(s.slots, vec![slot]);
+    assert_eq!(s.aim_offset, None);
+}
+
+/// The refusals kept: a planned copy with no tick list (the component already initialised) and no body class, each
+/// `NotRead`, with the counters unchanged.
+#[test]
+fn no_tick_list_and_no_body_class_are_not_read() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    match looked_up(&x, comp, t.root, None) {
+        Err(VmError::NotYet(n)) => assert_eq!((&*n.what, n.missing), (NO_BODY_CLASS, Missing::NotRead)),
+        other => panic!("{other:?}"),
+    }
+    x.set(comp, "bAnimTreeInitialised", Value::Bool(true));
+    let body = body_class(&mut x, "AimOffset", "None");
+    match looked_up(&x, comp, t.root, Some(body)) {
+        Err(VmError::NotYet(n)) => assert_eq!((&*n.what, n.missing), (NO_TICK_LIST, Missing::NotRead)),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The writes: after the attach's copy (`instance_with_map`), `apply` writes the copies, outered to the component,
+/// into the pawn's fields, and `SlotNodes` in tick order.
+#[test]
+fn apply_writes_the_copies_into_the_pawn() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let aim = x.obj(AIM_OFFSET_CLASS);
+    let (t, comp) = with_node(&mut x, aim);
+    named(&mut x, aim, "AimOffset");
+    let body = body_class(&mut x, "AimOffset", "None");
+    let s = looked_up(&x, comp, t.root, Some(body)).unwrap();
+    let object = x.object;
+    let o = PropKind::Object { class: object };
+    let fields = [
+        ("ArmBoneBlend", o.clone()),
+        ("AimOffset", o.clone()),
+        ("LeftHandIK", o.clone()),
+        ("HeadLookAt", o.clone()),
+        ("bUsingFootIK", PropKind::Bool),
+        ("SlotNodes", arr(o.clone())),
+    ];
+    class(&mut x.vm, "Test.ToyPawn", object, &fields);
+    let pawn = x.obj("Test.ToyPawn");
+    let (_, map) = crate::world::anim_tree_copy::instance_with_map(&mut x.vm, comp, t.root).unwrap();
+    apply(&mut x.vm, pawn, &s, |o| map.get(&o).copied().unwrap_or(o)).unwrap();
+    let Value::Object(Some(copy)) = x.get(pawn, "AimOffset") else { panic!("AimOffset set") };
+    assert_ne!(copy, aim, "the copy, not the template node");
+    assert_eq!(x.vm.space.heap.get(copy).unwrap().outer, Some(comp));
+    assert_eq!(copy, copy_of(&x, comp, aim));
+    assert_eq!(x.get(pawn, "SlotNodes"), Value::array(Vec::new()));
+    assert_eq!(x.get(pawn, "bUsingFootIK"), Value::Bool(false));
+}

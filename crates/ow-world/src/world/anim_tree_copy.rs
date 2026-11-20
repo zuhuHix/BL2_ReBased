@@ -226,14 +226,20 @@ fn unloaded(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
 /// the lookup's refusal; no `AnimTreeTemplate` has nothing to copy. Reads only. The instance's writes join the made
 /// `Mesh`'s writes when the body composition's `Mesh` step has an Off answer past the lookups.
 pub fn attach_check(vm: &Vm, template: ObjRef) -> Result<(), VmError> {
+    attach_plan(vm, template).map(|_| ())
+}
+
+/// [`attach_check`] with its plan: `None` when there is no tree to copy (or the check is switched off in tests). The
+/// body composition's lookups search the planned copy (lane FIX-BODY-COMPOSITION-LOOKUP-STALE).
+pub fn attach_plan(vm: &Vm, template: ObjRef) -> Result<Option<Plan>, VmError> {
     if ATTACH_CHECK_SKIPPED.with(std::cell::Cell::get) {
-        return Ok(());
+        return Ok(None);
     }
     unloaded(vm, template)?;
     let Some(tree) = object_of(&read(vm, template, "AnimTreeTemplate")?) else {
-        return Ok(());
+        return Ok(None);
     };
-    plan(vm, template, tree).map(|_| ())
+    plan(vm, template, tree).map(Some)
 }
 
 /// The `Anim` of each set child slot of node `o` (none when its class is not a blend node), in slot order.
@@ -706,15 +712,25 @@ fn initialise(
 /// Copies `template` onto `component`, sets the component's `Animations` and initialises the tree (module
 /// documentation); the new tree. The preflight first, then the writes under #518's counters.
 pub fn instance(vm: &mut Vm, component: ObjRef, template: ObjRef) -> Result<ObjRef, VmError> {
+    instance_with_map(vm, component, template).map(|(root, _)| root)
+}
+
+/// [`instance`] with the copy's map from each template object (the root, its nodes and its controls) to its copy, for
+/// a caller that planned on the template (the body composition's lookups, lane FIX-BODY-COMPOSITION-LOOKUP-STALE).
+pub fn instance_with_map(
+    vm: &mut Vm,
+    component: ObjRef,
+    template: ObjRef,
+) -> Result<(ObjRef, DetMap<ObjRef, ObjRef>), VmError> {
     let before = Counters::read(vm);
     let plan = plan(vm, component, template)?;
-    let run = |vm: &mut Vm| -> Result<ObjRef, VmError> {
+    let run = |vm: &mut Vm| -> Result<(ObjRef, DetMap<ObjRef, ObjRef>), VmError> {
         let (root, map) = copy(vm, component, &plan)?;
         write(vm, component, "Animations", Value::Object(Some(root)))?;
         if plan.initialise {
             initialise(vm, component, root, &plan, &map)?;
         }
-        Ok(root)
+        Ok((root, map))
     };
     run(vm).map_err(|e| after_writes(vm, before, e))
 }
