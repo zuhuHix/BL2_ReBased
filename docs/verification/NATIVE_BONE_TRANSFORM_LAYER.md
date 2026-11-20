@@ -1,6 +1,6 @@
 # The bone-transform layer: a skeletal component's current bone transforms (2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BONE-TRANSFORM-LAYER (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BONE-TRANSFORM-LAYER (decision 2026-11-19-258, number
 pending). Analyst only: a different lane implements it (clean room). This thread wrote the socket note (#636) and
 implemented #627/#642 and an earlier SetSkeletalMesh mesh-change branch, which meet this layer; it implements nothing
 here.
