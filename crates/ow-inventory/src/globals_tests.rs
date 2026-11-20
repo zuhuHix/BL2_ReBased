@@ -99,6 +99,10 @@ fn willow_game() -> Vec<u8> {
     let wrong_list = t.class("ToyWrongListGlobals", object);
     toy_array_of(&mut t, wrong_list, "PickupList", "Object", object);
     native(&mut t, wrong_list, "AddPickup", NATIVE, &[Param { type_ref: object, ..Param::new("Object", "Pickup") }], None);
+    // A holder declaring a reference to a class nothing looks up (#625 r1, item 4).
+    let cold_target = t.class("ToyColdTarget", object);
+    let cold_holder = t.class("ToyColdHolder", object);
+    t.prop("Object", cold_holder, "Target", 0, cold_target);
     t.build()
 }
 
@@ -349,26 +353,57 @@ fn the_rarity_schema_wants_the_declared_struct() {
     }
 }
 
-/// Lane FOLLOWUP-PICKUP-RB-VALIDATION, fix 2: `declared_reference` checks the declaration first and compares the
-/// declared class by its own path, with no class lookup, so nothing loads. A wanted class no package holds is a plain
-/// mismatch (a data error), and #518's three counters do not move on a pass or on a refusal.
+/// Lane FOLLOWUP-PICKUP-RB-VALIDATION, fix 2, with #625 r1 items 3 and 4: `declared_reference` checks the declaration
+/// first and compares the declared class through the class table's read-only `by_path`, by id, so nothing is looked
+/// up through the VM and nothing loads. Either path separator names the same class; a wanted class no package holds
+/// is a plain mismatch (a data error). #518's three counters and the name table's length are asserted after each call.
 #[test]
 fn the_declared_reference_check_looks_nothing_up() {
     let mut x = fx(ParityMode::Off);
     let g = x.globals;
-    let counters = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
-    let start = counters(&x.vm);
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let start = marks(&x.vm);
     declared_reference(&x.vm, g, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), "test").unwrap();
+    assert_eq!(marks(&x.vm), start, "the passing check");
+    declared_reference(&x.vm, g, "TheGlobalsDefinition", Some("GearboxFramework:GearboxGlobalsDefinition"), "test")
+        .expect("the class table's separator equivalence");
+    assert_eq!(marks(&x.vm), start, "the passing check with the other separator");
     match declared_reference(&x.vm, g, "TheGlobalsDefinition", Some("WillowGame.ToyNoSuchClass"), "test").unwrap_err() {
         VmError::Script { message, .. } => {
             assert!(message.contains("TheGlobalsDefinition") && message.contains("ToyNoSuchClass"), "{message}")
         }
         e => panic!("a data error, not a lookup: {e}"),
     }
+    assert_eq!(marks(&x.vm), start, "the class no package holds");
     let wrong = make(&mut x.vm, "WillowGame.ToyWrongGlobals");
-    let start_wrong = counters(&x.vm);
+    let start = marks(&x.vm);
     assert!(matches!(globals_schemas(&x.vm, wrong, "test"), Err(VmError::Script { .. })));
+    assert_eq!(marks(&x.vm), start, "globals_schemas' refusal");
     assert!(matches!(pickup_list_declared(&x.vm, wrong, "test"), Err(VmError::Script { .. })));
-    assert_eq!(counters(&x.vm), start_wrong, "nothing moved on the refusals");
-    assert_eq!(start.2, x.vm.defs.load_transitions(), "no load at all");
+    assert_eq!(marks(&x.vm), start, "pickup_list_declared's refusal");
+}
+
+/// #625 r1, item 4: a declared-only target. `ToyColdHolder` declares `Target` as a reference to `ToyColdTarget`, and
+/// both classes stay cold (the holder is made from the store's defaults, never through `Vm::find_class`). The check
+/// leaves the target's layout and code as cold as they were, and #518's three counters and the name table's length
+/// do not move.
+#[test]
+fn a_declared_only_target_stays_cold() {
+    let mut x = fx(ParityMode::Off);
+    let holder_class = x.vm.defs.class_id(&mut x.vm.space, "WillowGame.ToyColdHolder").unwrap();
+    let holder = ow_vm::interp::instantiate_from_defaults(&mut x.vm, holder_class).unwrap();
+    let target = x.vm.space.classes.by_path("WillowGame.ToyColdTarget").expect("declared by the store");
+    let cold = |vm: &Vm| (vm.space.classes.get_layout(target).is_some_and(|l| l.is_defined()), vm.class_code_loaded(target));
+    let before = cold(&x.vm);
+    assert!(!before.1, "the target's code starts cold");
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let start = marks(&x.vm);
+    let r = declared_reference(&x.vm, holder, "Target", Some("WillowGame.ToyColdTarget"), "test");
+    match &r {
+        Ok(()) => {}
+        Err(VmError::NotYet(n)) => assert!(n.what.contains("not loaded"), "{n}"),
+        Err(e) => panic!("{e}"),
+    }
+    assert_eq!(marks(&x.vm), start, "nothing moved: {r:?}");
+    assert_eq!(cold(&x.vm), before, "layout and code stay cold");
 }

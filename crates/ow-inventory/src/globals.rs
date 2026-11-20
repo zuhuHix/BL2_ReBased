@@ -106,11 +106,13 @@ pub fn declared_reference(vm: &Vm, o: ObjRef, name: &str, class: Option<&str>, w
     }
 }
 
-/// Whether `c`, the class a declaration names, is the class at `path`, compared by the class's own path (no lookup,
-/// no load): a different class is a data error naming `name`; a class with no layout is `NotYet { NotRead }`.
+/// Whether `c`, the class a declaration names, is the class at `path`: the class table's read-only `by_path` (which
+/// parses the path, so its separator equivalence holds, and neither loads nor interns) compared by id (#625 r1, item
+/// 3). A different class, or a path the table does not hold, is a data error naming `name`; a declared class with no
+/// layout is `NotYet { NotRead }`.
 pub fn class_named(vm: &Vm, c: ClassId, path: &str, name: &str, what: &str) -> Result<(), VmError> {
     match vm.space.classes.get_layout(c) {
-        Some(l) if l.path().as_str().eq_ignore_ascii_case(path) => Ok(()),
+        Some(_) if vm.space.classes.by_path(path) == Some(c) => Ok(()),
         Some(l) => Err(bad(what, format!("{name} is declared as a reference to {}, not one {path}", l.path().as_str()))),
         None => Err(NotYet::not_read(
             format!("the class {name} is declared with, not loaded (a class load is a write)"),

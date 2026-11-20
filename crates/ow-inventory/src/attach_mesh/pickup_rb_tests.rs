@@ -106,21 +106,14 @@ fn engine() -> Vec<u8> {
     t.prop("Float", mesh, "PhysicsWeight", 0, 0);
     t.prop("Object", mesh, "PhysicsAsset", 0, asset);
     t.prop("Bool", mesh, "bHasPhysicsAssetInstance", 0, 0);
-    // The deferred reattach's fields, only on this subclass: plain SkeletalMeshComponent lacks them, so its calls are
-    // refused by the up-front declaration check (lane FOLLOWUP-PICKUP-RB-VALIDATION).
+    // The deferred reattach's fields, only on this subclass: plain SkeletalMeshComponent lacks them (item 3).
     let toy_mesh = t.class("ToyMesh", mesh);
     t.prop("Struct", toy_mesh, "Scene", 0, pointer);
     t.prop("Object", toy_mesh, "Owner", 0, actor);
     t.prop("Bool", toy_mesh, "bNeedsReattach", 0, 0);
-    // An owned mesh without `Scene`: the ownerless path's field, checked on every path now.
-    let owned = t.class("ToyOwnedMesh", mesh);
-    t.prop("Object", owned, "Owner", 0, actor);
-    t.prop("Bool", owned, "bNeedsReattach", 0, 0);
-    // A plain primitive with the reattach fields, for refusal 2.
-    let toy_primitive = t.class("ToyPrimitive", primitive);
-    t.prop("Struct", toy_primitive, "Scene", 0, pointer);
-    t.prop("Object", toy_primitive, "Owner", 0, actor);
-    t.prop("Bool", toy_primitive, "bNeedsReattach", 0, 0);
+    // A plain primitive whose `BlockActors` is declared an int, shadowing the parent's bool (#625 r1, item 2).
+    let bad_primitive = t.class("ToyBadPrimitive", primitive);
+    t.prop("Int", bad_primitive, "BlockActors", 0, 0);
     t.class("WillowInventory", actor);
     let definition = t.class("WillowInventoryDefinition", object);
     t.prop("Object", definition, "PhysicsAsset", 0, asset);
@@ -187,6 +180,10 @@ fn willow_game() -> Vec<u8> {
     for f in SPIN_FIELDS {
         t.prop("Float", spin, f, 0, 0);
     }
+    // A globals definition whose `DropImpactEffectDelay` is declared an int, shadowing the parent's float (#625 r1,
+    // item 2).
+    let bad = t.class("ToyBadImpactGlobalsDefinition", gd);
+    t.prop("Int", bad, "DropImpactEffectDelay", 0, 0);
     t.build()
 }
 
@@ -217,6 +214,7 @@ fn fx_mode(mode: ParityMode) -> Fx {
 
 const GD_SPIN: &str = "WillowGame.ToySpinGlobalsDefinition";
 const GD_PLAIN: &str = "WillowGame.GlobalsDefinition";
+const GD_BAD_IMPACT: &str = "WillowGame.ToyBadImpactGlobalsDefinition";
 
 /// The world, its globals definition of class `gd`; with `warm` false that class's code is never loaded (its layout is
 /// defined by the store, and the object made from the default without `Vm::find_class`).
@@ -268,6 +266,9 @@ fn fx_with(mode: ParityMode, gd_class: &str, warm: bool) -> Fx {
         ("DropImpactEffectDelay", 0.5),
         ("DropImpactEffectThreshold", 41.0),
     ] {
+        if gd_class == GD_BAD_IMPACT && f == "DropImpactEffectDelay" {
+            continue;
+        }
         set(&mut vm, gd, f, Value::Float(v));
     }
     if gd_class == GD_SPIN {
@@ -510,7 +511,7 @@ fn the_branch_without_a_physics_asset_is_not_read() {
 #[test]
 fn a_primitive_that_is_not_a_skeletal_mesh_is_not_read() {
     let mut x = fx();
-    let primitive = x.obj("Engine.ToyPrimitive");
+    let primitive = x.obj("Engine.PrimitiveComponent");
     x.set(primitive, "CollideActors", Value::Bool(true));
     x.set(x.pickup, "CollisionComponent", Value::Object(Some(primitive)));
     x.mesh = primitive;
@@ -650,46 +651,58 @@ fn a_missing_destination_slot_refuses_before_any_write() {
     assert_eq!(x.state(), before, "no timer and no field written");
 }
 
-/// A call refused as a data error before any write: its message, with the heap, the timers and #518's three counters
-/// (`Heap::committed_writes`, `GameRng::draws`, `DefStore::load_transitions`) unchanged.
-fn refused_script(x: &mut Fx) -> String {
-    let before = x.state();
-    let counters = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
-    let start = counters(x);
-    let message = match x.call() {
-        Err(VmError::Script { message, .. }) => message,
-        other => panic!("expected a data error, got {other:?}"),
-    };
-    assert_eq!(counters(x), start, "#518's counters moved: {message}");
-    assert_eq!(x.state(), before, "nothing written: {message}");
-    message
-}
-
-/// Lane FOLLOWUP-PICKUP-RB-VALIDATION, fix 1 (replacing review r1 of #587's item 3): every declaration the native
-/// reads is checked before the branches. The spin range is checked on the torque path too, and the reattach fields
-/// (`Scene` included) with `CollideActors` set and on the owned path. Each refusal is a data error with #518's
-/// counters unchanged.
+/// Review r1 of #587, item 3: each field is checked only on the branch that uses it. A torque call passes with a
+/// globals definition that has no spin range; a mesh with `CollideActors` set passes without the reattach fields.
 #[test]
-fn every_declaration_is_checked_before_the_branches() {
-    // A globals definition with no spin range: the spin path and the torque path alike.
-    let mut x = fx_with(ParityMode::Off, GD_PLAIN, true);
-    assert!(refused_script(&mut x).contains("PickupSpin"), "the spin path");
+fn fields_are_checked_only_on_the_branch_that_uses_them() {
     let mut x = fx_with(ParityMode::Off, GD_PLAIN, true);
     x.set(x.pickup, "bTorque", Value::Bool(true));
-    assert!(refused_script(&mut x).contains("PickupSpin"), "the torque path checks the spin range's declarations too");
-    // A mesh with CollideActors set (no reattach) and no reattach fields.
+    x.call().expect("the torque path reads no spin range");
+    let mut x = fx_with(ParityMode::Off, GD_PLAIN, true);
+    let e = x.call().unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("PickupSpin")), "the spin path needs it: {e:?}");
     let mut x = fx();
     let bare = x.obj("Engine.SkeletalMeshComponent");
     x.set(bare, "CollideActors", Value::Bool(true));
     x.set(x.pickup, "CollisionComponent", Value::Object(Some(bare)));
     x.mesh = bare;
-    assert!(refused_script(&mut x).contains("declares no Owner"), "the reattach fields without the reattach");
-    // An owned mesh without Scene, on the owned path: Scene is checked there too.
+    x.call().expect("no reattach, so no reattach fields");
+    assert_eq!(x.get(bare, "bHasPhysicsAssetInstance"), Value::Bool(true));
+}
+
+/// A call refused as a data error: its message, with nothing written, no timer, and #518's three counters unchanged.
+fn refused_script(x: &mut Fx) -> String {
+    let before = x.state();
+    let message = match x.call() {
+        Err(VmError::Script { message, .. }) => message,
+        other => panic!("expected a data error, got {other:?}"),
+    };
+    assert_eq!(x.state(), before, "nothing written: {message}");
+    message
+}
+
+/// #625 r1, item 2 (the hub's ruling): a malformed declaration on the chosen path is a data error before any write,
+/// even where a valid refusal would follow it; one on a path not taken is never read.
+#[test]
+fn a_malformed_declaration_on_the_chosen_path_refuses_before_any_write() {
+    // The asset path copies G's DropImpactEffectDelay: declared an int, refused before the first write.
+    let mut x = fx_with(ParityMode::Off, GD_BAD_IMPACT, true);
+    x.set(x.pickup, "bTorque", Value::Bool(true));
+    let message = refused_script(&mut x);
+    assert!(message.contains("DropImpactEffectDelay"), "{message}");
+    // A primitive with a malformed BlockActors, which the path reads before refusal 2: the data error comes first.
     let mut x = fx();
-    let owned = x.obj("Engine.ToyOwnedMesh");
-    let pickup = x.pickup;
-    x.set(owned, "Owner", Value::Object(Some(pickup)));
-    x.set(x.pickup, "CollisionComponent", Value::Object(Some(owned)));
-    x.mesh = owned;
-    assert!(refused_script(&mut x).contains("declares no Scene"), "Scene off the ownerless path");
+    let primitive = x.obj("Engine.ToyBadPrimitive");
+    x.set(primitive, "CollideActors", Value::Bool(true));
+    x.set(x.pickup, "CollisionComponent", Value::Object(Some(primitive)));
+    x.mesh = primitive;
+    let message = refused_script(&mut x);
+    assert!(message.contains("BlockActors"), "{message}");
+    // Refusal 2 with G's malformed declaration: that path never reads the impact fields, so the refusal stands.
+    let mut x = fx_with(ParityMode::Off, GD_BAD_IMPACT, true);
+    let primitive = x.obj("Engine.PrimitiveComponent");
+    x.set(primitive, "CollideActors", Value::Bool(true));
+    x.set(x.pickup, "CollisionComponent", Value::Object(Some(primitive)));
+    x.mesh = primitive;
+    refused(&mut x, Missing::NotRead, NO_ASSET, RECORD_RB);
 }
