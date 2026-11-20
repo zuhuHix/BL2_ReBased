@@ -216,7 +216,9 @@ So the evaluator loads the definitions it reads as it walks them, and the refusa
 writes before a later one refuses: the loads are the evaluator's own. In the game these objects are presumably
 resident with the skill's package (UNVERIFIED). Two ways out, for queue item PREFLIGHT-ORDER-LINK9-CAST:
 - **(a)** load them at link 9's set-up as labelled harness inputs, as `IFlagProvider` and `IRuleEngineOwner` already
-  are;
+  are. That would remove the load transitions the probe saw. Whether the partial-write mark then goes stays
+  UNVERIFIED until a run shows all three of #518's counters unchanged from the evaluator's start through the refusal:
+  the probe did not attribute all 40 heap writes to the loads;
 - **(b)** check residency first in the evaluator's preflight, so an unloaded definition refuses not-read before any
   load. Link 9 would then stop earlier.
 
