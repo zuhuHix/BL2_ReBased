@@ -188,6 +188,44 @@ binds `GetAIComponent` to a `NotYet { NotRead }` (`ow-combat` `holds.rs`). A wor
 stop at that NotYet instead. Either way, `GetAIComponent` is the next stop once this answer is implemented, and it is
 that native's own open work.
 
+## Link 9's partial writes before this question (second pass, 2026-11-20)
+
+AI-assisted (Claude Code, Claude Opus 5.5). A second analyst pass (lane ANALYST-GEARBOXMIND-QUERYINTERFACE again, on
+main 4c4522d7 with #628's set-up). It re-read the interface virtual's entries for `AIController`, `GearboxMind` and
+`WillowMind`, and the pawn accessor. It agrees with sections 1 to 3: one shared answer, the same two names, and
+`WillowMind`'s own pawn field. It changes no rule here. Raw output stays under ignored `local/analysis/gmqi/`.
+**UNVERIFIED** in the running game.
+
+**Where the mark comes from.** On #628's head (77ff5e7c), link 9's `cast` stops at this note's question, marked
+"stopped after partial writes". The mark is `FlagExpressionEvaluator.Evaluate`'s (`ow-skills`
+`action_skill/flag_expression.rs`). The native takes a snapshot of #518's three counters when it starts and marks a
+refusal when one has moved since.
+
+**What moved.** A local probe, never pushed, logged the counters and each lazy definition load inside that one call
+(installed Off `--slice-gate`, strict, under the machine lock). Between the evaluator's start and the refusal:
+- **0 draws;**
+- **8 definition loads:**
+  - the skill's flag evaluator sub-object;
+  - `Flag_Skills_CanPhaseLock` and its flag evaluator;
+  - `Flag_Skills_DisablePhaseLock`, its `WillowMind` attribute context resolver and its rule-engine flag value
+    resolver;
+  - `Flag_Skills_PhaseLockOnHold` and its AI component attribute context resolver;
+- **40 committed heap writes.** The probe did not separate the loads' own writes from any other write.
+
+So the evaluator loads the definitions it reads as it walks them, and the refusal comes later. No earlier native
+writes before a later one refuses: the loads are the evaluator's own. In the game these objects are presumably
+resident with the skill's package (UNVERIFIED). Two ways out, for queue item PREFLIGHT-ORDER-LINK9-CAST:
+- **(a)** load them at link 9's set-up as labelled harness inputs, as `IFlagProvider` and `IRuleEngineOwner` already
+  are;
+- **(b)** check residency first in the evaluator's preflight, so an unloaded definition refuses not-read before any
+  load. Link 9 would then stop earlier.
+
+The mark does not count writes made before the evaluator (the cast's own script), and the probe did not look at them.
+
+**The probe with this note's answer stood in** (the open `GearboxMind` entry dropped, so the mind gets the plain
+answer): ok 4, notyet 8, error 2 of 14. Link 9 passes 1 of 2 steps, and `cast` stops at the unbound
+`GearboxMind.GetAIComponent()`, as section 6 found.
+
 ## Open (each UNVERIFIED)
 
 - What `WillowPlayerController`'s own answer adds around `Controller`'s.

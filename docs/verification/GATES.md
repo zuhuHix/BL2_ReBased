@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-GEARBOXMIND-QUERYINTERFACE, second pass (2026-11-20, pc-hummer, docs only, on
+research/rust-gearboxmind-query-interface):** AI-assisted (Claude Code, Opus 5.5). No code changed, so no measured
+number moved. It appends one section to #589's note: link 9's partial writes are the flag evaluator's own 8 lazy
+loads (40 heap writes, 0 draws). The local probe (#628's head with the mind on the plain rule; installed Off
+`--slice-gate` strict) gives ok 4, notyet 8, error 2 of 14, with link 9 at 1 of 2 steps, stopped at the unbound
+`GearboxMind.GetAIComponent()`. UNVERIFIED in game.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
