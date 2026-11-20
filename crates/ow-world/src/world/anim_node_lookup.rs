@@ -1,4 +1,4 @@
-//! Owner: lanes IMPL-ANIM-NODE-LOOKUP and FIX-BODY-COMPOSITION-LOOKUP-STALE (decisions 2026-11-19-NNN, numbers
+//! Owner: lanes IMPL-ANIM-NODE-LOOKUP and FIX-BODY-COMPOSITION-LOOKUP-STALE (decisions 2026-11-19-230, numbers
 //! pending). The new `Mesh`'s animation-node and skeletal-control lookups and the slot-node scan of the pawn's
 //! `PostInitBodyComposition`, in `ParityMode::Off`, over the **copied tree**. AI-assisted (Claude Code).
 //!
