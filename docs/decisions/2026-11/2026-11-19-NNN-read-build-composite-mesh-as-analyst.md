@@ -1,4 +1,4 @@
-## 2026-11-20: Read WillowWeapon.BuildCompositeMesh for link 8 as analyst
+## 2026-11-19: Read WillowWeapon.BuildCompositeMesh for link 8 as analyst
 
 AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BUILD-COMPOSITE-MESH, analyst only, for slice link 8. The decision
 number is pending (the hub numbers decisions at landing); NNN is a placeholder.
@@ -21,6 +21,13 @@ number is pending (the hub numbers decisions at landing); NNN is a placeholder.
     draws nothing of its own.
   - **The slice gun** takes the gestalt path with 4 names (barrel, body, grip, stock).
   - **The proposed Off answer:** a write-free, load-free preflight, then `LayerAbsent` for the gestalt data write
-    (the next native copies it) and for a merge. A hub alternative treats the gestalt data as render-side.
-  - **The probe:** with that alternative as a stand-in, link 8 next stops at the unbound
+    and for a merge.
+  - **Review r1 of #588:** the hub's render-side ruling was overturned. `InitMeshes` copies the gestalt data at
+    once (first to third person, then third person to each extra slot, both under the `GestaltMesh` and
+    `GestaltSkeletalMesh` checks), and later script queries weapon sockets (that dependency is UNVERIFIED). So the
+    gestalt component state (`GestaltData`) is a port layer. The preflight order is defined: residency before
+    fields, shapes as read, the component checked only on the gestalt path (None or the wrong class is a
+    `VmError::Script`), and the part-name fallback read from handle name metadata without a load. The definition's
+    `GestaltInfos` already decode; what Off lacks is the component state and its fill.
+  - **The probe:** with a probe-only stand-in that skips the component write, link 8 next stops at the unbound
     `SkeletalMeshComponent.InitGestaltMeshDataFromOther(object)`.
