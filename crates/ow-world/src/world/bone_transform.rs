@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-BONE-TRANSFORM-LAYER. The script natives `SkeletalMeshComponent.ForceSkelUpdate()` and
 //! `SkeletalMeshComponent.UpdateAnimations()` in `ParityMode::Off`, coded from docs/verification/
-//! NATIVE_BONE_TRANSFORM_LAYER.md section 6.4 alone (#646 at 78bc883c; clean room: lane ANALYST-BONE-TRANSFORM-LAYER
+//! NATIVE_BONE_TRANSFORM_LAYER.md section 6.4 alone (#646 at 94ab4339; clean room: lane ANALYST-BONE-TRANSFORM-LAYER
 //! read the native, this lane did not). The layer's read and pose update (sections 6.1 to 6.3) are in
 //! `world::skeletal`. AI-assisted (Claude Code). **Every rule here is UNVERIFIED in the running game.** Reference
 //! binds nothing.
@@ -28,8 +28,7 @@ use crate::world::skeletal::{self, Kind};
 /// The record of every refusal here.
 pub const RECORD: &str = "docs/verification/NATIVE_BONE_TRANSFORM_LAYER.md";
 /// `ForceSkelUpdate`'s refusal on an attached component.
-pub const FORCE_ATTACHED: &str =
-    "ForceSkelUpdate on an attached component (the tree tick, the LOD choice, the pose update and the transform update)";
+pub const FORCE_ATTACHED: &str = "ForceSkelUpdate on an attached component (the tree tick, the LOD choice, the pose update and the transform update)";
 /// `UpdateAnimations`' refusal with a tree.
 pub const TREE_TICKS: &str = "UpdateAnimations: the tree nodes' ticks";
 /// The natives' keys.
@@ -37,21 +36,32 @@ pub const FORCE_SKEL_UPDATE: &str = "SkeletalMeshComponent.ForceSkelUpdate()";
 pub const UPDATE_ANIMATIONS: &str = "SkeletalMeshComponent.UpdateAnimations()";
 
 fn script(function: &str, message: String) -> VmError {
-    VmError::Script { function: function.to_string(), message: format!("{function}: {message}") }
+    VmError::Script {
+        function: function.to_string(),
+        message: format!("{function}: {message}"),
+    }
 }
 
 /// Rule 1: the receiver set and resident.
 fn receiver(c: &NativeCall<'_>, function: &str) -> Result<ObjRef, VmError> {
-    let o = c.this.ok_or_else(|| script(function, "called with no component".to_string()))?;
+    let o = c
+        .this
+        .ok_or_else(|| script(function, "called with no component".to_string()))?;
     if !skeletal::resident(c.vm, o)? {
-        return Err(NotYet::not_read(format!("{function}: the component is an unloaded handle (a load is a write)"), RECORD).into());
+        return Err(NotYet::not_read(
+            format!("{function}: the component is an unloaded handle (a load is a write)"),
+            RECORD,
+        )
+        .into());
     }
     Ok(o)
 }
 
 fn force_skel_update(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let o = receiver(c, "ForceSkelUpdate")?;
-    if skeletal::read_kind(c.vm, o, "bAttached", Kind::Bool, "ForceSkelUpdate")? == Value::Bool(true) {
+    if skeletal::read_kind(c.vm, o, "bAttached", Kind::Bool, "ForceSkelUpdate")?
+        == Value::Bool(true)
+    {
         return Err(NotYet::not_read(FORCE_ATTACHED, RECORD).into());
     }
     Ok(Value::None)
@@ -59,7 +69,9 @@ fn force_skel_update(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn update_animations(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let o = receiver(c, "UpdateAnimations")?;
-    if skeletal::read_kind(c.vm, o, "Animations", Kind::Object, "UpdateAnimations")? != Value::Object(None) {
+    if skeletal::read_kind(c.vm, o, "Animations", Kind::Object, "UpdateAnimations")?
+        != Value::Object(None)
+    {
         return Err(NotYet::not_ported(TREE_TICKS, RECORD).into());
     }
     Ok(Value::None)

@@ -94,7 +94,9 @@ impl ReferenceSkeleton {
 
     /// The index of the bone named `name`, compared as names are (case-insensitively).
     pub fn bone_index(&self, name: &str) -> Option<usize> {
-        self.bones.iter().position(|b| b.name.eq_ignore_ascii_case(name))
+        self.bones
+            .iter()
+            .position(|b| b.name.eq_ignore_ascii_case(name))
     }
 }
 
@@ -134,7 +136,11 @@ pub struct SkeletalMeshes {
 
 impl SkeletalMeshes {
     pub fn new(source: Box<dyn SkeletonSource>) -> Self {
-        SkeletalMeshes { source, cache: DetMap::new(), poses: DetMap::new() }
+        SkeletalMeshes {
+            source,
+            cache: DetMap::new(),
+            poses: DetMap::new(),
+        }
     }
 
     /// Installs the layer in `vm` (a harness input; at most once per VM).
@@ -144,7 +150,10 @@ impl SkeletalMeshes {
 }
 
 fn script(message: String) -> VmError {
-    VmError::Script { function: UNIT.to_string(), message: format!("{UNIT}: {message}") }
+    VmError::Script {
+        function: UNIT.to_string(),
+        message: format!("{UNIT}: {message}"),
+    }
 }
 
 /// The store's file package, object path and object name of `o`, from its export table entry (the entry's own
@@ -159,11 +168,15 @@ fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
     let interned = vm.space.names.text(x.name).into_owned();
     if let Origin::Export { package, index } | Origin::Resource { package, index } = x.origin {
         let pkg = vm.defs.packages().get(package);
-        if let (Ok(path), Ok(entry)) = (ow_defs::identity::full_path(pkg, index), pkg.object(index)) {
+        if let (Ok(path), Ok(entry)) = (ow_defs::identity::full_path(pkg, index), pkg.object(index))
+        {
             let leaf = entry.name.clone();
             let base = vm.space.classes.by_path(MESH_CLASS);
             for (i, e) in pkg.exports.iter().enumerate() {
-                if i64::try_from(i + 1).ok() == Some(i64::from(index)) || !e.name.eq_ignore_ascii_case(&leaf) || e.class == 0 {
+                if i64::try_from(i + 1).ok() == Some(i64::from(index))
+                    || !e.name.eq_ignore_ascii_case(&leaf)
+                    || e.class == 0
+                {
                     continue;
                 }
                 let class_path = ow_defs::identity::full_path(pkg, e.class).unwrap_or_default();
@@ -196,27 +209,50 @@ fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
             return Ok((pkg.name.clone(), path, leaf));
         }
     }
-    Err(NotYet::layer_absent(format!("{UNIT}: {interned}, an object with no package export"), LAYER, RECORD).into())
+    Err(NotYet::layer_absent(
+        format!("{UNIT}: {interned}, an object with no package export"),
+        LAYER,
+        RECORD,
+    )
+    .into())
 }
 
 /// Refuses an object the store has not loaded (module documentation, "Write-free").
 fn loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     let stand_in = {
         let x = vm.space.heap.get(o)?;
-        x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0)
+        x.slots.is_empty()
+            && vm
+                .space
+                .classes
+                .get_layout(x.class)
+                .is_some_and(|l| l.slot_count() > 0)
     };
     if vm.defs.is_unloaded(&vm.space, o) || stand_in {
         let leaf = vm.space.names.text(vm.space.heap.get(o)?.name).into_owned();
-        return Err(NotYet::layer_absent(format!("{UNIT}: the unloaded {what} {leaf}"), LOAD_LAYER, RECORD).into());
+        return Err(NotYet::layer_absent(
+            format!("{UNIT}: the unloaded {what} {leaf}"),
+            LOAD_LAYER,
+            RECORD,
+        )
+        .into());
     }
     Ok(())
 }
 
 fn check_mesh(vm: &Vm, mesh: ObjRef) -> Result<(), VmError> {
     let class = vm.space.heap.get(mesh)?.class;
-    let is_mesh = vm.space.classes.by_path(MESH_CLASS).is_some_and(|m| vm.space.classes.is_child_of(class, m));
+    let is_mesh = vm
+        .space
+        .classes
+        .by_path(MESH_CLASS)
+        .is_some_and(|m| vm.space.classes.is_child_of(class, m));
     if !is_mesh {
-        let path = vm.space.classes.get_layout(class).map_or_else(String::new, |l| l.path().as_str().to_string());
+        let path = vm
+            .space
+            .classes
+            .get_layout(class)
+            .map_or_else(String::new, |l| l.path().as_str().to_string());
         return Err(script(format!("{path} is not a SkeletalMesh")));
     }
     loaded(vm, mesh, "skeletal mesh")
@@ -226,23 +262,49 @@ fn check_mesh(vm: &Vm, mesh: ObjRef) -> Result<(), VmError> {
 pub fn reference_skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>, VmError> {
     check_mesh(vm, mesh)?;
     let Some(cell) = vm.service::<SkeletalMeshes>() else {
-        return Err(NotYet::layer_absent(format!("{UNIT}: no skeleton source is installed"), LAYER, RECORD).into());
+        return Err(NotYet::layer_absent(
+            format!("{UNIT}: no skeleton source is installed"),
+            LAYER,
+            RECORD,
+        )
+        .into());
     };
-    if let Some(hit) = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.cache.get(&mesh) {
+    if let Some(hit) = cell
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+        .cache
+        .get(&mesh)
+    {
         return Ok(Rc::clone(hit));
     }
     let (package, path, leaf) = identity(vm, mesh)?;
-    let read = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.source.skeleton(&package, &path, &leaf);
+    let read = cell
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+        .source
+        .skeleton(&package, &path, &leaf);
     let skeleton = match read {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return Err(NotYet::layer_absent(format!("{UNIT}: no reference skeleton for {path}"), LAYER, RECORD).into());
+            return Err(NotYet::layer_absent(
+                format!("{UNIT}: no reference skeleton for {path}"),
+                LAYER,
+                RECORD,
+            )
+            .into());
         }
-        Err(e) => return Err(script(format!("the reference skeleton of {path} failed to parse: {e}"))),
+        Err(e) => {
+            return Err(script(format!(
+                "the reference skeleton of {path} failed to parse: {e}"
+            )));
+        }
     };
     check_skeleton(&skeleton, &path)?;
     let skeleton = Rc::new(skeleton);
-    cell.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.cache.insert(mesh, Rc::clone(&skeleton));
+    cell.try_borrow_mut()
+        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+        .cache
+        .insert(mesh, Rc::clone(&skeleton));
     Ok(skeleton)
 }
 
@@ -251,12 +313,16 @@ pub fn reference_skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>
 /// spelling and order are kept.
 fn check_skeleton(s: &ReferenceSkeleton, path: &str) -> Result<(), VmError> {
     if s.bones.is_empty() {
-        return Err(script(format!("the reference skeleton of {path} has no bones")));
+        return Err(script(format!(
+            "the reference skeleton of {path} has no bones"
+        )));
     }
     let mut seen: ow_core::DetSet<String> = ow_core::DetSet::new();
     for (i, b) in s.bones.iter().enumerate() {
         if !seen.insert(b.name.to_ascii_lowercase()) {
-            return Err(script(format!("the reference skeleton of {path}: bone {i}'s name repeats an earlier bone's")));
+            return Err(script(format!(
+                "the reference skeleton of {path}: bone {i}'s name repeats an earlier bone's"
+            )));
         }
     }
     for (i, b) in s.bones.iter().enumerate() {
@@ -265,7 +331,9 @@ fn check_skeleton(s: &ReferenceSkeleton, path: &str) -> Result<(), VmError> {
             Some(p) => i > 0 && p < i,
         };
         if !ok {
-            return Err(script(format!("the reference skeleton of {path}: bone {i} is out of parent order")));
+            return Err(script(format!(
+                "the reference skeleton of {path}: bone {i} is out of parent order"
+            )));
         }
     }
     Ok(())
@@ -273,7 +341,10 @@ fn check_skeleton(s: &ReferenceSkeleton, path: &str) -> Result<(), VmError> {
 
 fn prop(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
     let class = vm.space.heap.get(o)?.class;
-    let p = vm.space.prop(class, name).ok_or_else(|| script(format!("an object without {name}")))?;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| script(format!("an object without {name}")))?;
     Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
 }
 
@@ -281,14 +352,24 @@ fn field<'a>(vm: &Vm, v: &'a Value, name: &str) -> Result<&'a Value, VmError> {
     let missing = || script(format!("a value without the field {name}"));
     let s = v.as_struct().ok_or_else(missing)?;
     let id = vm.space.names.find(name).ok_or_else(missing)?;
-    let (i, _) = vm.space.classes.struct_layout(s.ty).and_then(|l| l.field(id)).ok_or_else(missing)?;
-    s.fields.get(usize::try_from(i).map_err(|_| missing())?).ok_or_else(missing)
+    let (i, _) = vm
+        .space
+        .classes
+        .struct_layout(s.ty)
+        .and_then(|l| l.field(id))
+        .ok_or_else(missing)?;
+    s.fields
+        .get(usize::try_from(i).map_err(|_| missing())?)
+        .ok_or_else(missing)
 }
 
 fn name_of(vm: &Vm, v: &Value, what: &str) -> Result<String, VmError> {
     match v {
         Value::Name(n) => Ok(vm.space.names.text(*n).into_owned()),
-        other => Err(script(format!("{what} holds {}, not a name", other.kind_name()))),
+        other => Err(script(format!(
+            "{what} holds {}, not a name",
+            other.kind_name()
+        ))),
     }
 }
 
@@ -297,7 +378,12 @@ fn floats(vm: &Vm, v: &Value, names: [&str; 3], what: &str) -> Result<[f32; 3], 
     for (o, n) in out.iter_mut().zip(names) {
         *o = match field(vm, v, n)? {
             Value::Float(f) => *f,
-            other => return Err(script(format!("{what}.{n} holds {}, not a float", other.kind_name()))),
+            other => {
+                return Err(script(format!(
+                    "{what}.{n} holds {}, not a float",
+                    other.kind_name()
+                )));
+            }
         };
     }
     Ok(out)
@@ -308,14 +394,19 @@ fn ints(vm: &Vm, v: &Value, names: [&str; 3], what: &str) -> Result<[i32; 3], Vm
     for (o, n) in out.iter_mut().zip(names) {
         *o = match field(vm, v, n)? {
             Value::Int(i) => *i,
-            other => return Err(script(format!("{what}.{n} holds {}, not an int", other.kind_name()))),
+            other => {
+                return Err(script(format!(
+                    "{what}.{n} holds {}, not an int",
+                    other.kind_name()
+                )));
+            }
         };
     }
     Ok(out)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The bone-transform layer (lane IMPL-BONE-TRANSFORM-LAYER, NATIVE_BONE_TRANSFORM_LAYER.md section 6, #646 at 78bc883c;
+// The bone-transform layer (lane IMPL-BONE-TRANSFORM-LAYER, NATIVE_BONE_TRANSFORM_LAYER.md section 6, #646 at 94ab4339;
 // clean room). Two separate answers: the consumers' read ([`stored_space_bases`], the buffer as stored) and the fill
 // paths' plan ([`pose_update`], no fill path is ported yet). Every rule is UNVERIFIED in the running game.
 // ---------------------------------------------------------------------------------------------------------------
@@ -325,7 +416,8 @@ pub const BONE_RECORD: &str = "docs/verification/NATIVE_BONE_TRANSFORM_LAYER.md"
 /// The struct `SpaceBases` holds.
 pub const BONE_ATOM: &str = "Core.Object.BoneAtom";
 /// `pose_update`'s rule 2.
-pub const UNLOADED_MESH: &str = "the bone-transform layer: the mesh is an unloaded handle (a load is a write)";
+pub const UNLOADED_MESH: &str =
+    "the bone-transform layer: the mesh is an unloaded handle (a load is a write)";
 /// `pose_update`'s rule 3: its layer and text.
 pub const PARENT_COPY: &str = "the bone-transform layer's parent copy";
 pub const PARENT_COPY_TEXT: &str = "the bone-transform layer: the bones of a ParentAnimComponent";
@@ -345,18 +437,30 @@ pub enum Kind {
 
 /// Field `name` of `o`: declared on its class with `kind` (by the declaration, not the value), else
 /// `VmError::Script` naming it for `function`; then its value, read without a load.
-pub fn read_kind(vm: &Vm, o: ObjRef, name: &str, kind: Kind, function: &str) -> Result<Value, VmError> {
+pub fn read_kind(
+    vm: &Vm,
+    o: ObjRef,
+    name: &str,
+    kind: Kind,
+    function: &str,
+) -> Result<Value, VmError> {
     let class = vm.space.heap.get(o)?.class;
     let path = || vm.space.classes.layout(class).path().to_string();
     let bad = || VmError::Script {
         function: function.to_string(),
-        message: format!("{function}: {}.{name} is not declared as {}", path(), kind_name(kind)),
+        message: format!(
+            "{function}: {}.{name} is not declared as {}",
+            path(),
+            kind_name(kind)
+        ),
     };
     let p = vm.space.prop(class, name).ok_or_else(bad)?;
     let declared = vm.space.classes.decl(p).map(|d| &d.kind);
     let ok = matches!(
         (kind, declared),
-        (Kind::Object, Some(PropKind::Object { .. })) | (Kind::Bool, Some(PropKind::Bool)) | (Kind::Int, Some(PropKind::Int))
+        (Kind::Object, Some(PropKind::Object { .. }))
+            | (Kind::Bool, Some(PropKind::Bool))
+            | (Kind::Int, Some(PropKind::Int))
     );
     if !ok {
         return Err(bad());
@@ -375,7 +479,12 @@ fn kind_name(kind: Kind) -> &'static str {
 /// Whether `o` is resident: not an unloaded or failed handle, and not a stand-in with no slots whose class has some.
 pub fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     let x = vm.space.heap.get(o)?;
-    let stand_in = x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0);
+    let stand_in = x.slots.is_empty()
+        && vm
+            .space
+            .classes
+            .get_layout(x.class)
+            .is_some_and(|l| l.slot_count() > 0);
     Ok(!vm.defs.is_unloaded(&vm.space, o) && !stand_in)
 }
 
@@ -385,11 +494,20 @@ pub fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
 pub fn stored_space_bases(vm: &Vm, component: ObjRef) -> Result<Vec<Value>, VmError> {
     let class = vm.space.heap.get(component)?.class;
     let path = || vm.space.classes.layout(class).path().to_string();
-    let bad = || script(format!("{}.SpaceBases is not declared as an array of {BONE_ATOM}", path()));
+    let bad = || {
+        script(format!(
+            "{}.SpaceBases is not declared as an array of {BONE_ATOM}",
+            path()
+        ))
+    };
     let p = vm.space.prop(class, "SpaceBases").ok_or_else(bad)?;
     let atoms = match vm.space.classes.decl(p).map(|d| &d.kind) {
         Some(PropKind::Array(inner)) => match inner.as_ref() {
-            PropKind::Struct(ty) => vm.space.classes.struct_layout(*ty).is_some_and(|l| l.path().as_str() == BONE_ATOM),
+            PropKind::Struct(ty) => vm
+                .space
+                .classes
+                .struct_layout(*ty)
+                .is_some_and(|l| l.path().as_str() == BONE_ATOM),
             _ => false,
         },
         _ => false,
@@ -397,7 +515,12 @@ pub fn stored_space_bases(vm: &Vm, component: ObjRef) -> Result<Vec<Value>, VmEr
     if !atoms {
         return Err(bad());
     }
-    Ok(vm.space.read(component, PropAddr::scalar(p))?.elements().map(<[Value]>::to_vec).unwrap_or_default())
+    Ok(vm
+        .space
+        .read(component, PropAddr::scalar(p))?
+        .elements()
+        .map(<[Value]>::to_vec)
+        .unwrap_or_default())
 }
 
 /// The fill paths' plan (section 6.3).
@@ -425,11 +548,17 @@ pub fn pose_update(vm: &Vm, component: ObjRef) -> Result<PoseUpdate, VmError> {
     const F: &str = "the bone-transform layer";
     let object = |n: &str| match read_kind(vm, component, n, Kind::Object, F)? {
         Value::Object(o) => Ok(o),
-        other => Err(script(format!("{n} holds {}, not an object", other.kind_name()))),
+        other => Err(script(format!(
+            "{n} holds {}, not an object",
+            other.kind_name()
+        ))),
     };
     let boolean = |n: &str| match read_kind(vm, component, n, Kind::Bool, F)? {
         Value::Bool(b) => Ok(b),
-        other => Err(script(format!("{n} holds {}, not a bool", other.kind_name()))),
+        other => Err(script(format!(
+            "{n} holds {}, not a bool",
+            other.kind_name()
+        ))),
     };
     let mesh = object("SkeletalMesh")?;
     let animations = object("Animations")?;
@@ -438,7 +567,12 @@ pub fn pose_update(vm: &Vm, component: ObjRef) -> Result<PoseUpdate, VmError> {
     let discard = boolean("bForceDiscardRootMotion")?;
     let force_refpose = match read_kind(vm, component, "bForceRefpose", Kind::Int, F)? {
         Value::Int(i) => i != 0,
-        other => return Err(script(format!("bForceRefpose holds {}, not an int", other.kind_name()))),
+        other => {
+            return Err(script(format!(
+                "bForceRefpose holds {}, not an int",
+                other.kind_name()
+            )));
+        }
     };
     stored_space_bases(vm, component)?;
     // Rule 1.
@@ -467,7 +601,8 @@ pub fn pose_update(vm: &Vm, component: ObjRef) -> Result<PoseUpdate, VmError> {
 }
 
 /// The reference pose's text when a bone of the skeleton has no bind pose.
-pub const NO_BIND_POSE: &str = "the skeletal mesh data layer: a reference skeleton without bind poses";
+pub const NO_BIND_POSE: &str =
+    "the skeletal mesh data layer: a reference skeleton without bind poses";
 
 /// `mesh`'s reference pose in component space (lane IMPL-BONE-TRANSFORM-LAYER, NATIVE_BONE_TRANSFORM_LAYER.md section
 /// 6.1): each bone's bind pose composed onto its parent's composed transform, root first, every scale 1. A child's
@@ -478,24 +613,42 @@ pub const NO_BIND_POSE: &str = "the skeletal mesh data layer: a reference skelet
 pub fn reference_space_bases(vm: &Vm, mesh: ObjRef) -> Result<Rc<Vec<SpaceBase>>, VmError> {
     let skeleton = reference_skeleton(vm, mesh)?;
     let Some(cell) = vm.service::<SkeletalMeshes>() else {
-        return Err(NotYet::layer_absent(format!("{UNIT}: no skeleton source is installed"), LAYER, RECORD).into());
+        return Err(NotYet::layer_absent(
+            format!("{UNIT}: no skeleton source is installed"),
+            LAYER,
+            RECORD,
+        )
+        .into());
     };
-    if let Some(hit) = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.poses.get(&mesh) {
+    if let Some(hit) = cell
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+        .poses
+        .get(&mesh)
+    {
         return Ok(Rc::clone(hit));
     }
     let mut out: Vec<SpaceBase> = Vec::with_capacity(skeleton.len());
     for bone in &skeleton.bones {
         let Some(bind) = bone.bind else {
-            return Err(NotYet::layer_absent(NO_BIND_POSE, LAYER, RECORD).into());
+            return Err(NotYet::layer_absent(NO_BIND_POSE, LAYER, BONE_RECORD).into());
         };
         let atom = match bone.parent {
-            None => SpaceBase { rotation: bind.rotation, translation: bind.translation, scale: 1.0 },
+            None => SpaceBase {
+                rotation: bind.rotation,
+                translation: bind.translation,
+                scale: 1.0,
+            },
             Some(p) => {
                 let parent = out[p];
                 let r = rotate(parent.rotation, bind.translation);
                 SpaceBase {
                     rotation: quat_mul(parent.rotation, bind.rotation),
-                    translation: [parent.translation[0] + r[0], parent.translation[1] + r[1], parent.translation[2] + r[2]],
+                    translation: [
+                        parent.translation[0] + r[0],
+                        parent.translation[1] + r[1],
+                        parent.translation[2] + r[2],
+                    ],
                     scale: 1.0,
                 }
             }
@@ -503,14 +656,18 @@ pub fn reference_space_bases(vm: &Vm, mesh: ObjRef) -> Result<Rc<Vec<SpaceBase>>
         out.push(atom);
     }
     let out = Rc::new(out);
-    cell.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.poses.insert(mesh, Rc::clone(&out));
+    cell.try_borrow_mut()
+        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+        .poses
+        .insert(mesh, Rc::clone(&out));
     Ok(out)
 }
 
 /// Whether the composed-pose cache holds `mesh` (tests only: a refusal caches nothing).
 #[cfg(test)]
 pub(crate) fn has_cached_pose(vm: &Vm, mesh: ObjRef) -> bool {
-    vm.service::<SkeletalMeshes>().is_some_and(|c| c.borrow().poses.contains_key(&mesh))
+    vm.service::<SkeletalMeshes>()
+        .is_some_and(|c| c.borrow().poses.contains_key(&mesh))
 }
 
 /// The Hamilton product `a b` of two `(x, y, z, w)` quaternions, in single precision.
@@ -527,7 +684,10 @@ fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 
 /// `v` rotated by the unit quaternion `q` (`q v q*`), in single precision.
 fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
-    let [x, y, z, _] = quat_mul(quat_mul(q, [v[0], v[1], v[2], 0.0]), [-q[0], -q[1], -q[2], q[3]]);
+    let [x, y, z, _] = quat_mul(
+        quat_mul(q, [v[0], v[1], v[2], 0.0]),
+        [-q[0], -q[1], -q[2], q[3]],
+    );
     [x, y, z]
 }
 
