@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-20, pc-hummer, docs only, on docs/native-unlock-class-achievement-2,
+rebased onto main d3c7a13):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md, link 9's next
+stop after the trace amendment. No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game.
+
 **LINK9-NEXT-STOP (2026-11-20, pc-hummer, on fix/rust-link9-pawn-natives, stacked on #650):** AI-assisted (Claude
 Code, Opus 5.5). Link 9's set-up registers the combat pack's pawn natives (`IsStaggered`, `DropCombatPerch`).
 `cargo test --workspace`: 3202 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off
