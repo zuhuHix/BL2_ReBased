@@ -64,6 +64,7 @@ use ow_vm::error::VmError;
 
 use crate::equip::{bad, object_of, required, write};
 
+pub mod particle_activation;
 pub mod pickup_particles;
 pub mod pickup_rb;
 

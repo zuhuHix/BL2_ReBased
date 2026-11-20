@@ -579,6 +579,8 @@ pub(crate) fn preload_globals_definition(vm: &mut Vm, globals: ObjRef, what: &st
 
 /// The prefix of the particle preload's log lines.
 pub(crate) const PARTICLE_INPUT: &str = "harness input: SpawnPickupParticles preload";
+/// The prefix of the particle engine flags' log line.
+pub(crate) const PARTICLE_FLAGS: &str = "harness input: ParticleSystemComponent engine flags";
 
 /// `SpawnPickupParticles`' harness inputs (hub ruling 1 on #581, NATIVE_SPAWN_PICKUP_PARTICLES.md section 4; lane
 /// IMPL-SPAWN-PICKUP-PARTICLES), world set-up before `make`, each an UNVERIFIED stand-in for packages the game has
@@ -603,6 +605,14 @@ fn particle_preload(vm: &mut Vm, definition: ObjRef) -> Result<(), VmError> {
     let defaults = defaults.map_err(VmError::from)?;
     pp::add_particle_preload(vm, pp::ParticlePreload { class, defaults })?;
     vm.log.push(format!("{PARTICLE_INPUT}: {} class and default object loaded at set-up (UNVERIFIED)", pp::COMPONENT_CLASS));
+    // The engine flags SetTemplate and ActivateSystem test (hub ruling 1 on #597, NATIVE_PARTICLE_ACTIVATION.md
+    // section 7; lane IMPL-PARTICLE-ACTIVATION): the hub's slice values, an UNVERIFIED stand-in for the game's.
+    let flags = ow_inventory::attach_mesh::particle_activation::ParticleEngineFlags::SLICE;
+    ow_inventory::attach_mesh::particle_activation::add_particle_engine_flags(vm, flags)?;
+    vm.log.push(format!(
+        "{PARTICLE_FLAGS}: GIsGame {}, GIsEditor {}, particles allowed {}, game-thread LOD {}, force lowest LOD {}, LOD bias {}, system detail mode {} (UNVERIFIED)",
+        flags.is_game, flags.is_editor, flags.particles_allowed, flags.game_thread_lod, flags.force_lowest, flags.lod_bias, flags.system_detail_mode
+    ));
     Ok(())
 }
 

@@ -19,16 +19,17 @@ use ow_object::value::StructValue;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::{FunctionSpec, ScriptToy};
 use ow_package::testkit::{Export, ints};
-use ow_vm::api::StubPolicy;
+use ow_vm::api::{StubPolicy, WorldTimeQuery};
 
 use super::*;
-use crate::attach_mesh::{ATTACH, ATTACH_DETACH, SPAWN_PICKUP_PARTICLES, add_empty_scene, register};
+use crate::attach_mesh::particle_activation::*;
+use crate::attach_mesh::{ATTACH, ATTACH_DETACH, REATTACH_OWNER, REATTACH_SCENE, SCENE_LAYER, SPAWN_PICKUP_PARTICLES, add_empty_scene, register};
 
 const NATIVE: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const PARTICLES_FN: &str = "WillowGame.WillowPickup.SpawnPickupParticles";
 
-const IMPORTS: [&str; 11] = [
+const IMPORTS: [&str; 12] = [
     "Class",
     "Function",
     "ScriptStruct",
@@ -40,6 +41,7 @@ const IMPORTS: [&str; 11] = [
     "StructProperty",
     "ByteProperty",
     "ArrayProperty",
+    "NameProperty",
 ];
 
 fn toy_enum(t: &mut ScriptToy, owner: i32, name: &str, values: &[&str]) -> i32 {
@@ -75,7 +77,9 @@ fn engine() -> Vec<u8> {
     let actor = t.class("Actor", object);
     let component = t.class("ActorComponent", object);
     toy_array_of(&mut t, actor, "Components", "Object", component);
-    t.prop("Bool", actor, "bDeleteMe", 0, 0);
+    for b in ["bDeleteMe", "bStatic", "bTickIsDisabled"] {
+        t.prop("Bool", actor, b, 0, 0);
+    }
     t.prop("Struct", actor, "Rotation", 0, rotator);
     t.prop("Struct", component, "Scene", 0, pointer);
     t.prop("Object", component, "Owner", 0, actor);
@@ -83,16 +87,58 @@ fn engine() -> Vec<u8> {
         t.prop("Bool", component, b, 0, 0);
     }
     let primitive = t.class("PrimitiveComponent", component);
+    t.prop("Byte", primitive, "DetailMode", 0, 0);
+    for b in ["HiddenGame", "bIgnoreOwnerHidden", "bAcceptsLights", "AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+        t.prop("Bool", primitive, b, 0, 0);
+    }
+    t.prop("Float", primitive, "LastRenderTime", 0, 0);
+    t.prop("Struct", primitive, "Translation", 0, vector);
+    t.prop("Struct", primitive, "Rotation", 0, rotator);
+    let ak_event = t.class("AkEvent", object);
+    let ak_component = t.class("AkComponent", component);
     let system = t.class("ParticleSystem", object);
-    t.prop("Float", system, "WarmupTime", 0, 0);
+    t.prop("Object", system, "PhysxParticleSystemRef", 0, system);
+    for b in ["bLoadIfPhysXLevel0", "bLoadIfPhysXLevel1", "bLoadIfPhysXLevel2", "bUseDelayRange", "bSkipSpawnCountCheck"] {
+        t.prop("Bool", system, b, 0, 0);
+    }
+    for f in ["Delay", "DelayLow", "fAudioDelaySeconds", "WarmupTime"] {
+        t.prop("Float", system, f, 0, 0);
+    }
+    t.prop("Byte", system, "LODMethod", 0, 0);
+    toy_array_of(&mut t, system, "LODDistances", "Float", 0);
     let lod = toy_struct(&mut t, system, "ParticleSystemLOD", None);
     t.prop("Bool", lod, "bLit", 0, 0);
     toy_array_of(&mut t, system, "LODSettings", "Struct", lod);
+    toy_array_of(&mut t, system, "Emitters", "Object", object);
+    for e in ["StartAudioEvent", "StopAudioEvent", "StartLoopingAudioEvent", "StopLoopingAudioEvent"] {
+        t.prop("Object", system, e, 0, ak_event);
+    }
     let psc = t.class("ParticleSystemComponent", primitive);
     t.prop("Object", psc, "Template", 0, system);
-    for b in ["bAutoActivate", "bIsActive", "bWasDeactivated"] {
+    for b in [
+        "bAutoActivate", "bIsActive", "bWasDeactivated", "bJustAttached", "bWasCompleted", "bSuppressSpawning",
+        "bHasBeenActivated", "bLODUpdatePending", "bOverrideLODMethod", "bWarmingUp", "bSkipUpdateDynamicDataDuringTick",
+        "bRecacheViewRelevance", "bSkipSpawnCountCheck", "bIsViewRelevanceDirty", "AudioEnabled", "bStartEventPlayed",
+    ] {
         t.prop("Bool", psc, b, 0, 0);
     }
+    for f in ["EmitterDelay", "AudioEventDelay", "AccumTickTime", "WarmupTime"] {
+        t.prop("Float", psc, f, 0, 0);
+    }
+    t.prop("Int", psc, "LODLevel", 0, 0);
+    t.prop("Byte", psc, "LODMethod", 0, 0);
+    let playing = toy_struct(&mut t, psc, "AkPlayingInfo", None);
+    t.prop("Object", playing, "SourceComponent", 0, ak_component);
+    t.prop("Int", playing, "AkPlayingId", 0, 0);
+    t.prop("Struct", psc, "LoopingAkPlayingInfo", 0, playing);
+    toy_array_of(&mut t, psc, "EmitterInstances", "Struct", pointer);
+    toy_array_of(&mut t, psc, "SMComponents", "Object", object);
+    toy_array_of(&mut t, psc, "SMMaterialInterfaces", "Object", object);
+    let param = toy_struct(&mut t, psc, "ParticleSysParam", None);
+    t.prop("Name", param, "Name", 0, 0);
+    t.prop("Byte", param, "ParamType", 0, 0);
+    t.prop("Struct", param, "Vector", 0, vector);
+    toy_array_of(&mut t, psc, "InstanceParameters", "Struct", param);
     t.class("WillowInventory", actor);
     let definition = t.class("WillowInventoryDefinition", object);
     t.prop("Struct", definition, "PickupFlagOffset", 0, vector);
@@ -168,6 +214,8 @@ struct Fx {
     unloaded: ObjRef,
     defaults: ObjRef,
     gd: ObjRef,
+    globals: ObjRef,
+    definition: ObjRef,
 }
 
 impl Drop for Fx {
@@ -205,7 +253,24 @@ fn with(vm: &Vm, v: &Value, fields: &[(&str, Value)]) -> Value {
     Value::Struct(Rc::new(StructValue { ty: s.ty, fields: out }))
 }
 
+/// The fixture's world options.
+#[derive(Clone, Copy)]
+struct Opts {
+    mode: ParityMode,
+    preload: bool,
+    scene: bool,
+    flags: Option<ParticleEngineFlags>,
+    clock: bool,
+}
+
+const OPTS: Opts = Opts { mode: ParityMode::Off, preload: true, scene: true, flags: Some(ParticleEngineFlags::SLICE), clock: true };
+
 fn fx_with(mode: ParityMode, preload: bool, scene: bool) -> Fx {
+    fx_opts(Opts { mode, preload, scene, ..OPTS })
+}
+
+fn fx_opts(o: Opts) -> Fx {
+    let mode = o.mode;
     let dir = std::env::temp_dir().join(format!(
         "ow-inventory-pickup-particles-{}-{}",
         std::process::id(),
@@ -221,12 +286,19 @@ fn fx_with(mode: ParityMode, preload: bool, scene: bool) -> Fx {
         vm.find_class(c).unwrap();
     }
     register(&mut vm).unwrap();
-    if scene {
+    if o.scene {
         add_empty_scene(&mut vm).unwrap();
+    }
+    if let Some(flags) = o.flags {
+        add_particle_engine_flags(&mut vm, flags).unwrap();
+    }
+    if o.clock {
+        // An explicitly absent world: the time is 0 (ow_vm's world_time_seconds).
+        vm.add_service(WorldTimeQuery(|_| Ok(None))).unwrap();
     }
     let class = vm.find_class(COMPONENT_CLASS).unwrap();
     let defaults = vm.defs.class_default(&mut vm.space, COMPONENT_CLASS).unwrap();
-    if preload {
+    if o.preload {
         add_particle_preload(&mut vm, ParticlePreload { class, defaults }).unwrap();
     }
     let holder = vm.defs.find(&mut vm.space, &ObjectPath::parse("Engine.ToyHolderObject").unwrap()).unwrap().unwrap();
@@ -245,13 +317,32 @@ fn fx_with(mode: ParityMode, preload: bool, scene: bool) -> Fx {
     set(&mut vm, globals, "TheGlobalsDefinition", Value::Object(Some(gd)));
     let q = ow_world::query::install(&mut vm).unwrap();
     q.borrow_mut().set_globals(globals);
-    let mut x = Fx { vm, dir, pickup, template, unloaded, defaults, gd };
+    let mut x = Fx { vm, dir, pickup, template, unloaded, defaults, gd, globals, definition };
     x.bands(&[(0, 9, 2), (10, 19, 1)]);
     x
 }
 
 fn fx() -> Fx {
-    fx_with(ParityMode::Off, true, true)
+    fx_opts(OPTS)
+}
+
+/// The slice's shape (the note's section 5): an auto-activating, audio-enabled default; a template with one LOD
+/// distance, one `LODSettings` entry and `LODMethod` 1.
+fn slice() -> Fx {
+    slice_with(OPTS)
+}
+
+fn slice_with(o: Opts) -> Fx {
+    let mut x = fx_opts(o);
+    let d = x.defaults;
+    x.set(d, "bAutoActivate", Value::Bool(true));
+    x.set(d, "AudioEnabled", Value::Bool(true));
+    let t = x.template;
+    x.set(t, "LODMethod", Value::Byte(1));
+    x.set(t, "LODDistances", Value::array(vec![Value::Float(0.0)]));
+    let lod = x.lod(false);
+    x.set(t, "LODSettings", Value::array(vec![lod]));
+    x
 }
 
 impl Fx {
@@ -259,19 +350,48 @@ impl Fx {
         set(&mut self.vm, o, name, v);
     }
 
-    /// The globals definition's bands: (`MinLevel`, `MaxLevel`, `RarityRating`).
-    fn bands(&mut self, bands: &[(i32, i32, u8)]) {
-        let class = self.vm.space.heap.get(self.gd).unwrap().class;
-        let p = self.vm.space.prop(class, "RarityLevelColors").unwrap();
+    fn get(&self, o: ObjRef, name: &str) -> Value {
+        get(&self.vm, o, name)
+    }
+
+    /// `o.name := v` past the heap's write checks (a fixture of malformed data).
+    fn put(&mut self, o: ObjRef, name: &str, v: Value) {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, name).unwrap();
+        *self.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+    }
+
+    /// The zero element of `o`'s array field `name`, with fields replaced.
+    fn element(&self, o: ObjRef, name: &str, fields: &[(&str, Value)]) -> Value {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, name).unwrap();
         let PropKind::Array(inner) = self.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
-        let zero = self.vm.space.classes.zero_value(&inner);
+        with(&self.vm, &self.vm.space.classes.zero_value(&inner), fields)
+    }
+
+    fn lod(&self, lit: bool) -> Value {
+        self.element(self.template, "LODSettings", &[("bLit", Value::Bool(lit))])
+    }
+
+    /// The globals definition's bands: (`MinLevel`, `MaxLevel`, `RarityRating`), colour (10 × rating, 20, 30, 255).
+    fn bands(&mut self, bands: &[(i32, i32, u8)]) {
+        let gd = self.gd;
+        let color = |x: &Fx, r: u8| {
+            let zero = x.element(gd, "RarityLevelColors", &[]);
+            let c = ow_attr::eval::field(&x.vm.space, &zero, "Color").unwrap().clone();
+            with(&x.vm, &c, &[("R", Value::Byte(10 * r)), ("G", Value::Byte(20)), ("B", Value::Byte(30)), ("A", Value::Byte(255))])
+        };
         let entries: Vec<Value> = bands
             .iter()
             .map(|&(min, max, r)| {
-                with(&self.vm, &zero, &[("MinLevel", Value::Int(min)), ("MaxLevel", Value::Int(max)), ("RarityRating", Value::Byte(r))])
+                let c = color(self, r);
+                self.element(
+                    gd,
+                    "RarityLevelColors",
+                    &[("MinLevel", Value::Int(min)), ("MaxLevel", Value::Int(max)), ("RarityRating", Value::Byte(r)), ("Color", c)],
+                )
             })
             .collect();
-        let gd = self.gd;
         self.set(gd, "RarityLevelColors", Value::array(entries));
     }
 
@@ -281,11 +401,35 @@ impl Fx {
         Ok(self.vm.call(f, Some(p), vec![])?.ret)
     }
 
+    /// A held component of the particle class, made from the defaults' values and set on the pickup.
+    fn held(&mut self) -> ObjRef {
+        let c = make(&mut self.vm, COMPONENT_CLASS);
+        let p = self.pickup;
+        self.set(p, "PickupParticleComponent", Value::Object(Some(c)));
+        c
+    }
+
+    /// The component on the pickup after a call.
+    fn component(&self) -> ObjRef {
+        let Value::Object(Some(c)) = self.get(self.pickup, "PickupParticleComponent") else { panic!("no component") };
+        c
+    }
+
     /// The pickup's and the defaults' values, the heap size and #518's three counters.
     fn state(&self) -> (Vec<Value>, Vec<Value>, usize, [u64; 3]) {
         let all = |o: ObjRef| -> Vec<Value> { self.vm.space.heap.get(o).unwrap().slots.to_vec() };
         let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions()];
         (all(self.pickup), all(self.defaults), self.vm.space.heap.handles().len(), counters)
+    }
+
+    /// The names of the planned writes, in order (the preflight, nothing applied).
+    fn plan(&mut self) -> Vec<&'static str> {
+        let p = self.pickup;
+        let plan = preflight(&mut self.vm, p).unwrap();
+        let mut names: Vec<&'static str> = plan.before.iter().map(|w| w.1).collect();
+        names.push("InstanceParameters");
+        names.extend(plan.after.iter().map(|w| w.1));
+        names
     }
 }
 
@@ -302,6 +446,19 @@ fn refused(x: &mut Fx, missing: Missing, what: &str, record: &str) {
     assert_eq!(x.state(), before, "{what}: nothing written, allocated, loaded or drawn");
 }
 
+/// The call is a data error naming `needle`, and changes nothing.
+fn data_error(x: &mut Fx, needle: &str) {
+    let before = x.state();
+    match x.call() {
+        Err(e @ VmError::Script { .. }) => assert!(e.to_string().contains(needle), "{needle}: {e}"),
+        other => panic!("{needle}: expected a data error, got {other:?}"),
+    }
+    assert_eq!(x.state(), before, "{needle}: nothing written");
+}
+
+const PARTICLE: Missing = Missing::LayerAbsent(PARTICLE_LAYER);
+const AUDIO: Missing = Missing::LayerAbsent(AUDIO_LAYER);
+
 /// Step 1: no particle system is #520's removal refusal.
 #[test]
 fn no_particle_system_is_the_removal_refusal() {
@@ -311,34 +468,312 @@ fn no_particle_system_is_the_removal_refusal() {
     refused(&mut x, Missing::NotRead, PARTICLES_REMOVAL, RECORD);
 }
 
-/// The slice's case: a new component from the preloaded default (whose `bAutoActivate` is clear here), a common
-/// rating, a loaded template: refusal F; with the default's `bAutoActivate` set, refusal E.
+/// The note's test 1, the slice's case: a new component, made with the pickup as outer and attached by part 1, is
+/// activated; every write lands in the native's order; `EmitterInstances` stays empty; no draw and no load.
 #[test]
-fn a_new_component_stops_at_the_initialisation_or_the_activation() {
-    let mut x = fx();
-    refused(&mut x, Missing::NotRead, F, RECORD_PARTICLES);
-    let d = x.defaults;
-    x.set(d, "bAutoActivate", Value::Bool(true));
-    refused(&mut x, Missing::NotRead, E, RECORD_PARTICLES);
+fn the_slice_case_activates_a_new_component_in_order() {
+    let mut x = slice();
+    let names = x.plan();
+    let want = [
+        // The new component and part 1's attach.
+        "PickupParticleComponent", "Translation", "bNeedsReattach", "bNeedsUpdateTransform", "Owner", "Components",
+        // SetTemplate, its reset (the stop-audio step on the old template, None) and the template.
+        "bIsViewRelevanceDirty", "bWasCompleted", "SMComponents", "SMMaterialInterfaces", "bIsActive",
+        "bStartEventPlayed", "LoopingAkPlayingInfo", "Template", "WarmupTime",
+        // The activation: delays, the stop-audio step on T, the four flags, the transform request.
+        "EmitterDelay", "AudioEventDelay", "bStartEventPlayed", "LoopingAkPlayingInfo", "bWasCompleted",
+        "bSuppressSpawning", "bWasDeactivated", "bIsActive", "bNeedsUpdateTransform",
+        // The initialisation inside it (attached by part 1, so AccumTickTime).
+        "WarmupTime", "bSkipSpawnCountCheck", "SMComponents", "SMMaterialInterfaces", "bWasCompleted", "AccumTickTime",
+        // bHasBeenActivated, the owner part's transform branch, the end of the activation.
+        "bHasBeenActivated", "bNeedsUpdateTransform", "AccumTickTime", "LastRenderTime",
+        // bAcceptsLights and the reattach request (T changed), then #581's steps 6 to 10.
+        "bAcceptsLights", "bNeedsReattach", "AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale", "Rotation",
+        "InstanceParameters", "bNeedsUpdateTransform",
+    ];
+    assert_eq!(names, want);
+    let [_, draws, loads] = x.state().3;
+    x.call().unwrap();
+    let c = x.component();
+    assert_ne!(c, x.defaults, "a new object");
+    assert_eq!(x.vm.space.heap.get(c).unwrap().outer, Some(x.pickup), "the pickup is the outer");
+    let Value::Array(list) = x.get(x.pickup, "Components") else { panic!() };
+    assert_eq!(list.as_ref(), &vec![Value::Object(Some(c))], "attached by part 1, no default left in the list");
+    for (name, v) in [
+        ("Owner", Value::Object(Some(x.pickup))),
+        ("Template", Value::Object(Some(x.template))),
+        ("bIsActive", Value::Bool(true)),
+        ("bHasBeenActivated", Value::Bool(true)),
+        ("bIsViewRelevanceDirty", Value::Bool(true)),
+        ("bNeedsReattach", Value::Bool(true)),
+        ("bNeedsUpdateTransform", Value::Bool(true)),
+        ("AbsoluteRotation", Value::Bool(true)),
+        ("bAcceptsLights", Value::Bool(false)),
+        ("LastRenderTime", Value::Float(0.0)),
+        ("bAttached", Value::Bool(false)),
+    ] {
+        assert_eq!(x.get(c, name), v, "{name}");
+    }
+    assert_eq!(x.get(c, "EmitterInstances"), Value::array(Vec::new()), "ruling 4: left empty");
+    // The colour parameter: the common band's colour (R 20, G 20, B 30), appended once.
+    let Value::Array(params) = x.get(c, "InstanceParameters") else { panic!() };
+    assert_eq!(params.len(), 1);
+    let name = ow_attr::eval::field(&x.vm.space, &params[0], "Name").unwrap().clone();
+    assert_eq!(name, Value::Name(x.vm.space.names.find(COLOR_PARAMETER).unwrap()));
+    assert_eq!(ow_attr::eval::field(&x.vm.space, &params[0], "ParamType").unwrap(), &Value::Byte(PARAM_VECTOR));
+    let v = ow_attr::eval::field(&x.vm.space, &params[0], "Vector").unwrap().clone();
+    let axis = |a: &str| ow_attr::eval::field(&x.vm.space, &v, a).unwrap().clone();
+    // byte × 1/255 (#581 step 7), not byte / 255: the two can differ in the last bit.
+    let unit = |b: f32| Value::Float(b * (1.0 / 255.0));
+    assert_eq!((axis("X"), axis("Y"), axis("Z")), (unit(20.0), unit(20.0), unit(30.0)));
+    let [_, draws_after, loads_after] = x.state().3;
+    assert_eq!((draws_after, loads_after), (draws, loads), "#518: only writes moved");
+    // A second call finds the reattach the first requested still pending (the port runs no end-of-frame reattach):
+    // part 1's refusal, before any write. With it cleared, as the engine's reattach would, the component is reused and
+    // the parameter updated in place.
+    refused(&mut x, Missing::NotRead, REATTACH_OWNER, RECORD);
+    x.set(c, "bNeedsReattach", Value::Bool(false));
+    x.call().unwrap();
+    assert_eq!(x.component(), c);
+    let Value::Array(params) = x.get(c, "InstanceParameters") else { panic!() };
+    assert_eq!(params.len(), 1, "updated, not appended");
 }
 
-/// A held component's own values choose: active and not deactivated is E; active and deactivated is F.
+/// The note's test 2: `bAutoActivate` clear is the initialisation: its two copies and `bWasCompleted`, and with C
+/// neither `bAttached` nor in its owner's `Components`, no `AccumTickTime` and no activation.
 #[test]
-fn a_held_component_chooses_by_its_own_flags() {
+fn the_initialisation_branch_copies_and_does_not_activate_unattached() {
     let mut x = fx();
+    let c = x.held();
+    let t = x.template;
+    x.set(t, "WarmupTime", Value::Float(0.0));
+    x.set(t, "bSkipSpawnCountCheck", Value::Bool(true));
+    x.set(c, "AccumTickTime", Value::Float(5.0));
+    x.set(c, "bWasCompleted", Value::Bool(true));
+    x.call().unwrap();
+    assert_eq!(x.get(c, "bSkipSpawnCountCheck"), Value::Bool(true));
+    assert_eq!(x.get(c, "bWasCompleted"), Value::Bool(false));
+    assert_eq!(x.get(c, "AccumTickTime"), Value::Float(5.0), "not attached: no AccumTickTime");
+    assert_eq!(x.get(c, "bIsActive"), Value::Bool(false));
+    assert_eq!(x.get(c, "bHasBeenActivated"), Value::Bool(false));
+    // A new component attached by part 1 does get AccumTickTime.
+    let mut y = fx();
+    let d = y.defaults;
+    y.set(d, "AccumTickTime", Value::Float(5.0));
+    y.call().unwrap();
+    let c = y.component();
+    assert_eq!(y.get(c, "AccumTickTime"), Value::Float(0.0));
+    assert_eq!(y.get(c, "bIsActive"), Value::Bool(false));
+}
+
+/// The note's test 3: the initialisation's auto-activation for an attached component that is not active. SetTemplate
+/// never reaches it (its choice already activates such a component), so the planner is called directly.
+#[test]
+fn the_initialisations_auto_activation_runs_when_attached() {
+    let mut x = slice();
     let c = make(&mut x.vm, COMPONENT_CLASS);
     let p = x.pickup;
-    x.set(p, "PickupParticleComponent", Value::Object(Some(c)));
-    x.set(c, "bIsActive", Value::Bool(true));
-    refused(&mut x, Missing::NotRead, E, RECORD_PARTICLES);
-    x.set(c, "bWasDeactivated", Value::Bool(true));
-    refused(&mut x, Missing::NotRead, F, RECORD_PARTICLES);
-    // A held component skips the preload: without it, still F.
-    let mut y = fx_with(ParityMode::Off, false, false);
-    let c = make(&mut y.vm, COMPONENT_CLASS);
-    let p = y.pickup;
-    y.set(p, "PickupParticleComponent", Value::Object(Some(c)));
-    refused(&mut y, Missing::NotRead, F, RECORD_PARTICLES);
+    x.set(c, "bAutoActivate", Value::Bool(true));
+    x.set(c, "Owner", Value::Object(Some(p)));
+    x.set(p, "Components", Value::array(vec![Value::Object(Some(c))]));
+    let t = x.template;
+    let mut s = Setup::new(&x.vm, c, false, ParticleEngineFlags::SLICE);
+    s.initialise(t).unwrap();
+    let names: Vec<&str> = s.writes.iter().map(|w| w.1).collect();
+    assert!(names.contains(&"bHasBeenActivated") && names.contains(&"LastRenderTime"), "{names:?}");
+    // Not attached: no activation.
+    let lone = make(&mut x.vm, COMPONENT_CLASS);
+    x.set(lone, "bAutoActivate", Value::Bool(true));
+    let mut s = Setup::new(&x.vm, lone, false, ParticleEngineFlags::SLICE);
+    s.initialise(t).unwrap();
+    assert!(!s.writes.iter().any(|w| w.1 == "bHasBeenActivated"));
+}
+
+/// The note's test 4, part one: the template's refusals, each before any write.
+#[test]
+fn the_templates_refusals_come_before_any_write() {
+    // The PhysX swap.
+    let mut x = slice();
+    let (t, other) = (x.template, make(&mut x.vm, "Engine.ParticleSystem"));
+    x.set(t, "PhysxParticleSystemRef", Value::Object(Some(other)));
+    x.set(t, "bLoadIfPhysXLevel1", Value::Bool(true));
+    refused(&mut x, Missing::NotRead, PHYSX, RECORD_ACTIVATION);
+    // A reference with no level flag is no swap.
+    x.set(t, "bLoadIfPhysXLevel1", Value::Bool(false));
+    x.call().unwrap();
+    // The LOD for location.
+    let mut x = slice();
+    let t = x.template;
+    x.set(t, "LODDistances", Value::array(vec![Value::Float(0.0), Value::Float(100.0)]));
+    refused(&mut x, Missing::LayerAbsent(CAMERA_LAYER), LOD_LOCATION, RECORD_ACTIVATION);
+    // The delay range (hub ruling 2).
+    let mut x = slice();
+    let t = x.template;
+    x.set(t, "bUseDelayRange", Value::Bool(true));
+    refused(&mut x, Missing::NotPorted, DELAY_RANGE, RECORD_ACTIVATION);
+    // T's stop audio events, in the activation.
+    let mut x = slice();
+    let (t, event) = (x.template, make(&mut x.vm, "Engine.AkEvent"));
+    x.set(t, "StopLoopingAudioEvent", Value::Object(Some(event)));
+    refused(&mut x, AUDIO, TEMPLATE_AUDIO, RECORD_ACTIVATION);
+    // With AudioEnabled clear the step does not run.
+    let d = x.defaults;
+    x.set(d, "AudioEnabled", Value::Bool(false));
+    x.call().unwrap();
+    // The warm-up.
+    let mut x = slice();
+    let t = x.template;
+    x.set(t, "WarmupTime", Value::Float(0.5));
+    refused(&mut x, PARTICLE, WARM_UP, RECORD_ACTIVATION);
+}
+
+/// The note's test 4, part two: the held component's refusals: existing instances, the old template's audio, an LOD
+/// level that would change (the implementer's guard), and a looping sound recorded.
+#[test]
+fn the_held_components_refusals_come_before_any_write() {
+    let mut x = slice();
+    let c = x.held();
+    let ptr = x.element(c, "EmitterInstances", &[]);
+    x.set(c, "EmitterInstances", Value::array(vec![ptr]));
+    refused(&mut x, PARTICLE, INSTANCES_RESET, RECORD_ACTIVATION);
+    // The old template's stop audio events, in the reset.
+    let mut x = slice();
+    let c = x.held();
+    let (old, event) = (make(&mut x.vm, "Engine.ParticleSystem"), make(&mut x.vm, "Engine.AkEvent"));
+    x.set(old, "StopAudioEvent", Value::Object(Some(event)));
+    x.set(c, "Template", Value::Object(Some(old)));
+    x.set(c, "AudioEnabled", Value::Bool(true));
+    refused(&mut x, AUDIO, OLD_AUDIO, RECORD_ACTIVATION);
+    // An old template the store has not loaded is not loaded here.
+    let u = x.unloaded;
+    x.set(c, "Template", Value::Object(Some(u)));
+    refused(&mut x, Missing::NotRead, B, RECORD_PARTICLES);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, u));
+    // A looping sound recorded is the audio layer too.
+    let mut x = slice();
+    let c = x.held();
+    x.set(c, "AudioEnabled", Value::Bool(true));
+    let info = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("AkPlayingId", Value::Int(4))]);
+    x.set(c, "LoopingAkPlayingInfo", info);
+    refused(&mut x, AUDIO, OLD_AUDIO, RECORD_ACTIVATION);
+    // An LOD level that would change.
+    let mut x = slice();
+    let c = x.held();
+    x.set(c, "bAutoActivate", Value::Bool(true));
+    x.set(c, "LODLevel", Value::Int(1));
+    refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
+}
+
+/// The note's test 4, part three: the owner and attach refusals: C2, D, #520's ATTACH for a never-attached component
+/// with no scene, part 1's REATTACH_OWNER with `bNeedsReattach`, and #581's C1 and REATTACH_SCENE.
+#[test]
+fn the_owner_and_attach_refusals_come_before_any_write() {
+    // C2: the pickup static.
+    let mut x = slice();
+    let p = x.pickup;
+    x.set(p, "bStatic", Value::Bool(true));
+    refused(&mut x, Missing::NotRead, C2, RECORD_PARTICLES);
+    // ... unless it is being deleted: then part 1 attaches nothing, and the component has no owner.
+    x.set(p, "bDeleteMe", Value::Bool(true));
+    x.call().unwrap();
+    // D: no owner and bAttached.
+    let mut x = slice();
+    let c = x.held();
+    x.set(c, "bAutoActivate", Value::Bool(true));
+    x.set(c, "bAttached", Value::Bool(true));
+    refused(&mut x, Missing::NotRead, D, RECORD_PARTICLES);
+    // ATTACH: an owner whose Components lack the component, not bAttached, and no scene layer.
+    let mut x = slice_with(Opts { scene: false, ..OPTS });
+    let c = x.held();
+    let other = make(&mut x.vm, "WillowGame.WillowPickup");
+    x.set(c, "Owner", Value::Object(Some(other)));
+    refused(&mut x, Missing::LayerAbsent(SCENE_LAYER), ATTACH, RECORD);
+    // REATTACH_OWNER: attached (in the owner's Components) with bNeedsReattach.
+    let mut x = slice();
+    let c = x.held();
+    let p = x.pickup;
+    x.set(c, "Owner", Value::Object(Some(p)));
+    x.set(p, "Components", Value::array(vec![Value::Object(Some(c))]));
+    x.set(c, "bNeedsReattach", Value::Bool(true));
+    refused(&mut x, Missing::NotRead, REATTACH_OWNER, RECORD);
+    // C1: the initialisation branch, then SetTemplate's reattach request with a static owner.
+    let mut x = fx();
+    let c = x.held();
+    let p = x.pickup;
+    x.set(c, "Owner", Value::Object(Some(p)));
+    x.set(p, "Components", Value::array(vec![Value::Object(Some(c))]));
+    x.set(p, "bTickIsDisabled", Value::Bool(true));
+    refused(&mut x, Missing::NotRead, REATTACH_OWNER, RECORD);
+    // REATTACH_SCENE: no owner, a scene.
+    let mut x = fx();
+    let c = x.held();
+    let scene = with(&x.vm, &x.get(c, "Scene"), &[("Dummy", Value::Int(1))]);
+    x.set(c, "Scene", scene);
+    refused(&mut x, Missing::NotRead, REATTACH_SCENE, RECORD);
+}
+
+/// The note's test 4, part four: the engine flags (hub ruling 1): none supplied is NotRead, a non-game session
+/// NotPorted (the implementer's guard).
+#[test]
+fn the_engine_flags_are_a_harness_input() {
+    let mut x = slice_with(Opts { flags: None, ..OPTS });
+    refused(&mut x, Missing::NotRead, FLAGS, RECORD_ACTIVATION);
+    let outside = ParticleEngineFlags { is_game: false, ..ParticleEngineFlags::SLICE };
+    let mut x = slice_with(Opts { flags: Some(outside), ..OPTS });
+    refused(&mut x, Missing::NotPorted, OUTSIDE_SESSION, RECORD_ACTIVATION);
+    let bias = ParticleEngineFlags { lod_bias: 1, ..ParticleEngineFlags::SLICE };
+    let mut x = slice_with(Opts { flags: Some(bias), ..OPTS });
+    refused(&mut x, Missing::NotPorted, OUTSIDE_SESSION, RECORD_ACTIVATION);
+}
+
+/// The note's test 5: a template object (the class default itself, held): SetTemplate's own writes only, no
+/// activation even with `bAutoActivate` set.
+#[test]
+fn a_template_object_gets_set_templates_own_writes_only() {
+    let mut x = slice();
+    let (p, d) = (x.pickup, x.defaults);
+    x.set(p, "PickupParticleComponent", Value::Object(Some(d)));
+    let mut s = Setup::new(&x.vm, d, false, ParticleEngineFlags::SLICE);
+    s.set_template(x.template).unwrap();
+    let names: Vec<&str> = s.writes.iter().map(|w| w.1).collect();
+    assert_eq!(names, ["bIsViewRelevanceDirty", "bWasCompleted", "Template", "WarmupTime", "bAcceptsLights"]);
+    x.call().unwrap();
+    assert_eq!(x.get(d, "bIsActive"), Value::Bool(false));
+    assert_eq!(x.get(d, "Template"), Value::Object(Some(x.template)));
+}
+
+/// The note's test 6: particles not allowed is `Template` := None in SetTemplate, then #581's later steps.
+#[test]
+fn particles_not_allowed_sets_no_template() {
+    let off = ParticleEngineFlags { particles_allowed: false, ..ParticleEngineFlags::SLICE };
+    let mut x = slice_with(Opts { flags: Some(off), ..OPTS });
+    x.call().unwrap();
+    let c = x.component();
+    assert_eq!(x.get(c, "Template"), Value::Object(None));
+    assert_eq!(x.get(c, "bIsActive"), Value::Bool(false));
+    assert_eq!(x.get(c, "bIsViewRelevanceDirty"), Value::Bool(false), "nothing else of SetTemplate");
+    assert_eq!(x.get(c, "AbsoluteRotation"), Value::Bool(true), "#581's step 6 still runs");
+}
+
+/// The note's test 7: `DetailMode` above the system's skips the activation's steps; `LastRenderTime` is still written.
+#[test]
+fn a_detail_mode_above_the_systems_skips_the_activation() {
+    let mut x = slice();
+    let d = x.defaults;
+    x.set(d, "DetailMode", Value::Byte(2));
+    x.set(d, "LastRenderTime", Value::Float(7.0));
+    x.call().unwrap();
+    let c = x.component();
+    assert_eq!(x.get(c, "LastRenderTime"), Value::Float(0.0));
+    assert_eq!(x.get(c, "bIsActive"), Value::Bool(false));
+    assert_eq!(x.get(c, "bHasBeenActivated"), Value::Bool(false));
+}
+
+/// The note's test 8: a world with no clock refuses `LastRenderTime` before any write.
+#[test]
+fn a_world_without_a_clock_refuses_last_render_time() {
+    let mut x = slice_with(Opts { clock: false, ..OPTS });
+    refused(&mut x, Missing::LayerAbsent(CLOCK_LAYER), WORLD_TIME, RECORD_ACTIVATION);
 }
 
 /// Refusal G: a new component with no preload in the world.
@@ -349,14 +784,14 @@ fn a_new_component_without_the_preload_is_refusal_g() {
 }
 
 /// The attach plan from the default's values: no scene layer is #520's `ATTACH`; the default `bAttached` is
-/// `ATTACH_DETACH`; a pickup being destroyed attaches nothing, so neither applies and the native goes on to F.
+/// `ATTACH_DETACH`; a pickup being destroyed attaches nothing, so neither applies.
 #[test]
 fn the_attach_plan_uses_part_1s_guards_and_refusals() {
     let mut x = fx_with(ParityMode::Off, true, false);
-    refused(&mut x, Missing::LayerAbsent("a scene that components attach to: render, collision and physics registration (the port has none)"), ATTACH, RECORD);
+    refused(&mut x, Missing::LayerAbsent(SCENE_LAYER), ATTACH, RECORD);
     let p = x.pickup;
     x.set(p, "bDeleteMe", Value::Bool(true));
-    refused(&mut x, Missing::NotRead, F, RECORD_PARTICLES);
+    x.call().unwrap();
     let mut x = fx();
     let d = x.defaults;
     x.set(d, "bAttached", Value::Bool(true));
@@ -364,7 +799,7 @@ fn the_attach_plan_uses_part_1s_guards_and_refusals() {
 }
 
 /// Refusal A: the band holding the level rates `RARITY_Rainbow` (by name; 1 in this toy's enum). It comes after G and
-/// the attach plan, and before B.
+/// the attach plan, and before B. With no globals definition held, nothing is read (review r1 of #593).
 #[test]
 fn a_rainbow_rating_is_refusal_a_in_its_place() {
     let mut x = fx();
@@ -378,36 +813,86 @@ fn a_rainbow_rating_is_refusal_a_in_its_place() {
     let p = y.pickup;
     y.set(p, "InventoryRarityLevel", Value::Int(12));
     refused(&mut y, Missing::NotRead, G, RECORD_PARTICLES);
-    // A level no band holds is RARITY_Unknown: not Rainbow.
+    // A level no band holds is RARITY_Unknown: not Rainbow, and opaque white.
     let mut z = fx();
     let p = z.pickup;
     z.set(p, "InventoryRarityLevel", Value::Int(40));
-    refused(&mut z, Missing::NotRead, F, RECORD_PARTICLES);
+    z.call().unwrap();
+    // No globals definition: no rarity read, white.
+    let mut w = fx();
+    let (p, g) = (w.pickup, w.globals);
+    w.set(p, "InventoryRarityLevel", Value::Int(12));
+    w.set(g, "TheGlobalsDefinition", Value::Object(None));
+    w.call().unwrap();
+    let c = w.component();
+    let Value::Array(params) = w.get(c, "InstanceParameters") else { panic!() };
+    let v = ow_attr::eval::field(&w.vm.space, &params[0], "Vector").unwrap().clone();
+    assert_eq!(ow_attr::eval::field(&w.vm.space, &v, "X").unwrap(), &Value::Float(1.0));
 }
 
-/// Refusal B: a template the store has not loaded, refused without loading it, before E or F.
+/// The definition's non-zero `LootBeamColorOverride` replaces the band's colour.
+#[test]
+fn a_loot_beam_override_replaces_the_colour() {
+    let mut x = slice();
+    let def = x.definition;
+    let over = with(&x.vm, &x.get(def, "LootBeamColorOverride"), &[("R", Value::Byte(255))]);
+    x.set(def, "LootBeamColorOverride", over);
+    x.call().unwrap();
+    let c = x.component();
+    let Value::Array(params) = x.get(c, "InstanceParameters") else { panic!() };
+    let v = ow_attr::eval::field(&x.vm.space, &params[0], "Vector").unwrap().clone();
+    let axis = |a: &str| ow_attr::eval::field(&x.vm.space, &v, a).unwrap().clone();
+    assert_eq!((axis("X"), axis("Y")), (Value::Float(1.0), Value::Float(0.0)));
+}
+
+/// Refusal B: a template the store has not loaded, refused without loading it.
 #[test]
 fn an_unloaded_template_is_refusal_b_and_stays_unloaded() {
-    let mut x = fx();
-    let d = x.defaults;
-    x.set(d, "bAutoActivate", Value::Bool(true));
+    let mut x = slice();
     let (p, u) = (x.pickup, x.unloaded);
     x.set(p, "PickupParticles", Value::Object(Some(u)));
     refused(&mut x, Missing::NotRead, B, RECORD_PARTICLES);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, u), "not loaded");
 }
 
-/// The template's `LODSettings` entries are checked for a bool `bLit` before E or F.
+/// Review r1 of #593: data errors, each naming its field and writing nothing.
 #[test]
-fn the_template_lod_settings_are_checked_before_the_choice() {
+fn malformed_inputs_are_data_errors_naming_the_field() {
+    // A held component of the wrong class.
     let mut x = fx();
+    let (p, t) = (x.pickup, x.template);
+    x.put(p, "PickupParticleComponent", Value::Object(Some(t)));
+    data_error(&mut x, "not a ParticleSystemComponent");
+    // InventoryRarityLevel of the wrong kind.
+    let mut x = fx();
+    let p = x.pickup;
+    x.put(p, "InventoryRarityLevel", Value::Bool(true));
+    data_error(&mut x, "InventoryRarityLevel");
+    // A rating outside the enum, and one of the wrong kind, in a band after the matching one (every entry checked).
+    for bad_rating in [Value::Byte(9), Value::Int(1)] {
+        let mut x = fx();
+        x.bands(&[(0, 9, 2), (10, 19, 2)]);
+        let gd = x.gd;
+        let Value::Array(entries) = x.get(gd, "RarityLevelColors") else { panic!() };
+        let mut entries = entries.as_ref().clone();
+        entries[1] = with(&x.vm, &entries[1], &[("RarityRating", bad_rating)]);
+        x.put(gd, "RarityLevelColors", Value::array(entries));
+        data_error(&mut x, "RarityRating");
+    }
+    // The template's WarmupTime, LODSettings and an entry's bLit.
+    let mut x = slice();
     let t = x.template;
-    let class = x.vm.space.heap.get(t).unwrap().class;
-    let p = x.vm.space.prop(class, "LODSettings").unwrap();
-    let PropKind::Array(inner) = x.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
-    let lod = with(&x.vm, &x.vm.space.classes.zero_value(&inner), &[("bLit", Value::Bool(true))]);
-    x.set(t, "LODSettings", Value::array(vec![lod]));
-    refused(&mut x, Missing::NotRead, F, RECORD_PARTICLES);
+    x.put(t, "WarmupTime", Value::Int(1));
+    data_error(&mut x, "WarmupTime");
+    let mut x = slice();
+    let t = x.template;
+    x.put(t, "LODSettings", Value::Int(1));
+    data_error(&mut x, "LODSettings");
+    let mut x = slice();
+    let t = x.template;
+    let lod = with(&x.vm, &x.lod(false), &[("bLit", Value::Int(1))]);
+    x.put(t, "LODSettings", Value::array(vec![lod]));
+    data_error(&mut x, "bLit");
 }
 
 /// Reference binds nothing.

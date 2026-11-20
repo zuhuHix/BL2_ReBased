@@ -15,10 +15,21 @@ passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 fa
 crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
 `FlagExpressionEvaluator.Evaluate(object)`.
 
+**IMPL-PARTICLE-ACTIVATION (2026-11-20, zuhu desktop, on fix/rust-spawn-pickup-particles 9777c2cc, #593):**
+AI-assisted (Claude Code, Opus 5.5). `SetTemplate`'s activation and initialisation in Off from
+NATIVE_PARTICLE_ACTIVATION.md (#597, 3df9cd88), with the hub's rulings: `SpawnPickupParticles` plans every write, then
+applies it; #581's refusals E and F are gone; engine flags are a logged harness input (UNVERIFIED in game). `cargo build
+--workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4`: 2,500 passed / 0 failed / 46 ignored
+(`ow-inventory` 239; `attach_mesh/pickup_particles_tests.rs` 20, 10 net new). Installed `--slice-gate` (Off, strict,
+release build, under the machine lock): ok 0, notyet 5, error 9 of 14. Links 6 and 7 pass `make` and stop at `touch`
+on the unbound `Actor.GetBoundingCylinder(float,float)` (1 of 3 and 1 of 4 driver steps), from #593's refusal E (so
+notyet 7 / error 7 becomes 5 / 9); the other 12 rows read as on #593. ctest and verify_packages not run (no C++ change). No
+real-game run. Logs under ignored `local/p2/ppa/gate/`. This is what the host did, not parity.
+
 **IMPL-SPAWN-PICKUP-PARTICLES (2026-11-20, zuhu desktop, on fix/rust-pickup-rb 7ae53972, #587):** AI-assisted
 (Claude Code, Opus 5.5). `SpawnPickupParticles` in Off from NATIVE_SPAWN_PICKUP_PARTICLES.md: the ordered preflight to
 refusal E or F, which always applies today, so the native writes nothing; a harness preload of `PartPickup` and the
-particle component class (UNVERIFIED in game). `cargo test --workspace -j 2`: 2,489 passed, 0 failed (48 result lines). `ow-inventory` 228 passed (10 new in
+particle component class (UNVERIFIED in game). `cargo test --workspace -j 2`: 2,490 passed, 0 failed (48 result lines; 2,489 before review r1 of #593's count fix). `ow-inventory` 228 passed (10 new in
 `attach_mesh/pickup_particles_tests.rs`). Installed `--slice-gate` (Off, strict): ok 0, notyet 7, error 7 of 14.
 Links 6 and 7 move from "WillowPickup.SpawnPickupParticles: the pickup's particle effect" (`LayerAbsent`) to refusal
 E, "stopped after partial writes: ParticleSystemComponent.ActivateSystem: the system's activation ..." in `make`
