@@ -1,6 +1,6 @@
 # Native rules after the login check: UpdateURL, SaveConfig and UpdateInputContext (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK1-AFTER-LOGIN (decision 2026-11-19-NNN, number to be given
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK1-AFTER-LOGIN (decision 2026-11-19-106, number to be given
 by the hub).
 - **Script first:** the callers were read in the installed packages with `research/script_disasm.py`, and every script
   function of the nine code packages was scanned once for the readers named below (a local helper over the same
