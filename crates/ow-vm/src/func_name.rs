@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-GET-FUNC-NAME (decision 2026-11-19-NNN, number pending). `Object.GetFuncName()`, the stock UE3 Core
+//! Owner: lane IMPL-GET-FUNC-NAME (decision 2026-11-19-178, number pending). `Object.GetFuncName()`, the stock UE3 Core
 //! native that answers the name of the script function calling it. AI-assisted (Claude Code).
 //!
 //! **The rule** (public UE3 semantics, not a Gearbox rule; no analyst note): a static final native whose answer is
