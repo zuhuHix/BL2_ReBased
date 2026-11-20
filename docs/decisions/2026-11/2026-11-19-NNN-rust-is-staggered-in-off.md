@@ -23,6 +23,9 @@ only. Based on main c687c135.
      struct, and its member `bIsStaggered` must be a bool. Otherwise a `VmError::Script` naming it.
 
   It writes, loads and draws nothing, so no refusal is marked "stopped after partial writes" from inside it.
+- **Review r1 of #619:** the S1 texts name the object (its class path and its own name, as `ow-attr`'s `eval.rs`
+  stand-in text does), and the stand-in test is `ow-attr`'s condition, no slots although the class has fields. A
+  `StaggerState` of another struct type is tested as a `VmError::Script`.
 - **Verified:** host unit tests on invented packages, covering the note's nine test items. Every refusal leaves #518's
   counters unchanged. The installed Off strict slice gate is identical to main's, row by row.
 - **Not verified:** nothing is checked against the running game, so every rule is **UNVERIFIED** in game.

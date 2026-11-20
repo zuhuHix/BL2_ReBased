@@ -674,18 +674,22 @@ pub fn is_staggered_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<bool,
     if !willow_pawn.is_some_and(|p| space.classes.is_child_of(class, p)) {
         return Err(super::access::error(format!("WillowPawn.IsStaggered: {path} is not a WillowPawn")));
     }
+    // S1 names the object, as ow-attr's eval.rs stand-in text does: its class path and its own name (review r1 of #619).
+    let object = format!("{path} {}", space.names.text(obj.name));
     if vm.defs.is_unloaded(space, pawn) {
         return Err(NotYet::not_read(
-            format!("WillowPawn.IsStaggered: the pawn {path} is an unloaded handle (a load is a write)"),
+            format!("WillowPawn.IsStaggered: the pawn {object} is an unloaded handle (a load is a write)"),
             RECORD_STAGGER,
         )
         .into());
     }
-    if u32::try_from(obj.slots.len()).ok() != space.classes.get_layout(class).map(|l| l.slot_count()) {
+    // A stand-in with no properties: no slots although its class has fields (ow-attr's eval.rs condition).
+    let fields = space.classes.get_layout(class).map_or(0, |l| l.slot_count());
+    if obj.slots.is_empty() && fields > 0 {
         return Err(NotYet::not_read(
             format!(
-                "WillowPawn.IsStaggered: the pawn {path} is a stand-in with no properties (an object the store cannot \
-                 load)"
+                "WillowPawn.IsStaggered: the pawn {object} is a stand-in with no properties (an object the store \
+                 cannot load)"
             ),
             RECORD_STAGGER,
         )

@@ -33,6 +33,8 @@ enum Shape {
     NotAStruct,
     /// `StaggerStateData` whose `bIsStaggered` is an int.
     NotABool,
+    /// `StaggerState` of another struct type, `ToyOtherStateData { bIsStaggered: bool }`.
+    OtherStruct,
 }
 
 /// `WillowGame.upk` (invented): `WillowPawn` (native `IsStaggered`, an object field `ToyLink`), `WillowAIPawn` (its
@@ -59,6 +61,11 @@ fn willow(shape: Shape) -> Vec<u8> {
         Shape::Missing => {}
         Shape::NotAStruct => {
             t.prop("Int", ai, "StaggerState", 0, 0);
+        }
+        Shape::OtherStruct => {
+            let state = toy_struct(&mut t, ai, "ToyOtherStateData", None);
+            t.prop("Bool", state, "bIsStaggered", 0, 0);
+            t.prop("Struct", ai, "StaggerState", 0, state);
         }
         Shape::Good | Shape::NotABool => {
             let state = toy_struct(&mut t, ai, "StaggerStateData", None);
@@ -253,11 +260,14 @@ fn a_receiver_outside_willow_pawn_is_a_script_error() {
 fn an_unloaded_pawn_is_s1() {
     let mut x = fx();
     let peer = x.unloaded_pawn();
-    x.refuses(peer, "is an unloaded handle (a load is a write)");
+    x.refuses(peer, "the pawn WillowGame.WillowAIPawn Peer is an unloaded handle (a load is a write)");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, peer), "still unloaded");
     let class = x.vm.find_class("WillowGame.WillowAIPawn").unwrap();
     let stand_in = x.vm.space.alloc_stand_in(class, "ToyStandIn", Origin::Resource { package: 0, index: -1 }).unwrap();
-    x.refuses(stand_in, "is a stand-in with no properties (an object the store cannot load)");
+    x.refuses(
+        stand_in,
+        "the pawn WillowGame.WillowAIPawn ToyStandIn is a stand-in with no properties (an object the store cannot load)",
+    );
 }
 
 /// The wrong shape, three cases, each a `VmError::Script` naming the field.
@@ -267,6 +277,7 @@ fn a_wrong_stagger_state_is_a_script_error() {
         (Shape::Missing, "StaggerState is not declared"),
         (Shape::NotAStruct, "StaggerState is not a struct"),
         (Shape::NotABool, "not a bool"),
+        (Shape::OtherStruct, "is not a WillowGame.WillowAIPawn.StaggerStateData"),
     ] {
         let x = fx_with(ParityMode::Off, shape);
         let mut x = x;
