@@ -250,6 +250,11 @@ fn fx_impl(world_info: bool, missing: Option<&str>, package_evaluator: bool, pac
     s.classes.define("Toy.PassContextResolver", Some(object), vec![]).unwrap();
     s.classes.define("Toy.FixedContextResolver", Some(object), vec![]).unwrap();
     s.classes.define("Toy.NoneContextResolver", Some(object), vec![]).unwrap();
+    // Lane PREFLIGHT-ORDER-LINK9-CAST: the AI component resolver (a pass-through here), its interface, and a pawn
+    // class for the rules each test binds.
+    s.classes.define("GearboxFramework.AIComponentAttributeContextResolver", Some(object), vec![]).unwrap();
+    s.classes.define("GearboxFramework.IAIInterface", Some(object), vec![]).unwrap();
+    s.classes.define("Toy.AIPawn", Some(pawn), vec![]).unwrap();
     // A context resolver class the attribute system does not bind (review r2 of #630, item 1).
     s.classes.define("Toy.UnboundContextResolver", Some(object), vec![]).unwrap();
     let expression = s.classes.define("Engine.ExpressionEvaluator", Some(object), vec![]).unwrap();
@@ -276,6 +281,8 @@ fn fx_impl(world_info: bool, missing: Option<&str>, package_evaluator: bool, pac
         .with_context_resolver("Toy.FixedContextResolver", Fixed)
         .unwrap()
         .with_context_resolver("Toy.NoneContextResolver", NoneAnswer)
+        .unwrap()
+        .with_context_resolver("GearboxFramework.AIComponentAttributeContextResolver", Pass)
         .unwrap();
     let mut vm = Vm::new(s, defs, Rc::new(attrs), ParityMode::Off);
     let actors = vm.add_service(ow_world::actors::Actors::new(actor)).unwrap();
@@ -978,3 +985,87 @@ fn the_store_path_is_reported_before_the_provider_guard() {
     assert!(!start.moved(&x.vm), "write-free");
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Lane PREFLIGHT-ORDER-LINK9-CAST: the AI component resolver's question, asked read-only before the first write
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The invented open answer's text.
+const OPEN: &str = "Toy.AIPawn's invented open QueryInterface answer is not read";
+
+/// A `Toy.AIPawn` whose class answers `QueryInterface` read-only by `answer`: `Some(true)` itself, `Some(false)`
+/// none, `None` the invented open refusal. `ordinary_only` binds the answer without a read-only form (a rule the
+/// read-only dispatch calls not ported).
+fn ai_pawn(x: &mut Fx, answer: Option<bool>, ordinary_only: bool) -> ObjRef {
+    let class = x.class("Toy.AIPawn");
+    let answer_of = move |this: ObjRef| -> Result<Option<ObjRef>, VmError> {
+        match answer {
+            Some(yes) => Ok(yes.then_some(this)),
+            None => Err(ow_core::NotYet::not_read(OPEN, "an invented record").into()),
+        }
+    };
+    if ordinary_only {
+        x.vm.register_interface_rule(class, Rc::new(move |_vm: &mut Vm, this, _iface| answer_of(this))).unwrap();
+    } else {
+        x.vm.register_read_only_interface_rule(class, Rc::new(move |_vm: &Vm, _asking: &mut ow_vm::api::InterfaceAsking, this, _iface| answer_of(this)))
+            .unwrap();
+    }
+    x.obj("Toy.AIPawn", "AIPawn")
+}
+
+/// A flag definition whose context chain is `chain` (resolver classes, in order), no value resolver.
+fn chained(x: &mut Fx, chain: &[&str]) -> ObjRef {
+    let f = x.obj("GearboxFramework.FlagDefinition", "Chained");
+    let entries = chain.iter().map(|c| Value::Object(Some(x.obj(c, "Resolver")))).collect();
+    x.set(f, "ContextResolverChain", Value::array(entries));
+    f
+}
+
+fn counters(x: &Fx) -> (WriteCounters, usize) {
+    (WriteCounters::of(&x.vm), x.vm.space.names.len())
+}
+
+/// The question with no bound read-only answer refuses before the evaluator's first write, its text kept and not
+/// marked: on a definition whose first resolver is the AI component resolver, and on a cold receiver (its chain is
+/// unknown until its load), which stays unloaded.
+#[test]
+fn an_open_ai_question_refuses_before_any_write() {
+    let mut x = fx();
+    let pawn = ai_pawn(&mut x, None, false);
+    let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
+    let e = x.evaluator(&[(0, Some(f))], 0);
+    let before = counters(&x);
+    let text = not_read(x.eval(e, Some(pawn)), OPEN);
+    assert_eq!(text, OPEN, "the dispatch's text, not marked");
+    assert_eq!(counters(&x), before, "write-free, RNG-free, load-free, no name interned");
+    // A cold receiver.
+    let mut x = fx_all(true, None, true);
+    let pawn = ai_pawn(&mut x, None, false);
+    let cold = x.cold_evaluator();
+    let before = counters(&x);
+    assert_eq!(not_read(x.eval(cold, Some(pawn)), OPEN), OPEN);
+    assert_eq!(counters(&x), before);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the receiver was not loaded");
+}
+
+/// A receiver with a bound read-only answer goes through, yes or no; so does a rule with no read-only form (the
+/// ordinary dispatch decides), and a chain whose AI component resolver comes after another resolver.
+#[test]
+fn a_bound_ai_answer_goes_through() {
+    for answer in [true, false] {
+        let mut x = fx();
+        let pawn = ai_pawn(&mut x, Some(answer), false);
+        let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
+        let e = x.evaluator(&[(0, Some(f))], 0);
+        assert!(!x.eval(e, Some(pawn)).unwrap(), "IsTrue with neither field is false");
+    }
+    let mut x = fx();
+    let pawn = ai_pawn(&mut x, None, true);
+    let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
+    let e = x.evaluator(&[(0, Some(f))], 0);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "no read-only form: left to the dispatch");
+    let mut x = fx();
+    let pawn = ai_pawn(&mut x, None, false);
+    let f = chained(&mut x, &["Toy.PassContextResolver", AI_COMPONENT_RESOLVER]);
+    let e = x.evaluator(&[(0, Some(f))], 0);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "a later entry asks a changed context: not preflighted");
+}

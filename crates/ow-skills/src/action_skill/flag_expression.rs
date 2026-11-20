@@ -81,6 +81,11 @@ const RULE_ENGINE_OWNER: &str = "GearboxFramework.IRuleEngineOwner";
 const FLAG_PROVIDER: &str = "GearboxFramework.IFlagProvider";
 const RULE_ENGINE_RESOLVER: &str = "GearboxFramework.RuleEngineFlagValueResolver";
 const FUNCTION_RESOLVER: &str = "GearboxFramework.ObjectFunctionFlagValueResolver";
+/// The context resolver whose script asks its source for [`AI_INTERFACE`] before anything else (read with
+/// `research/script_disasm.py`; lane PREFLIGHT-ORDER-LINK9-CAST).
+pub const AI_COMPONENT_RESOLVER: &str = "GearboxFramework.AIComponentAttributeContextResolver";
+/// The interface [`AI_COMPONENT_RESOLVER`] asks for.
+pub const AI_INTERFACE: &str = "GearboxFramework.IAIInterface";
 
 /// Binds the rule in Off, first-wins; nothing under Reference.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -290,6 +295,10 @@ fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<
             interface(vm, path)?;
         }
         rule_engine(vm, context)?;
+        // The chain is unknown until the load: any definition may reach the AI component resolver.
+        if let Some(c) = context {
+            ai_question(vm, c)?;
+        }
     }
     load(vm, me)?;
     let chain = field(vm, me, "FlagChain")?;
@@ -389,6 +398,11 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
                 }
                 if context.is_some() && may_need_store(vm, definition)? {
                     interface(vm, FLAG_PROVIDER)?;
+                }
+                if let Some(c) = context
+                    && may_ask_ai_first(vm, definition)?
+                {
+                    ai_question(vm, c)?;
                 }
                 load(vm, definition)?;
                 if takes_store_path(vm, definition, engine.flatten())? {
@@ -542,6 +556,48 @@ fn may_need_store(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
         }
     }
     Ok(false)
+}
+
+/// Whether a reached definition may ask its context for [`AI_INTERFACE`] before anything changes that context (lane
+/// PREFLIGHT-ORDER-LINK9-CAST), by reads only: a handle not loaded yet (its fields are unknown), or a chain whose first
+/// set entry is an [`AI_COMPONENT_RESOLVER`] (its script asks its source, the context, first). A later entry asks a
+/// context the chain's earlier resolvers have changed, which cannot be known before they run, and a nested evaluator
+/// checks its own definitions: the dispatch decides there.
+fn may_ask_ai_first(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+    if vm.defs.is_unloaded(&vm.space, definition) {
+        return Ok(true);
+    }
+    let class = vm.space.heap.get(definition)?.class;
+    let Some(p) = vm.space.prop(class, "ContextResolverChain") else {
+        // Undeclared: the reads after the load report it.
+        return Ok(false);
+    };
+    let first = vm.space.read(definition, PropAddr::scalar(p))?.elements().and_then(|entries| {
+        entries.iter().find_map(|v| match v {
+            Value::Object(Some(o)) => Some(*o),
+            _ => None,
+        })
+    });
+    match first {
+        Some(resolver) => is_a(vm, resolver, AI_COMPONENT_RESOLVER),
+        None => Ok(false),
+    }
+}
+
+/// The preflight of the AI component resolver's first question (lane PREFLIGHT-ORDER-LINK9-CAST): the context's
+/// `QueryInterface(IAIInterface)` through the read-only dispatch ([`Vm::query_interface_read_only`]), before the next
+/// load, so a question with no bound answer refuses before the evaluator's first write rather than after it. Its
+/// `NotYet` is returned as it is, text and kind kept. Left to the dispatch: an answer (the question is asked again
+/// when the resolver runs), a rule with no read-only form (`NotPorted`: the ordinary rule may answer), any other
+/// error, and an interface class that is not loaded.
+fn ai_question(vm: &Vm, context: ObjRef) -> Result<(), VmError> {
+    let Some(iface) = vm.space.classes.by_path(AI_INTERFACE) else {
+        return Ok(());
+    };
+    match vm.query_interface_read_only(&mut ow_vm::api::InterfaceAsking::default(), context, iface) {
+        Err(VmError::NotYet(n)) if n.missing != ow_core::Missing::NotPorted => Err(n.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Whether a definition takes the store path (note section 3, step 3.2) given `R`.

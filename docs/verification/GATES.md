@@ -120,6 +120,18 @@ does not reach the merge. No real-game run; `UNVERIFIED` in game. Logs under ign
 stop after the hooks is the recorded AnimNodeSpecialMoveBlend owner test (NATIVE_BONE_TRANSFORM_LAYER.md section 5,
 #646); after it, attachment 13's attached CylinderComponent release is the expected stop (UNVERIFIED, not measured).
 
+**PREFLIGHT-ORDER-LINK9-CAST (2026-11-20, zuhu desktop, on fix/rust-link9-cast-preflight-order from main 241a6c4):**
+AI-assisted (Claude Code, Opus 5.5). `FlagExpressionEvaluator.Evaluate` asks the AI component resolver's
+`QueryInterface(IAIInterface)` through #602's read-only dispatch before its next load, so a question with no bound
+answer refuses before the evaluator's first write, not after it. `cargo test -p ow-skills --lib flag_expression` 22
+passed / 0 failed; `cargo build --workspace -j 2` OK; `cargo test --workspace -j 2` 3,201 passed / 0 failed / 51
+ignored; `crate_edges_test.py` 19 OK; clippy: no warning in the touched files. Installed Off `--slice-gate` strict
+(release build, under the machine lock): 4 ok / 9 NotYet / 1 error. Link 9 errors in `cast` on the unbound
+`GearboxMind.GetAIComponent()`, which is batch 9's own error (lane d2b6). With #602 the mind answers `IAIInterface`
+read-only, so the preflight passes and the cast reaches that call. The old "after partial writes" stop is not reached
+on this base. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN; logs under ignored `local/p2/link9-preflight/`.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
