@@ -20,6 +20,10 @@ Stacked on fix/rust-is-staggered @ 11097cef (#619), because both bind in `ow-com
      `bPerchAttached` clear answers nothing, with nothing written.
   6. **D3**, `NotYet { NotRead }`, when the guard holds: the perch projectile's spawn and launch was read only to its
      edge. It refuses before any write.
+- **`death.rs`'s no-op (review r1 of #620):** `death.rs` bound `DropCombatPerch` as a presentation no-op. It now
+  binds it under Reference only, so in Off the rule answers whichever pack registers first, and `Died` and
+  `Staggered.BeginState` reach it. A test runs a perched pawn's `Died` in Off (D3) in both registration orders, and
+  the no-op under Reference.
 - **Verified:** host unit tests on invented packages, covering the note's eight tests. Every answer and refusal leaves
   #518's counters unchanged. The installed Off strict slice gate is identical to main's, row by row.
 - **Not verified:** nothing is checked against the running game, so every rule is **UNVERIFIED** in game.

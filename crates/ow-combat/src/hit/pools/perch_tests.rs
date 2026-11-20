@@ -13,7 +13,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_package::testkit::script::{FunctionSpec, ScriptToy};
+use ow_package::testkit::script::{Asm, FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
@@ -21,6 +21,7 @@ use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
+const SCRIPT_FLAGS: u32 = 0x1 | 0x2 | 0x20000;
 
 /// How `WillowAIPawn` declares the perch fields in the fixture.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,7 +51,17 @@ fn willow(shape: Shape) -> Vec<u8> {
     }
     t.prop(if shape == Shape::IntFlag { "Int" } else { "Bool" }, ai, "bPerchAttached", 0, 0);
     let spec = FunctionSpec::new(NATIVE_FLAGS, "DropCombatPerch");
-    t.function(ai, "DropCombatPerch", &[], None, &[], &spec, |_| None);
+    let drop = t.function(ai, "DropCombatPerch", &[], None, &[], &spec, |_| None).function;
+    // `Died(Killer)`, a script stand-in for the installed one's call: it calls `DropCombatPerch` on itself.
+    let spec = FunctionSpec::new(SCRIPT_FLAGS, "Died");
+    let killer = Param { type_ref: object, ..Param::new("Object", "Killer") };
+    t.function(ai, "Died", &[killer], None, &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().final_function(drop, |_| {});
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.class("ToyAIPawnChild", ai);
     t.class("ToyNativeAIPawn", ai);
     t.class("ToyPlainPawn", pawn);
@@ -277,4 +288,36 @@ fn both_registration_orders_and_reference() {
     register(&mut x.vm).unwrap();
     let f = x.vm.find_function(DROP_COMBAT_PERCH).unwrap();
     assert!(!x.vm.is_bound(f), "unbound under Reference");
+}
+
+/// `Died` reaches the rule in Off (review r1 of #620): `death.rs` binds `DropCombatPerch` as a presentation no-op under
+/// Reference only, so in Off a perched pawn's `Died` reaches D3 and the slice shape's `Died` does nothing, whichever of
+/// the two packs registers first. Under Reference the no-op answers, perched or not.
+#[test]
+fn died_reaches_the_rule_in_off_and_the_no_op_in_reference() {
+    let died = "WillowGame.WillowAIPawn.Died";
+    for death_first in [false, true] {
+        let mut x = fx();
+        if death_first {
+            crate::death::register(&mut x.vm).unwrap();
+            register(&mut x.vm).unwrap();
+        } else {
+            register(&mut x.vm).unwrap();
+            crate::death::register(&mut x.vm).unwrap();
+        }
+        let f = x.vm.find_function(died).unwrap();
+        let perched = x.pawn("WillowAIPawn", 3, true, true);
+        match x.vm.call(f, Some(perched), vec![Value::Object(None)]) {
+            Err(VmError::NotYet(n)) => assert!(n.what.contains(PERCH_DROP), "death first {death_first}: {n}"),
+            other => panic!("death first {death_first}: expected D3, got {other:?}"),
+        }
+        let slice = x.pawn("WillowAIPawn", 3, false, false);
+        x.vm.call(f, Some(slice), vec![Value::Object(None)]).unwrap();
+    }
+    let mut x = fx_with(ParityMode::Reference, Shape::Good);
+    crate::death::register(&mut x.vm).unwrap();
+    register(&mut x.vm).unwrap();
+    let f = x.vm.find_function(died).unwrap();
+    let perched = x.pawn("WillowAIPawn", 3, true, true);
+    x.vm.call(f, Some(perched), vec![Value::Object(None)]).unwrap();
 }

@@ -415,6 +415,11 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     )?;
 
     for path in PRESENTATION_NO_OPS {
+        // In Off, DropCombatPerch has its own rule (crate::hit::pools, NATIVE_DROP_COMBAT_PERCH.md; lane
+        // IMPL-DROPCOMBATPERCH), which `Died` and `Staggered.BeginState` reach; Reference keeps this no-op.
+        if path == crate::hit::pools::DROP_COMBAT_PERCH && vm.parity == ow_core::ParityMode::Off {
+            continue;
+        }
         bind_fn(vm, path, |_| Ok(Value::None))?;
     }
     for path in LOGGED_NO_OPS {
