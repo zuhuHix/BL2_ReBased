@@ -22,7 +22,8 @@ implements it). The decision number is pending from the hub (three digits); NNN 
       count;
     - the minimal case writes `bAnimTreeInitialised`, `SkeletalMesh`, `SpaceBases`, `bHasValidBodies` and the morph
       map;
-    - **the native-only transform needs a hub ruling** (nothing, or a transform refusal on a non-zero origin);
+    - **the native-only transform, by the hub's ruling (05:35Z):** `LayerAbsent` when either mesh has a non-zero
+      origin offset or rotation, nothing when both are zero (UNVERIFIED);
     - Reference is unchanged.
 - **Sources:** `Borderlands2.exe` through `tools/ghidra/run.ps1 -ReadOnly` under the machine lock. Raw output stays
   under ignored `local/analysis/smmc/`. No addresses, decompiler output or listing structure is in tracked files. No

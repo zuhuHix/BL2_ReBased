@@ -128,10 +128,18 @@ to 3 are #599's and stay as they are:
      "the skeletal mesh data layer's LOD models") }`. The count, and the per-LOD byte copied from each LOD model, come
      from native mesh data with no script declaration. With a None mesh, or an equal count, nothing is written there.
 7. **The transform** (step 9) is native-only in the port: the probe found no `LocalToWorld` declaration on the port's
-   layout (section 5), and an unattached component has no scene transform. **This needs a hub ruling**: either answer
-   it as nothing in Off, because no script-visible field or slice step reads it, or refuse it as
-   `NotYet { LayerAbsent("a component transform") }` whenever either mesh's origin offset or rotation is non-zero.
-   Step 12's unidentified field and step 17's notification are native-only too, and fall under the same ruling.
+   layout (section 5), and an unattached component has no scene transform.
+
+   **The hub's ruling (05:35Z, on the review of this note), UNVERIFIED:** in Off, read each mesh that is set (old and
+   new; both are resident by rules 4 and 5) for its origin offset and origin rotation (by fit `Origin` and
+   `RotOrigin`; each declared with its kind, else a `VmError::Script` naming it). When either mesh has a non-zero
+   offset or a non-zero rotation, the recomputed transform would matter, so refuse before any write with
+   `NotYet { LayerAbsent("a component transform") }`, "SetSkeletalMesh: the component transform's origin compensation
+   (a mesh with a non-zero origin)". When both are zero (or the mesh is None), the compensation is the identity on
+   both sides, so the transform is answered as nothing. The unidentified component flag of step 3, which would make
+   the compensation the identity whatever the origin, is not read: a non-zero origin refuses even if the flag is set.
+   The ruling covers the transform only. Step 12's unidentified field and step 17's notification are native-only
+   too: this note proposes no write for them and leaves them as open questions.
 
 **Writes**, only after the whole preflight passed, in the native's order:
 1. `bAnimTreeInitialised` = false;
@@ -148,7 +156,7 @@ leaves a value unchanged is still made (the native writes it), except item 5's e
 record kept.
 
 **The clear** (a set mesh to None) needs no mesh data under these rules: rules 4 and 6's `LODInfo` row do not apply,
-and rule 5 reads the old mesh's origin only for the transform, which follows the hub's ruling on rule 7. Link 8 makes
+and rule 5 reads the old mesh's origin only for the transform (rule 7: a non-zero old origin refuses). Link 8 makes
 no such call (its resets are None to None, #583 section 5).
 
 ## 5. What link 8 meets (local probe, uncommitted)
@@ -178,7 +186,8 @@ The probe ran on a local, unpushed merge of main 4c4522d7 with #577, #599, #596 
 before the run, through a harness preload as with the gestalt definitions (an UNVERIFIED harness input, a hub ruling),
 or through the composite-mesh build once it is ported to produce a resident mesh. After that comes rule 6's `LODInfo`
 row: the mesh has at least one LOD and `LODInfo` is empty, so it is `LayerAbsent` until #569's layer exposes the LOD
-models. Rule 7 follows the hub's ruling. With all of those lifted, the next stop is `PrimitiveComponent.SetScale(float)`.
+models. Then rule 7: a non-zero origin on the composite mesh refuses (its values were not read for this note). With
+all of those lifted, the next stop is `PrimitiveComponent.SetScale(float)`.
 
 ## Tests for the implementer
 
@@ -196,7 +205,8 @@ unchanged:
 7. the clear (a set mesh to None) on a minimal component: `SkeletalMesh` None, `bAnimTreeInitialised` false,
    `SpaceBases` empty, `LODInfo` unchanged;
 8. a field declared with the wrong kind (each written field): `VmError::Script` naming it, before any write;
-9. under the hub's ruling on rule 7: the case it names (nothing, or the transform refusal with a non-zero origin);
+9. rule 7 (the hub's ruling): a non-zero origin offset, or a non-zero origin rotation, on the new mesh, and then on
+   the old mesh, is the transform's `LayerAbsent` before any write; both zero, or a None mesh, writes no transform;
 10. Reference: unchanged.
 
 ## Open questions
@@ -204,7 +214,8 @@ unchanged:
 1. **UNVERIFIED:** every field name of section 2 (by fit); the component flag of step 3; step 12's field; step 17's
    call; the LOD-model data behind step 16's byte.
 2. **Not read in detail:** the bone-name search of steps 8, 10 and 14, and the tree's per-bone array layout.
-3. **Hub ruling needed:** rule 7, the native-only transform.
+3. **Ruled by the hub (05:35Z):** rule 7, the native-only transform. Still open: steps 12 and 17 (native-only, no
+   write proposed).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
