@@ -1,6 +1,6 @@
 # CacheWeaponCard's body, the rest: the order of equal priorities and the displayed value (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-CARD-BODY-REST (decision 2026-11-19-NNN, number pending).
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-CARD-BODY-REST (decision 2026-11-19-143, number pending).
 Analyst only: a different lane implements it (clean room).
 
 **Sources:**
