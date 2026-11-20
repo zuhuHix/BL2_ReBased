@@ -1,7 +1,7 @@
 # `WillowAIPawn.DropCombatPerch` on link 9 (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-DROPCOMBATPERCH (decision
-`docs/decisions/2026-11/2026-11-19-NNN-drop-combat-perch-on-link-9.md`, number pending). Analyst only: a different lane
+`docs/decisions/2026-11/2026-11-19-225-drop-combat-perch-on-link-9.md`, number pending). Analyst only: a different lane
 implements it (clean room).
 
 **Sources:**
