@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on #608 at 193ef94f):** AI-assisted (Claude Code, Opus 5.5).
+The owner's `PostInitAnimTree` after the tree initialisation, and `SkeletalMeshComponent.FindAnimNode` /
+`FindSkelControl` in Off, from NATIVE_TREE_INIT_OWNER_EVENT.md (#612 at 3691317c), replacing #561's owner-event
+refusal. `cargo build --workspace --locked` clean; `cargo test --workspace --locked -j 4` 3,038 passed / 0 failed /
+51 ignored (18 new in `anim_tree_copy`, the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm --all-targets` adds no
+warning in the touched files. Installed Off `--slice-gate` (strict, under the lock; measured before the rebase, on the 383c929c stack) on a throwaway merge with #570
+(d910fa13), #592, #500 and #528, against the same merge without this branch: ok 1 / NotYet 10 / error 3 of 14 on both.
+Links 1, 3, 4, 5, 13 and 14 run 0 of 1 step and now stop at #557's body composition lookup refusal ("needs an
+animation-tree instance for the skeletal mesh"); before, they stopped at the owner's event. The other eight links' stops
+are unchanged. Maya's `.psk` was exported locally with UModel 1590 for the run, as #592 records. ctest and
+verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
