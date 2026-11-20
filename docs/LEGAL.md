@@ -41,6 +41,10 @@ descriptively.
   the repository: the scripts write it to the ignored `local/` folder, and
   commits made before 2026-11-11 still contain it.
 - One vendored third-party library (lzokay, MIT) with recorded provenance.
+- WGSL shaders translated from the UE3 shader source shipped with
+  Borderlands 2, under `crates/ow-render/shaders/ue3/` (see
+  [License](#license)). This is an exception to the list below, made by the
+  maintainer on 2026-11-19.
 
 ## What this repository does not contain, and never will
 
@@ -52,6 +56,12 @@ descriptively.
   screenshots of loaded game content. Such outputs are written to
   git-ignored directories (such as `local/`) on the contributor's
   machine, and are never committed to the git tree.
+- The one exception to both points: WGSL translations of the `.usf` shader
+  source files in the install's `Engine/Shaders` folder that are headed with an
+  Epic Games copyright, under `crates/ow-render/shaders/ue3/` (see
+  [License](#license)). The `.usf` files themselves are never committed, and
+  the install's shader files headed Gearbox, NVIDIA or Scaleform, or with no
+  notice, are not covered.
 
 ### Screenshots and the progress gallery
 
@@ -72,7 +82,8 @@ The README banner is official Borderlands 2 promotional artwork. It is not a
 game file and is used solely to identify the game the engine is built for. It
 will be removed promptly at the request of the rights holder (see
 [Contact for rights holders](#contact-for-rights-holders)).
-- Any Gearbox, 2K, Take-Two or Epic Games source code, leaked or otherwise.
+- Any Gearbox, 2K, Take-Two or Epic Games source code, leaked or otherwise,
+  apart from the translated UE3 shaders named above.
 - Any code transcribed, translated or mechanically converted from disassembling or
   decompiling `Borderlands2.exe` or any other shipped binary, and any decompiler
   output itself: listings, pseudo-code, recovered headers or type libraries, and
@@ -217,7 +228,11 @@ bytes is not; such attachments will be removed.
 The original code and documents in this repository are licensed under the
 [MIT License](../LICENSE). The license covers only that original work: it
 does not cover, and the repository does not contain, any Borderlands 2 game
-data, Gearbox Software code, or Epic Games engine code. Vendored third-party
+data or Gearbox Software code. The repository contains WGSL derived from Epic
+Games' UE3 shader source under `crates/ow-render/shaders/ue3/` (maintainer
+decision 2026-11-19); those files are not MIT-licensed, Epic Games retains its
+rights, and they are distributed without a licence grant. It contains no other
+Epic Games engine code. Vendored third-party
 code retains its own license (lzokay: MIT, in `third_party/lzokay/LICENSE`).
 The reasoning for MIT over GPL-3 (chiefly that GPL code could not be
 distributed as a binary linked against Unreal Engine, the host at the time) is
@@ -233,7 +248,10 @@ The MIT License disclaims all warranty and liability. It governs what others
 may do with this code; it does not itself limit any claim a rights holder
 might make. The project's protection against such claims is that it ships no game
 files and no code transcribed from the game's binaries, and that it needs the
-player's own copy of the game.
+player's own copy of the game. The translated UE3 shaders are the one place where
+the repository publishes code derived from a rights holder's source; the
+maintainer accepted that risk on 2026-11-19, and those files are removed at the
+rights holder's request (see [Contact for rights holders](#contact-for-rights-holders)).
 
 ## Contact for rights holders
 
