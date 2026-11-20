@@ -1,6 +1,6 @@
 # SkeletalMeshComponent.SetSkeletalMesh on link 8 (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SET-SKELETAL-MESH (decision 2026-11-19-NNN, number pending).
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SET-SKELETAL-MESH (decision 2026-11-19-199, number pending).
 Analyst only: a different lane implements it (clean room).
 
 **Sources:**
