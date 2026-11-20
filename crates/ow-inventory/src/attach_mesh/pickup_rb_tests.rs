@@ -588,6 +588,27 @@ fn a_cold_globals_definition_class_is_refused_and_stays_cold() {
     assert!(!x.vm.class_code_loaded(class), "nothing registered");
 }
 
+/// Review r2 of #587 (low 1): with both globals classes cold, the declared `GearboxGlobalsDefinition` is refused first,
+/// and neither class gets its code registered. Code registration moves none of #518's counters, so the test reads
+/// `Vm::class_code_loaded` for both classes, not only `state()`.
+#[test]
+fn both_cold_globals_classes_stay_cold() {
+    let mut x = fx_with(ParityMode::Off, GD_SPIN, false);
+    let classes = ["GearboxFramework.GearboxGlobalsDefinition", GD_PLAIN].map(|p| x.vm.space.classes.by_path(p).unwrap());
+    let cold = |x: &Fx| classes.map(|c| !x.vm.class_code_loaded(c));
+    assert_eq!(cold(&x), [true, true], "both classes start cold");
+    let before = x.state();
+    match x.call() {
+        Err(VmError::NotYet(n)) => {
+            assert!(n.what.contains("GearboxFramework.GearboxGlobalsDefinition, not loaded"), "{n}");
+            assert!(!ow_core::notyet::is_partial_writes(&n.what), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.state(), before);
+    assert_eq!(cold(&x), [true, true], "neither class's code registered");
+}
+
 /// Review r1 of #587, item 2: a timer service already borrowed refuses before the first write.
 #[test]
 fn a_borrowed_timer_service_refuses_before_any_write() {

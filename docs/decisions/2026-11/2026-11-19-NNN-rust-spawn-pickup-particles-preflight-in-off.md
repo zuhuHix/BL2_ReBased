@@ -56,3 +56,12 @@ the native (clean room). No real-game session was run. No dependency was added a
   `make`. This is what the host did, not parity.
 - **Open:** the note's open questions, `ActivateSystem`'s script-visible writes above all (the next read for links 6
   and 7), and the initialisation.
+
+## Edits: review r2 of #587 (two lows, folded here)
+
+- `pickup_rb_tests.rs`: a new test makes both globals classes cold. `GearboxGlobalsDefinition` is refused first, and
+  `Vm::class_code_loaded` stays false for both classes. Registering code moves none of #518's counters, so the test
+  reads both classes directly.
+- The installed `--slice-gate` was run again and its graded table matches the first run line for line. Links 6 and 7
+  pass `InitializePickupForRBPhysics` (the pickup preflight loads both globals classes first) and stop at this
+  native's refusal E in `make`. The GATES row is unchanged.
