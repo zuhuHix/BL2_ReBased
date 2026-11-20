@@ -132,7 +132,7 @@ in Off from NATIVE_AUTO_STATE.md section 5 (#540). `cargo build --workspace --lo
 `cargo clippy -p ow-vm --all-targets` adds no warning in `states.rs`; `crate_edges_test.py` OK. The installed Off
 `--slice-gate` (strict, under the lock): ok 1 / NotYet 4 / error 9 of 14 on the head, and the same rows on a throwaway
 merge with #537 at 3d25b4a; no row reaches `GotoState('Auto')`. ctest and verify_packages not run (no C++ change). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN.
+`UNVERIFIED` in game. Decision 2026-11-19-156.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
