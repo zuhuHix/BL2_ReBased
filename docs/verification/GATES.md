@@ -231,6 +231,16 @@ link 1 runs 0 of 1 step, its first stop moved from #569's unloaded-mesh `LayerAb
 section 2 step 5 (the initialisation's pass over the component; links 3, 4, 5, 13 and 14 blocked behind it). ctest and
 verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
 
+**FIX-BODY-COMPOSITION-LOOKUP-STALE (2026-11-20, pc-hummer, on #608 at 383c929c):** AI-assisted (Claude Code, Opus
+5.5). The body composition's animation-node lookups over the planned copy (NATIVE_ANIM_NODE_LOOKUP.md sections 1 and
+2) instead of #557's stale no-instance refusal. `cargo test --workspace --locked -j 2` 2,589 passed / 0 failed / 49
+ignored (5 new in `anim_tree_copy`, 3 template-era tests dropped in `body_composition`); `cargo clippy -p ow-world
+--all-targets` adds no warning in the touched files; `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict,
+under the lock) on a throwaway merge with #592, #570, #500 and #528, the owner's event (#612) a local stand-in: ok 1 /
+NotYet 10 / error 3 of 14; links 1, 3, 4, 5, 13 and 14 run 0 of 1 step and stop at the body's rendering hooks
+(LayerAbsent), past the lookups. ctest and verify_packages not run (no C++ change). No real-game run; every rule
+UNVERIFIED.
+
 **IMPL-COPY-COMPONENT-PASS (2026-11-20, pc-hummer, on #585 at ce3be0ac):** AI-assisted (Claude Code, Opus 5.5). The
 tree initialisation's component pass and per-bone control arrays in Off from NATIVE_COPY_COMPONENT_PASS.md (#598 at
 5196fcec), replacing #575's two step-5 refusals, plus InitTag and the two per-node arrays. `cargo test --workspace
