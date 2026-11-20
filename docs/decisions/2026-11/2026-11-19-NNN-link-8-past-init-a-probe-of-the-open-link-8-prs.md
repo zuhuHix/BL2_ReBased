@@ -1,7 +1,7 @@
 ## 2026-11-19: Link 8 past init: a probe of the open link 8 PRs
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane ANALYST-LINK8-NEXT, an analyst lane. No real-game session was run,
-and no native was read for this record. Every stop below is what the host did on a throwaway probe tree, not parity.
+and no native was read for this record. Every stop below is what the host did on a throwaway probe tree, not parity. Every native behaviour and gameplay conclusion here, the mesh change's needs included, stays UNVERIFIED in game.
 
 **The probe.** A local merge that was never pushed and is deleted: main at 4c4522d7, plus #596 (the gestalt mesh layer),
 #613 (the gestalt data layer), #616 (AddAttributeModifier, which contains #615), #577 (GetExpLevelFromManufacturerData)
@@ -20,7 +20,7 @@ build. Logs are under ignored `local/analysis/link8next/`.
 | 1 | `GetExpLevelFromManufacturerData`, unbound (error) | #577, open |
 | 2 | `SkeletalMeshComponent.SetSkeletalMesh(object,bool)`, unbound (error) | #599, open |
 | 3 | `BuildCompositeMesh: a definition it reads is not loaded` (NotRead) | #596's own preflight; see below |
-| 4 | `SetSkeletalMesh: a mesh change (bones, the animation tree's per-bone state, physics and render state)`, LayerAbsent (the component's bone transforms), after partial writes | #599's own guard; no native |
+| 4 | `SetSkeletalMesh: a mesh change (bones, the animation tree's per-bone state, physics and render state)`, LayerAbsent (the component's bone transforms). The native's guard refuses before it writes anything; the "after partial writes" marker belongs to the surrounding `init` step | #599's own guard; no native |
 
 With every PR above in, link 8 still passes only `make` (1 of 5 steps), but the stop moves from an error to a NotYet.
 The whole gate on the last probe was 4 ok / 10 NotYet / 0 errors of 14.
