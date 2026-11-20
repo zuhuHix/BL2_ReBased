@@ -23,6 +23,14 @@
 //! definition store, `NotRead` for a stand-in). The rule engine search alone reads without loading (an unloaded
 //! object there is `NotRead`).
 //!
+//! **The interface classes** (lane FIX-FLAG-IMPLEMENTS-NOTYET): the rule asks objects for `IRuleEngineOwner` and
+//! `IFlagProvider` by their class tables, which only hold an interface class once it is loaded. With a context, both
+//! must be loaded classes, checked after the receiver's type and before its load, so before any write; otherwise
+//! `NotYet { NotRead }`, "the interface class <path> is not loaded (a load is a write)". A loaded class that does not
+//! implement one still answers no. The check is eager: a chain that would never reach an interface question (all
+//! None definitions, or a short circuit first) refuses too, the price of refusing write-free. With no context no
+//! interface question is reached (step 4's None context answers false, and `R` is None), so nothing is checked.
+//!
 //! **Also `NotYet { NotRead }`:** a value resolver class other than the two read; a computed flag that also has a value
 //! resolver (the hand-off); a flag store that is not a `GearboxMind`'s; a store whose two arrays are out of step. Two
 //! are the port's own choices, not questions of the note: a rule engine owner other than a `GearboxMind` (only the
@@ -142,11 +150,10 @@ fn is_a(vm: &Vm, o: ObjRef, path: &str) -> Result<bool, VmError> {
     Ok(vm.space.classes.by_path(path).is_some_and(|b| class == b || vm.space.classes.is_child_of(class, b)))
 }
 
-/// Whether `o`'s class declares (or inherits) the interface at `path`, from the class tables alone.
+/// Whether `o`'s class declares (or inherits) the interface at `path`, from the class tables alone. An interface class
+/// that is not loaded is `NotRead` ([`interface`]), not a "no": [`chain_of`] checks that before any write.
 fn implements(vm: &mut Vm, o: ObjRef, path: &str) -> Result<bool, VmError> {
-    let Some(iface) = vm.space.classes.by_path(path) else {
-        return Ok(false);
-    };
+    let iface = interface(vm, path)?;
     let class = vm.space.heap.get(o)?.class;
     vm.implements_checked(class, iface)
 }
@@ -242,10 +249,16 @@ struct Conditional {
 }
 
 /// The receiver's chain and operator: the note's eager checks (section 6), the receiver loaded when it is a handle.
-fn chain_of(vm: &mut Vm, me: Option<ObjRef>) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
+/// With a context, the interface classes are checked first, before the load (module documentation).
+fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
     let me = me.ok_or_else(|| script("called with no evaluator".to_string()))?;
     if !is_a(vm, me, EVALUATOR)? {
         return Err(script(format!("{} is not a FlagExpressionEvaluator", path_of(vm, me))));
+    }
+    if context.is_some() {
+        for path in [RULE_ENGINE_OWNER, FLAG_PROVIDER] {
+            interface(vm, path)?;
+        }
     }
     load(vm, me)?;
     let chain = field(vm, me, "FlagChain")?;
@@ -315,7 +328,7 @@ fn rule_engine(vm: &mut Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, V
 /// receiver and the chain's shape are checked up front; each conditional is checked when it is reached (note section
 /// 6, "Per conditional").
 pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<bool, VmError> {
-    let (_, chain, operator) = chain_of(vm, me)?;
+    let (_, chain, operator) = chain_of(vm, me, context)?;
     let mut engine: Option<Option<ObjRef>> = None;
     let mut result = true;
     for (i, c) in chain.iter().enumerate() {
@@ -430,8 +443,13 @@ fn definition_answer(
     Ok(value == is_true)
 }
 
+/// The interface class at `path`, which must be loaded: the class tables only answer for a loaded class, and loading
+/// one is a write the rule does not make (lane FIX-FLAG-IMPLEMENTS-NOTYET).
 fn interface(vm: &Vm, path: &str) -> Result<ClassId, VmError> {
-    vm.space.classes.by_path(path).ok_or_else(|| not_read(format!("the interface {path} is not in the loaded classes")))
+    vm.space
+        .classes
+        .by_path(path)
+        .ok_or_else(|| not_read(format!("the interface class {path} is not loaded (a load is a write)")))
 }
 
 /// The context through the definition's `ContextResolverChain` (note section 4.0, step 2): a None entry is skipped; a

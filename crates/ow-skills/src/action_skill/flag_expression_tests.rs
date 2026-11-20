@@ -124,8 +124,13 @@ fn fx() -> Fx {
     fx_with(true)
 }
 
-/// The fixture; `world_info`: whether a `WorldInfo` is placed (the world's time).
 fn fx_with(world_info: bool) -> Fx {
+    fx_full(world_info, None)
+}
+
+/// The fixture; `world_info`: whether a `WorldInfo` is placed (the world's time); `missing`: an interface class left
+/// out of the loaded classes (its subclasses then derive from `Core.Object`).
+fn fx_full(world_info: bool, missing: Option<&str>) -> Fx {
     let mut s = ObjectSpace::new();
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
@@ -159,11 +164,14 @@ fn fx_with(world_info: bool) -> Fx {
     s.classes.define("GearboxFramework.GearboxPawn", Some(pawn), vec![]).unwrap();
     // The fixture makes the mind derive from both interfaces (rule engine owner, flag provider) so the class tables
     // answer them.
-    let owner = s.classes.define("GearboxFramework.IRuleEngineOwner", Some(object), vec![]).unwrap();
+    let interface_class = |s: &mut ObjectSpace, path: &str, parent: ClassId| {
+        if missing == Some(path) { parent } else { s.classes.define(path, Some(parent), vec![]).unwrap() }
+    };
+    let owner = interface_class(&mut s, "GearboxFramework.IRuleEngineOwner", object);
     let decls = vec![d(&mut s, "MyRuleEngine", obj.clone())];
     s.classes.define("Toy.OtherRuleEngineOwner", Some(owner), decls).unwrap();
     s.classes.define("GearboxFramework.RuleEngine", Some(object), vec![]).unwrap();
-    let provider = s.classes.define("GearboxFramework.IFlagProvider", Some(owner), vec![]).unwrap();
+    let provider = interface_class(&mut s, "GearboxFramework.IFlagProvider", owner);
     let decls = vec![
         d(&mut s, "DynamicFlagDefinitions", objs.clone()),
         d(&mut s, "DynamicFlags", PropKind::Array(Box::new(PropKind::Struct(flag_entry)))),
@@ -444,6 +452,38 @@ fn the_flag_tests_through_the_minds_store() {
     for kind in [2u8, 3] {
         let timed = x.evaluator(&[(kind, Some(held))], 1);
         not_read(x.eval(timed, Some(pawn)), "the timed flag tests");
+    }
+}
+
+/// The interface checks (lane FIX-FLAG-IMPLEMENTS-NOTYET): a loaded class that implements `IFlagProvider` is read as
+/// the store; a loaded class that does not answers no (no store, false); an interface class that is not loaded is
+/// `NotRead` before any write (no counter moves, nothing is marked), for either interface, and only
+/// with a context.
+#[test]
+fn an_unloaded_interface_class_is_not_read_before_any_write() {
+    // Loaded and implemented: the mind's store is read (the definition is added there).
+    let mut x = fx();
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    let f = x.store_flag(vec![]);
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    assert!(!x.eval(e, Some(mind)).unwrap(), "a zeroed entry");
+    assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap(), &[Value::Object(Some(f))]);
+    // Loaded and not implemented: no store, false, nothing refused.
+    let plain = x.obj("Toy.PassContextResolver", "Plain");
+    assert!(!x.eval(e, Some(plain)).unwrap(), "a loaded class that does not implement it answers no");
+
+    for missing in ["GearboxFramework.IRuleEngineOwner", "GearboxFramework.IFlagProvider"] {
+        let mut x = fx_full(true, Some(missing));
+        let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+        let f = x.store_flag(vec![]);
+        let e = x.evaluator(&[(0, Some(f))], 1);
+        let start = WriteCounters::of(&x.vm);
+        let text = not_read(x.eval(e, Some(mind)), &format!("the interface class {missing} is not loaded (a load is a write)"));
+        assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+        assert!(!start.moved(&x.vm), "{missing}: write-free");
+        assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap().len(), 0, "{missing}: the store untouched");
+        // With no context no interface question is reached: false, as before.
+        assert!(!x.eval(e, None).unwrap(), "{missing}: no context");
     }
 }
 

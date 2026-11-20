@@ -271,6 +271,13 @@ passes `spawn` (1 of 2) and gets past this native in `cast`, then stops at the u
 argument of the same event call. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in
 game. Decision 2026-11-19-171; logs under ignored `local/analysis/gbpd-impl/`.
 
+**FIX-FLAG-IMPLEMENTS-NOTYET (2026-11-20, zuhu desktop, stacked on #535 fix/rust-flag-expression-evaluate 7f8fc7d):**
+AI-assisted (Claude Code, Opus 5.5). In Off, `FlagExpressionEvaluator.Evaluate` with a context refuses an unloaded
+`IRuleEngineOwner` or `IFlagProvider` class as `NotYet { NotRead }` before any write, instead of reading "no".
+`cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,460 passed / 0 failed / 46 ignored (1 new test in
+`ow-skills`); clippy flags nothing in ow-skills. Slice not probed in this lane. ctest and verify_packages not run (no C++
+change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
