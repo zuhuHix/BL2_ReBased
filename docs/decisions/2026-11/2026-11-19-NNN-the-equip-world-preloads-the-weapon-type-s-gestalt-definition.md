@@ -58,3 +58,12 @@ AI-assisted (Claude Code, Claude Opus 5.5). When a weapon's set-up fails, the pa
 a best effort: a failed write, for example `--output` naming a directory, is ignored. The command always returns the
 original set-up error, "line N: ...", byte for byte. The path is its own function, `failed_set_up`, and a test covers
 both an output that cannot be written (a directory) and one that can.
+
+### Rebased onto main df0970ec (batch 7: #613, #596, #577, #599 and #592 landed)
+
+AI-assisted (Claude Code, Claude Opus 5.5). The only conflicts were at link 8's preparation call, where main's
+`prepare_link8_typed` is kept, and in the test module, where both sides are kept. `cargo test --workspace -j 2`: 3,134
+passed / 0 failed / 51 ignored. Installed Off strict `--slice-gate` on the rebased head alone: 4 ok / 10 NotYet / 0
+errors. Link 8 passes `make` (1 of 5), and its harness lines show the gestalt definition loaded. It then stops in
+`init` at #599's `SetSkeletalMesh` mesh-change LayerAbsent (a component's bone transforms), after partial writes: the
+probe-merge result above, now on main.

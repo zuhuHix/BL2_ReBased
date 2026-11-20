@@ -34,7 +34,7 @@ ANALYST-LINK8-NEXT). `cargo test --workspace -j 2` 2,981 passed / 0 failed / 51 
 `inventory/equip_run_gestalt_tests.rs`); `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release, under
 the machine lock): on this branch 4 ok / 9 NotYet / 1 error, link 8 at `GetExpLevelFromManufacturerData` as on main; on
 a probe merge with #596, #613, #577 and #599, 4 ok / 10 NotYet / 0 errors, link 8 passes `make` and stops in `init` at
-#599's `SetSkeletalMesh` mesh-change LayerAbsent. ctest and verify_packages not run (no C++ change). No real-game run.
+#599's `SetSkeletalMesh` mesh-change LayerAbsent. ctest and verify_packages not run (no C++ change). No real-game run. Rebased onto main df0970ec (batch 7): `cargo test --workspace -j 2` 3,134 passed / 0 failed / 51 ignored; the branch alone is now 4 ok / 10 NotYet / 0 errors, link 8 at the same mesh-change stop.
 
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
