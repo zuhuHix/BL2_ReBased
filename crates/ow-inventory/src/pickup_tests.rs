@@ -24,8 +24,16 @@ const NATIVE: u32 = 0x400 | 0x20000;
 const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-const IMPORTS: [&str; 7] =
-    ["Class", "Function", "ScriptStruct", "ObjectProperty", "BoolProperty", "IntProperty", "StructProperty"];
+const IMPORTS: [&str; 8] = [
+    "Class",
+    "Function",
+    "ScriptStruct",
+    "ObjectProperty",
+    "BoolProperty",
+    "IntProperty",
+    "StructProperty",
+    "FloatProperty",
+];
 
 fn native(t: &mut ScriptToy, owner: i32, name: &str, params: &[Param], result: Option<(&str, i32)>) {
     t.function(owner, name, params, result, &[], &FunctionSpec::new(NATIVE, name), |_| None);
@@ -35,6 +43,9 @@ fn engine() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let object = t.class("Object", 0);
     let vector = ow_package::testkit::reflect::toy_struct(&mut t, object, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
     let actor = t.class("Actor", object);
     let pawn = t.class("Pawn", actor);
     t.class("Vehicle", pawn);
@@ -165,16 +176,21 @@ fn get_inventory_pawn_supports_only_a_plain_player_pawn() {
     }
 }
 
-/// `TouchPickupTrace` (the Off contract): what blocks the trace is not read, so a touch's validity is a named
-/// `NotYet`.
+/// `TouchPickupTrace` in a world with no collision service (lane IMPL-TOUCH-PICKUP-TRACE; the full cases are in
+/// `pickup_touch_tests.rs`): the note's `LayerAbsent`, never "clear".
 #[test]
-fn the_touch_trace_is_not_yet() {
+fn the_touch_trace_without_a_collision_service_is_layer_absent() {
     let mut x = fx(ParityMode::Off);
     let pickup = x.obj("WillowGame.WillowPickup");
     let f = x.vm.find_function("Engine.DroppedPickup.TouchPickupTrace").unwrap();
     let args: Vec<Value> = x.vm.function(f).unwrap().params.iter().map(|p| x.vm.space.classes.default_value(&p.kind).unwrap()).collect();
-    let r = x.vm.call(f, Some(pickup), args).map(|r| r.ret);
-    assert!(not_read(r).contains("TouchPickupTrace"));
+    match x.vm.call(f, Some(pickup), args).map(|r| r.ret) {
+        Err(VmError::NotYet(n)) => {
+            assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+            assert_eq!(n.what.as_ref(), ow_world::touch_trace::TOUCH_TRACE);
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 /// `AddToNavigation` does nothing; `RemovePickup` is `NotYet { NotRead }` before it changes anything (the pickup keeps

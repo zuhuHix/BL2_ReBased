@@ -8,8 +8,19 @@
 //!   `WillowPlayerPawn`, which answers as no vehicle. Any other pawn, a subclass included, is `NotYet { NotRead }`,
 //!   because the note leaves the vehicle test open (question 4) and a vehicle gives its `Driver` instead. A failed
 //!   class lookup is that error, not the refusal (review r2 of #452).
-//! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (section 3; the Off contract): `NotYet { NotRead }`. What
-//!   blocks the trace inside the native was not read, so a touch's validity cannot be settled in Off.
+//! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (lane IMPL-TOUCH-PICKUP-TRACE, decision 2026-11-19-NNN),
+//!   coded from NATIVE_TOUCH_PICKUP_TRACE.md section 4 alone (#624, accepted at 6dbdea1e; clean room: analyst lane
+//!   ANALYST-LINKS-6-7-PAST-TOUCH read the native, this lane did not), UNVERIFIED. It replaces the earlier
+//!   `NotYet { NotRead }` stub. Steps 1 to 4 are here, each before anything else is read:
+//!   1. no receiver: a data error;
+//!   2. the receiver's exact class neither `Engine.DroppedPickup` nor `WillowGame.WillowPickup` (looked up through the
+//!      class table's `by_path` only): `NotYet { NotRead }`, "the touch trace of <class>". No other subclass's table
+//!      was read;
+//!   3. the two arguments not `Vector` structs: a data error;
+//!   4. an unloaded receiver: `NotYet { NotRead }` (the walk needs its `Base` chain).
+//!
+//!   Steps 5 to 9 (the collision service, the level part from `EndLoc` to `StartLoc`, the actor walk with the pickup
+//!   as the source actor) are `ow_world::touch_trace::touch_line`. Nothing is written, loaded or drawn.
 //! - **`DroppedPickup.AddToNavigation()`** (high confidence): does nothing in this build.
 //! - **`WillowGlobals.RemovePickup(Pickup)`** (medium confidence): `NotYet { NotRead }`, decided before anything
 //!   changes. The note says it removes the pickup from the globals' pickup list and fires `OnPickupDetached`, and
@@ -64,6 +75,57 @@ pub const REMOVE_PICKUP: &str = "WillowGlobals.RemovePickup(object)";
 pub const TOUCH_PICKUP_TRACE: &str = "DroppedPickup.TouchPickupTrace(vector,vector)";
 pub const GET_PICKUPABLE_INVENTORY: &str = "DroppedPickup.GetPickupableInventory()";
 pub const GET_PICKUPABLE_INVENTORY_DEFINITION: &str = "DroppedPickup.GetPickupableInventoryDefinition()";
+
+/// The record of `TouchPickupTrace`.
+pub const RECORD_TOUCH: &str = ow_world::trace_filter::RECORD_TOUCH;
+/// The two classes whose table holds the read implementation (note section 1).
+pub const TOUCH_CLASSES: [&str; 2] = ["Engine.DroppedPickup", "WillowGame.WillowPickup"];
+/// The prefix of the exact-class refusal.
+pub const TOUCH_TRACE_OF: &str = "the touch trace of";
+/// The refusal of an unloaded receiver.
+pub const TOUCH_UNLOADED: &str = "the touch trace of a pickup the store has not loaded (the walk needs its Base chain)";
+
+/// Argument `i` as a `Vector` struct's three floats, else a data error.
+fn vector_arg(c: &NativeCall<'_>, i: usize, what: &str) -> Result<[f32; 3], VmError> {
+    let v = c.arg(i)?;
+    let not = || bad(what, format!("argument {i} is not a Vector"));
+    let s = v.as_struct().ok_or_else(not)?;
+    let classes = &c.vm.space.classes;
+    let layout = classes.struct_layout(s.ty).ok_or_else(not)?;
+    if !layout.path().name().eq_ignore_ascii_case("Vector") {
+        return Err(not());
+    }
+    let mut out = [0.0; 3];
+    for (slot, axis) in out.iter_mut().zip(["X", "Y", "Z"]) {
+        let id = c.vm.space.names.find(axis).ok_or_else(not)?;
+        let (k, _) = layout.field(id).ok_or_else(not)?;
+        *slot = match s.fields.get(k as usize) {
+            Some(Value::Float(x)) => *x,
+            _ => return Err(not()),
+        };
+    }
+    Ok(out)
+}
+
+fn touch_pickup_trace(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const WHAT: &str = "DroppedPickup.TouchPickupTrace";
+    // 1. The receiver.
+    let pickup = c.this.ok_or_else(|| bad(WHAT, "called without a pickup"))?;
+    // 2. Its exact class, by the class table alone.
+    let class = c.vm.space.heap.get(pickup)?.class;
+    if !TOUCH_CLASSES.iter().any(|path| c.vm.space.classes.by_path(path) == Some(class)) {
+        let path = ow_attr::eval::class_path(&c.vm.space, pickup);
+        return Err(NotYet::not_read(format!("{TOUCH_TRACE_OF} {path}"), RECORD_TOUCH).into());
+    }
+    // 3. The arguments.
+    let start = vector_arg(c, 0, WHAT)?;
+    let end = vector_arg(c, 1, WHAT)?;
+    // 4. A receiver the store has not loaded.
+    if ow_world::touch_trace::is_unloaded(c.vm, pickup) {
+        return Err(NotYet::not_read(TOUCH_UNLOADED, RECORD_TOUCH).into());
+    }
+    Ok(Value::Bool(ow_world::touch_trace::touch_line(c.vm, pickup, start, end)?))
+}
 
 fn pickup_inventory(c: &mut NativeCall<'_>, what: &str) -> Result<Option<ow_object::ids::ObjRef>, VmError> {
     let pickup = c.this.ok_or_else(|| bad(what, "called without a pickup"))?;
@@ -137,17 +199,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
                 Err(NotYet::not_read("the pickup events of RemovePickup", crate::globals::RECORD).into())
             }),
         ),
-        (
-            TOUCH_PICKUP_TRACE,
-            Rc::new(|_: &mut NativeCall<'_>| {
-                Err(NotYet::not_read(
-                    "DroppedPickup.TouchPickupTrace (what blocks the touch trace inside the native was not read, so a \
-                     touch's validity cannot be settled in Off)",
-                    RECORD,
-                )
-                .into())
-            }),
-        ),
+        (TOUCH_PICKUP_TRACE, Rc::new(touch_pickup_trace)),
     ];
     for (key, f) in natives {
         vm.register_native(key, f)?;
@@ -158,3 +210,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 #[cfg(test)]
 #[path = "pickup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pickup_touch_tests.rs"]
+mod touch_tests;

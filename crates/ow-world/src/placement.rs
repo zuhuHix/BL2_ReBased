@@ -73,7 +73,7 @@ pub const RELOCATION: &str = "the post-spawn relocation step";
 /// The mark of a refusal after the actor was made.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
-const LAYER: &str = "collision (the world's collision service, a SpawnCollision)";
+pub(crate) const LAYER: &str = "collision (the world's collision service, a SpawnCollision)";
 
 /// A box test's collision mode (note section 3, "Terms").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,20 +465,19 @@ fn refusal(query: &str, why: &str) -> VmError {
     NotYet::not_read(format!("{SPOT_SEARCH}: {query}: {why}"), RECORD).into()
 }
 
-/// Missing data on a live primitive or its actor (a property not loaded) becomes a named refusal; any other error
-/// passes through.
-fn data_or_refusal<T>(r: Result<T, VmError>, query: &str, what: &str) -> Result<T, VmError> {
+/// Missing data on a live primitive or its actor (a property not loaded) becomes the refusal `text` under `record`;
+/// any other error passes through.
+fn missing_data<T>(r: Result<T, VmError>, text: &str, record: &'static str) -> Result<T, VmError> {
     match r {
-        Err(VmError::Heap(ow_object::heap::HeapError::SlotMissing { .. })) => Err(refusal(
-            query,
-            &format!("the data of the live actor primitive {what}, which is not loaded"),
-        )),
+        Err(VmError::Heap(ow_object::heap::HeapError::SlotMissing { .. })) => {
+            Err(NotYet::not_read(text.to_string(), record).into())
+        }
         other => other,
     }
 }
 
 /// The box `extent` swept from `start` to `end`, as bounds.
-fn swept(extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Bounds {
+pub(crate) fn swept(extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Bounds {
     let mut b = Bounds { min: [0.0; 3], max: [0.0; 3] };
     for k in 0..3 {
         b.min[k] = start[k].min(end[k]) - extent[k];
@@ -512,59 +511,12 @@ struct Queries<'a> {
 }
 
 impl Queries<'_> {
-    /// The actor walk of `kind` over `region`: Ok when no live primitive under an unread rule meets it. It records
-    /// no actor hit: every primitive the walk could hit refuses first (module documentation, step 3).
+    /// The actor walk of `kind` over `region` ([`actor_walk`], no source actor).
     fn walk(&self, kind: Query, region: Bounds, query: &str) -> Result<Vec<trace_filter::Hit>, VmError> {
         let Some(vm) = self.vm else {
             return Ok(Vec::new());
         };
-        let space = &vm.space;
-        let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
-            return Ok(Vec::new());
-        };
-        let list = actors_of(vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
-        for actor in list {
-            let who = name(space, actor)?;
-            if data_or_refusal(is_destroyed(space, actor), query, &who)? {
-                continue;
-            }
-            let class = space.heap.get(actor)?.class;
-            let mut parts: Vec<ObjRef> = Vec::new();
-            if space.prop(class, "CollisionComponent").is_some() {
-                parts.extend(data_or_refusal(object(space, actor, "CollisionComponent"), query, &who)?);
-            }
-            if space.prop(class, "Components").is_some() {
-                for c in data_or_refusal(objects(space, actor, "Components"), query, &who)?.into_iter().flatten() {
-                    if !parts.contains(&c) {
-                        parts.push(c);
-                    }
-                }
-            }
-            for part in parts {
-                if !space.classes.is_child_of(space.heap.get(part)?.class, primitive) {
-                    continue;
-                }
-                let what = format!("{who}'s {}", name(space, part)?);
-                // Bounds first (review r2 of #477): a primitive whose service bounds miss the region leaves the walk
-                // before any of its filter data is read, so its unloaded flags cannot refuse the query.
-                let bounds = self.model.actor_bounds(space, part)?;
-                if bounds.is_some_and(|b| !b.meets(&region)) {
-                    continue;
-                }
-                let Candidate::Unsupported(rule) =
-                    data_or_refusal(trace_filter::tested(space, part, actor, kind), query, &what)?
-                else {
-                    continue;
-                };
-                let held = if bounds.is_some() { "" } else { ", whose bounds the collision service does not hold" };
-                return Err(NotYet::not_read(
-                    format!("{SPOT_SEARCH}: {query}: {} (the live actor primitive {what}{held})", rule.rule()),
-                    rule.record(),
-                )
-                .into());
-            }
-        }
-        Ok(Vec::new())
+        actor_walk(vm, self.model, kind, region, None, &format!("{SPOT_SEARCH}: {query}"), RECORD)
     }
 
     fn free(&self, extent: [f32; 3], at: [f32; 3], mode: Mode) -> Result<bool, VmError> {
@@ -607,6 +559,69 @@ impl Queries<'_> {
     fn point_hits(&self, start: [f32; 3], end: [f32; 3]) -> Result<bool, VmError> {
         Ok(self.sweep(Query::PointSweep, [0.0; 3], start, end, "a point sweep")?.is_some())
     }
+}
+
+/// The actor walk of `kind` over `region` (module documentation, step 3): Ok when no live primitive under an unread
+/// rule meets it. It records no actor hit: every primitive the walk could hit refuses first. `source` is the query's
+/// source actor, if any (`crate::trace_filter::Source`). Refusals open with `prefix`; missing data on a live primitive
+/// is a refusal under `record`.
+pub(crate) fn actor_walk(
+    vm: &Vm,
+    model: &dyn SpawnCollision,
+    kind: Query,
+    region: Bounds,
+    source: Option<&trace_filter::Source<'_>>,
+    prefix: &str,
+    record: &'static str,
+) -> Result<Vec<trace_filter::Hit>, VmError> {
+    let space = &vm.space;
+    let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
+        return Ok(Vec::new());
+    };
+    // Missing data on a live primitive or its actor (a property not loaded) becomes a named refusal.
+    let named = |what: &str| format!("{prefix}: the data of the live actor primitive {what}, which is not loaded");
+    let list = actors_of(vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
+    for actor in list {
+        let who = name(space, actor)?;
+        if missing_data(is_destroyed(space, actor), &named(&who), record)? {
+            continue;
+        }
+        let class = space.heap.get(actor)?.class;
+        let mut parts: Vec<ObjRef> = Vec::new();
+        if space.prop(class, "CollisionComponent").is_some() {
+            parts.extend(missing_data(object(space, actor, "CollisionComponent"), &named(&who), record)?);
+        }
+        if space.prop(class, "Components").is_some() {
+            for c in missing_data(objects(space, actor, "Components"), &named(&who), record)?.into_iter().flatten() {
+                if !parts.contains(&c) {
+                    parts.push(c);
+                }
+            }
+        }
+        for part in parts {
+            if !space.classes.is_child_of(space.heap.get(part)?.class, primitive) {
+                continue;
+            }
+            let what = format!("{who}'s {}", name(space, part)?);
+            // Bounds first (review r2 of #477): a primitive whose service bounds miss the region leaves the walk
+            // before any of its filter data is read, so its unloaded flags cannot refuse the query.
+            let bounds = model.actor_bounds(space, part)?;
+            if bounds.is_some_and(|b| !b.meets(&region)) {
+                continue;
+            }
+            let standing = trace_filter::tested_from(space, part, actor, kind, source);
+            let Candidate::Unsupported(rule) = missing_data(standing, &named(&what), record)? else {
+                continue;
+            };
+            let held = if bounds.is_some() { "" } else { ", whose bounds the collision service does not hold" };
+            return Err(NotYet::not_read(
+                format!("{prefix}: {} (the live actor primitive {what}{held})", rule.rule()),
+                rule.record(),
+            )
+            .into());
+        }
+    }
+    Ok(Vec::new())
 }
 
 /// What the slice step reported (note section 3, step 3).

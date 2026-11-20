@@ -1248,6 +1248,15 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
             return;
         }
     };
+    // Harness input (the hub's ruling for lane IMPL-TOUCH-PICKUP-TRACE), an UNVERIFIED stand-in: this world loads no
+    // level, so it gets link 9's no-level collision service. Every level part is clear and it holds no actor bounds,
+    // so `TouchPickupTrace`'s actor walk decides the touch (NATIVE_TOUCH_PICKUP_TRACE.md section 4). Without it the
+    // native refuses with LayerAbsent.
+    if let Err(e) = ow_world::placement::install_collision(&mut world.vm, Rc::new(ow_world::placement::NoLevel)) {
+        r.stop = Some(classify_error("setup", &e));
+        ran[i] = Some(r);
+        return;
+    }
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).

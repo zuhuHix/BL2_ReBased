@@ -14,5 +14,6 @@ pub mod placement;
 pub mod pools;
 pub mod query;
 pub mod timers;
+pub mod touch_trace;
 pub mod trace_filter;
 pub mod world;

@@ -38,6 +38,19 @@
 //!
 //! So a primitive is never answered "tested": the most the port can say is "not tested" or Unsupported.
 //!
+//! **The touch's line check** ([`Query::PointLine`]; lane IMPL-TOUCH-PICKUP-TRACE, from NATIVE_TOUCH_PICKUP_TRACE.md
+//! sections 2 and 4, UNVERIFIED): a point line through the world's single-line routine with the flags [`TOUCH_TRACE`]
+//! (plus [`ONE_RESULT`]) and a **source actor** ([`Source`]). Two steps differ from the spawn's queries:
+//! - **the source actor's exclusion**, after the per-component test and before the owner's row: a primitive whose
+//!   owner is the source actor, or in its `Base` chain, is not tested. The chain is read only when a candidate reaches
+//!   this step, from resident objects through lookup-only names. A link the store has not loaded is
+//!   [`Unread::BaseChainLink`]; the walk stops at None and at a link already seen (a cycle); a class that declares no
+//!   `Base` is a data error;
+//! - **a `bPawnsOnly` volume** is [`Unread::SourceVolumeTest`] (the source actor's test, not read) instead of rejected.
+//!
+//! A primitive every read test accepts is still [`Unread::HashAdmission`]. Only when a test installs the hash stand-in
+//! ([`Source::admission_established`]) does it become [`Unread::PrimitiveLineTest`], the primitive's own line test.
+//!
 //! **Which hit a sweep returns** ([`choose_sweep_hit`]): the BSP hit, or the actors' hit when there is no BSP hit.
 //! Actors are walked to the BSP hit plus 5 units along the sweep, capped at the end point (the whole sweep without a
 //! BSP hit). A BSP hit together with an actor hit is Unsupported (the comparator between them was not read). Among the
@@ -73,6 +86,17 @@ pub const ONE_RESULT: u32 = 1024;
 pub const TERRAIN: u32 = 8192;
 /// Bit 131072: complex (per-polygon) collision.
 pub const COMPLEX: u32 = 131072;
+/// Bit 134217728: read by one game-class filter override only (NATIVE_TOUCH_PICKUP_TRACE.md section 3).
+pub const TOUCH_ONLY_BIT: u32 = 134_217_728;
+/// The flag set of `DroppedPickup.TouchPickupTrace` (bits 2, 4, 128, 512, 8192 and [`TOUCH_ONLY_BIT`]), before the
+/// single-line routine adds [`ONE_RESULT`].
+pub const TOUCH_TRACE: u32 = 134_226_566;
+/// The record of the touch's line check.
+pub const RECORD_TOUCH: &str = "NATIVE_TOUCH_PICKUP_TRACE.md";
+/// The touch note's names for its unread rules.
+pub const SOURCE_VOLUME_TEST: &str = "the source actor's volume test";
+pub const BASE_CHAIN_LINK: &str = "a Base-chain link the store has not loaded";
+pub const PRIMITIVE_LINE_TEST: &str = "the primitive's line test";
 
 /// The flag set of every box test.
 pub const BOX_TEST: u32 = 8902;
@@ -107,6 +131,8 @@ pub enum Query {
     BoxTest { zero_extent: bool, complex: bool },
     BoxSweep,
     PointSweep,
+    /// The touch's point line (zero extent), with a source actor (module documentation).
+    PointLine,
 }
 
 impl Query {
@@ -115,6 +141,7 @@ impl Query {
         match self {
             Query::BoxTest { complex, .. } => BOX_TEST | if complex { COMPLEX } else { 0 },
             Query::BoxSweep | Query::PointSweep => SWEEP | ONE_RESULT,
+            Query::PointLine => TOUCH_TRACE | ONE_RESULT,
         }
     }
 
@@ -122,14 +149,14 @@ impl Query {
     pub fn walks_actors(self) -> bool {
         match self {
             Query::BoxTest { .. } => true,
-            Query::BoxSweep | Query::PointSweep => self.flags() & SWEEP_HASH_MASK != 0,
+            Query::BoxSweep | Query::PointSweep | Query::PointLine => self.flags() & SWEEP_HASH_MASK != 0,
         }
     }
 
     /// The primitive flag a candidate needs to block this query's kind.
     pub fn blocking_flag(self) -> &'static str {
         match self {
-            Query::BoxTest { zero_extent: true, .. } | Query::PointSweep => "BlockZeroExtent",
+            Query::BoxTest { zero_extent: true, .. } | Query::PointSweep | Query::PointLine => "BlockZeroExtent",
             Query::BoxTest { zero_extent: false, .. } | Query::BoxSweep => "BlockNonZeroExtent",
         }
     }
@@ -222,6 +249,12 @@ pub enum Unread {
     TerrainHandling,
     /// A primitive every read test accepts: whether the game's collision hash holds it.
     HashAdmission,
+    /// A `bPawnsOnly` volume in a query with a source actor: the source actor's test.
+    SourceVolumeTest,
+    /// A link of the source actor's `Base` chain the store has not loaded, needed to decide a candidate.
+    BaseChainLink,
+    /// A primitive every read test accepts, once the hash admits it (a test stand-in only): its own line test.
+    PrimitiveLineTest,
 }
 
 impl Unread {
@@ -231,6 +264,9 @@ impl Unread {
             Unread::OwnerClass(class) => format!("the trace filter of {class}"),
             Unread::TerrainHandling => TERRAIN_HANDLING.to_string(),
             Unread::HashAdmission => HASH_ADMISSION.to_string(),
+            Unread::SourceVolumeTest => SOURCE_VOLUME_TEST.to_string(),
+            Unread::BaseChainLink => BASE_CHAIN_LINK.to_string(),
+            Unread::PrimitiveLineTest => PRIMITIVE_LINE_TEST.to_string(),
         }
     }
 
@@ -239,6 +275,7 @@ impl Unread {
         match self {
             Unread::OwnerClass(_) | Unread::TerrainHandling => "NATIVE_SPAWN_PLACEMENT.md",
             Unread::HashAdmission => RECORD_TRACE_FILTER,
+            Unread::SourceVolumeTest | Unread::BaseChainLink | Unread::PrimitiveLineTest => RECORD_TOUCH,
         }
     }
 }
@@ -265,10 +302,67 @@ pub fn owner_of(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef) -> Resul
     Ok(walked)
 }
 
+/// A query's source actor (module documentation, the touch's line check).
+pub struct Source<'a> {
+    /// The source actor (the pickup).
+    pub actor: ObjRef,
+    /// Whether an object is a handle the store has not loaded (a link whose `Base` cannot be read).
+    pub unloaded: &'a dyn Fn(ObjRef) -> bool,
+    /// A test stand-in for the hash step: when set, the hash's admission counts as established (UNVERIFIED).
+    pub admission_established: bool,
+}
+
+/// Where `owner` stands against the source actor's chain.
+enum Chain {
+    Excluded,
+    Outside,
+    Unloaded,
+}
+
+/// Whether `owner` is the source actor or in its `Base` chain (module documentation). Reads resident objects only,
+/// through lookup-only names; bounded by the links seen.
+fn chain_of(space: &ObjectSpace, s: &Source<'_>, owner: ObjRef) -> Result<Chain, VmError> {
+    if owner == s.actor {
+        return Ok(Chain::Excluded);
+    }
+    let mut seen = vec![s.actor];
+    let mut at = s.actor;
+    loop {
+        let class = space.heap.get(at)?.class;
+        if space.prop(class, "Base").is_none() {
+            return Err(VmError::Script {
+                function: "the touch trace's Base chain".to_string(),
+                message: format!("{} declares no Base", ow_attr::eval::class_path(space, at)),
+            });
+        }
+        match object(space, at, "Base")? {
+            None => return Ok(Chain::Outside),
+            Some(next) if seen.contains(&next) => return Ok(Chain::Outside),
+            Some(next) if next == owner => return Ok(Chain::Excluded),
+            Some(next) if (s.unloaded)(next) => return Ok(Chain::Unloaded),
+            Some(next) => {
+                seen.push(next);
+                at = next;
+            }
+        }
+    }
+}
+
 /// The standing of `primitive`, met in the walk of the actor `walked`, in `query` (module documentation): its owner
 /// ([`owner_of`]), then the read tests in the walkers' order, each only rejecting, then the unread rules. Reads the
-/// live objects only.
+/// live objects only. A query with no source actor ([`tested_from`] with `None`).
 pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Query) -> Result<Candidate, VmError> {
+    tested_from(space, primitive, walked, query, None)
+}
+
+/// [`tested`] for a query that may pass a source actor (module documentation, the touch's line check).
+pub fn tested_from(
+    space: &ObjectSpace,
+    primitive: ObjRef,
+    walked: ObjRef,
+    query: Query,
+    source: Option<&Source<'_>>,
+) -> Result<Candidate, VmError> {
     if !query.walks_actors() {
         return Ok(Candidate::NotTested);
     }
@@ -289,7 +383,8 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Que
     }
     let class = space.heap.get(owner)?.class;
     // The skip flag (note section 4); a sweep with bit 30 ignores it.
-    let ignores_skip = matches!(query, Query::BoxSweep | Query::PointSweep) && query.flags() & SKIP_IGNORED != 0;
+    let ignores_skip =
+        matches!(query, Query::BoxSweep | Query::PointSweep | Query::PointLine) && query.flags() & SKIP_IGNORED != 0;
     if !ignores_skip && flag(space, primitive, SKIP_FLAG_FIELD)? {
         return Ok(Candidate::NotTested);
     }
@@ -299,6 +394,14 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Que
     // The per-component test (note section 2), on the live primitive and its live owner.
     if !flag(space, primitive, "CollideActors")? || !flag(space, owner, "bCollideActors")? {
         return Ok(Candidate::NotTested);
+    }
+    // The source actor's exclusion (module documentation), read only for a candidate that reaches it.
+    if let Some(s) = source {
+        match chain_of(space, s, owner)? {
+            Chain::Excluded => return Ok(Candidate::NotTested),
+            Chain::Unloaded => return Ok(Candidate::Unsupported(Unread::BaseChainLink)),
+            Chain::Outside => {}
+        }
     }
     let Some(row) = row_of(space, class) else {
         return Ok(Candidate::Unsupported(Unread::OwnerClass(ow_attr::eval::class_path(space, owner))));
@@ -310,6 +413,9 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Que
             o.world_geometry = read("bWorldGeometry")?;
             if row == Row::Volume {
                 o.pawns_only = read("bPawnsOnly")?;
+                if o.pawns_only && source.is_some() {
+                    return Ok(Candidate::Unsupported(Unread::SourceVolumeTest));
+                }
             }
         }
         Row::Pawn => {
@@ -328,6 +434,9 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Que
     };
     if !owner_tested(row, &o, primitive_blocks, flags) {
         return Ok(Candidate::NotTested);
+    }
+    if source.is_some_and(|s| s.admission_established) {
+        return Ok(Candidate::Unsupported(Unread::PrimitiveLineTest));
     }
     Ok(Candidate::Unsupported(Unread::HashAdmission))
 }
