@@ -84,18 +84,18 @@ const SPIN_FIELDS: [&str; 4] = ["PickupSpinVMin", "PickupSpinVMax", "PickupSpinH
 
 /// #518's canonical write counters, snapshot when the native is entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WriteCounters {
+pub(super) struct WriteCounters {
     heap: u64,
     draws: u64,
     loads: u64,
 }
 
 impl WriteCounters {
-    fn of(vm: &Vm) -> Self {
+    pub(super) fn of(vm: &Vm) -> Self {
         WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
     }
 
-    fn mark(&self, vm: &Vm, e: VmError) -> VmError {
+    pub(super) fn mark(&self, vm: &Vm, e: VmError) -> VmError {
         match e {
             VmError::NotYet(n) if WriteCounters::of(vm) != *self => n.after_partial_writes().into(),
             other => other,

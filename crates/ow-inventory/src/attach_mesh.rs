@@ -47,8 +47,8 @@
 //!   otherwise the minimal answer of NATIVE_PICKUP_RB_MINIMAL.md in [`pickup_rb`] (lane IMPL-PICKUP-RB), which
 //!   replaced 6.6's rigid-body `LayerAbsent`.
 //! - `WillowPickup.SpawnPickupParticles()` (6.4): `PickupParticles` None is [`PARTICLES_REMOVAL`],
-//!   `NotYet { NotRead }`; otherwise [`PARTICLES`], `NotYet { LayerAbsent }` ([`PARTICLES_LAYER`]), both before any
-//!   write of its own.
+//!   `NotYet { NotRead }`; otherwise NATIVE_SPAWN_PICKUP_PARTICLES.md's preflight in [`pickup_particles`] (lane
+//!   IMPL-SPAWN-PICKUP-PARTICLES), which replaced 6.4's particle-effects `LayerAbsent`.
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference binds none of them, so Reference keeps the VM's stub policy
 //! (`Actor.AttachComponent` is a Reference stub of the slice runs).
@@ -64,6 +64,7 @@ use ow_vm::error::VmError;
 
 use crate::equip::{bad, object_of, required, write};
 
+pub mod pickup_particles;
 pub mod pickup_rb;
 
 /// The record these natives follow.
@@ -93,8 +94,6 @@ pub const SPAWN_PICKUP_PARTICLES: &str = "WillowPickup.SpawnPickupParticles()";
 
 /// Part 2's named `NotYet`s, the note's texts.
 pub const PARTICLES_REMOVAL: &str = "WillowPickup.SpawnPickupParticles with no particle system: the particles' removal";
-pub const PARTICLES: &str = "WillowPickup.SpawnPickupParticles: the pickup's particle effect";
-pub const PARTICLES_LAYER: &str = "a particle-effects layer (the port has none)";
 
 /// The fitted fields (UNVERIFIED (fitted), the note's open question 2).
 pub const FORCE_REF_POSE: &str = "bForceRefpose";
@@ -354,16 +353,6 @@ fn fits(vm: &Vm, o: ObjRef, name: &str, v: &Value, what: &str) -> Result<(), VmE
         .map_err(|e| bad(what, format!("{name} cannot take the value: {e}")))
 }
 
-/// `SpawnPickupParticles()` on `pickup` in Off (module documentation, part 2). Writes nothing.
-pub fn spawn_pickup_particles(vm: &Vm, pickup: ObjRef) -> Result<(), VmError> {
-    const WHAT: &str = "WillowPickup.SpawnPickupParticles";
-    schemas(vm, pickup, &[("PickupParticles", Want::Object)], WHAT)?;
-    if object_of(&required(vm, pickup, "PickupParticles", WHAT)?, WHAT)?.is_none() {
-        return Err(NotYet::not_read(PARTICLES_REMOVAL, RECORD).into());
-    }
-    Err(NotYet::layer_absent(PARTICLES, PARTICLES_LAYER, RECORD).into())
-}
-
 fn light_environment_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let component = this(c, SET_LIGHT_ENVIRONMENT)?;
     let new = object_of(c.arg(0)?, SET_LIGHT_ENVIRONMENT)?;
@@ -379,7 +368,7 @@ fn rb_physics_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn particles_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let pickup = this(c, SPAWN_PICKUP_PARTICLES)?;
-    spawn_pickup_particles(c.vm, pickup)?;
+    pickup_particles::spawn_pickup_particles(c.vm, pickup)?;
     Ok(Value::None)
 }
 

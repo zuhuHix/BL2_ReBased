@@ -571,21 +571,20 @@ fn the_rigid_body_set_up_is_nothing_when_the_pickup_skips_it() {
     assert_eq!((x.get(pickup, "bUseRBPhysics"), x.get(pickup, "PickupParticles"), x.get(pickup, "Components")), before);
 }
 
-/// `SpawnPickupParticles` (6.4): no particle system is the removal's `NotRead`; one set is the particle-effects
-/// `LayerAbsent`. Both unmarked, nothing written.
+/// `SpawnPickupParticles` (6.4): the rule is lane IMPL-SPAWN-PICKUP-PARTICLES's (`attach_mesh/pickup_particles_tests.rs`).
+/// On this toy, whose pickup declares none of the fields the note's preflight checks first, it is a data error before
+/// any write, with or without a particle system.
 #[test]
-fn spawn_pickup_particles_is_not_read_or_layer_absent() {
+fn spawn_pickup_particles_on_a_toy_without_its_fields_is_a_data_error() {
     let mut x = fx(ParityMode::Off, true);
     let pickup = x.obj("Engine.WillowPickup");
-    let n = not_yet(x.call(PARTICLES_FN, pickup, vec![]));
-    assert_eq!(n.what.as_ref(), "WillowPickup.SpawnPickupParticles with no particle system: the particles' removal");
-    unmarked(&n, Missing::NotRead, PARTICLES_REMOVAL);
     let system = x.obj("Engine.Actor");
-    x.set(pickup, "PickupParticles", Value::Object(Some(system)));
-    let n = not_yet(x.call(PARTICLES_FN, pickup, vec![]));
-    assert_eq!(n.what.as_ref(), "WillowPickup.SpawnPickupParticles: the pickup's particle effect");
-    unmarked(&n, Missing::LayerAbsent("a particle-effects layer (the port has none)"), PARTICLES);
-    assert_eq!(x.get(pickup, "Components"), Value::array(Vec::new()), "no component made or attached");
+    for held in [None, Some(system)] {
+        x.set(pickup, "PickupParticles", Value::Object(held));
+        let e = x.call(PARTICLES_FN, pickup, vec![]).unwrap_err();
+        assert!(matches!(&e, VmError::Script { .. }), "{e:?}");
+        assert_eq!(x.get(pickup, "Components"), Value::array(Vec::new()), "no component made or attached");
+    }
 }
 
 /// First wins for part 2's keys (review r1 of #520): a key bound before the pack keeps its handler, and the other two

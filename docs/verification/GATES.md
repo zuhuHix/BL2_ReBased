@@ -15,6 +15,16 @@ passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 fa
 crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
 `FlagExpressionEvaluator.Evaluate(object)`.
 
+**IMPL-SPAWN-PICKUP-PARTICLES (2026-11-20, zuhu desktop, on fix/rust-pickup-rb 7ae53972, #587):** AI-assisted
+(Claude Code, Opus 5.5). `SpawnPickupParticles` in Off from NATIVE_SPAWN_PICKUP_PARTICLES.md: the ordered preflight to
+refusal E or F, which always applies today, so the native writes nothing; a harness preload of `PartPickup` and the
+particle component class (UNVERIFIED in game). `cargo test --workspace -j 2`: 2,489 passed, 0 failed (48 result lines). `ow-inventory` 228 passed (10 new in
+`attach_mesh/pickup_particles_tests.rs`). Installed `--slice-gate` (Off, strict): ok 0, notyet 7, error 7 of 14.
+Links 6 and 7 move from "WillowPickup.SpawnPickupParticles: the pickup's particle effect" (`LayerAbsent`) to refusal
+E, "stopped after partial writes: ParticleSystemComponent.ActivateSystem: the system's activation ..." in `make`
+(0 of 3 and 0 of 4 driver steps; the prefix is the driver's, for `make`'s earlier writes). The other 12 rows read as
+before. This is what the host did, not parity.
+
 **IMPL-PICKUP-RB (2026-11-20, zuhu desktop, on fix/rust-attach-mesh-to-pickup-2 4d0539b2, #520):** AI-assisted
 (Claude Code, Opus 5.5). `InitializePickupForRBPhysics` in Off from NATIVE_PICKUP_RB_MINIMAL.md, with the asset
 branch at rest and a seeded stand-in stream (hub rulings; UNVERIFIED in game). `cargo test --workspace -j 2`: 2,476

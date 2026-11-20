@@ -447,6 +447,7 @@ pub(crate) fn pickup_world(
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
+    particle_preload(&mut world.vm, definition)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
 }
 
@@ -464,6 +465,35 @@ pub(crate) fn preload_globals_definition(vm: &mut Vm, globals: ObjRef, what: &st
     ow_inventory::globals::globals_schemas(vm, globals, what)?;
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     Ok(definition)
+}
+
+/// The prefix of the particle preload's log lines.
+pub(crate) const PARTICLE_INPUT: &str = "harness input: SpawnPickupParticles preload";
+
+/// `SpawnPickupParticles`' harness inputs (hub ruling 1 on #581, NATIVE_SPAWN_PICKUP_PARTICLES.md section 4; lane
+/// IMPL-SPAWN-PICKUP-PARTICLES), world set-up before `make`, each an UNVERIFIED stand-in for packages the game has
+/// loaded already and logged: the globals definition's `PartPickup` template, loaded here; the
+/// `ParticleSystemComponent` class with its code and its default object, recorded for the native's preflight
+/// (`ow_inventory::attach_mesh::pickup_particles::ParticlePreload`).
+fn particle_preload(vm: &mut Vm, definition: ObjRef) -> Result<(), VmError> {
+    use ow_inventory::attach_mesh::pickup_particles as pp;
+    match ow_inventory::equip::read_prop(vm, definition, "PartPickup") {
+        Some(Value::Object(Some(template))) => {
+            let loaded = vm.defs.ensure_loaded(&mut vm.space, template);
+            vm.log.extend(vm.defs.take_log());
+            loaded.map_err(VmError::from)?;
+            let path = ow_attr::eval::class_path(&vm.space, template);
+            vm.log.push(format!("{PARTICLE_INPUT}: the globals definition's PartPickup ({path}) loaded at set-up (UNVERIFIED)"));
+        }
+        other => vm.log.push(format!("{PARTICLE_INPUT}: the globals definition's PartPickup is {other:?}, nothing loaded")),
+    }
+    let class = vm.find_class(pp::COMPONENT_CLASS)?;
+    let defaults = vm.defs.class_default(&mut vm.space, pp::COMPONENT_CLASS);
+    vm.log.extend(vm.defs.take_log());
+    let defaults = defaults.map_err(VmError::from)?;
+    pp::add_particle_preload(vm, pp::ParticlePreload { class, defaults })?;
+    vm.log.push(format!("{PARTICLE_INPUT}: {} class and default object loaded at set-up (UNVERIFIED)", pp::COMPONENT_CLASS));
+    Ok(())
 }
 
 /// The run's world in Off, typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).
