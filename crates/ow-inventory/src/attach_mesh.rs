@@ -398,7 +398,10 @@ fn hide_bone_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-fn attach_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+/// The `Actor.AttachComponent(object)` native: [`attach_component`] on the call's receiver and argument. Public so the
+/// skill worlds bind the same rule (`ow_skills::action_skill::Pack`, lane BIND-ATTACHCOMPONENT-SKILL-WORLDS); there is
+/// one implementation.
+pub fn attach_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let actor = this(c, ATTACH_COMPONENT)?;
     let component = object_of(c.arg(0)?, ATTACH_COMPONENT)?;
     attach_component(c.vm, actor, component)?;
@@ -415,7 +418,11 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(SET_HIDDEN, Rc::new(hidden_native))?;
     vm.register_native(SET_OWNER_NO_SEE, Rc::new(owner_no_see_native))?;
     vm.register_native(HIDE_BONE_BY_NAME, Rc::new(hide_bone_native))?;
-    vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))?;
+    // Keep-existing (lane BIND-ATTACHCOMPONENT-SKILL-WORLDS): the action-skill pack may have bound the same function
+    // for `Engine` first; a second registration would be refused as a duplicate.
+    if !vm.has_native(ATTACH_COMPONENT) {
+        vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))?;
+    }
     // Part 2's keys, first wins (review r1 of #520): a key an earlier pack bound keeps its handler, and the others are
     // still registered.
     let part2: [(&str, NativeFn); 3] = [

@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
+b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
+the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
+ignored (5 new in `ow-skills` `action_skill/attach_component_tests.rs`); `crate_edges_test.py` OK. Installed Off
+`--slice-gate` strict (release build, under the machine lock): ok 3, notyet 9, error 2 of 14. Link 9 passes 1 of 2
+steps and `cast` stops before the attach, at `FlagExpressionEvaluator.Evaluate`'s not-loaded interface class
+`GearboxFramework.IRuleEngineOwner` (NATIVE_FLAG_EXPRESSION_EVALUATE.md). The attach is reached only under the probe
+stand-ins of NATIVE_ACTOR_TRACE.md section 4, and `phaselock_world` installs no scene layer, so there it would refuse
+layer-absent. UNVERIFIED in game.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
