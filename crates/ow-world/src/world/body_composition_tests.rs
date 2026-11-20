@@ -1231,7 +1231,8 @@ fn a_control_shared_by_two_lists_is_not_a_loop() {
     let body = body_of(&e, p);
     assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
     let (missing, what) = refused(&mut e, p);
-    assert_eq!((missing, what.as_str()), (Missing::NotRead, MESH_REST));
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
+    assert_eq!(what, RENDER_HOOKS);
 }
 
 /// `check` on its own, with #518's counters read around it: a refusal moves none of them.
