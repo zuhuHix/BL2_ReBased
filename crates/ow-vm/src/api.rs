@@ -615,6 +615,12 @@ impl Vm {
         crate::interp::find_class(self, path)
     }
 
+    /// Whether `class`'s function and state code is loaded (a read: it loads nothing). A class whose layout another
+    /// load defined can still have no code loaded (review r2 of #579).
+    pub fn class_code_loaded(&self, class: ClassId) -> bool {
+        self.code.has_class(class)
+    }
+
     /// [`Vm::find_class`], with a class no installed package holds (or a VM with no code layer) as `None`; any other
     /// lookup failure is kept as the error (lane FIX-RUN-BEHAVIORS, review r1 of #439).
     pub fn find_class_if_present(&mut self, path: &str) -> Result<Option<ClassId>, VmError> {

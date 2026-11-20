@@ -96,6 +96,26 @@ pub fn declared_reference(vm: &mut Vm, o: ObjRef, name: &str, class: Option<&str
     declared_reference_to(vm, o, name, want, class.unwrap_or("object"), what)
 }
 
+/// The class at `path` when it is ready with no load: a defined layout and loaded function and state code (lane
+/// IMPL-PICKUP-RB, review r1 of #587; the test of #579's `class_ready`). `Vm::find_class` can register code even
+/// when the layout is there, so a write-free preflight uses this instead. A class that is not ready is a named
+/// `NotYet { NotRead }`: a class load is a write.
+pub fn ready_class(vm: &Vm, path: &str) -> Result<ClassId, VmError> {
+    match vm.space.classes.by_path(path) {
+        Some(c) if vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()) && vm.class_code_loaded(c) => Ok(c),
+        _ => Err(NotYet::not_read(format!("the class {path}, not loaded (a class load is a write)"), RECORD).into()),
+    }
+}
+
+/// [`declared_reference`] with no load: the wanted class through [`ready_class`] (review r1 of #587).
+pub fn declared_reference_loaded(vm: &Vm, o: ObjRef, name: &str, class: Option<&str>, what: &str) -> Result<(), VmError> {
+    let want = match class {
+        Some(path) => Some(ready_class(vm, path)?),
+        None => None,
+    };
+    declared_reference_to(vm, o, name, want, class.unwrap_or("object"), what)
+}
+
 /// [`declared_reference`] with the class already found (`label` names it in the error): it loads nothing.
 pub fn declared_reference_to(
     vm: &Vm,
@@ -251,6 +271,30 @@ pub fn globals_definition_of(
     what: &str,
 ) -> Result<ObjRef, VmError> {
     declared_reference_to(vm, globals, "TheGlobalsDefinition", Some(gearbox), GEARBOX_GLOBALS_DEFINITION, what)?;
+    let d = held_definition(vm, globals, what)?;
+    definition_of_class(vm, d, class)
+}
+
+/// [`globals_definition`] with no load and no code registration (review r1 of #587): both classes through
+/// [`ready_class`], the same refusals otherwise, in the same order.
+pub fn globals_definition_loaded(vm: &Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
+    declared_reference_loaded(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
+    let d = held_definition(vm, globals, what)?;
+    let class = ready_class(vm, GLOBALS_DEFINITION_CLASS)?;
+    definition_of_class(vm, d, class)
+}
+
+fn definition_of_class(vm: &Vm, d: ObjRef, class: ClassId) -> Result<ObjRef, VmError> {
+    if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) { Ok(d) } else { Err(first_load()) }
+}
+
+fn first_load() -> VmError {
+    NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into()
+}
+
+/// The validated holder's definition: None is the first load, a handle not loaded yet the lazy load (review r1 of
+/// #476).
+fn held_definition(vm: &Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
     let first_load =
         || -> VmError { NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into() };
     // The validated holder first (review r1 of #476): None is the first load.
@@ -261,7 +305,7 @@ pub fn globals_definition_of(
     if vm.defs.is_unloaded(&vm.space, d) {
         return Err(lazy_definition());
     }
-    if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) { Ok(d) } else { Err(first_load()) }
+    Ok(d)
 }
 
 /// The globals definition held as a handle the definition store has not loaded: a named `NotYet { NotRead }`, raised

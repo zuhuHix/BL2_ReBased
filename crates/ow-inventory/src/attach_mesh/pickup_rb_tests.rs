@@ -88,9 +88,6 @@ fn engine() -> Vec<u8> {
     }
     t.prop("Object", actor, "CollisionComponent", 0, object);
     let component = t.class("ActorComponent", object);
-    t.prop("Struct", component, "Scene", 0, pointer);
-    t.prop("Object", component, "Owner", 0, actor);
-    t.prop("Bool", component, "bNeedsReattach", 0, 0);
     let primitive = t.class("PrimitiveComponent", component);
     let channel = toy_enum(&mut t, primitive, "ERBCollisionChannel", &["RBCC_Default", "RBCC_Pawn", "RBCC_WillowPickup"]);
     let container = toy_struct(&mut t, primitive, "RBCollisionChannelContainer", None);
@@ -109,6 +106,11 @@ fn engine() -> Vec<u8> {
     t.prop("Float", mesh, "PhysicsWeight", 0, 0);
     t.prop("Object", mesh, "PhysicsAsset", 0, asset);
     t.prop("Bool", mesh, "bHasPhysicsAssetInstance", 0, 0);
+    // The deferred reattach's fields, only on this subclass: plain SkeletalMeshComponent lacks them (item 3).
+    let toy_mesh = t.class("ToyMesh", mesh);
+    t.prop("Struct", toy_mesh, "Scene", 0, pointer);
+    t.prop("Object", toy_mesh, "Owner", 0, actor);
+    t.prop("Bool", toy_mesh, "bNeedsReattach", 0, 0);
     t.class("WillowInventory", actor);
     let definition = t.class("WillowInventoryDefinition", object);
     t.prop("Object", definition, "PhysicsAsset", 0, asset);
@@ -170,8 +172,10 @@ fn willow_game() -> Vec<u8> {
         t.prop("Float", gd, f, 0, 0);
     }
     t.prop("Object", gd, "DropImpactEffectVelocityAkRtpc", 0, object);
+    // The spin range, only on this subclass: the plain definition lacks it (review r1 of #587, item 3).
+    let spin = t.class("ToySpinGlobalsDefinition", gd);
     for f in SPIN_FIELDS {
-        t.prop("Float", gd, f, 0, 0);
+        t.prop("Float", spin, f, 0, 0);
     }
     t.build()
 }
@@ -198,6 +202,15 @@ impl Drop for Fx {
 }
 
 fn fx_mode(mode: ParityMode) -> Fx {
+    fx_with(mode, GD_SPIN, true)
+}
+
+const GD_SPIN: &str = "WillowGame.ToySpinGlobalsDefinition";
+const GD_PLAIN: &str = "WillowGame.GlobalsDefinition";
+
+/// The world, its globals definition of class `gd`; with `warm` false that class's code is never loaded (its layout is
+/// defined by the store, and the object made from the default without `Vm::find_class`).
+fn fx_with(mode: ParityMode, gd_class: &str, warm: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-inventory-pickup-rb-{}-{}",
         std::process::id(),
@@ -209,8 +222,11 @@ fn fx_mode(mode: ParityMode) -> Fx {
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode)
         .with_stub_policy(StubPolicy::refuse_all());
-    for c in ["Engine.SkeletalMeshComponent", "Engine.ActorComponent", "WillowGame.WillowPickup", "WillowGame.GlobalsDefinition"] {
+    for c in ["Engine.ToyMesh", "Engine.ActorComponent", "WillowGame.WillowPickup"] {
         vm.find_class(c).unwrap();
+    }
+    if warm {
+        vm.find_class(gd_class).unwrap();
     }
     register(&mut vm).unwrap();
     vm.add_service(ow_world::timers::Timers::new()).unwrap();
@@ -220,7 +236,7 @@ fn fx_mode(mode: ParityMode) -> Fx {
     let pickup = make(&mut vm, "WillowGame.WillowPickup");
     set(&mut vm, pickup, "bUseRBPhysics", Value::Bool(true));
     set(&mut vm, pickup, "MaxRBAwakeTime", Value::Float(15.0));
-    let mesh = make(&mut vm, "Engine.SkeletalMeshComponent");
+    let mesh = make(&mut vm, "Engine.ToyMesh");
     set(&mut vm, mesh, "Owner", Value::Object(Some(pickup)));
     set(&mut vm, pickup, "CollisionComponent", Value::Object(Some(mesh)));
     let asset = make(&mut vm, "Engine.PhysicsAsset");
@@ -229,19 +245,25 @@ fn fx_mode(mode: ParityMode) -> Fx {
     let weapon = make(&mut vm, "WillowGame.WillowWeapon");
     set(&mut vm, pickup, "Inventory", Value::Object(Some(weapon)));
     let globals = make(&mut vm, "WillowGame.WillowGlobals");
-    let gd = make(&mut vm, "WillowGame.GlobalsDefinition");
+    let gd = if warm {
+        make(&mut vm, gd_class)
+    } else {
+        let c = vm.defs.class_id(&mut vm.space, gd_class).unwrap();
+        ow_vm::interp::instantiate_from_defaults(&mut vm, c).unwrap()
+    };
     set(&mut vm, globals, "TheGlobalsDefinition", Value::Object(Some(gd)));
     let rtpc = make(&mut vm, "Engine.Object");
     for (f, v) in [
         ("DropImpactEffectMax", 3.7),
         ("DropImpactEffectDelay", 0.5),
         ("DropImpactEffectThreshold", 41.0),
-        ("PickupSpinVMin", 1.0),
-        ("PickupSpinVMax", 2.0),
-        ("PickupSpinHMin", 3.0),
-        ("PickupSpinHMax", 4.0),
     ] {
         set(&mut vm, gd, f, Value::Float(v));
+    }
+    if gd_class == GD_SPIN {
+        for (f, v) in SPIN_FIELDS.into_iter().zip([1.0, 2.0, 3.0, 4.0]) {
+            set(&mut vm, gd, f, Value::Float(v));
+        }
     }
     set(&mut vm, gd, "DropImpactEffectVelocityAkRtpc", Value::Object(Some(rtpc)));
     let q = ow_world::query::install(&mut vm).unwrap();
@@ -312,10 +334,11 @@ impl Fx {
     }
 
     /// Every value of the pickup and the mesh, and the pickup's timers: what a refusal must leave unchanged.
-    fn state(&self) -> (Vec<Value>, Vec<Value>, usize, u64) {
+    fn state(&self) -> (Vec<Value>, Vec<Value>, usize, [u64; 3]) {
         let all = |o: ObjRef| -> Vec<Value> { self.vm.space.heap.get(o).unwrap().slots.to_vec() };
         let timers = ow_world::timers::timers_of(&self.vm).unwrap().borrow().of(self.pickup).len();
-        (all(self.pickup), all(self.mesh), timers, self.vm.rng.draws())
+        let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions()];
+        (all(self.pickup), all(self.mesh), timers, counters)
     }
 
     fn timer(&self, func: &str) -> Option<(f32, bool)> {
@@ -350,9 +373,9 @@ fn refused(x: &mut Fx, missing: Missing, what: &str, record: &str) {
         Err(VmError::NotYet(n)) => n,
         other => panic!("{what}: expected NotYet, got {other:?}"),
     };
-    assert_eq!((n.missing.clone(), n.what.as_ref(), n.record), (missing, what, record));
+    assert_eq!((n.missing, n.what.as_ref(), n.record), (missing, what, record));
     assert!(!ow_core::notyet::is_partial_writes(&n.what), "a preflight refusal is unmarked");
-    assert_eq!(x.state(), before, "{what}: nothing written, no timer, no draw");
+    assert_eq!(x.state(), before, "{what}: nothing written, no timer, and #518's three counters unchanged");
 }
 
 /// `bUseRBPhysics` clear: nothing at all, not even the declarations past it.
@@ -405,9 +428,10 @@ fn without_a_primitive_component_only_the_pickups_own_steps_run() {
 #[test]
 fn the_asset_branch_runs_at_rest_with_every_write() {
     let mut x = fx();
-    // Every bit set first, so the two clears show; `Pawn` stays set.
-    let all = filled(&x.get(x.mesh, "RBCollideWithChannels"), Value::Bool(true));
-    x.set(x.mesh, "RBCollideWithChannels", all);
+    // The seven bits the native sets start clear; the two it clears and the unrelated `Pawn` start set.
+    let start = filled(&x.get(x.mesh, "RBCollideWithChannels"), Value::Bool(false));
+    let start = with_fields(&x.vm, &start, &[("Pawn", Value::Bool(true)), ("WillowPickup", Value::Bool(true)), ("DeadPawn", Value::Bool(true))], "test").unwrap();
+    x.set(x.mesh, "RBCollideWithChannels", start);
     let draws = x.vm.rng.draws();
     assert_eq!(x.call().unwrap(), Value::None);
     assert_eq!(x.vector(x.mesh, "Scale3D"), [1.0; 3]);
@@ -477,7 +501,7 @@ fn the_branch_without_a_physics_asset_is_not_read() {
 fn a_primitive_that_is_not_a_skeletal_mesh_is_not_read() {
     let mut x = fx();
     let primitive = x.obj("Engine.PrimitiveComponent");
-    x.set(primitive, "Owner", Value::Object(Some(x.pickup)));
+    x.set(primitive, "CollideActors", Value::Bool(true));
     x.set(x.pickup, "CollisionComponent", Value::Object(Some(primitive)));
     x.mesh = primitive;
     refused(&mut x, Missing::NotRead, NO_ASSET, RECORD_RB);
@@ -542,4 +566,74 @@ fn the_globals_refusal_comes_before_any_write() {
 fn reference_binds_nothing() {
     let x = fx_mode(ParityMode::Reference);
     assert!(!x.vm.has_native(INIT_RB_PHYSICS));
+}
+
+/// Review r1 of #587, item 1: a globals definition whose class layout is defined but whose code was never loaded is
+/// refused before any write, and the preflight loads and registers nothing (the class stays cold).
+#[test]
+fn a_cold_globals_definition_class_is_refused_and_stays_cold() {
+    let mut x = fx_with(ParityMode::Off, GD_SPIN, false);
+    let class = x.vm.space.classes.by_path(GD_PLAIN).unwrap();
+    assert!(!x.vm.class_code_loaded(class), "the fixture's class is cold");
+    let before = x.state();
+    match x.call() {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.contains("not loaded (a class load is a write)"), "{n}");
+            assert!(!ow_core::notyet::is_partial_writes(&n.what), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.state(), before);
+    assert!(!x.vm.class_code_loaded(class), "nothing registered");
+}
+
+/// Review r1 of #587, item 2: a timer service already borrowed refuses before the first write.
+#[test]
+fn a_borrowed_timer_service_refuses_before_any_write() {
+    let mut x = fx();
+    let before = x.state();
+    let timers = ow_world::timers::timers_of(&x.vm).unwrap();
+    let held = timers.borrow_mut();
+    let e = x.call().unwrap_err();
+    drop(held);
+    assert!(matches!(e, VmError::ServiceBorrowed(_)), "{e:?}");
+    assert_eq!(x.state(), before, "bForceRBToSleep and every other field unchanged");
+}
+
+/// Review r1 of #587, item 2: a mesh missing its `bHasPhysicsAssetInstance` slot fails in the preflight, so the timers
+/// and the earlier fields are not changed.
+#[test]
+fn a_missing_destination_slot_refuses_before_any_write() {
+    let mut x = fx();
+    let class = x.vm.space.heap.get(x.mesh).unwrap().class;
+    let p = x.vm.space.prop(class, "bHasPhysicsAssetInstance").unwrap();
+    let slot = x.vm.space.classes.resolve(class, PropAddr::scalar(p)).unwrap();
+    let before_slots = x.vm.space.heap.get(x.mesh).unwrap().slots.len();
+    assert!(slot < before_slots);
+    // Every field the native reads on the mesh before it plans the asset writes sits in the kept slots.
+    x.vm.space.heap.get_mut(x.mesh).unwrap().slots.truncate(slot);
+    let before = x.state();
+    let e = x.call().unwrap_err();
+    assert!(!matches!(e, VmError::NotYet(_)), "a data error, not a NotYet: {e:?}");
+    assert_eq!(x.state(), before, "no timer and no field written");
+}
+
+/// Review r1 of #587, item 3: each field is checked only on the branch that uses it. A torque call passes with a
+/// globals definition that has no spin range; a mesh with `CollideActors` set passes without the reattach fields.
+#[test]
+fn fields_are_checked_only_on_the_branch_that_uses_them() {
+    let mut x = fx_with(ParityMode::Off, GD_PLAIN, true);
+    x.set(x.pickup, "bTorque", Value::Bool(true));
+    x.call().expect("the torque path reads no spin range");
+    let mut x = fx_with(ParityMode::Off, GD_PLAIN, true);
+    let e = x.call().unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("PickupSpin")), "the spin path needs it: {e:?}");
+    let mut x = fx();
+    let bare = x.obj("Engine.SkeletalMeshComponent");
+    x.set(bare, "CollideActors", Value::Bool(true));
+    x.set(x.pickup, "CollisionComponent", Value::Object(Some(bare)));
+    x.mesh = bare;
+    x.call().expect("no reattach, so no reattach fields");
+    assert_eq!(x.get(bare, "bHasPhysicsAssetInstance"), Value::Bool(true));
 }

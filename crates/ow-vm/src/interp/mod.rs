@@ -181,6 +181,13 @@ pub(crate) struct CodeState {
     frame_serial: u64,
 }
 
+impl CodeState {
+    /// Whether `class`'s functions and states are loaded (a read).
+    pub(crate) fn has_class(&self, class: ClassId) -> bool {
+        self.classes.contains_key(&class)
+    }
+}
+
 /// One active frame's storage.
 #[derive(Debug, Default)]
 struct FrameStore {

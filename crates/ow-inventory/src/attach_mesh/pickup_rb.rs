@@ -33,14 +33,14 @@
 
 use ow_core::NotYet;
 use ow_core::rand::frand_f32;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::{REATTACH_OWNER, REATTACH_SCENE, RECORD, Want, bool_of, fits, is_zero, schemas};
-use crate::equip::{bad, object_of, required, write};
+use super::{REATTACH_OWNER, REATTACH_SCENE, RECORD, Want, bool_of, is_zero, schemas};
+use crate::equip::{bad, object_of, required};
 
 /// The record of this rule.
 pub const RECORD_RB: &str = "docs/verification/NATIVE_PICKUP_RB_MINIMAL.md";
@@ -60,18 +60,14 @@ const PICKUP_FIELDS: [(&str, Want); 5] = [
     ("Torque", Want::Struct),
 ];
 /// C's fields step 4 reads or writes (the asset branch's checked when it is taken).
-const COMPONENT_FIELDS: [(&str, Want); 9] = [
+const COMPONENT_FIELDS: [(&str, Want); 6] = [
     ("Scale3D", Want::Struct),
     ("BlockRigidBody", Want::Bool),
     ("CollideActors", Want::Bool),
     ("BlockActors", Want::Bool),
-    ("Owner", Want::Object),
-    ("Scene", Want::Struct),
-    ("bNeedsReattach", Want::Bool),
     ("bNotifyRigidBodyCollision", Want::Bool),
     ("RBCollideWithChannels", Want::Struct),
 ];
-const ASSET_FIELDS: [(&str, Want); 2] = [("PhysicsAsset", Want::Object), ("bHasPhysicsAssetInstance", Want::Bool)];
 /// The nine channel updates of step 4.8, in order: the channel's container field and its new value.
 const CHANNELS: [(&str, bool); 9] = [
     ("WillowPickup", false),
@@ -107,13 +103,33 @@ impl WriteCounters {
     }
 }
 
-/// What the preflight settled for the writes.
-struct Plan {
-    component: Option<ObjRef>,
-    globals: Option<ObjRef>,
-    reattach: bool,
-    asset: Option<ObjRef>,
-    awake_time: f32,
+/// One step of the commit, each settled and checked by the preflight (review r1 of #587): a write whose address and
+/// value the heap's own rules accepted, a timer, the spin's draws, or the asset branch's log line.
+enum Step {
+    Write(ObjRef, PropAddr, Value),
+    Timer(f32, bool, &'static str),
+    Draws(u32),
+    Log(&'static str),
+}
+
+const AT_REST: &str = "InitializePickupForRBPhysics: the physics asset branch answered at rest: no rigid body is made (the hub's ruling, UNVERIFIED)";
+
+/// A planned write of `v` to `name` on `o`: the object's slot read at that address and `v` checked against the
+/// declaration by the heap's own write rules, so the commit's write cannot fail (review r1 of #587, item 2).
+fn planned(vm: &Vm, o: ObjRef, name: &str, v: Value) -> Result<Step, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| bad(WHAT, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
+    let a = PropAddr::scalar(p);
+    vm.space.read(o, a).map_err(|e| bad(WHAT, format!("{name} has no slot to write: {e}")))?;
+    let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| bad(WHAT, format!("{name} has no declaration")))?;
+    vm.space
+        .heap
+        .check_value(&vm.space.classes, &kind, &v)
+        .map_err(|e| bad(WHAT, format!("{name} cannot take the value: {e}")))?;
+    Ok(Step::Write(o, a, v))
 }
 
 fn float_of(v: &Value, name: &str) -> Result<f32, VmError> {
@@ -184,62 +200,34 @@ fn zeroed(v: &Value) -> Value {
     }
 }
 
-/// The preflight (module documentation). Reads only.
-fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Plan>, VmError> {
-    // 1. bUseRBPhysics.
-    schemas(vm, pickup, &[("bUseRBPhysics", Want::Bool)], WHAT)?;
-    if !bool_of(&required(vm, pickup, "bUseRBPhysics", WHAT)?, "bUseRBPhysics", WHAT)? {
-        return Ok(None);
-    }
-    // 2. C.
-    schemas(vm, pickup, &[("CollisionComponent", Want::Object)], WHAT)?;
-    let component = match object_of(&required(vm, pickup, "CollisionComponent", WHAT)?, WHAT)? {
-        Some(c) if is_a(vm, c, "Engine.PrimitiveComponent")? => Some(c),
-        _ => None,
-    };
-    // 3. The pickup's fields of steps 1, 2, 5, 6 and 7, and the timer service.
-    schemas(vm, pickup, &PICKUP_FIELDS, WHAT)?;
-    let awake_time = float_of(&required(vm, pickup, "MaxRBAwakeTime", WHAT)?, "MaxRBAwakeTime")?;
-    enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
-    ow_world::timers::timers_of(vm)?;
-    let Some(c) = component else {
-        return Ok(Some(Plan { component: None, globals: None, reattach: false, asset: None, awake_time }));
-    };
-    // 4.1. G, as the pickup world's set-up prepared it.
+fn flag(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    bool_of(&required(vm, o, name, WHAT)?, name, WHAT)
+}
+
+/// What the preflight settled with C: its globals definition, whether the reattach runs, the asset.
+struct WithComponent {
+    c: ObjRef,
+    g: ObjRef,
+    reattach: bool,
+    asset: ObjRef,
+}
+
+/// The refusal checks with C, in the note's order (section 3, step 4), each field checked only on the branch that
+/// uses it (review r1 of #587, item 3).
+fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithComponent, VmError> {
+    // 4.1. G, as the pickup world's set-up prepared it, with no class load (review r1 of #587, item 1).
     let world = crate::globals::world_globals(vm)?;
-    let globals = Some(crate::globals::globals_definition(vm, world, WHAT)?);
-    // 4.2. The declarations.
+    let g = crate::globals::globals_definition_loaded(vm, world, WHAT)?;
+    // 4.2. The declarations of the fields every path with C uses.
     schemas(vm, c, &COMPONENT_FIELDS, WHAT)?;
     schemas(vm, pickup, &[("MaxImpactEffectPlayCount", Want::Int), ("Inventory", Want::Object)], WHAT)?;
-    for f in ["Scale3D", "RBCollideWithChannels"] {
-        let v = required(vm, c, f, WHAT)?;
-        let fields: Vec<(&str, Value)> = match f {
-            "Scale3D" => vec![("X", Value::Float(1.0)), ("Y", Value::Float(1.0)), ("Z", Value::Float(1.0))],
-            _ => CHANNELS.iter().map(|&(n, b)| (n, Value::Bool(b))).collect(),
-        };
-        with_fields(vm, &v, &fields, f)?;
-    }
-    enum_value(vm, c, "RBChannel", "RBCC_WillowPickup")?;
-    if let Some(g) = globals {
-        for f in ["DropImpactEffectMax", "DropImpactEffectThreshold"] {
-            float_of(&required(vm, g, f, WHAT)?, f)?;
-        }
-        for (from, to) in [("DropImpactEffectDelay", "ImpactEffectDelay"), ("DropImpactEffectVelocityAkRtpc", "ImpactVelocityAkRtpc")] {
-            let v = required(vm, g, from, WHAT)?;
-            fits(vm, pickup, to, &v, WHAT)?;
-        }
-        fits(vm, c, "ScriptRigidBodyCollisionThresholdCompiled", &Value::Byte(0), WHAT)?;
-        for f in SPIN_FIELDS {
-            float_of(&required(vm, g, f, WHAT)?, f)?;
-        }
-    }
-    // 4.3. The deferred reattach, with CollideActors clear (refusals 3 and 4).
-    let reattach = !bool_of(&required(vm, c, "CollideActors", WHAT)?, "CollideActors", WHAT)?;
+    // 4.3. The deferred reattach, with CollideActors clear (refusals 3 and 4); its fields only then.
+    let reattach = !flag(vm, c, "CollideActors")?;
     if reattach {
+        schemas(vm, c, &[("Owner", Want::Object), ("Scene", Want::Struct), ("bNeedsReattach", Want::Bool)], WHAT)?;
         match object_of(&required(vm, c, "Owner", WHAT)?, WHAT)? {
             Some(owner) => {
-                let flag = |vm: &Vm, n: &str| -> Result<bool, VmError> { bool_of(&required(vm, owner, n, WHAT)?, n, WHAT) };
-                if (flag(vm, "bStatic")? || flag(vm, "bTickIsDisabled")?) && !flag(vm, "bDeleteMe")? {
+                if (flag(vm, owner, "bStatic")? || flag(vm, owner, "bTickIsDisabled")?) && !flag(vm, owner, "bDeleteMe")? {
                     return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
                 }
             }
@@ -267,10 +255,89 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Plan>, VmError> {
     let Some(asset) = object_of(&required(vm, definition, "PhysicsAsset", WHAT)?, WHAT)? else {
         return Err(no_asset());
     };
-    schemas(vm, c, &ASSET_FIELDS, WHAT)?;
-    float_of(&required(vm, c, "PhysicsWeight", WHAT)?, "PhysicsWeight")?;
-    fits(vm, c, "PhysicsAsset", &Value::Object(Some(asset)), WHAT)?;
-    Ok(Some(Plan { component: Some(c), globals, reattach, asset: Some(asset), awake_time }))
+    Ok(WithComponent { c, g, reattach, asset })
+}
+
+/// The preflight (module documentation): every refusal, then the whole commit planned and checked. Reads only.
+fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Vec<Step>>, VmError> {
+    // 1. bUseRBPhysics.
+    schemas(vm, pickup, &[("bUseRBPhysics", Want::Bool)], WHAT)?;
+    if !flag(vm, pickup, "bUseRBPhysics")? {
+        return Ok(None);
+    }
+    // 2. C.
+    schemas(vm, pickup, &[("CollisionComponent", Want::Object)], WHAT)?;
+    let component = match object_of(&required(vm, pickup, "CollisionComponent", WHAT)?, WHAT)? {
+        Some(c) if is_a(vm, c, "Engine.PrimitiveComponent")? => Some(c),
+        _ => None,
+    };
+    // 3. The pickup's fields of steps 1, 2, 5, 6 and 7, and the timer service.
+    schemas(vm, pickup, &PICKUP_FIELDS, WHAT)?;
+    let awake_time = float_of(&required(vm, pickup, "MaxRBAwakeTime", WHAT)?, "MaxRBAwakeTime")?;
+    let mode = enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
+    ow_world::timers::timers_of(vm)?;
+    let with = match component {
+        Some(c) => Some(component_checks(vm, pickup, c)?),
+        None => None,
+    };
+    // The plan, in note section 2's order.
+    let mut plan = vec![
+        planned(vm, pickup, "bForceRBToSleep", Value::Bool(false))?,
+        Step::Timer(awake_time, false, "MaxRBAwakeTimer"),
+        Step::Timer(1.0, true, "CheckForRigidBodySleepState"),
+        planned(vm, pickup, "RotationRate", zeroed(&required(vm, pickup, "RotationRate", WHAT)?))?,
+    ];
+    if let Some(WithComponent { c, g, reattach, asset }) = with {
+        let one = [("X", Value::Float(1.0)), ("Y", Value::Float(1.0)), ("Z", Value::Float(1.0))];
+        plan.push(planned(vm, c, "Scale3D", with_fields(vm, &required(vm, c, "Scale3D", WHAT)?, &one, "Scale3D")?)?);
+        plan.push(planned(vm, c, "BlockRigidBody", Value::Bool(true))?);
+        if reattach {
+            plan.push(planned(vm, c, "CollideActors", Value::Bool(true))?);
+            plan.push(planned(vm, c, "bNeedsReattach", Value::Bool(true))?);
+        }
+        plan.push(planned(vm, c, "BlockActors", Value::Bool(false))?);
+        // 4.5. The asset branch, at rest (the hub's ruling): its non-physics writes, no rigid body.
+        plan.push(planned(vm, c, "PhysicsWeight", Value::Float(1.0))?);
+        plan.push(planned(vm, c, "PhysicsAsset", Value::Object(Some(asset)))?);
+        plan.push(planned(vm, c, "bHasPhysicsAssetInstance", Value::Bool(true))?);
+        plan.push(Step::Log(AT_REST));
+        // 4.6. The impact fields.
+        let max = float_of(&required(vm, g, "DropImpactEffectMax", WHAT)?, "DropImpactEffectMax")?;
+        plan.push(planned(vm, pickup, "MaxImpactEffectPlayCount", Value::Int(ow_core::num::trunc_i32(max)))?);
+        plan.push(planned(vm, pickup, "ImpactEffectDelay", required(vm, g, "DropImpactEffectDelay", WHAT)?)?);
+        plan.push(planned(vm, pickup, "ImpactVelocityAkRtpc", required(vm, g, "DropImpactEffectVelocityAkRtpc", WHAT)?)?);
+        // 4.7. The collision notify, then the threshold.
+        plan.push(planned(vm, c, "bNotifyRigidBodyCollision", Value::Bool(true))?);
+        let t = float_of(&required(vm, g, "DropImpactEffectThreshold", WHAT)?, "DropImpactEffectThreshold")?;
+        let byte = ow_core::num::trunc_i32(t * 0.25) as u8;
+        plan.push(planned(vm, c, "ScriptRigidBodyCollisionThresholdCompiled", Value::Byte(byte))?);
+        // 4.8. The channel and the nine bits (one write keeping every other bit).
+        let channel = enum_value(vm, c, "RBChannel", "RBCC_WillowPickup")?;
+        plan.push(planned(vm, c, "RBChannel", Value::Byte(channel))?);
+        let fields: Vec<(&str, Value)> = CHANNELS.iter().map(|&(n, b)| (n, Value::Bool(b))).collect();
+        let bits = with_fields(vm, &required(vm, c, "RBCollideWithChannels", WHAT)?, &fields, "RBCollideWithChannels")?;
+        plan.push(planned(vm, c, "RBCollideWithChannels", bits)?);
+        // 5. The physics mode.
+        plan.push(planned(vm, pickup, "Physics", Value::Byte(mode))?);
+        // 6. The torque, or the spin: three draws on the port's stand-in for the engine's seeded generator
+        // (UNVERIFIED; the values feed only the impulse, which the port does not apply). The spin range is read only
+        // on the spin's branch.
+        if flag(vm, pickup, "bTorque")? {
+            if flag(vm, pickup, "bTorqueTemporary")? {
+                plan.push(planned(vm, pickup, "bTorque", Value::Bool(false))?);
+            }
+        } else {
+            for f in SPIN_FIELDS {
+                float_of(&required(vm, g, f, WHAT)?, f)?;
+            }
+            plan.push(Step::Draws(3));
+        }
+    } else {
+        plan.push(planned(vm, pickup, "Physics", Value::Byte(mode))?);
+    }
+    // 7. The ragdoll timer.
+    plan.push(Step::Timer(0.3, false, "EnableRagdollCollision"));
+    Ok(Some(plan))
 }
 
 /// `InitializePickupForRBPhysics()` on `pickup` in Off (module documentation).
@@ -280,91 +347,32 @@ pub fn initialize(vm: &mut Vm, pickup: ObjRef) -> Result<(), VmError> {
         let Some(plan) = preflight(vm, pickup)? else {
             return Ok(());
         };
-        writes(vm, pickup, &plan)
+        // The timer borrow is taken before the first write (review r1 of #587, item 2).
+        let timers = ow_world::timers::timers_of(vm)?;
+        let mut timers = timers.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("Timers"))?;
+        commit(vm, pickup, plan, &mut timers)
     })();
     result.map_err(|e| start.mark(vm, e))
 }
 
-fn set_timer(vm: &mut Vm, pickup: ObjRef, rate: f32, looping: bool, func: &str) -> Result<(), VmError> {
-    let name = vm.space.names.intern(func);
-    let timers = ow_world::timers::timers_of(vm)?;
-    timers.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("Timers"))?.set(pickup, rate, looping, name, pickup);
+/// The planned steps, in order. Every write was checked by the preflight.
+fn commit(vm: &mut Vm, pickup: ObjRef, plan: Vec<Step>, timers: &mut ow_world::timers::Timers) -> Result<(), VmError> {
+    for step in plan {
+        match step {
+            Step::Write(o, a, v) => vm.space.write(o, a, v)?,
+            Step::Timer(rate, looping, func) => {
+                let name = vm.space.names.intern(func);
+                timers.set(pickup, rate, looping, name, pickup);
+            }
+            Step::Draws(n) => {
+                for _ in 0..n {
+                    let _ = frand_f32(vm.rng.engine_seeded());
+                }
+            }
+            Step::Log(line) => vm.log.push(line.to_string()),
+        }
+    }
     Ok(())
-}
-
-/// The writes, in note section 2's order (module documentation).
-fn writes(vm: &mut Vm, pickup: ObjRef, plan: &Plan) -> Result<(), VmError> {
-    // 1. The sleep set-up.
-    write(vm, pickup, "bForceRBToSleep", Value::Bool(false), WHAT)?;
-    set_timer(vm, pickup, plan.awake_time, false, "MaxRBAwakeTimer")?;
-    set_timer(vm, pickup, 1.0, true, "CheckForRigidBodySleepState")?;
-    // 2. RotationRate, the zero constant (fitted).
-    let rate = zeroed(&required(vm, pickup, "RotationRate", WHAT)?);
-    write(vm, pickup, "RotationRate", rate, WHAT)?;
-    // 4. With C.
-    if let Some(c) = plan.component {
-        let scale = required(vm, c, "Scale3D", WHAT)?;
-        let one = with_fields(vm, &scale, &[("X", Value::Float(1.0)), ("Y", Value::Float(1.0)), ("Z", Value::Float(1.0))], "Scale3D")?;
-        write(vm, c, "Scale3D", one, WHAT)?;
-        write(vm, c, "BlockRigidBody", Value::Bool(true), WHAT)?;
-        if plan.reattach {
-            write(vm, c, "CollideActors", Value::Bool(true), WHAT)?;
-            write(vm, c, "bNeedsReattach", Value::Bool(true), WHAT)?;
-        }
-        write(vm, c, "BlockActors", Value::Bool(false), WHAT)?;
-        // 4.5. The asset branch, at rest (the hub's ruling): its non-physics writes, no rigid body.
-        if let Some(asset) = plan.asset {
-            write(vm, c, "PhysicsWeight", Value::Float(1.0), WHAT)?;
-            write(vm, c, "PhysicsAsset", Value::Object(Some(asset)), WHAT)?;
-            write(vm, c, "bHasPhysicsAssetInstance", Value::Bool(true), WHAT)?;
-            vm.log.push(
-                "InitializePickupForRBPhysics: the physics asset branch answered at rest: no rigid body is made (the hub's ruling, UNVERIFIED)"
-                    .to_string(),
-            );
-        }
-        // 4.6. The impact fields, with G.
-        if let Some(g) = plan.globals {
-            let max = float_of(&required(vm, g, "DropImpactEffectMax", WHAT)?, "DropImpactEffectMax")?;
-            write(vm, pickup, "MaxImpactEffectPlayCount", Value::Int(ow_core::num::trunc_i32(max)), WHAT)?;
-            let delay = required(vm, g, "DropImpactEffectDelay", WHAT)?;
-            write(vm, pickup, "ImpactEffectDelay", delay, WHAT)?;
-            let rtpc = required(vm, g, "DropImpactEffectVelocityAkRtpc", WHAT)?;
-            write(vm, pickup, "ImpactVelocityAkRtpc", rtpc, WHAT)?;
-        }
-        // 4.7. The collision notify, then the threshold with G.
-        write(vm, c, "bNotifyRigidBodyCollision", Value::Bool(true), WHAT)?;
-        if let Some(g) = plan.globals {
-            let t = float_of(&required(vm, g, "DropImpactEffectThreshold", WHAT)?, "DropImpactEffectThreshold")?;
-            let byte = ow_core::num::trunc_i32(t * 0.25) as u8;
-            write(vm, c, "ScriptRigidBodyCollisionThresholdCompiled", Value::Byte(byte), WHAT)?;
-        }
-        // 4.8. The channel and the nine bits (one write keeping every other bit).
-        let channel = enum_value(vm, c, "RBChannel", "RBCC_WillowPickup")?;
-        write(vm, c, "RBChannel", Value::Byte(channel), WHAT)?;
-        let bits = required(vm, c, "RBCollideWithChannels", WHAT)?;
-        let fields: Vec<(&str, Value)> = CHANNELS.iter().map(|&(n, b)| (n, Value::Bool(b))).collect();
-        let bits = with_fields(vm, &bits, &fields, "RBCollideWithChannels")?;
-        write(vm, c, "RBCollideWithChannels", bits, WHAT)?;
-    }
-    // 5. The physics mode.
-    let mode = enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
-    write(vm, pickup, "Physics", Value::Byte(mode), WHAT)?;
-    // 6. The spin or the torque.
-    if plan.component.is_some() {
-        if bool_of(&required(vm, pickup, "bTorque", WHAT)?, "bTorque", WHAT)? {
-            if bool_of(&required(vm, pickup, "bTorqueTemporary", WHAT)?, "bTorqueTemporary", WHAT)? {
-                write(vm, pickup, "bTorque", Value::Bool(false), WHAT)?;
-            }
-        } else if plan.globals.is_some() {
-            // Three draws on the port's stand-in for the engine's seeded generator (UNVERIFIED; the values feed only
-            // the impulse, which the port does not apply).
-            for _ in 0..3 {
-                let _ = frand_f32(vm.rng.engine_seeded());
-            }
-        }
-    }
-    // 7. The ragdoll timer.
-    set_timer(vm, pickup, 0.3, false, "EnableRagdollCollision")
 }
 
 #[cfg(test)]

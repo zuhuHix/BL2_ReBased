@@ -66,3 +66,18 @@ first commit takes #518's seven write-counter files byte-identical from 1f1a2bcc
 - **Installed slice gate (Off, strict):** see `docs/verification/GATES.md`. This is what the host did, not parity.
 - **Open:** the note's open questions: `InitializeRBPhysics`, the reattach's owner update, the matched entries'
   side effects, `RotationRate`'s constant, and the engine generator itself.
+
+## Edits: review r1 of #587
+
+- **No class load in the preflight.** G is looked up with `globals::globals_definition_loaded`, which resolves both
+  classes through the new `globals::ready_class`: a defined layout and loaded code (`Vm::class_code_loaded`, the same
+  read-only query #579 adds, applied byte-identically from 2a428257, so it merges with #579). `Vm::find_class` could
+  register functions and states for a class whose layout was there. A cold class is a `NotYet { NotRead }` before any
+  write. The globals refusals are unchanged; `globals_definition` keeps its behaviour for its other callers.
+- **The whole commit is checked first.** The preflight plans every step. Each write's slot is read at its address and
+  its value checked by the heap's own write rules. The timer borrow is taken before the first write.
+- **Fields only on their branch.** The reattach fields are checked only when `CollideActors` is clear, and the spin
+  range only on the spin's branch. The note's refusal order is kept.
+- **Tests:** 14 in `pickup_rb_tests.rs`, 4 of them new: a cold class refused and left cold; a borrowed timer service;
+  a missing destination slot; the branch-only checks. The channel test now starts with the seven bits clear and an
+  unrelated bit set. Every refusal compares all three of #518's counters.
