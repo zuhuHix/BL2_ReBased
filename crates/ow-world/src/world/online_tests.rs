@@ -402,7 +402,7 @@ fn server_change_name_guards_the_resolved_change_name() {
     not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "PlayerController.ServerChangeName: the game info Engine.ToyGameInfo");
 }
 
-/// The slice worlds' offline engine object (decision 2026-11-19-NNN; port Off answer: the port has no online
+/// The slice worlds' offline engine object (decision 2026-11-19-112; port Off answer: the port has no online
 /// subsystem, UNVERIFIED against a logged-in game). In Off it is a `GameEngine` whose `OnlineSubsystem` slot is empty,
 /// so `GetOnlineSubsystem` answers None (no subsystem is made). A second registration is refused. In Reference it is
 /// refused and no engine object is registered.

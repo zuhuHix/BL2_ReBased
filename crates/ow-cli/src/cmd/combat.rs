@@ -132,7 +132,7 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
             message: other.to_string(),
         },
     })?;
-    // The engine object with an empty online subsystem slot (decision 2026-11-19-NNN). Port Off answer: the port has
+    // The engine object with an empty online subsystem slot (decision 2026-11-19-112). Port Off answer: the port has
     // no online subsystem; UNVERIFIED against a logged-in game. Off only, so a Reference run is unchanged.
     if mode == ParityMode::Off {
         ow_world::world::online::register_offline_engine(&mut world.vm)?;

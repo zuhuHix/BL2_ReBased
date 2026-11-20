@@ -233,7 +233,7 @@ fn unread(what: &'static str) -> VmError {
 #[derive(Debug, Clone, Copy)]
 pub struct EngineObject(pub ObjRef);
 
-/// Registers the slice worlds' engine object (decision 2026-11-19-NNN, the hub's ruling of 2026-11-19, reversible): a
+/// Registers the slice worlds' engine object (decision 2026-11-19-112, the hub's ruling of 2026-11-19, reversible): a
 /// `GameEngine` made from its class defaults, with its `OnlineSubsystem` slot written empty.
 ///
 /// **Port Off answer: the port has no online subsystem; UNVERIFIED against a logged-in game.** It is a fact of the

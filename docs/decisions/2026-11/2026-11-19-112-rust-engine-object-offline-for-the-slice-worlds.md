@@ -5,6 +5,8 @@ AI-assisted (Claude Code). Lane IMPL-ENGINE-OBJECT-OFFLINE (the file number is a
 online state; the hub marked the ruling reversible. Stacked on #479 (`NATIVE_LOGIN_STATUS.md`, decision
 2026-11-19-95). No real-game session was run. No dependency was added and no bounds check was loosened.
 
+Edits: docs/decisions/2026-11/2026-11-19-95-rust-login-status-online-subsystem-and-steamworks.md
+
 - **The ruling.** The port has no online subsystem, so the slice worlds register a `GameEngine` object whose
   `OnlineSubsystem` slot is empty. **Port Off answer: the port has no online subsystem; UNVERIFIED against a
   logged-in game.** This is a fact of the port, not an invented game value, and it matches a real game state (playing
