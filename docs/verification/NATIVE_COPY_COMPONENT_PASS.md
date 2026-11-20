@@ -1,6 +1,6 @@
 # The tree initialisation's last steps: the component pass and the per-bone control arrays (2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-COPY-COMPONENT-PASS (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-COPY-COMPONENT-PASS (decision 2026-11-19-211, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented earlier, unrelated slice
 lanes (#573 GetParticleEffect, #584 the damage-type resolver). It does not implement this note, and it read no native
 code for those lanes.
