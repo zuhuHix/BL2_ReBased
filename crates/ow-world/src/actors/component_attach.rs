@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SPAWN-COMPONENT-ATTACH (decision 2026-11-19-NNN). The spawn's component update in Off: each of a
+//! Owner: lane IMPL-SPAWN-COMPONENT-ATTACH (decision 2026-11-19-221). The spawn's component update in Off: each of a
 //! new actor's `Components` is attached to the world's scene and gets the actor as its `Owner`. AI-assisted (Claude
 //! Code).
 //!
