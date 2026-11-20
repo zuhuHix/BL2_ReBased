@@ -50,7 +50,7 @@ particle effect" in `make`, as #574 foresaw. The other 12 rows read as before. T
 NATIVE_BUILD_COMPOSITE_MESH.md (ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (67170f22). They run the notes'
 preflights, refuse the gestalt data layer as `LayerAbsent`, give the non-gestalt answers, and answer a self-copy as
 success; the layer itself is not built. `cargo build --workspace --locked -j 4` clean (0 warnings); `cargo test
---workspace --locked -j 4` 2,574 passed / 0 failed / 48 ignored (10 new). Installed Off `--slice-gate` strict (release
+--workspace --locked -j 4` 2,574 passed / 0 failed / 48 ignored (10 new); after review r1 of #596, 2,577 passed / 0 failed / 48 ignored (13 new). Installed Off `--slice-gate` strict (release
 build, under the machine lock): 2 ok / 4 NotYet / 8 errors. Link 8 is `notyet` in `make` at `WillowWeapon.CacheWeaponCard`,
 before either native, so the gate does not reach them (the base was not rerun). ctest and verify_packages not run (no
 C++ change). No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/gestalt/`.

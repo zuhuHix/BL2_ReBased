@@ -20,7 +20,8 @@ ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (#591 at 67170f22). This lane rea
   - two or more meshes: `LayerAbsent("a skeletal mesh merge")`.
 - **`InitGestaltMeshDataFromOther`** answers a self-copy with success and no write, even while the layer is absent.
   Otherwise it checks that both `GestaltData` slots are held whole (#591 r1):
-  - a stand-in with no slots: `NotRead`;
+  - an object without its slots: the layer's `LayerAbsent`, since a slotless resident object is a stand-in that
+    never loads; only a store definition whose slots were never filled is `NotRead` (review r1 of #596);
   - a malformed value: the layer's `LayerAbsent`.
 
   Then it refuses that same `LayerAbsent`.

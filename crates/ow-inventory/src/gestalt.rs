@@ -1,14 +1,15 @@
 //! Owner: lane IMPL-GESTALT-MESH-LAYER. AI-assisted (Claude Code, Opus 5.5). `WillowWeapon.BuildCompositeMesh` and
 //! `SkeletalMeshComponent.InitGestaltMeshDataFromOther` in Off, coded from the two analyst notes alone:
-//! NATIVE_BUILD_COMPOSITE_MESH.md (#588, at ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (#591, at 792ba72c). This
+//! NATIVE_BUILD_COMPOSITE_MESH.md (#588, at ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (#591, at 67170f22). This
 //! lane read neither native (clean room). Every rule is the notes' reading of the executable, **UNVERIFIED** in the
 //! running game.
 //!
 //! **`BuildCompositeMesh(C, D)`** (NATIVE_BUILD_COMPOSITE_MESH.md section 4). The preflight runs in the note's order,
 //! and the first failure is the answer:
-//! 1. `D.WeaponTypeDefinition` (an object field, else a data error). None answers None, and nothing else is checked,
+//! 1. `D.WeaponTypeDefinition` (an object field, else a data error, `VmError::Script`, as every field of `D` read here). None answers None, and nothing else is checked,
 //!    the component included.
-//! 2. The type must be resident, else [`NOT_LOADED`] (`NotRead`). Its `GestaltMesh` must be an object field.
+//! 2. The type must be resident, else [`NOT_LOADED`] (`NotRead`). Resident here also means filled: a slotless stand-in
+//!    type, gestalt definition or part is [`STAND_IN`] (`NotRead`), never a heap error. Its `GestaltMesh` must be an object field.
 //! 3. The path choice. When `GestaltMesh` is set, that definition must be resident ([`NOT_LOADED`]) and its
 //!    `GestaltSkeletalMesh` an object field. Both set: the gestalt path. Otherwise: the non-gestalt path.
 //! 4. The part walk: `D`'s slots in `AllParts` order ([`WEAPON_ALL_PARTS`] without the two name parts), empty slots
@@ -38,8 +39,10 @@
 //! 3. the receiver being the argument is a self-assignment: success, with nothing written, even while the layer is
 //!    absent (UNVERIFIED: the notes did not read the self-copy separately);
 //! 4. both components' `GestaltData` slots must be held whole: one complete value, read as it stands, with no decode
-//!    and no load ([`held_whole`]). A component whose slots the store has not filled (a loaded stand-in with no slots)
-//!    is [`NOT_DECODED`] (`NotRead`). A slot of the wrong shape is the same `LayerAbsent` as the answer.
+//!    and no load ([`held_whole`]). An object without its slots is the layer's `LayerAbsent`: in this store a slotless
+//!    resident object is a stand-in that never loads (review r1 of #596). Only a store definition whose slots were
+//!    never filled is [`NOT_DECODED`] (`NotRead`): the store holds the data but has not decoded it. A slot of the
+//!    wrong shape is the same `LayerAbsent` as the answer.
 //!
 //! Any other pair then refuses `LayerAbsent(`[`GESTALT_LAYER`]`)` ([`INIT_GESTALT_DATA`]), the same layer as the
 //! fill. With the layer, the copy would be one atomic value replacement (a single heap write of the whole container),
@@ -97,6 +100,8 @@ pub const RECEIVER_NOT_LOADED: &str =
     "InitGestaltMeshDataFromOther: the component is an unloaded handle (a load is a write)";
 pub const ARGUMENT_NOT_LOADED: &str =
     "InitGestaltMeshDataFromOther: ComponentToCopyFrom is an unloaded handle (a load is a write)";
+pub const STAND_IN: &str =
+    "BuildCompositeMesh: a definition that is a stand-in with no properties (an object the store cannot load)";
 pub const NOT_DECODED: &str =
     "InitGestaltMeshDataFromOther: a component whose properties the store has not decoded (a decode is a write)";
 
@@ -160,6 +165,29 @@ fn names_field(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Vec<NameId>
     (0..dim).map(|i| name_value(vm.space.read(o, PropAddr::element(p, i))?, name, what)).collect()
 }
 
+/// The part slots of `D` the walk visits: [`WEAPON_ALL_PARTS`] without its last two, the name parts.
+const WALKED_PARTS: usize = WEAPON_ALL_PARTS.len() - 2;
+
+/// Field `name` of the definition data `data`; a bad field is a data error (`VmError::Script`, the note's check 1).
+fn data_field(vm: &Vm, data: &Value, name: &str) -> Result<Value, VmError> {
+    field(vm, data, name).map_err(|e| bad(BUILD, format!("WeaponDefinitionData.{name}: {e}")))
+}
+
+/// Whether `o` lacks the slots its class lays out.
+fn slotless(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    let x = vm.space.heap.get(o)?;
+    Ok(u32::try_from(x.slots.len()).ok() != vm.space.classes.get_layout(x.class).map(|l| l.slot_count()))
+}
+
+/// [`resident`], and filled: a slotless stand-in definition is [`STAND_IN`] (review r1 of #596).
+fn resident_definition(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    resident(vm, o, NOT_LOADED, BUILD_RECORD)?;
+    if slotless(vm, o)? {
+        return Err(NotYet::not_read(STAND_IN, BUILD_RECORD).into());
+    }
+    Ok(())
+}
+
 /// `o` must be resident, else `NotYet { NotRead }` with `text` and `record`.
 fn resident(vm: &Vm, o: ObjRef, text: &'static str, record: &'static str) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
@@ -218,10 +246,12 @@ fn complete(vm: &Vm, v: &Value, kind: &PropKind, dim: i32) -> bool {
 
 /// Check 4 of the copy: `o`'s `GestaltData` slot is held whole, read as it stands (module documentation).
 pub fn held_whole(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
-    let x = vm.space.heap.get(o)?;
-    let filled = vm.space.classes.get_layout(x.class).map(|l| l.slot_count());
-    if u32::try_from(x.slots.len()).ok() != filled {
-        return Err(NotYet::not_read(NOT_DECODED, INIT_RECORD).into());
+    if slotless(vm, o)? {
+        // A store definition holds data it has not decoded; any other slotless object is a stand-in that never loads.
+        if vm.defs.is_loaded(&vm.space, o) {
+            return Err(NotYet::not_read(NOT_DECODED, INIT_RECORD).into());
+        }
+        return Err(NotYet::layer_absent(INIT_GESTALT_DATA, GESTALT_LAYER, INIT_RECORD).into());
     }
     let (p, kind, dim) = declared(vm, o, "GestaltData", INIT)?;
     if complete(vm, vm.space.read(o, PropAddr::scalar(p))?, &kind, dim) {
@@ -234,24 +264,24 @@ pub fn held_whole(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
 /// The plan of `BuildCompositeMesh` for definition data `data`: steps 1 to 4 of the module documentation. `None` when
 /// `D.WeaponTypeDefinition` is None. It reads only resident objects and writes nothing.
 pub fn composite_plan(vm: &Vm, data: &Value) -> Result<Option<CompositePlan>, VmError> {
-    let Some(ty) = object_of(&field(vm, data, "WeaponTypeDefinition")?, "WeaponTypeDefinition")? else {
+    let Some(ty) = object_of(&data_field(vm, data, "WeaponTypeDefinition")?, "WeaponTypeDefinition")? else {
         return Ok(None);
     };
-    resident(vm, ty, NOT_LOADED, BUILD_RECORD)?;
+    resident_definition(vm, ty)?;
     let gestalt = match object_field(vm, ty, "GestaltMesh", BUILD)? {
         Some(g) => {
-            resident(vm, g, NOT_LOADED, BUILD_RECORD)?;
+            resident_definition(vm, g)?;
             object_field(vm, g, "GestaltSkeletalMesh", BUILD)?.map(|mesh| (g, mesh))
         }
         None => None,
     };
     let mut names = Vec::new();
     let mut meshes = Vec::new();
-    for slot in &WEAPON_ALL_PARTS[..9] {
-        let Some(part) = object_of(&field(vm, data, slot)?, slot)? else {
+    for slot in &WEAPON_ALL_PARTS[..WALKED_PARTS] {
+        let Some(part) = object_of(&data_field(vm, data, slot)?, slot)? else {
             continue;
         };
-        resident(vm, part, NOT_LOADED, BUILD_RECORD)?;
+        resident_definition(vm, part)?;
         let gestalt_mode = bool_field(vm, part, "bIsGestaltMode", BUILD)?;
         let mesh = object_field(vm, part, "NongestaltSkeletalMesh", BUILD)?;
         if gestalt.is_some() {

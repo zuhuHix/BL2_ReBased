@@ -29,9 +29,10 @@ const LOADED: [&str; 12] = [
     "ToyType", "ToyGestalt", "ToyPartA", "ToyPartB", "ToyPartC", "ToyMeshA", "ToyMeshB", "ToyShared", "ToyComp1",
     "ToyComp2", "ToyWeapon", "ToyMeshObj",
 ];
-const UNLOADED: [&str; 4] = ["UnType", "UnPart", "UnComp", "UnMesh"];
+const UNLOADED: [&str; 5] = ["UnType", "UnPart", "UnComp", "UnMesh", "UnGestalt"];
 
-fn package() -> Vec<u8> {
+/// The package; without `gestalt_data` the component class declares no `GestaltData`.
+fn package(gestalt_data: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
         "ScriptStruct",
@@ -60,7 +61,9 @@ fn package() -> Vec<u8> {
     let inner = t.p.next_export();
     t.prop("Array", container, "PartMeshNames", 0, inner + 1);
     t.prop("Name", inner, "PartMeshNames", 0, 0);
-    t.prop("Struct", component, "GestaltData", 0, container);
+    if gestalt_data {
+        t.prop("Struct", component, "GestaltData", 0, container);
+    }
     let weapon = t.class("WillowWeapon", object);
     let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
     t.prop("Object", data, "WeaponTypeDefinition", 0, object);
@@ -79,7 +82,7 @@ fn package() -> Vec<u8> {
         t.p.add_export(c, n, d.clone());
     }
     let mut h = 0i32.to_le_bytes().to_vec();
-    for (n, c) in UNLOADED.iter().zip([ty, part, component, mesh]) {
+    for (n, c) in UNLOADED.iter().zip([ty, part, component, mesh, gestalt]) {
         let x = t.p.add_export(c, n, d.clone());
         h.extend(t.p.object_tag(n, x));
     }
@@ -100,9 +103,13 @@ impl Drop for Fx {
 }
 
 fn fx() -> Fx {
+    fx_with(true)
+}
+
+fn fx_with(gestalt_data: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-inventory-gestalt-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let bytes = package();
+    let bytes = package(gestalt_data);
     let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     for n in LOADED.iter().chain(["ToyHolder"].iter()) {
@@ -348,13 +355,87 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     let (what, l) = layer(init_gestalt_mesh_data(&x.vm, c1, Some(c2)).unwrap_err());
     assert_eq!((what.as_str(), l), (INIT_GESTALT_DATA, GESTALT_LAYER));
     assert_eq!(x.snapshot(), before, "nothing written");
-    // A stand-in with no slots.
-    x.vm.space.heap.get_mut(c2).unwrap().slots.clear();
-    assert_eq!(not_read(init_gestalt_mesh_data(&x.vm, c1, Some(c2)).unwrap_err()), NOT_DECODED);
-    assert_eq!(not_read(init_gestalt_mesh_data(&x.vm, c2, Some(c1)).unwrap_err()), NOT_DECODED);
+    // A real stand-in (slotless, not a store definition, never loads): the layer's LayerAbsent, not NotRead
+    // (review r1 of #596), as the receiver or as the argument.
+    let class = x.vm.space.heap.get(c1).unwrap().class;
+    let ghost = x.vm.space.alloc_stand_in(class, "ToyGhostComp", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
+    assert!(x.vm.space.heap.get(ghost).unwrap().slots.is_empty() && !x.vm.defs.is_loaded(&x.vm.space, ghost));
+    for (this, from) in [(c1, ghost), (ghost, c1)] {
+        let (what, l) = layer(init_gestalt_mesh_data(&x.vm, this, Some(from)).unwrap_err());
+        assert_eq!((what.as_str(), l), (INIT_GESTALT_DATA, GESTALT_LAYER));
+    }
     // The self-copy answers before check 4, so even the stand-in succeeds with nothing written.
-    init_gestalt_mesh_data(&x.vm, c2, Some(c2)).unwrap();
-    assert!(x.vm.space.heap.get(c2).unwrap().slots.is_empty());
+    init_gestalt_mesh_data(&x.vm, ghost, Some(ghost)).unwrap();
+    assert!(x.vm.space.heap.get(ghost).unwrap().slots.is_empty());
+}
+
+/// Review r1 of #596, item 5: an unloaded gestalt definition, and an unloaded part on the non-gestalt path, are
+/// `NotRead`; a stand-in definition is the defined [`STAND_IN`] refusal, not a heap error (item 2).
+#[test]
+fn unloaded_and_stand_in_definitions_refuse_not_read() {
+    let mut x = fx();
+    let (ty, un_gestalt) = (x.o("ToyType"), x.handle("UnGestalt"));
+    x.set(ty, "GestaltMesh", some(un_gestalt));
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
+    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), NOT_LOADED);
+    x.set(ty, "GestaltMesh", Value::Object(None));
+    let un_part = x.handle("UnPart");
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("GripPartDefinition", some(un_part))]);
+    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), NOT_LOADED, "the non-gestalt path");
+    let part_a = x.o("ToyPartA");
+    let part_class = x.vm.space.heap.get(part_a).unwrap().class;
+    let ghost = x.vm.space.alloc_stand_in(part_class, "ToyGhostPart", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("GripPartDefinition", some(ghost))]);
+    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), STAND_IN);
+    let type_class = x.vm.space.heap.get(ty).unwrap().class;
+    let ghost_type = x.vm.space.alloc_stand_in(type_class, "ToyGhostType", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
+    let data = x.data(vec![("WeaponTypeDefinition", some(ghost_type))]);
+    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), STAND_IN);
+}
+
+/// Review r1 of #596, item 5: a field holding the wrong kind of value is a data error naming it. The values are
+/// placed in the slots directly, past the heap's write checks (a fixture of malformed data).
+#[test]
+fn a_field_of_the_wrong_kind_is_a_data_error_naming_it() {
+    let put = |x: &mut Fx, o: ObjRef, name: &str, v: Value| {
+        let class = x.vm.space.heap.get(o).unwrap().class;
+        let p = x.vm.space.prop(class, name).unwrap();
+        *x.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+    };
+    let mut x = fx();
+    let ty = x.o("ToyType");
+    put(&mut x, ty, "GestaltMesh", Value::Int(1));
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
+    let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }) && e.to_string().contains("GestaltMesh"), "{e}");
+    for (field, v) in [("GestaltModeSkeletalMeshName", Value::Int(2)), ("NongestaltSkeletalMesh", Value::Int(3))] {
+        let mut x = fx();
+        let ty = x.gestalt_type();
+        let a = x.o("ToyPartA");
+        put(&mut x, a, field, v);
+        let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("BodyPartDefinition", some(a))]);
+        let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
+        assert!(matches!(e, VmError::Script { .. }) && e.to_string().contains(field), "{field}: {e}");
+    }
+    // A bad field of D itself (item 3): a data error, not an attribute error.
+    let mut x = fx();
+    let ty = x.o("ToyType");
+    let mut data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
+    data.struct_mut().unwrap().fields.truncate(1);
+    let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+}
+
+/// Review r1 of #596, item 5: a component of the right class whose class declares no `GestaltData` is a data error.
+#[test]
+fn a_component_class_without_gestalt_data_is_a_data_error() {
+    let mut x = fx_with(false);
+    let ty = x.gestalt_type();
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
+    let c = x.o("ToyComp1");
+    assert!(script(build_composite_mesh(&x.vm, Some(c), &data).unwrap_err()).contains("GestaltData"));
+    let c2 = x.o("ToyComp2");
+    assert!(script(init_gestalt_mesh_data(&x.vm, c, Some(c2)).unwrap_err()).contains("GestaltData"));
 }
 
 /// NATIVE_INIT_GESTALT_MESH_DATA.md section 5: the receiver, the argument, the self-copy, then the layer.
