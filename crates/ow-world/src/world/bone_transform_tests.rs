@@ -734,3 +734,23 @@ fn keep_existing_in_off_and_nothing_in_reference() {
     let r = fx_with(ParityMode::Reference, true);
     assert!(!r.vm.has_native(FORCE_SKEL_UPDATE) && !r.vm.has_native(UPDATE_ANIMATIONS));
 }
+
+/// Lane BIND-UPDATEANIMATIONS-FORCESKELUPDATE: the world's own pack, which `World::new` registers in every slice world
+/// (the combat, equip, pickup and cast worlds), binds both natives in Off and neither under Reference; a second
+/// registration keeps them (keep-existing).
+#[test]
+fn the_world_pack_binds_both_natives_in_off_only() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut x = fx_with(mode, false);
+        ow_vm::api::NativePack::register(&crate::world::Pack, &mut x.vm).unwrap();
+        let bound = x.vm.has_native(FORCE_SKEL_UPDATE) && x.vm.has_native(UPDATE_ANIMATIONS);
+        assert_eq!(bound, mode == ParityMode::Off, "{mode:?}");
+        if mode == ParityMode::Off {
+            register(&mut x.vm).unwrap();
+            let mesh = x.export("Mesh_Chain");
+            let c = x.component(Some(mesh));
+            assert_eq!(x.call(c, FORCE).unwrap(), Value::None, "unattached: nothing");
+            assert_eq!(x.call(c, UPDATE).unwrap(), Value::None, "no tree: nothing");
+        }
+    }
+}

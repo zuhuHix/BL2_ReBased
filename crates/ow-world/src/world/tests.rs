@@ -2486,6 +2486,22 @@ fn all_navigation_points_is_bound_in_off_only() {
     });
 }
 
+/// `SkeletalMeshComponent.ForceSkelUpdate()` and `UpdateAnimations()` (lane BIND-UPDATEANIMATIONS-FORCESKELUPDATE,
+/// NATIVE_BONE_TRANSFORM_LAYER.md 6.4): `World::new` itself binds both keys in Off and neither under Reference, so
+/// every slice world built through it (combat, equip, pickup, cast) has them.
+#[test]
+fn world_new_binds_force_skel_update_and_update_animations_in_off_only() {
+    use crate::world::bone_transform::{FORCE_SKEL_UPDATE, UPDATE_ANIMATIONS};
+    run(|| {
+        let x = fx();
+        assert!(x.w.vm.has_native(FORCE_SKEL_UPDATE), "ForceSkelUpdate bound in Off");
+        assert!(x.w.vm.has_native(UPDATE_ANIMATIONS), "UpdateAnimations bound in Off");
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native(FORCE_SKEL_UPDATE), "ForceSkelUpdate unbound under Reference");
+        assert!(!x.w.vm.has_native(UPDATE_ANIMATIONS), "UpdateAnimations unbound under Reference");
+    });
+}
+
 /// `PlayerController.IsLocalPlayerController` (decision 2026-11-19-15, public UE3 semantics): a controller in the
 /// world's local-player list is local; an unlisted one with no `Player` is not; an unlisted one with a `Player` the
 /// world does not model is `NotYet`; a destroyed listed one is not. Without a world: `NotYet { LayerAbsent }`. Unbound
