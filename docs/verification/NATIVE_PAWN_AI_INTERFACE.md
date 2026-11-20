@@ -118,6 +118,8 @@ each class's registration and constructor, and their entries for that virtual co
 - **`ActorComponent`** holds its own body.
 - **`SkeletalMeshComponent`** holds the same body as `ActorComponent`.
 - The classes between them (`PrimitiveComponent`, `MeshComponent`) and every other component class were not looked at.
+- **Later (2026-11-19):** `AIComponent` and `WillowAIComponent` hold the same body too, read in
+  [NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md](NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md).
 
 ### 6.2 The rule
 
