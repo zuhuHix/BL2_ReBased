@@ -80,6 +80,9 @@ The script native returns what a virtual function of an object held inside the m
 a `MapProperty`). Reading it as "the mind's `AIComponent` property", as `ow-combat` binds it, is plausible and
 unproven.
 
+**Read 2026-11-20** in [NATIVE_GEARBOXMIND_GETAICOMPONENT.md](NATIVE_GEARBOXMIND_GETAICOMPONENT.md): it is the mind's
+own `AIComponent` property, as it is (placed by structural checks on the layout). Still UNVERIFIED in game.
+
 - **Live confirmation:** call `GetAIComponent()` on a bullymong's mind and compare with its `AIComponent` property.
 
 ## Not read
