@@ -790,6 +790,15 @@ impl Vm {
         self.natives_at.contains_key(&(package.to_ascii_lowercase(), key.to_string())) || self.natives.contains_key(key)
     }
 
+    /// The implementation a call of native key `key` declared in package `package` runs ([`Vm::is_bound_in`]'s order),
+    /// so a caller can tell which binding it is (review r2 of #631, item 1).
+    pub fn native_in(&self, package: &str, key: &str) -> Option<NativeFn> {
+        self.natives_at
+            .get(&(package.to_ascii_lowercase(), key.to_string()))
+            .or_else(|| self.natives.get(key))
+            .cloned()
+    }
+
     /// Whether a native implementation is registered for `key`, VM-wide or for some package.
     pub fn has_native(&self, key: &str) -> bool {
         self.natives.contains_key(key) || self.natives_at_count.get(key).is_some_and(|&n| n > 0)
@@ -1294,6 +1303,16 @@ impl Vm {
     ) -> Result<CallResult, VmError> {
         // The C++ `invoke` reports a function that cannot run, and decodes, before it checks the depth.
         crate::interp::prepare(self, f)?;
+        self.check_depth(f)?;
+        self.script_depth += 1;
+        let result = self.run_frame(f, this, args);
+        self.script_depth -= 1;
+        result
+    }
+
+    /// The call depth refusal of a new bytecode frame of `f`, read only: shared by [`Vm::run_bytecode`] and the
+    /// call-entry check (`interp::check_entry`, review r2 of #631, item 2), so a preflight refuses what the call would.
+    pub(crate) fn check_depth(&self, f: FuncId) -> Result<(), VmError> {
         if self.script_depth >= self.limits.max_call_depth {
             let path = self.function_path(f);
             // The C++ names the four innermost active script functions, oldest first (`interp.cpp:711-713`).
@@ -1308,10 +1327,7 @@ impl Vm {
                 function: path,
             });
         }
-        self.script_depth += 1;
-        let result = self.run_frame(f, this, args);
-        self.script_depth -= 1;
-        result
+        Ok(())
     }
 
     /// Runs one bytecode frame of script function `f` ([`crate::interp::run_frame`], lane W3-INTERP).

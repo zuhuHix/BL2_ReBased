@@ -293,6 +293,9 @@ pub(crate) fn check_entry(vm: &Vm, f: FuncId, args: &[Arg]) -> Result<(), VmErro
     }
     // The body's decoding, the same step the call takes first (its result is cached for the call).
     decoded(vm, &code)?;
+    // The frame's two refusals, as the call meets them: the depth, then the slot bounds (review r2 of #631, item 2).
+    vm.check_depth(f)?;
+    frame_bounds(vm, &code)?;
     for (position, &entry) in code.params.iter().enumerate() {
         if let Some(a) = args.get(position).filter(|a| a.supplied) {
             parameter_items(&code.locals[entry], a, &code.path)?;
@@ -322,16 +325,7 @@ fn read_parameter(vm: &Vm, frame: &Frame, entry: usize) -> Result<Value, VmError
 fn new_frame_store(vm: &Vm, code: &FuncCode) -> Result<FrameStore, VmError> {
     let path = &code.path;
     let needed = code.slot_count;
-    let live = vm.code.live_slots.saturating_add(needed);
-    if needed > MAX_FRAME_SLOTS || live > MAX_LIVE_SLOTS {
-        return Err(script_error(
-            path,
-            format!(
-                "the frame of {path} needs {needed} value slots ({live} with the active frames); the bound is \
-                 {MAX_FRAME_SLOTS} per frame and {MAX_LIVE_SLOTS} for all active frames (a Rust-only refusal)"
-            ),
-        ));
-    }
+    frame_bounds(vm, code)?;
     let mut slots = Vec::new();
     slots.try_reserve_exact(needed).map_err(|_| {
         script_error(
@@ -353,6 +347,23 @@ fn new_frame_store(vm: &Vm, code: &FuncCode) -> Result<FrameStore, VmError> {
         slots,
         ..FrameStore::default()
     })
+}
+
+/// The frame's slot bounds, read only (shared by [`new_frame_store`] and [`check_entry`]).
+fn frame_bounds(vm: &Vm, code: &FuncCode) -> Result<(), VmError> {
+    let path = &code.path;
+    let needed = code.slot_count;
+    let live = vm.code.live_slots.saturating_add(needed);
+    if needed > MAX_FRAME_SLOTS || live > MAX_LIVE_SLOTS {
+        return Err(script_error(
+            path,
+            format!(
+                "the frame of {path} needs {needed} value slots ({live} with the active frames); the bound is \
+                 {MAX_FRAME_SLOTS} per frame and {MAX_LIVE_SLOTS} for all active frames (a Rust-only refusal)"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn cannot_run(path: &str, why: &str) -> VmError {

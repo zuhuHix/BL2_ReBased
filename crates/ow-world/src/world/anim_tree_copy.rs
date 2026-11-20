@@ -130,6 +130,12 @@ pub const IN_STATE: &str =
 /// The two lookups `WillowPlayerPawn`'s version calls, each unbound in Off (rule 7).
 pub const ANIM_NODE_UNBOUND: &str = "SkeletalMeshComponent.FindAnimNode in Off";
 pub const SKEL_CONTROL_UNBOUND: &str = "SkeletalMeshComponent.FindSkelControl in Off";
+/// Either lookup bound to a handler other than this port's read-only one (a binding kept from before, review r2 of
+/// #631, item 1): its answers cannot be predicted before the writes.
+pub const ANIM_NODE_OTHER: &str =
+    "SkeletalMeshComponent.FindAnimNode bound to a handler other than the port's read-only lookup";
+pub const SKEL_CONTROL_OTHER: &str =
+    "SkeletalMeshComponent.FindSkelControl bound to a handler other than the port's read-only lookup";
 /// The three classes `WillowPlayerPawn`'s version casts its finds to, with the field each find fills and the name it
 /// looks up (`None`: the body class's `AimOffsetNodeName`).
 pub const PER_BONE_CLASS: &str = "Engine.AnimNodeBlendPerBone";
@@ -578,6 +584,14 @@ fn owner_event(
     if !vm.is_bound_in(PACKAGE, FIND_SKEL_CONTROL) {
         return Err(NotYet::not_ported(SKEL_CONTROL_UNBOUND, EVENT_RECORD).into());
     }
+    // The answers below are predicted from this module's own scan, which holds only for the port's two read-only
+    // lookups; a binding kept from before is not predicted (review r2 of #631, item 1).
+    if !crate::world::tree_lookup::bound_to_ours(vm, FIND_ANIM_NODE)? {
+        return Err(NotYet::not_ported(ANIM_NODE_OTHER, EVENT_RECORD).into());
+    }
+    if !crate::world::tree_lookup::bound_to_ours(vm, FIND_SKEL_CONTROL)? {
+        return Err(NotYet::not_ported(SKEL_CONTROL_OTHER, EVENT_RECORD).into());
+    }
     // The cast classes, read only: a defined layout, else the cast would define one.
     let casts = CAST_CLASSES
         .iter()
@@ -771,6 +785,8 @@ fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<(ObjRef, DetMap<O
     for (t, c) in cmap {
         map.insert(t, c);
     }
+    // The world's record of this copy, for the lookups' membership check (review r2 of #631, item 3).
+    crate::world::tree_lookup::record_copy(vm, root, map.values().copied())?;
     Ok((root, map))
 }
 
