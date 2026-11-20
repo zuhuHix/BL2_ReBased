@@ -74,6 +74,15 @@ mod tests {
                 if path.file_name().is_some_and(|n| n == "after_login_census.rs") {
                     continue;
                 }
+                // Hub ruling on #537 (decision 2026-11-19-148): the map load's default-game input reads the install's
+                // shipped `WillowGame/Config/DefaultGame.ini`, read only and size-capped. That is not the player's
+                // config and not a URL/config native's answer, so these two files alone are not scanned. UpdateURL and
+                // SaveConfig stay `NotYet { LayerAbsent }`. UNVERIFIED.
+                if path.ends_with("ow-world/src/world/mapload/game_info.rs")
+                    || path.ends_with("ow-world/src/world/mapload/game_info/tests.rs")
+                {
+                    continue;
+                }
                 for n in &needles {
                     // A needle counts only as a whole word at its end (`.ini`, not `.init`).
                     let whole = text.match_indices(n.as_str()).any(|(at, _)| {

@@ -68,3 +68,7 @@ AI-assisted (Claude Code). The hub's review r1 of #537 (Opus 5.5 high).
   when a lazy load already ran.
 - **Tests:** the reader's refusals and the BOM, the capped read, an RNG draw moving the mark, and the routing's marked
   base-search failure next to the unmarked init-pass one.
+- **The config scan's exemption (hub ruling at landing).** #499's source scan in `ow-cli`'s `after_login_census.rs`
+  skips exactly `crates/ow-world/src/world/mapload/game_info.rs` and `game_info/tests.rs`, for this read of the
+  install's `DefaultGame.ini`. Every other crate file stays scanned, and UpdateURL and SaveConfig stay
+  `NotYet { LayerAbsent }`. UNVERIFIED.
