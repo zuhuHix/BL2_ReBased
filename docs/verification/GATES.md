@@ -55,7 +55,7 @@ each one whole-slot write after a write-free preflight (F1, F2). `cargo build --
 3 ok / 10 NotYet / 1 error both times, every row byte-identical. Link 8 stops in `init` (1 of 5 driver steps,
 `make`) at the unbound `WillowWeapon.RecomputeAttributeBaseValues()`, before either native, so the gate does not
 reach the layer. ctest and verify_packages not run (no C++ change). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
+`UNVERIFIED` in game. Decision 2026-11-19-224 (placeholder).
 
 **IMPL-GESTALT-MESH-LAYER (2026-11-20, zuhu desktop, on main c687c13):** AI-assisted (Claude Code, Opus 5.5).
 `WillowWeapon.BuildCompositeMesh` and `SkeletalMeshComponent.InitGestaltMeshDataFromOther` in Off, from

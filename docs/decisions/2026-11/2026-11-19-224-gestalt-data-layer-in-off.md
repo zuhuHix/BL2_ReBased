@@ -1,4 +1,4 @@
-# The gestalt component data layer in Off: the fill and the whole-slot copy
+## 2026-11-19: The gestalt component data layer in Off: the fill and the whole-slot copy
 
 AI-assisted (Claude Code, Claude Opus 5.5), lane IMPL-GESTALT-DATA-LAYER. Coded from
 `docs/verification/NATIVE_GESTALT_DATA_LAYER.md` alone (#603, `research/rust-gestalt-data-layer` 9e5113c0, with the
