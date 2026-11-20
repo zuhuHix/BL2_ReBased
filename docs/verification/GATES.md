@@ -45,6 +45,15 @@ Installed `--slice-gate` (Off, strict): ok 0, notyet 7, error 7 of 14. Links 6 a
 rigid-body set-up" (`LayerAbsent`) to "stopped after partial writes: WillowPickup.SpawnPickupParticles: the pickup's
 particle effect" in `make`, as #574 foresaw. The other 12 rows read as before. This is what the host did, not parity.
 
+**IMPL-GESTALT-MESH-LAYER (2026-11-20, zuhu desktop, on main 66378ec):** AI-assisted (Claude Code, Opus 5.5).
+`WillowWeapon.BuildCompositeMesh` and `SkeletalMeshComponent.InitGestaltMeshDataFromOther` in Off, from
+NATIVE_BUILD_COMPOSITE_MESH.md (ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (67170f22). They run the notes'
+preflights, refuse the gestalt data layer as `LayerAbsent`, give the non-gestalt answers, and answer a self-copy as
+success; the layer itself is not built. `cargo build --workspace --locked -j 4` clean (0 warnings); `cargo test
+--workspace --locked -j 4` 2,574 passed / 0 failed / 48 ignored (10 new). Installed Off `--slice-gate` strict (release
+build, under the machine lock): 2 ok / 4 NotYet / 8 errors. Link 8 is `notyet` in `make` at `WillowWeapon.CacheWeaponCard`,
+before either native, so the gate does not reach them (the base was not rerun). ctest and verify_packages not run (no
+C++ change). No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/gestalt/`.
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

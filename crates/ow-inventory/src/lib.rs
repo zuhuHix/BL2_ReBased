@@ -12,6 +12,7 @@ pub mod anim_tree;
 pub mod attach_mesh;
 pub mod definition;
 pub mod equip;
+pub mod gestalt;
 pub mod globals;
 pub mod manager;
 pub mod navigation;
