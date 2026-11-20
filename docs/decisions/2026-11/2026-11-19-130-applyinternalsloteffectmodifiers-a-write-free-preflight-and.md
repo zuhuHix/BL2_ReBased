@@ -3,6 +3,8 @@
 AI-assisted (Claude Code, Opus 5.5). Lane FIX-483-FOLLOWUP, implementer: the hub's follow-up (F1 to F6) to landed #483
 (decision 2026-11-19-97). The decision number is pending from the maintainer (three digits); NNN is a placeholder.
 
+Edits: docs/decisions/2026-11/2026-11-19-97-rust-apply-internal-slot-effect-modifiers-in-off.md
+
 - **Source:** NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md (on main) and the hub's findings and rulings. This lane did not
   analyse the native (its analyst was ANALYST-APPLY-SLOT-EFFECT-MODIFIERS, #471); it opened no `local/analysis/`,
   Ghidra or REA output. No real-game session: every rule stays **UNVERIFIED** in the running game.

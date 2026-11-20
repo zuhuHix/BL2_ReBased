@@ -124,7 +124,7 @@ actual write (after review r2 of #518: three monotonic counters, committed heap 
 (r2); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build,
 under the machine lock): 0 ok / 5 NotYet / 9 errors; link 8 1 of 2 driver steps, stop `WillowWeapon.CacheWeaponCard()`
 in `init`. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/p2/483-followup/`.
+2026-11-19-130; logs under ignored `local/p2/483-followup/`.
 
 **IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
 Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission screen's three calls in Off,
