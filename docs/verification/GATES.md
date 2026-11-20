@@ -197,7 +197,7 @@ under the machine lock) on a throwaway local merge with #523 (d2227301), #535 (7
 #518's counter files and a local rename of #523's two counter calls, never pushed: 1 ok / 3 NotYet / 10 errors. Link
 9 passes `spawn` (1 of 2) and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`, the
 argument `OnSelectedTarget` evaluates just before this native, so the new rule is not reached yet. ctest and
-verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-166; logs under
 ignored `local/analysis/aep-impl/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
