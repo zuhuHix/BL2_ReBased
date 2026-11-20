@@ -136,10 +136,10 @@ fn the_union_is_exact_in_single_precision() {
     // x spans -1..4: half 2.5, centre 1.5; y and z -1..1. Both distance sums are 1.5 + 1 = 2.5 < sqrt(8.25).
     let u = union(b([0.0; 3], [1.0; 3], 1.0), b([3.0, 0.0, 0.0], [1.0; 3], 1.0));
     assert_eq!(u, b([1.5, 0.0, 0.0], [2.5, 1.0, 1.0], 2.5));
-    // The same box twice with radius 10: the half diagonal sqrt(3), rounded to f32.
+    // The same box twice with radius 10: the half diagonal sqrt(3), rounded to f32 (through ow_core::num, rule N3).
     let u = union(b([0.0; 3], [1.0; 3], 10.0), b([0.0; 3], [1.0; 3], 10.0));
-    assert_eq!(u, b([0.0; 3], [1.0; 3], 3.0f32.sqrt()));
-    assert_eq!(u.radius.to_bits(), 3.0f32.sqrt().to_bits());
+    assert_eq!(u, b([0.0; 3], [1.0; 3], (ow_core::num::sqrt_f64(3.0) as f32)));
+    assert_eq!(u.radius.to_bits(), (ow_core::num::sqrt_f64(3.0) as f32).to_bits());
     // A negative extent: min and max of both ends per axis, so the box is -1..1, not the stock sum's.
     let u = union(b([0.0; 3], [-1.0; 3], 1.0), b([0.0; 3], [0.5; 3], 0.5));
     assert_eq!(u, b([0.0; 3], [1.0; 3], 1.0));
