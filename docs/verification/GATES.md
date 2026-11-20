@@ -309,7 +309,7 @@ Results:
   harness spawned with no mind (`IsPhaselocked` reads 0; corrected after FIX-ISPHASELOCKED-UNLOCKED).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN.
+2026-11-19-182.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
