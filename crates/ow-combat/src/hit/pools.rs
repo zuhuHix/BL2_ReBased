@@ -122,6 +122,13 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
             get_exp_level(c.vm, pawn)
         })?;
     }
+    // IsStaggered on the two pawn classes that declare it (NATIVE_IS_STAGGERED.md; lane IMPL-IS-STAGGERED).
+    for path in IS_STAGGERED {
+        bind_fn(vm, path, |c| {
+            let pawn = this(c, "WillowPawn.IsStaggered")?;
+            Ok(Value::Bool(is_staggered(c.vm, pawn)?))
+        })?;
+    }
     bind_fn(vm, "Engine.ResourcePool.GetTimeSeconds", |c| {
         this(c, "ResourcePool.GetTimeSeconds")?;
         Ok(Value::Float(c.vm.world_time_seconds()?))
@@ -626,5 +633,106 @@ pub fn get_exp_level(vm: &mut Vm, pawn: ObjRef) -> Result<Value, VmError> {
     }
 }
 
+/// The record of [`is_staggered`].
+pub const RECORD_STAGGER: &str = "docs/verification/NATIVE_IS_STAGGERED.md";
+/// The two declarations bound to [`is_staggered`].
+pub const IS_STAGGERED: [&str; 2] = ["WillowGame.WillowPawn.IsStaggered", "WillowGame.WillowAIPawn.IsStaggered"];
+
+/// The native (C++) descendants of `WillowAIPawn`, carried with the binding so the class check stays load-free: the
+/// classes under `WillowAIPawn` that `research/native_by_class.json` lists (NATIVE_IS_STAGGERED.md section 3, step 4).
+pub const NATIVE_AI_PAWN_DESCENDANTS: [&str; 1] = ["WillowGame.WillowAICranePawn"];
+/// The struct type the AI rule reads.
+pub const STAGGER_STATE_DATA: &str = "WillowGame.WillowAIPawn.StaggerStateData";
+
+/// `IsStaggered()` on a pawn in Off (NATIVE_IS_STAGGERED.md section 3, the note as final at b8b22422; lane
+/// IMPL-IS-STAGGERED, coded from that note alone, clean room). **UNVERIFIED in the running game.** It writes, loads and
+/// draws nothing. [`is_staggered_with`] with [`NATIVE_AI_PAWN_DESCENDANTS`].
+pub fn is_staggered(vm: &Vm, pawn: ObjRef) -> Result<bool, VmError> {
+    is_staggered_with(vm, pawn, &NATIVE_AI_PAWN_DESCENDANTS)
+}
+
+/// [`is_staggered`] with `native` as the native descendants of `WillowAIPawn`. The preflight, in order, the first
+/// failure the answer:
+/// 1. the receiver's class is `WillowPawn` or a child (the class table's `by_path` and `is_child_of` only): otherwise a
+///    `VmError::Script`;
+/// 2. **S1**, `NotYet { NotRead }`: an unloaded handle, or a slotless stand-in the store does not load (two texts);
+/// 3. the class:
+///    - exactly `WillowAIPawn`, or a script-only child of it (no class between it and `WillowAIPawn`, itself included,
+///      is in `native`): the AI rule;
+///    - a native descendant of `WillowAIPawn`: **S2** (its slot was not read);
+///    - exactly `WillowPawn`: false (its virtual's stub);
+///    - any other child of `WillowPawn` (`WillowPlayerPawn`, a script-only child of `WillowPawn` too): **S2**;
+/// 4. the AI rule reads by name, no offset: `StaggerState` declared as a struct of type `WillowAIPawn.StaggerStateData`
+///    ([`STAGGER_STATE_DATA`]), its member `bIsStaggered` a bool. Otherwise a `VmError::Script` naming the field. The
+///    answer is that bool, from the resident pawn's slot.
+pub fn is_staggered_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<bool, VmError> {
+    let space = &vm.space;
+    let path = ow_attr::eval::class_path(space, pawn);
+    let obj = space.heap.get(pawn)?;
+    let class = obj.class;
+    let willow_pawn = space.classes.by_path("WillowGame.WillowPawn");
+    if !willow_pawn.is_some_and(|p| space.classes.is_child_of(class, p)) {
+        return Err(super::access::error(format!("WillowPawn.IsStaggered: {path} is not a WillowPawn")));
+    }
+    if vm.defs.is_unloaded(space, pawn) {
+        return Err(NotYet::not_read(
+            format!("WillowPawn.IsStaggered: the pawn {path} is an unloaded handle (a load is a write)"),
+            RECORD_STAGGER,
+        )
+        .into());
+    }
+    if u32::try_from(obj.slots.len()).ok() != space.classes.get_layout(class).map(|l| l.slot_count()) {
+        return Err(NotYet::not_read(
+            format!(
+                "WillowPawn.IsStaggered: the pawn {path} is a stand-in with no properties (an object the store cannot \
+                 load)"
+            ),
+            RECORD_STAGGER,
+        )
+        .into());
+    }
+    let s2 = || -> VmError {
+        NotYet::not_read(
+            format!("WillowPawn.IsStaggered: the stagger rule of {path} (its virtual was not read)"),
+            RECORD_STAGGER,
+        )
+        .into()
+    };
+    let ai = space.classes.by_path("WillowGame.WillowAIPawn");
+    if let Some(ai) = ai.filter(|&a| space.classes.is_child_of(class, a)) {
+        // A native class at or above the receiver, below WillowAIPawn, holds its own slot.
+        let natives: Vec<_> = native.iter().filter_map(|p| space.classes.by_path(p)).collect();
+        let mut cursor = Some(class);
+        while let Some(c) = cursor.filter(|&c| c != ai) {
+            if natives.contains(&c) {
+                return Err(s2());
+            }
+            cursor = space.classes.get_layout(c).and_then(|l| l.super_class());
+        }
+        let bad = |why: &str| super::access::error(format!("WillowAIPawn.IsStaggered: {path}.StaggerState {why}"));
+        let p = space.prop(class, "StaggerState").ok_or_else(|| bad("is not declared"))?;
+        let Some(PropKind::Struct(sid)) = space.classes.decl(p).map(|d| &d.kind) else {
+            return Err(bad("is not a struct"));
+        };
+        let typed = space.classes.struct_layout(*sid).is_some_and(|l| l.path().as_str().eq_ignore_ascii_case(STAGGER_STATE_DATA));
+        if !typed {
+            return Err(bad(&format!("is not a {STAGGER_STATE_DATA}")));
+        }
+        let state = space.read(pawn, ow_object::ids::PropAddr::scalar(p))?;
+        return match ow_combat_field(vm, state, "bIsStaggered") {
+            Some(Value::Bool(b)) => Ok(b),
+            Some(other) => Err(bad(&format!("has a bIsStaggered of kind {}, not a bool", other.kind_name()))),
+            None => Err(bad("has no bIsStaggered")),
+        };
+    }
+    if willow_pawn == Some(class) {
+        return Ok(false);
+    }
+    Err(s2())
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "pools/stagger_tests.rs"]
+mod stagger_tests;
