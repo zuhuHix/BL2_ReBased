@@ -337,13 +337,23 @@ fn a_malformed_argument_names_the_field_through_the_vm() {
     }
 }
 
-/// Reference binds nothing: the VM's stub policy answers, not this binding.
+/// Reference binds nothing (review r2 of #582): both unloaded-input cases come back as the VM's unbound-native error
+/// under the fixture's default stub policy, naming the literal key, not as this binding's refusals.
 #[test]
 fn reference_does_not_answer_through_the_binding() {
     let mut x = packed(ParityMode::Reference);
     assert!(!x.vm.has_native(KEY));
+    let ty = x.handle("Type");
+    let unloaded_type = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty))]);
     let ty = x.loaded("Type");
-    let normal = x.handle("Normal");
-    let data = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty))]);
-    assert_ne!(call(&mut x, data).ok(), Some(Value::Object(Some(normal))), "the binding did not answer");
+    let part = x.handle("Part");
+    let unloaded_part = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty)), ("ElementalPartDefinition", Some(part))]);
+    for (case, data) in [("unloaded type", unloaded_type), ("unloaded part", unloaded_part)] {
+        match call(&mut x, data) {
+            Err(VmError::UnboundNative(key)) => {
+                assert_eq!(key, "WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)", "{case}");
+            }
+            other => panic!("{case}: expected the unbound-native error, got {other:?}"),
+        }
+    }
 }

@@ -65,3 +65,6 @@ at 3d948c43, deleted after:
    - in Reference, the binding is absent.
 
    ow-inventory now passes 190 / 0.
+
+**Review r2 of #582:** in Reference, both unloaded-input cases are called through the VM, and each comes back as the
+VM's `VmError::UnboundNative` naming the literal key, under the fixture's default stub policy.
