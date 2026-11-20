@@ -29,7 +29,7 @@ here.
   when the type has **no** usable gestalt mesh, so link 8's weapon never reaches the merge.
 - **Main's gate does not stop there.** Installed Off strict `--slice-gate` on main dba540a: link 8 passes `make` (1 of 5
   driver steps) and stops in `init` at "SetSkeletalMesh: a mesh change", after `BuildCompositeMesh` has answered the
-  gestalt mesh. The open #645 and #651 move that stop to the new mesh's residency and then to the mesh change's LOD
+  gestalt mesh. #645 (merged) and the open #651 move that stop to the new mesh's residency and then to the mesh change's LOD
   row (their PR texts), still past `BuildCompositeMesh`.
 - **No recorded run shows the merge refusal.** No branch's GATES rows or decision files record a stop at "a skeletal
   mesh merge", and I found no probe that reaches it. If the hub's reading came from a local probe, it most likely
@@ -63,8 +63,9 @@ With `Sources` the list of meshes:
 1. **A new mesh object.** It constructs a new `Engine.SkeletalMesh` object with the transient flag, in the transient
    package, with no name of its own (an engine-generated one), then checks that it is a `SkeletalMesh`. Every call
    makes a new object: nothing is cached or shared between calls, so two weapons with the same parts get two meshes.
-2. **The merge job.** It sets up a merge of `Sources` into the new mesh, with **no forced section mapping** and **no
-   LODs stripped**, then runs it.
+2. **The merge job.** It sets up a merge of `Sources` into the new mesh, then runs it. Every source LOD is kept (none
+   is dropped from the top), and sections are grouped by material with no caller-given mapping. Both were read from
+   the values the merge routine passes when it sets up the job, an empty mapping and a zero drop count.
 3. **The merge itself** (the stock engine's skeletal mesh merge). Read in outline only; the per-LOD steps are
    recognised by shape, not traced through:
    - it resets the target mesh's own data;
@@ -117,14 +118,15 @@ the VM.
 **If a slice link ever reaches it** (another weapon, or an item through the twin), the merged mesh's later readers
 decide what a stand-in must answer:
 - **The script and VM side** needs a mesh **object** to hand to `SetSkeletalMesh`, and later its **skeleton and
-  sockets** (socket lookups for effects and muzzle locations, the animation tree's bone lookups,
-  NATIVE_SET_SKELETAL_MESH.md's mesh change reading the new mesh's skeleton and LOD count).
+  sockets** (socket lookups for effects and muzzle locations, the animation tree's bone lookups, and the mesh change
+  reading the new mesh's skeleton and LOD count, NATIVE_SKELMESH_MESH_CHANGE.md step 16).
 - **The draw side** needs the LOD models, sections and buffers. That stays `LayerAbsent` in the VM.
 
 **The narrowest stand-in the gate could use honestly** (proposal; **UNVERIFIED**; only if a link needs it):
 - a **merged-skeleton record**: a new transient `SkeletalMesh` heap object, plus an entry in the skeletal mesh data
   layer keyed by that object (a `DetMap`). The entry gives the reference skeleton built from the sources' skeletons
-  (bones matched by name, in source order, parents remapped), and no sockets until the socket merge is read;
+  (bones matched by name; the bone order, source by source, and the parent remap are the port's stand-in choices,
+  not game rules), and no sockets until the socket merge is read;
 - its LOD count, vertex data and render state stay `LayerAbsent` ("a merged skeletal mesh's LOD models"), so any
   reader of those still refuses;
 - the stand-in would be labelled in the harness lines, as the gestalt preloads are.
@@ -158,7 +160,10 @@ unchanged, and no "stopped after partial writes: " prefix appears inside the nat
 ## 6. Test list (synthetic fixtures)
 
 For the implementer, on invented packages (`package()` / `tag()`), each call asserting #518's three counters
-(`Heap::committed_writes`, `GameRng::draws`, `DefStore::load_transitions`) and `names.len()` unchanged:
+(`Heap::committed_writes`, `GameRng::draws`, `DefStore::load_transitions`) and `names.len()` unchanged. Tests 1 and 2
+extend `crates/ow-inventory/src/gestalt_tests.rs`'s `the_non_gestalt_path_answers_none_one_mesh_or_refuses_the_merge`
+with unloaded mesh handles and the counter and `names.len()` asserts. Tests 3, 4 and 6 are new, and test 5 is the
+gestalt path's existing coverage:
 1. A type with no gestalt mesh and **two parts with distinct non-gestalt meshes**: `LayerAbsent("a skeletal mesh
    merge")`. Both mesh handles are still unloaded afterwards.
 2. The same with **three** parts, one of them in gestalt mode (not collected): still `LayerAbsent`. With two in
