@@ -158,6 +158,19 @@ impl Fx {
         self.vm.defs.class_default(&mut self.vm.space, class).unwrap()
     }
 
+    /// A run-time object of `class` with `outer` as its outer, as VM `new` makes one.
+    fn newed(&mut self, class: &str, outer: ObjRef) -> ObjRef {
+        let c = self.vm.find_class(class).unwrap();
+        self.vm.space.alloc(c, "ToyNewed", Some(outer), Origin::Runtime).unwrap()
+    }
+
+    /// This base's stand-in for #518's counters, which reached main after #595's base: every heap object's class, slots
+    /// and store state ([`Fx::fingerprint`]: no write, no new object, no load) and the RNG streams' whole state (no
+    /// draw). Once #595 is rebased onto main, `committed_writes`, `load_transitions` and `draws` replace it.
+    fn counters(&self) -> (String, ow_core::rand::GameRng) {
+        (self.fingerprint(), self.vm.rng.clone())
+    }
+
     fn export(&mut self, class: &str) -> ObjRef {
         let c = self.vm.find_class(class).unwrap();
         self.vm.space.alloc(c, "ToyExport", None, Origin::Export { package: 0, index: 1 }).unwrap()
@@ -225,6 +238,7 @@ impl Fx {
     /// they were.
     fn refuses(&self, o: ObjRef, missing: Missing, what: &str, record: &str) {
         let before = self.fingerprint();
+        let counters = self.counters();
         match answer(&self.vm, o) {
             Err(VmError::NotYet(n)) => {
                 assert_eq!((n.missing, n.what.as_ref(), n.record), (missing, what, record));
@@ -232,6 +246,14 @@ impl Fx {
             other => panic!("expected the NotYet {what:?}, got {other:?}"),
         }
         assert_eq!(self.fingerprint(), before, "a refusal writes, makes and loads nothing");
+        assert_eq!(self.counters(), counters, "#518's counters");
+    }
+
+    /// The answer for `o` must be `want`, with #518's counters unchanged (the answer itself writes nothing).
+    fn answers(&self, o: ObjRef, want: (f32, f32), label: &str) {
+        let counters = self.counters();
+        assert_eq!(answer(&self.vm, o).unwrap(), want, "{label}");
+        assert_eq!(self.counters(), counters, "{label}: #518's counters");
     }
 }
 
@@ -415,4 +437,67 @@ fn a_stand_in_with_no_slots_is_n() {
     let pickup = x.live("WillowGame.WillowPickup");
     x.components(pickup, vec![Some(stand_in)]);
     x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
+}
+
+/// A recheck of #595: a run-time object is a template when an object on its outer chain is one, as VM `new` can make
+/// it. A pawn `new`ed into a class default gets the pawn rule's cylinder; an actor `new`ed into one reads its entries'
+/// `bAttached` (no refusal L), then meets the skip flag; under a `new`ed run-time outer the walk goes on up.
+#[test]
+fn a_run_time_object_with_a_template_outer_is_a_template() {
+    let mut x = fx();
+    for class in ["Engine.Pawn", "WillowGame.WillowPlayerPawn"] {
+        let t = x.template(class);
+        let pawn = x.newed(class, t);
+        let c = x.cylinder(22.0, 44.0);
+        x.set(pawn, "CylinderComponent", Value::Object(Some(c)));
+        x.answers(pawn, (22.0, 44.0), class);
+        let deeper = x.newed(class, pawn);
+        x.set(deeper, "CylinderComponent", Value::Object(Some(c)));
+        x.answers(deeper, (22.0, 44.0), "two outers up");
+    }
+    let t = x.template("Engine.Actor");
+    let actor = x.newed("Engine.Actor", t);
+    let (unattached, colliding) = (x.primitive(false, true), x.primitive(true, true));
+    x.components(actor, vec![Some(unattached)]);
+    x.answers(actor, (0.0, 0.0), "an unattached entry is skipped");
+    x.components(actor, vec![Some(unattached), Some(colliding)]);
+    x.refuses(actor, Missing::NotRead, SKIP_FLAG, RECORD);
+}
+
+/// The rest of the walk: a run-time object under only run-time outers is live (refusal L at its colliding entry), and
+/// one with an export on its chain is T, because the export could be an archetype.
+#[test]
+fn a_run_time_outer_chain_is_live_and_an_export_on_it_is_t() {
+    let mut x = fx();
+    let root = x.live("Engine.Actor");
+    let actor = x.newed("Engine.Actor", root);
+    let mesh = x.primitive(true, true);
+    x.components(actor, vec![Some(mesh)]);
+    x.refuses(actor, l(), REFUSAL_L, RECORD);
+    let export = x.export("Engine.Actor");
+    let under_export = x.newed("Engine.Actor", export);
+    x.components(under_export, vec![Some(mesh)]);
+    x.refuses(under_export, Missing::NotRead, REFUSAL_T, RECORD);
+    let pawn = x.newed("Engine.Pawn", export);
+    let c = x.cylinder(22.0, 44.0);
+    x.set(pawn, "CylinderComponent", Value::Object(Some(c)));
+    x.refuses(pawn, Missing::NotRead, REFUSAL_T, RECORD);
+}
+
+/// An exported non-pawn whose `Components` holds a resident primitive is T, with nothing written or loaded and #518's
+/// counters unchanged; the same export with only a non-primitive entry never asks and answers the actor default.
+#[test]
+fn an_exported_non_pawn_with_a_resident_primitive_is_t() {
+    let mut x = fx();
+    for class in ["Engine.Actor", "WillowGame.WillowPickup"] {
+        let actor = x.export(class);
+        let light = x.live("Engine.DynamicLightEnvironmentComponent");
+        x.components(actor, vec![Some(light)]);
+        x.answers(actor, (0.0, 0.0), class);
+        for (attached, collides) in [(false, false), (true, true)] {
+            let mesh = x.primitive(attached, collides);
+            x.components(actor, vec![Some(light), Some(mesh)]);
+            x.refuses(actor, Missing::NotRead, REFUSAL_T, RECORD);
+        }
+    }
 }

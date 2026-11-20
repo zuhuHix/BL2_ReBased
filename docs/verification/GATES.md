@@ -180,6 +180,13 @@ rows are byte-identical. ctest and verify_packages not run (no C++ change). No r
 (the destinations' slots read before the first write; 2 tests): `cargo test --workspace -j 2` 2,463 passed / 0 failed
 / 46 ignored; no slice-gate rerun (the slice's path has full slot vectors).
 
+**FOLLOWUP-BOUNDING-CYLINDER-TEMPLATE (2026-11-20, pc-hummer, on #595 9de51c43):** AI-assisted (Claude Code, Opus
+5.5). `GetBoundingCylinder`'s template test walks the receiver's outer chain (a class default anywhere: template; an
+export or resource on it: T; only run-time objects: live), read-only. `cargo build --workspace` clean; `cargo test
+--workspace` 2,577 passed / 0 failed / 48 ignored (3 new); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 2 ok / 4 NotYet / 8
+errors, all 14 rows byte-identical to #595 9de51c43; links 6 and 7 still stop at `make` (unbound
+`SetLightEnvironment`), so this native is proved only by tests.
+
 **IMPL-GET-BOUNDING-CYLINDER (2026-11-20, pc-hummer, on main 66378ec4):** AI-assisted (Claude Code, Opus 5.5).
 `Actor`/`Pawn`/`NavigationPoint.GetBoundingCylinder` in Off from NATIVE_GET_BOUNDING_CYLINDER.md at 6800f603
 (`ow-world` `world::bounding_cylinder`): body by exact class, refusals C/T/N/L/S, both out arguments written last;

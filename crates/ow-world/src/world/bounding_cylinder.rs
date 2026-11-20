@@ -40,7 +40,7 @@
 
 use std::rc::Rc;
 
-use ow_core::NotYet;
+use ow_core::{DetSet, NotYet};
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
@@ -147,15 +147,35 @@ pub fn answer(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
     }
 }
 
-/// Step 2: whether `this` is a template, from its heap origin. An export or a resource stand-in could be a placed actor
-/// or an archetype (the port keeps no archetype flag): refusal T. The game also walks the outer chain; the port's
-/// run-time objects have no template outers (UNVERIFIED).
+/// Step 2: whether `this` is a template. The game tests the receiver and every object on its outer chain for the
+/// class-default and archetype flags, and the port reads that chain from heap origins, read-only (heap reads only, no
+/// load, no write):
+/// - a class default anywhere on the chain: a template;
+/// - otherwise an export or a resource stand-in on the chain (the receiver included): refusal T, because it could be
+///   a placed object or an archetype (the port keeps no archetype flag);
+/// - otherwise (every object on the chain made at run time): live.
+///
+/// A run-time object is not enough on its own: VM `new` can give it any outer, a template among them (a recheck of
+/// #595). UNVERIFIED in the running game.
 fn template(space: &ObjectSpace, this: ObjRef) -> Result<bool, VmError> {
-    match space.heap.get(this)?.origin {
-        Origin::Default { .. } => Ok(true),
-        Origin::Runtime => Ok(false),
-        _ => Err(NotYet::not_read(REFUSAL_T, RECORD).into()),
+    let mut seen: DetSet<ObjRef> = DetSet::new();
+    let mut unknown = false;
+    let mut cursor = Some(this);
+    // `seen` ends the walk on a cycle, which the heap should never hold.
+    while let Some(o) = cursor.filter(|&o| seen.insert(o)) {
+        let obj = space.heap.get(o)?;
+        match obj.origin {
+            Origin::Default { .. } => return Ok(true),
+            Origin::Runtime => {}
+            // An export, a resource stand-in, or any origin the heap adds later.
+            _ => unknown = true,
+        }
+        cursor = obj.outer;
     }
+    if unknown {
+        return Err(NotYet::not_read(REFUSAL_T, RECORD).into());
+    }
+    Ok(false)
 }
 
 /// A cylinder component's (CollisionRadius, CollisionHeight), from the resident component (else refusal N).
