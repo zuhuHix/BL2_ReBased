@@ -53,7 +53,7 @@ nothing is preflighted for it and nothing is rolled back. Every call below goes 
 2. **The engine-wide condition** (step 1's unresolved global): Off does not guess it. Settled in
    NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED): it holds when the world exists, and the both-branch comparison below is
    retired there.
-   - Retired history (decision 2026-11-19-NNN, IMPL-PLAYTHROUGH-VIRTUAL; Off now answers the tracker branch alone
+   - Retired history (decision 2026-11-19-109, IMPL-PLAYTHROUGH-VIRTUAL; Off now answers the tracker branch alone
      when the world exists): when the world, the replication info and the tracker were all there, both branches were
      computed, the tracker branch (steps 2 and 3) and the fallback (section 2).
    - Retired history: equal answers gave that number.
@@ -76,7 +76,7 @@ nothing is preflighted for it and nothing is rolled back. Every call below goes 
 6. **A definition without a readable `bPlotCritical`, `DlcExpansion` or `MissionNumber`** is bad data: a script error
    naming the field, propagated unchanged.
 
-**Retired history (decision 2026-11-19-NNN, IMPL-PLAYTHROUGH-VIRTUAL): the port's case before that lane, and the
+**Retired history (decision 2026-11-19-109, IMPL-PLAYTHROUGH-VIRTUAL): the port's case before that lane, and the
 stop it gave.** Off now answers the current playthrough by NATIVE_PLAYTHROUGH_QUERY.md's rule and the tracker branch
 alone when the world exists; the only Off `NotYet`s left there are the controller and replication-info subclass
 overrides. The text below is kept as the record. The mission bridge binds `IsDataValid` (the tracker's
@@ -108,7 +108,7 @@ Read again in this lane; it agrees with NATIVE_SAVE_LOAD.md.
 4. The answer is the largest kept, else 0.
 
 **Off answers, step by step:**
-1. **The current playthrough** (a negative index, the default). Retired history (decision 2026-11-19-NNN,
+1. **The current playthrough** (a negative index, the default). Retired history (decision 2026-11-19-109,
    IMPL-PLAYTHROUGH-VIRTUAL): the controller's virtual that gives it was not read, and its identity was not guessed,
    so it was `NotYet { NotRead }`, "the controller's current-playthrough virtual". Off now calls
    `mission_numbers::current_playthrough` as a function; only the controller and replication-info subclass
