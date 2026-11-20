@@ -519,7 +519,7 @@ impl NativePack for Pack {
             // The C++ does not bind it, so Reference keeps the stub (R3).
             vm.register_native(TRAVEL_COUNTDOWN, Rc::new(travel_countdown_in_process))?;
             // Actor/Pawn/NavigationPoint.GetBoundingCylinder (NATIVE_GET_BOUNDING_CYLINDER.md; lane
-            // IMPL-GET-BOUNDING-CYLINDER, decision 2026-11-19-NNN). The C++ binds none, so Reference keeps the stub (R3).
+            // IMPL-GET-BOUNDING-CYLINDER, decision 2026-11-19-203). The C++ binds none, so Reference keeps the stub (R3).
             bounding_cylinder::register(vm)?;
         }
         Ok(())

@@ -54,7 +54,7 @@ ignored (8 new); `crate_edges_test.py` OK. On the pre-rebase base 93ce3dbf: `cte
 give; no Python or real-game helper changed); `verify_packages.py --reader` exit 0. Installed Off `--slice-gate`
 strict: 2 ok / 4 NotYet / 8 errors, all 14 rows byte-identical with and without the binding. Links 6 and 7 pass 0
 steps and stop in `make` at the unbound `PrimitiveComponent.SetLightEnvironment(object)`, before `touch` reaches this
-native, so it is proved by tests only. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+native, so it is proved by tests only. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-203; logs under
 ignored `local/p2/gbc/`.
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 1 (2026-11-19, zuhu desktop, on fix/rust-set-anim-tree-template c1c8a73, #495):**

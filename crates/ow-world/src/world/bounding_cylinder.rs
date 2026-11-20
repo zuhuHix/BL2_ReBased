@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-GET-BOUNDING-CYLINDER (decision 2026-11-19-NNN). `Actor.GetBoundingCylinder(out float, out float)`
+//! Owner: lane IMPL-GET-BOUNDING-CYLINDER (decision 2026-11-19-203). `Actor.GetBoundingCylinder(out float, out float)`
 //! and its `Pawn` and `NavigationPoint` registrations, in Off. AI-assisted (Claude Code).
 //!
 //! Coded from NATIVE_GET_BOUNDING_CYLINDER.md alone, the note as accepted at 6800f603 (analyst lane
