@@ -47,18 +47,22 @@ pawn's special-move component nor any of its state is read. The packages list `S
 
 The port's rule (#575, `ow-world` `anim_node_init.rs`, `owner_implements`) answers the owner test only from the code
 index's **already resolved** interface entries (`CodeIndex::implements_resolved`). It refuses `NotRead`, "an owner
-that does not implement SpecialMoveInterface", whenever that answer is not a plain yes. That one text covers six
-different cases, and only the last is a real no:
-1. `GearboxFramework.SpecialMoveInterface` is not in the class table (not loaded);
-2. the world's code layer holds no class at all;
-3. the owner's class or the interface has no code key (a class defined by hand, with no package export behind it);
-4. a class body on the owner's chain, or the interface's, did not decode;
-5. an interface entry on the chain is not resolved yet, and no resolved entry answers yes;
-6. every entry on the chain is resolved and none is the interface: a real no.
+that does not implement SpecialMoveInterface", whenever that answer is not a plain yes. That one text covers the
+cases below; they are numbered here as in section 4.1's table, and only O6 and O7 are real answers:
+- **O1.** `GearboxFramework.SpecialMoveInterface` is not in the class table (not loaded).
+- **O2.** The world's code layer holds no class at all.
+- **O3.** The owner's class has no code key (a class defined by hand, with no package export behind it).
+- **O3'.** The interface has no code key.
+- **O4.** A class body on the owner's chain, or the interface's, did not decode.
+- **O5.** An interface entry on the chain is not resolved yet, and no resolved entry answers yes.
+- **O6.** A resolved entry is the interface or derives from it: a yes. `implements_resolved` gives no answer here
+  when an unresolved entry comes first in its order, although `implements_resolved_chain` answers yes.
+- **O7.** Every entry on the chain is resolved and none is the interface: a real no.
 
-The refusal's text therefore overstates it: on link 1 the pawn is expected to answer yes (section 1), so the stop
-means one of cases 1 to 5, most likely 5 ("not resolved yet"), not "does not implement". This reading of the port is
-from its code. Which case link 1 meets has not been probed.
+The refusal's text therefore overstates it. On link 1 the pawn is expected to answer yes (section 1), so the stop
+means one of O1 to O5 (most likely O5, "not resolved yet"), or O6 hidden behind an earlier unresolved entry. It does
+not mean "does not implement". This reading of the port is from its code. Which case link 1 meets has not been
+probed.
 
 ## 3. After the initialisation: what the node's natives ask of `SMI`
 
@@ -70,17 +74,17 @@ the index is inside the array (an engine assertion, not a script-visible answer)
 | Native | `SMI` unset | `SMI` set |
 |---|---|---|
 | `Play` | builds a zeroed play data and runs `PlayData`: as `PlayData` | as `PlayData` |
-| `PlayData` | returns 0, writing nothing. The same decline when the node's `SkelComponent` is None or that component's mesh is None | asks one `SpecialMoveInterface` function (**not identified by name**), which must answer non-zero; then the play itself, which writes the active entry, `AnimState` and the root-motion settings (not this note's subject) |
+| `PlayData` | returns 0, writing nothing | `SkelComponent` None, or its mesh None: returns 0, writing nothing. Otherwise it asks one `SpecialMoveInterface` function (**not identified by name**), which must answer non-zero, then plays: that writes the active entry, `AnimState` and the root-motion settings (not this note's subject) |
 | `Finish` | **with a `CustomAnimDef` on the active entry:** `AnimState` := 2, and no event. **Without one:** nothing at all (not even `AnimState`) | with a `CustomAnimDef`: `AnimState` := 2; then, when the same interface function answers non-zero, a script event by name to that definition, with `SMI`, the node, the entry's play data and an interrupted flag. By its parameters this is the definitions' `AnimFinished` (UNVERIFIED: the name was not resolved). Without one: nothing |
-| `Stop` | `AnimState` := 2; with a playing flag set it stops the active child's sequence. It does not use `SMI` | the same |
-| `SetRootMotion` | nothing (also with `SkelComponent` None) | copies the root-motion modes onto the component and onto an object it resolves (**not identified**) |
+| `Stop` | always `AnimState` := 2. With a playing flag set it also stops the active child's sequence, with `SavedBlendOutTime`. It does not use `SMI` | the same |
+| `SetRootMotion` | nothing | `SkelComponent` None: nothing. Otherwise it copies the root-motion modes onto the component and onto an object it resolves (**not identified**) |
 | `IsPlaying(def)` | false (also with `def` None) | `def` None: false; `def` is the active entry's definition: true; otherwise `def`'s own virtual decides, given `SMI` (**not read**) |
 | `GetCurrentAnimName`, `GetCurrentAnimDef` | not read | not read |
 
 **So an owner that lacks the interface never raises an error.** The node only declines: no play, no finish event,
-not playing, no root motion. The one write it still makes is `Finish`'s `AnimState`. The interface is reached through
-`SMI` alone: the node never asks the owner for it again after the initialisation, and never reads the special-move
-component directly.
+not playing, no root motion. The writes that remain are `Finish`'s `AnimState`, and `Stop`'s, which does not use
+`SMI` at all. The interface is reached through `SMI` alone: the node never asks the owner for it again after the
+initialisation, and never reads the special-move component directly.
 
 ## 4. Proposed Off answers (for a separate implementer)
 
@@ -91,10 +95,12 @@ component directly.
 **The set-up: route (a), the existing practice.** Resolve the question at Maya's set-up, before her pawn's tree copy,
 as a labelled harness input. The hooks already exist:
 - `preload_class(vm, "GearboxFramework.SpecialMoveInterface")` (`ow-cli` `slice_gate.rs`, link 9's set-up class
-  loader, with its "harness input: set-up class ... UNVERIFIED stand-in" line);
+  loader, with its "harness input: set-up class ... (a write; UNVERIFIED stand-in for the game having it loaded)"
+  line);
 - `Vm::resolve_interface_tables` on the class chain of Maya's pawn class, as
-  `ow_combat::pawn_interface::read_only::prepare` does for link 9's pawns. Each line says "harness input: ...
-  (a write; UNVERIFIED stand-in for the game having it loaded)".
+  `ow_combat::pawn_interface::read_only::prepare` does for link 9's pawns. Its line is "harness input: interface
+  tables of <class>: <n> entries resolved at set-up (a load; UNVERIFIED stand-in for the game having them
+  resolved)".
 
 Where: the `maya` step's class inputs (`ow-cli` `combat.rs`, `class_inputs`), after the pawn archetype's preload and
 before the class select that spawns the pawn. Extend that step's list, or add a link 1 set-up list beside link 9's
@@ -102,30 +108,37 @@ before the class select that spawns the pawn. Extend that step's list, or add a 
 interface lists inside the rule (route (b)), because `CodeIndex::class_at` may load and fills `interface_targets`, so
 it is not read-only, and a name-only compare cannot settle derivation.
 
-**The rule: one outcome per case of section 2**, all read-only (no write, load, draw or intern). `Vm::plain_interface_read_only`
-(`ow-vm` `interface_read_only.rs`) makes the same split for `QueryInterface`. The implementer may call it on the
-owner, or copy its cases, with one change (case 4):
+**The rule: one outcome per case of section 2,** in this order. All of it is read-only (no write, load, draw or
+intern):
+1. O1, then O2, from the class table and the code layer.
+2. O3 and O3', from the code keys.
+3. O4, testing decoding directly: `CodeIndex::class(k).body_decoded()` over the interface's key and every key of
+   `CodeIndex::super_chain(owner key)` (both public, neither loads).
+4. Only then `CodeIndex::implements_resolved_chain(owner key, interface key)` alone decides O5, O6 and O7. #575's
+   `implements_resolved` is not used, since it gives no answer in part of O6.
 
-| Case | Kind | Text |
+| Case | Kind | Answer or text |
 |---|---|---|
-| 1. the interface class is not loaded | `NotRead` | "AnimNodeSpecialMoveBlend: the interface class GearboxFramework.SpecialMoveInterface is not loaded (a load is a write)" |
-| 2. no code layer | `LayerAbsent` | as `plain_interface_read_only`: "the interface table of <class>: the world has no code layer (no class export is loaded)", layer "the code layer (package class exports)" |
-| 3. no code key for the owner's class or the interface | the settled no below, when the owner's class is not a child of the interface; a yes when it is | (a hand-defined class implements nothing, as `Vm::implements` answers it) |
-| 4. a body on the chain did not decode | `NotRead` | "AnimNodeSpecialMoveBlend: the class chain of <class> did not decode (the structural fallback is not taken)" |
-| 5. an unresolved entry, and no resolved yes | `NotRead` | "AnimNodeSpecialMoveBlend: the interface table of <class> has an entry not resolved at set-up (resolving it is a load)", where <class> is `implements_resolved_chain`'s `Err(class)` |
-| 6. resolved yes | answer | `SMI` := the owner, as the interface |
-| 7. resolved no, settled | answer | `SMI` left as it is, nothing written |
-| 7'. resolved no through an engine stand-in class | as `interp::is_child` answers it | (its `NotYet`) |
+| O1. the interface class is not loaded | `NotRead` | "AnimNodeSpecialMoveBlend: the interface class GearboxFramework.SpecialMoveInterface is not loaded (a load is a write)" |
+| O2. no code layer | `LayerAbsent` | as `Vm::plain_interface_read_only`: "the interface table of <class>: the world has no code layer (no class export is loaded)", layer "the code layer (package class exports)" |
+| O3. the owner's class has no code key | answer, or the stand-in `NotYet` | a hand-defined class implements nothing, as `Vm::implements` answers it. A yes when the owner's class is a child of the interface; otherwise a no (`SMI` left as it is), unless the class chain meets an engine-native stand-in, which gives the stand-in `NotYet` |
+| O3'. only the interface has no code key | `NotRead` | "AnimNodeSpecialMoveBlend: the interface GearboxFramework.SpecialMoveInterface has no code key (its table cannot be read)". `plain_interface_read_only` answers a quiet no here; this rule does not take it, because a loaded interface with no package export is not a case the note read |
+| O4. a body did not decode | `NotRead` | "AnimNodeSpecialMoveBlend: the class chain of <class> did not decode (the structural fallback is not taken)" |
+| O5. an unresolved entry, and no resolved yes | `NotRead` | "AnimNodeSpecialMoveBlend: the interface table of <class> has an entry not resolved at set-up (resolving it is a load)", where <class> is `implements_resolved_chain`'s `Err(class)` |
+| O6. a resolved yes | answer | `SMI` := the owner, as the interface |
+| O7. a resolved no | answer, or the stand-in `NotYet` | `SMI` left as it is, nothing written, when no engine-native stand-in is on the chain; otherwise the stand-in `NotYet` |
 
-**The ruling on case 4:** `implements_resolved_chain` answers an undecoded chain with `implements_structurally`, a
+**The ruling on O4:** `implements_resolved_chain` answers an undecoded chain with `implements_structurally`, a
 fallback. It is not taken here: the native's own test is the class's interface table, and the structural rule was not
-read for this node. Tell case 4 apart without a load: #575's `implements_resolved` answers `None` while
-`implements_resolved_chain` answers `Ok(_)`. If `plain_interface_read_only` is called, check case 4 before it.
+read for this node.
 
-**"Settled no", independent of the route:** `implements_resolved_chain` answers `Ok(false)`, the chain's bodies all
-decoded, and `interp::is_child(owner class, interface)` meets no engine-native stand-in on the chain (it answers
-without a `NotYet`). Only then is `SMI` left as it is. Route (a) makes cases 5 and 6 answerable for Maya. A settled no
-is reached the same way for any owner whose entries are all resolved and which does not implement the interface.
+**The stand-in check (O3, O7):** the engine-native stand-in test is `interp::is_child`, which is `pub(crate)` in
+`ow-vm`. From `ow-world`, reach it through the public `Vm::plain_interface_read_only`, which runs it for its own no
+answers, or add a public read-only wrapper for it in `ow-vm`.
+
+**A "settled no"** is O3 or O7 answered without the stand-in `NotYet`. Only then is `SMI` left as it is. Route (a)
+makes O5 answerable for Maya. A settled no is reached the same way for any owner whose entries are all resolved and
+which does not implement the interface.
 
 ### 4.2 The natives of section 3, when a lane binds them
 
@@ -135,15 +148,18 @@ is reached the same way for any owner whose entries are all resolved and which d
   - `SetRootMotion` does nothing;
   - `Finish` writes `AnimState` := 2 only when the active entry has a `CustomAnimDef`, and sends no event.
 
-  `PlayData` with `SkelComponent` or its mesh None declines the same way (returns 0, writes nothing). These answers
-  rest on the field fits of the source list (the node's fields 4 bytes after the layout tool's placement), which are
-  UNVERIFIED.
+  These answers rest on the field fits of the source list (the node's fields 4 bytes after the layout tool's
+  placement), which are UNVERIFIED.
+- **`Stop`,** whether `SMI` is set or not: `AnimState` := 2. The sequence stop with a playing flag set is a not-read
+  refusal, "AnimNodeSpecialMoveBlend.Stop: the active child's sequence stop (not read)". It is planned before the
+  `AnimState` write, so the refusal writes nothing.
 - **`SMI` set:**
-  - `PlayData` and `Finish`: a not-read refusal, "AnimNodeSpecialMoveBlend.<native>: the owner's special-move gate
-    (an unidentified interface function)". `Finish`'s `AnimState` write is planned, and made only after the gate
-    answers, so the refusal writes nothing;
-  - `SetRootMotion`: a not-read refusal, "AnimNodeSpecialMoveBlend.SetRootMotion: the root-motion target (an
-    unidentified object)";
+  - `PlayData` with `SkelComponent` or its mesh None returns 0, writing nothing. Otherwise a not-read refusal,
+    "AnimNodeSpecialMoveBlend.PlayData: the owner's special-move gate (an unidentified interface function)";
+  - `Finish`: the same gate refusal ("AnimNodeSpecialMoveBlend.Finish: ..."). Its `AnimState` write is planned, and
+    made only after the gate answers, so the refusal writes nothing;
+  - `SetRootMotion` with `SkelComponent` None does nothing. Otherwise a not-read refusal,
+    "AnimNodeSpecialMoveBlend.SetRootMotion: the root-motion target (an unidentified object)";
   - `IsPlaying(def)`: `def` None gives false, and the active entry's definition gives true. Any other definition is a
     not-read refusal, "AnimNodeSpecialMoveBlend.IsPlaying: another definition's own answer (a virtual of the
     definition, not read)".
@@ -155,21 +171,28 @@ is reached the same way for any owner whose entries are all resolved and which d
 On synthetic classes built with `package()` / `tag()`, every value invented:
 1. **The owner test**, on the package-backed fixture of `anim_tree_copy_tests.rs`
    (`h_takes_a_package_backed_owner_that_implements_the_interface`), one test per row of 4.1's table:
-   - a resolved yes writes `SMI`;
-   - cases 1, 2, 4 and 5 give their kinds and texts;
-   - a settled no leaves `SMI` and writes nothing;
-   - a no through a stand-in gives `is_child`'s `NotYet`.
+   - O6, a resolved yes, writes `SMI`;
+   - O6 with an unresolved entry before the resolved yes, in `implements_resolved`'s order: still `SMI` := the owner,
+     not O4 or O5;
+   - O1, O2, O3', O4 and O5 give their kinds and texts;
+   - O3 and O7 settled leave `SMI` and write nothing;
+   - a no through a stand-in gives its `NotYet`.
 
    Each refusal goes through `refused_clean` (the same file: heap writes, handles, RNG draws, loads unchanged) and
    leaves the name table's length unchanged. After an unanswered test, assert that the chain's interface entries are
    still unresolved, as `implements_resolved_chain_reads_only_resolved_entries` (`ow-object` `reflect/tests.rs`) does.
    The test-only override `OWNER_ANSWER` (`anim_node_init.rs`) answers only yes or no. Extend it to return one of the
-   split outcomes, or replace it with package-backed fixtures.
+   outcomes, or replace it with package-backed fixtures.
 2. **Route (a):** the set-up's lines, labelled, Off only. After the set-up, the read-only answer for the fixture's
-   pawn class is yes. Before it, case 5.
-3. **`SMI` unset:** `Play`, `PlayData` (also with `SkelComponent` or the mesh None), `IsPlaying` and `SetRootMotion`
-   write nothing. `Finish` writes `AnimState` with a `CustomAnimDef` and nothing without one.
-4. **`SMI` set:** each refusal of 4.2 before any write, `Finish`'s `AnimState` included. `IsPlaying`'s two answers.
+   pawn class is yes. Before it, O5.
+3. **`SMI` unset:**
+   - `Play`, `PlayData`, `IsPlaying` and `SetRootMotion` write nothing;
+   - `Finish` writes `AnimState` with a `CustomAnimDef` and nothing without one;
+   - `Stop` writes `AnimState`, and its sequence stop refuses before any write.
+4. **`SMI` set:**
+   - each refusal of 4.2 comes before any write, `Finish`'s `AnimState` included;
+   - `PlayData` and `SetRootMotion` with `SkelComponent` None decline;
+   - `IsPlaying`'s two answers.
 5. **An out-of-range active child index:** the `VmError::Script`.
 
 ## Open questions

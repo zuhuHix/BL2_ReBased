@@ -40,3 +40,18 @@ maintainer gives one. Docs only: no code, no dependency, and no bounds check cha
 6. **Purity tests:** `refused_clean` and an unresolved-entries assertion, on the package-backed fixture. The
    `OWNER_ANSWER` override is to be extended or replaced.
 7. The decline answers inherit the UNVERIFIED field-shift fit; the note says "no absolute offsets".
+
+## Edits: review r2 of #647
+
+1. **Decoding is tested directly** (`CodeIndex::class(k).body_decoded()` over the interface and the owner's super
+   chain), and `implements_resolved_chain` alone decides O5 to O7. So an unresolved entry before a resolved yes is
+   O6, not O4; there is a fixture for it.
+2. **`Stop`** always writes `AnimState`, `SMI` or not, and is now in 4.2 and the tests.
+3. **Case O3** (no code key for the owner) is its own no, as `Vm::implements` answers it. O3' (only the interface has
+   none) is a not-read refusal.
+4. **One numbering, O1 to O7,** runs through sections 2 and 4.1.
+5. **The stand-in check** goes through the public `Vm::plain_interface_read_only`, or a new public wrapper, since
+   `interp::is_child` is crate-private.
+6. **The rest:**
+   - `prepare`'s interface-table line is quoted as it reads ("a load; ...");
+   - with `SMI` set, `PlayData` and `SetRootMotion` decline when `SkelComponent` is None.
