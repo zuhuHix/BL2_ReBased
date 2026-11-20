@@ -165,7 +165,7 @@ ow-mission -p ow-cli --all-targets` adds no warning in the touched files; `crate
 `--slice-gate` (strict, under the lock), head against base: default route ok 1 / NotYet 4 / error 9 of 14 and
 `--map Sanctuary_P` ok 1 / NotYet 4 / error 9 of 14, every row identical; on the map route link 1 stops at setup,
 before adopt. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN.
+2026-11-19-186.
 
 **IMPL-SLICE-MAP-WORLD (2026-11-19, zuhu desktop, on #547 at 15d01ca):** AI-assisted (Claude Code, Opus 5.5). The
 bridge's adopt path (`MissionScript::adopt`) and the combat group on the map route behind `--map`
