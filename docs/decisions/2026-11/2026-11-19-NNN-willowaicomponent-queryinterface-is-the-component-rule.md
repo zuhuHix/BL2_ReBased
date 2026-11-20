@@ -17,8 +17,11 @@ the running game.**
 - **Proposed Off answer for a separate implementer:**
   - add the two AI component classes to `ow-combat`'s component rule's exact-class list;
   - a new read-only `PhaseLockOnHold` native, with its refusals;
-  - for the hub to choose: a NotRead refusal when `Owner` is None and the component is not attached, recommended, or
-    the faithful none.
+  - Hub ruling (2026-11-19): `NotYet { NotRead }` when `Owner` is None and the component is not attached, because
+    the port cannot tell never-attached from attach-step-not-ported. It covers only the two AI component classes,
+    and `ActorComponent` and `SkeletalMeshComponent` keep "Owner None answers none". `bAttached` is read only after
+    `Owner` reads None, with no load; when it is missing or mistyped, the answer is `VmError::Script`;
+  - it lands after #589 and #594.
   Reference is unchanged. The tests are in the note's section 4.
 - **Local probe (never pushed):** the link 9 stack with #524 and a hand-merged #523, plus probe-only stubs of #589,
   #594 and this note. Installed Off strict `--slice-gate`: 2 ok / 11 NotYet / 1 error.

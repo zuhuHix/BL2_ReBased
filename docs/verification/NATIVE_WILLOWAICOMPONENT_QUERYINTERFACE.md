@@ -84,33 +84,48 @@ stop at all.
 Reference registers none of this and is unchanged: `crate::hit::ai_interface_for` and the plain answer stay as they
 are.
 
+**Landing order.** This lands after #589 (a mind's `QueryInterface`, NATIVE_GEARBOXMIND_QUERYINTERFACE.md) and #594
+(`GetAIComponent`). On main, a `WillowMind`'s own answer stays the open `NotYet { NotRead }` of
+`ow_combat::pawn_interface`'s `OPEN_ANSWERS` until #589's rule is implemented, so a component's `Owner` step reaches
+that NotYet until then.
+
 **The `QueryInterface` rule.**
 - Add `GearboxFramework.AIComponent` and `WillowGame.WillowAIComponent` to the exact-class list of `ow-combat`'s
   component rule (`pawn_interface.rs`, `COMPONENT_RULE_CLASSES`), so both answer by NATIVE_PAWN_AI_INTERFACE.md
   section 6.4's contract, refusals included. Other subclasses keep the open NotRead: the exact-class test stays.
-- **The unattached owner, a choice for the hub.** Section 3 makes "Owner None" ambiguous in the port: it cannot tell
-  a component the game never attached from one whose attach step the port does not run.
-  - (a) Faithful: Owner None answers none, as section 6.4 already says. Link 9 then fails with no evidence and no
-    stop.
-  - (b) **Recommended for Off:** when `Owner` is None and `bAttached` is false, answer
-    `NotYet { NotRead }`, "the component `<path>` has no Owner and is not attached: the attach step that sets Owner is
-    not ported (asked for `<interface>`)". It is read before any write and changes nothing. That matches the
-    encroachment check, which refuses at the same step. A component that is attached with Owner None still answers
-    none.
+- **The unattached owner. Hub ruling (2026-11-19): NotRead,** because the port cannot tell a component the game
+  never attached from one whose attach step the port does not run (section 3). It covers **only**
+  `GearboxFramework.AIComponent` and `WillowGame.WillowAIComponent`. `ActorComponent` and `SkeletalMeshComponent` keep
+  "Owner None answers none" (NATIVE_PAWN_AI_INTERFACE.md section 6.4, step 3, and #524's test), so the pawn's `Mesh`
+  step and link 11 stay as they are.
+
+  For the two AI component classes, the component rule's steps become:
+  1. the plain answer, as section 6.4;
+  2. the unloaded-receiver check, as section 6.4;
+  3. `Owner` read, as section 6.4. When it is set, the question goes to it, as before;
+  4. **only when `Owner` reads None**, read `bAttached` (declared on `ActorComponent`) with `vm.space.prop` and
+     `vm.space.read`, loading nothing. Not with `hit::access::get`, which calls `loaded`. Judge the declaration at
+     registration, as `owner_declaration` judges `Owner`:
+     - `bAttached` not declared, or not a `Bool`: `VmError::Script`, "ActorComponent.QueryInterface:
+       `<class>`.bAttached is not declared as a bool";
+     - `true`: none, as before;
+     - `false`: `NotYet { NotRead }`, "the component `<path>` has no Owner and is not attached: the attach step that
+       sets Owner is not ported (asked for `<interface>`)", record NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md.
+
+  Every step is a read before any write, and it changes nothing. That matches the encroachment check, which refuses
+  at the same step.
 - Writes, loads, draws: none, as section 6.4.
 
 **`WillowAIComponent.PhaseLockOnHold()`** (a new Off native in `ow-combat`'s holds pack, next to the hold kinds).
-- **The answer.** Read the receiver's `PhaseLockHolds` by name, with a read that does not call `loaded`
-  (`vm.space.prop` and `vm.space.read`). Return `Bool(length > 0)`. Nothing is loaded, written or drawn.
+The steps, in order. Nothing is loaded, written or drawn at any of them:
+1. called with no object: `VmError::Script`;
+2. the receiver's class is not exactly `WillowAIComponent` (a subclass may replace the virtual; none was read):
+   `NotYet { NotRead }`, "PhaseLockOnHold on a `<class>` is not read";
+3. `PhaseLockHolds` not declared, or not an array: `VmError::Script`;
+4. the receiver is an unloaded definition handle: `NotYet { NotRead }`, and it is not loaded first;
+5. read `PhaseLockHolds` with `vm.space.prop` and `vm.space.read`, and return `Bool(length > 0)`.
 
-| Case | Outcome |
-|---|---|
-| Called with no object | `VmError::Script` |
-| The receiver's class is not exactly `WillowAIComponent` (a subclass may replace the virtual; none was read) | `NotYet { NotRead }`, "PhaseLockOnHold on a `<class>` is not read" |
-| `PhaseLockHolds` not declared, or not an array | `VmError::Script` |
-| The receiver is an unloaded definition handle | `NotYet { NotRead }`, not loaded first |
-
-No `LayerAbsent` or `NotPorted` case.
+Do not reuse `holds::this` or `read_list` here: both call `loaded`. No `LayerAbsent` or `NotPorted` case.
 
 **Tests on invented classes** (synthetic fixtures, the existing `package()` / `tag()` helpers). Each checks the answer,
 and that heap committed writes, load transitions and generator draws are unchanged.
@@ -119,7 +134,10 @@ and that heap committed writes, load transitions and generator draws are unchang
   - one that does not, with an `Owner` that lists it (the owner);
   - an `Owner` that declines (none);
   - Owner None and attached (none);
-  - Owner None and not attached (option b: NotRead; option a: none);
+  - Owner None and not attached (NotRead, the ruled text);
+  - `bAttached` not declared, and `bAttached` declared as another kind (`VmError::Script` each);
+  - an `ActorComponent` and a `SkeletalMeshComponent` with Owner None and `bAttached` false: still none (the ruling
+    does not reach them);
   - a subclass of `WillowAIComponent` (the open NotRead);
   - a question that comes back to the component (none).
 - `PhaseLockOnHold`:
