@@ -460,8 +460,12 @@ impl<'a> NativeCall<'a> {
     /// Whether [`NativeCall::set_out`] of `v` into argument `i` would succeed, writing nothing (lane
     /// IMPL-ACTOR-TRACE): the argument exists and is `out`, and, for an out argument from script, the write through
     /// its alias passes the same checks the write makes (a live frame and slot; the heap's address, step and value
-    /// checks for a property). A native that writes several outs checks each one first, so no failure can come between
-    /// its writes.
+    /// checks for a property).
+    ///
+    /// It checks the destination **as it is now** (review r2 of #633). A native that checks several outs and then
+    /// writes them must make sure its earlier writes keep the later destinations valid: an array out that a first
+    /// write shrinks can invalidate a later out aliasing one of its elements, which then refuses after the first write
+    /// committed. No batch validation is made; a caller with outs that may overlap that way needs its own ordering.
     pub fn check_out(&self, i: usize, v: &Value) -> Result<(), VmError> {
         match self.args.get(i) {
             Some(a) if a.out => match &a.alias {

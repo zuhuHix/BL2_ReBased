@@ -297,6 +297,9 @@ fn preflight(c: &NativeCall<'_>, this: ObjRef) -> Result<(Query, [Value; 2]), Vm
     // The actual arguments, not only the declaration (review r1 of #633, item 1): each is out, and the write through
     // its alias would be accepted. Both are checked before either is written, so the two `set_out` calls cannot fail
     // between them.
+    // Both writes are vectors, which change no array and no object reference, so the first cannot invalidate the
+    // second's destination, even when both alias one place (review r2 of #633; `check_out` checks the current
+    // destination only).
     c.check_out(HIT_LOCATION, &location)?;
     c.check_out(HIT_NORMAL, &normal)?;
     Ok((Query { start, end, extent, flags: trace_flags(trace_actors, extra) }, [location, normal]))

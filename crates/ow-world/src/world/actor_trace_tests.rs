@@ -617,7 +617,17 @@ fn an_out_alias_is_not_written_when_the_other_out_is_refused() {
     given.extend(args.into_iter().map(|v| Arg::new(v, false, true)));
     assert_eq!(x.direct_args(t, given).unwrap(), Value::Object(None));
     let zero = x.vector([0.0; 3]);
-    assert_eq!((x.location_of(witness).1, x.location_of(other).1), (zero.clone(), zero));
+    assert_eq!((x.location_of(witness).1, x.location_of(other).1), (zero.clone(), zero.clone()));
+    // Review r2 of #633: both outs aliasing one place. The first write cannot invalidate the second's destination
+    // (a vector changes no array or reference), so both checks hold through both writes.
+    x.set(witness, "Location", seven.clone());
+    let mut args = x.link9([0.0; 3]);
+    let normal = args.remove(1);
+    let location = args.remove(0);
+    let mut given = vec![Arg::aliasing_property(witness, at, location), Arg::aliasing_property(witness, at, normal)];
+    given.extend(args.into_iter().map(|v| Arg::new(v, false, true)));
+    assert_eq!(x.direct_args(t, given).unwrap(), Value::Object(None));
+    assert_eq!(x.location_of(witness).1, zero);
 }
 
 /// Review r1 of #633, item 2: a non-finite endpoint or extent, or a negative extent, refuses before the service is
