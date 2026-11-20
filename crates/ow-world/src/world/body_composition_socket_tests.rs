@@ -457,3 +457,49 @@ fn numbered_names_compare_by_id() {
     assert_eq!(e.vm.space.names.len(), names, "nothing interned (NeverSeenBone stays unseen)");
     assert!(e.vm.space.names.find("NeverSeenBone").is_none());
 }
+
+/// Review r1 of #641, item 1: a None name the remap maps to a socket is a socket attach, not the owner retry (beside
+/// test 3's socket remapped to None).
+#[test]
+fn a_none_name_remapped_to_a_socket_is_attached() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let s = socket(&mut e, "Shield", "Hips", [5.0, 0.0, 0.0], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let (gestalt, remap) = remap_struct(&e);
+    let (from, to) = (name(&mut e.vm, "None"), name(&mut e.vm, "Shield"));
+    let entry_value = value(&e.vm, remap, vec![("OriginalSocketName", from), ("MangledSocketName", to)]);
+    let g = value(&e.vm, gestalt, vec![("SocketMappings", Value::array(vec![entry_value]))]);
+    put(&mut e.vm, pt, "GestaltData", g);
+    let head = child(&mut e, "Head_Template");
+    let p = body(&mut e, pt, &[(head, "None")]);
+    run(&mut e, p).unwrap();
+    let (_, list) = parent_list(&e, p);
+    assert_eq!(list.len(), 1, "remapped to Shield, a socket hit");
+    let (_, bone, loc, ..) = entry(&e, &list[0]);
+    assert_eq!((bone.as_str(), loc), ("Hips", [5.0, 0.0, 0.0]));
+    let made = made_of(&e, &entries(&e, p)[1]);
+    assert_ne!(prop(&e.vm, made, "Owner"), Value::Object(Some(p)), "not the owner retry");
+}
+
+/// Review r1 of #641, item 2: a destination whose `RelativeRotation.Yaw` is declared a float cannot take the int
+/// rotation. The preflight checks the planned entry against the heap's write rules, so the build refuses before any
+/// write: #518's three counters and the name table's length unchanged, no entry and no component made.
+#[test]
+fn a_malformed_destination_refuses_before_any_write() {
+    ODD_ATTACHMENT.with(|c| c.set(true));
+    let mut e = env();
+    ODD_ATTACHMENT.with(|c| c.set(false));
+    answer_render_hooks_for_tests(true);
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [1, 2, 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let head = child(&mut e, "Head_Template");
+    let p = body(&mut e, pt, &[(head, "Shield")]);
+    let before = Counters::read(&e.vm);
+    let names = e.vm.space.names.len();
+    let err = run(&mut e, p).unwrap_err();
+    assert!(matches!(&err, VmError::Script { message, .. } if message.contains("cannot take the socket attach's entry")), "{err:?}");
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert_eq!(e.vm.space.names.len(), names, "nothing interned");
+    assert!(entries(&e, p).is_empty(), "no entry appended");
+}

@@ -694,28 +694,35 @@ fn socket_plan(vm: &Vm, x: &Socket, socket: &Value) -> Result<Option<SocketAttac
         },
         _ => return Err(script(format!("{}.Attachments is not an array", class_path(vm, x.pc)))),
     };
-    let zero = vm.space.classes.zero_value(&PropKind::Struct(entry));
-    for f in ["Component", "BoneName"] {
-        field(vm, &zero, f, "Attachment")?;
-    }
-    for (f, parts) in [("RelativeLocation", ["X", "Y", "Z"]), ("RelativeRotation", ["Pitch", "Yaw", "Roll"]), ("RelativeScale", ["X", "Y", "Z"])] {
-        let v = field(vm, &zero, f, "Attachment")?;
-        for part in parts {
-            field(vm, &v, part, f)?;
-        }
-    }
     let back_link = is_a(vm, x.class, SKELETAL);
     if back_link {
         require_kind(vm, x.class, "AttachedToSkelComponent", Want::Takes(x.pc))?;
     }
-    Ok(Some(SocketAttach { parent: x.parent, bone, location, rotation, entry, back_link }))
+    let sa = SocketAttach { parent: x.parent, bone, location, rotation, entry, back_link };
+    // The write's values against the heap's write rules (review r1 of #641, item 2), so no write fails after the build
+    // has written: the parent's list as the made copy starts it (its template's), and the planned entry, its
+    // `Component` the new component's template (the made copy's class). Each field's declared kind is checked, the
+    // offsets' too, and the entry's `Component` against the class it takes.
+    let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| script("Attachments has no declaration".into()))?;
+    let PropKind::Array(inner) = &kind else { unreachable!("checked above") };
+    let check = |what: &str, k: &PropKind, v: &Value| -> Result<(), VmError> {
+        vm.space
+            .heap
+            .check_value(&vm.space.classes, k, v)
+            .map_err(|e| script(format!("{}.Attachments cannot take the socket attach's {what}: {e}", class_path(vm, x.pc))))
+    };
+    let current = read_prop(vm, x.pt, "Attachments")?.unwrap_or(Value::None);
+    check("list", &kind, &current)?;
+    check("entry", inner, &socket_entry(vm, &sa, x.template)?)?;
+    Ok(Some(sa))
 }
 
-/// The socket attach's writes (the note's section 4, "The writes"): `parent`'s `Attachments` entry for `child` (an
-/// overwrite of the entry already naming `child`, else an append), then the back link.
-fn write_socket_attach(vm: &mut Vm, parent: ObjRef, child: ObjRef, sa: &SocketAttach) -> Result<(), VmError> {
+/// The `Attachments` entry for `component`: `Component`, `BoneName`, the offsets and a unit scale. The preflight builds
+/// it with the new component's template standing in for the component (the made copy has the template's class) and
+/// checks it against the heap's write rules (review r1 of #641, item 2); the write builds it again with the made one.
+fn socket_entry(vm: &Vm, sa: &SocketAttach, component: ObjRef) -> Result<Value, VmError> {
     let mut e = vm.space.classes.zero_value(&PropKind::Struct(sa.entry));
-    set_field(vm, &mut e, "Component", Value::Object(Some(child)), "Attachment")?;
+    set_field(vm, &mut e, "Component", Value::Object(Some(component)), "Attachment")?;
     set_field(vm, &mut e, "BoneName", Value::Name(sa.bone), "Attachment")?;
     let put = |vm: &Vm, e: &mut Value, f: &str, parts: [&str; 3], values: [Value; 3]| -> Result<(), VmError> {
         let mut v = field(vm, e, f, "Attachment")?;
@@ -727,6 +734,13 @@ fn write_socket_attach(vm: &mut Vm, parent: ObjRef, child: ObjRef, sa: &SocketAt
     put(vm, &mut e, "RelativeLocation", ["X", "Y", "Z"], sa.location.map(Value::Float))?;
     put(vm, &mut e, "RelativeRotation", ["Pitch", "Yaw", "Roll"], sa.rotation.map(Value::Int))?;
     put(vm, &mut e, "RelativeScale", ["X", "Y", "Z"], [1.0f32; 3].map(Value::Float))?;
+    Ok(e)
+}
+
+/// The socket attach's writes (the note's section 4, "The writes"): `parent`'s `Attachments` entry for `child` (an
+/// overwrite of the entry already naming `child`, else an append), then the back link.
+fn write_socket_attach(vm: &mut Vm, parent: ObjRef, child: ObjRef, sa: &SocketAttach) -> Result<(), VmError> {
+    let e = socket_entry(vm, sa, child)?;
     let class = vm.space.heap.get(parent)?.class;
     let p = vm.space.prop(class, "Attachments").ok_or_else(|| script(format!("{} has no Attachments", class_path(vm, class))))?;
     let mut list = vm.space.read(parent, PropAddr::scalar(p))?.clone();
@@ -898,14 +912,14 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         if !is_a(vm, *pc, SKELETAL) {
                             return Err(not_read(other_target(&class_path(vm, *pc))));
                         }
-                        if has_socket {
-                            if vm.defs.is_unloaded(&vm.space, *pt) {
-                                return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, *pt))));
-                            }
-                            // The skeletal component's socket attach (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section
-                            // 4): `None` is its false, and the owner retry takes the attachment.
-                            socket_attach = socket_plan(vm, &Socket { parent: b, pt: *pt, pc: *pc, template, class }, &socket)?;
+                        // The skeletal component's socket attach (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4)
+                        // for every child, a None name included: the remap comes before the None check (review r1
+                        // of #641, item 1), so it reads the parent template. `None` is its false, and the owner
+                        // retry takes the attachment.
+                        if vm.defs.is_unloaded(&vm.space, *pt) {
+                            return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, *pt))));
                         }
+                        socket_attach = socket_plan(vm, &Socket { parent: b, pt: *pt, pc: *pc, template, class }, &socket)?;
                         true
                     }
                 };

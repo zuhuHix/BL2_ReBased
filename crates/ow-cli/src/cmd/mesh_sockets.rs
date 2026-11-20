@@ -8,8 +8,10 @@
 //! **an UNVERIFIED stand-in for the streaming load**.
 //!
 //! - **Off only.** Outside Off nothing is done or logged.
-//! - **Logged before and after:** the line it is about to do, then the counts (loaded here, already loaded), or the
-//!   failure.
+//! - **Logged before and after:** the line it is about to do, then the counts, or the failure. The counts are the
+//!   sockets loaded here, the ones already readable, and the unresolved stand-ins: an object with no slots whose class
+//!   has some, which the store does not count as unloaded but the socket lookup refuses (review r1 of #641, item 3).
+//!   A stand-in is not loaded here.
 //! - **The mesh** is found through the store, which loads what it finds. #592's `preload_mesh` runs first and has
 //!   loaded it already, so in the slice this adds no load for the mesh. A path no package holds is logged and skipped.
 //! - **A failed socket load keeps its error:** it is logged and returned, as `preload_mesh` does.
@@ -53,13 +55,19 @@ pub(crate) fn preload_mesh_sockets(vm: &mut Vm, path: &str) -> Result<(), VmErro
     };
     let list = vm.space.read(mesh, PropAddr::scalar(p))?.clone();
     let items = list.elements().ok_or_else(|| script(format!("{path}.Sockets is not an array")))?.to_vec();
-    let (mut loaded, mut already) = (0usize, 0usize);
+    let (mut loaded, mut readable, mut stand_ins) = (0usize, 0usize, 0usize);
     for item in items {
         let Value::Object(Some(s)) = item else {
             continue;
         };
         if !vm.defs.is_unloaded(&vm.space, s) {
-            already += 1;
+            let x = vm.space.heap.get(s)?;
+            let stand_in = x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0);
+            if stand_in {
+                stand_ins += 1;
+            } else {
+                readable += 1;
+            }
             continue;
         }
         let name = vm.space.names.text(vm.space.heap.get(s)?.name).into_owned();
@@ -71,7 +79,9 @@ pub(crate) fn preload_mesh_sockets(vm: &mut Vm, path: &str) -> Result<(), VmErro
         }
         loaded += 1;
     }
-    vm.log.push(format!("{INPUT} {path}: {loaded} loaded, {already} already loaded"));
+    vm.log.push(format!(
+        "{INPUT} {path}: {loaded} loaded, {readable} already readable, {stand_ins} unresolved stand-ins"
+    ));
     Ok(())
 }
 

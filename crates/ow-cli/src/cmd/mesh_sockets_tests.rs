@@ -120,9 +120,9 @@ fn off_loads_the_sockets_and_logs_before_and_after() {
     let lines = harness_lines(&e.vm);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].contains("UNVERIFIED stand-in"), "{}", lines[0]);
-    assert!(lines[1].ends_with(": 2 loaded, 0 already loaded"), "{}", lines[1]);
+    assert!(lines[1].ends_with(": 2 loaded, 0 already readable, 0 unresolved stand-ins"), "{}", lines[1]);
     preload_mesh_sockets(&mut e.vm, "GD_ToyMesh.Mesh_A").unwrap();
-    assert!(harness_lines(&e.vm)[3].ends_with(": 0 loaded, 2 already loaded"));
+    assert!(harness_lines(&e.vm)[3].ends_with(": 0 loaded, 2 already readable, 0 unresolved stand-ins"));
 }
 
 /// Outside Off nothing is loaded or logged.
@@ -155,4 +155,25 @@ fn a_failed_socket_load_keeps_its_error() {
     let last = harness_lines(&e.vm).last().unwrap().clone();
     assert!(last.contains("the socket Socket_Cycle failed"), "{last}");
     assert!(e.vm.defs.is_loaded(&e.vm.space, sockets[0]), "the good socket was loaded first");
+}
+
+/// Review r1 of #641, item 3: a slotless stand-in (not an unloaded handle to the store) is counted apart, as an
+/// unresolved stand-in, and is not loaded or reported readable.
+#[test]
+fn a_slotless_stand_in_is_reported_apart() {
+    let mut e = env(ParityMode::Off);
+    let sockets = loaded_mesh(&mut e, "GD_ToyMesh.Mesh_A");
+    e.vm.defs.ensure_loaded(&mut e.vm.space, sockets[0]).unwrap();
+    let class = e.vm.space.heap.get(sockets[1]).unwrap().class;
+    let stand_in = e.vm.space.alloc(class, "Socket_StandIn", None, ow_object::heap::Origin::Runtime).unwrap();
+    e.vm.space.heap.get_mut(stand_in).unwrap().slots.clear();
+    let m = e.vm.defs.find(&mut e.vm.space, &ObjectPath::parse("GD_ToyMesh.Mesh_A").unwrap()).unwrap().unwrap();
+    let mesh_class = e.vm.space.heap.get(m).unwrap().class;
+    let p = e.vm.space.prop(mesh_class, "Sockets").unwrap();
+    let list = Value::array(vec![Value::Object(Some(sockets[0])), Value::Object(Some(stand_in)), Value::Object(Some(sockets[1]))]);
+    e.vm.space.write(m, PropAddr::scalar(p), list).unwrap();
+    preload_mesh_sockets(&mut e.vm, "GD_ToyMesh.Mesh_A").unwrap();
+    let last = harness_lines(&e.vm).last().unwrap().clone();
+    assert!(last.ends_with(": 1 loaded, 1 already readable, 1 unresolved stand-ins"), "{last}");
+    assert!(e.vm.space.heap.get(stand_in).unwrap().slots.is_empty(), "the stand-in is left as it is");
 }

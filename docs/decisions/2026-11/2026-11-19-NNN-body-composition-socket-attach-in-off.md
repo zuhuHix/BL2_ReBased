@@ -38,3 +38,20 @@ maintainer gives one. Written on #618 and rebased onto main 92c79308 after batch
   - #529's old "socket tables" case is removed from the named-refusals test.
 - **UNVERIFIED** in the running game: every rule here, the fitted gate fields, and that attachment 0 is unattached
   when the socket attaches run (the note's open question 2).
+
+## Edits: review r1 of #641
+
+1. **The remap runs for every child of a skeletal parent,** a None name included, so a mapping from None to a socket
+   attaches. The None check comes after it. Such a child now needs the parent template loaded (the lazy-template
+   refusal), since the remap reads it. There is a regression for None remapped to a socket.
+2. **The destination is checked against the heap's write rules in the preflight** (`Heap::check_value`, which is
+   read-only). The check covers:
+   - the parent's current `Attachments` list;
+   - the planned entry, built by the same function the write uses, with the new component's template standing in
+     for its class. Each field's declared kind is checked, the offsets' too, and `Component` against the class it
+     takes.
+
+   A malformed destination (a float `Yaw`) is a `VmError::Script` before any write. Its test asserts #518's three
+   counters and the name table's length.
+3. **The socket preload reports readable sockets and slotless stand-ins apart** ("N loaded, M already readable, K
+   unresolved stand-ins"). A stand-in is left as it is. There is a harness test.

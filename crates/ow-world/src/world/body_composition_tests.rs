@@ -24,6 +24,12 @@ use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
+thread_local! {
+    /// Review r1 of #641, item 2: build the toy `Attachment` with a rotation whose `Yaw` is a float, a destination the
+    /// socket attach's int write cannot take.
+    static ODD_ATTACHMENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 struct Env {
     vm: Vm,
     dir: PathBuf,
@@ -129,6 +135,10 @@ fn env_with(reattach: bool) -> Env {
         for c in ["Pitch", "Yaw", "Roll"] {
             t.prop("Int", rotator, c, 0, 0);
         }
+        let odd_rotator = toy_struct(&mut t, skeletal, "ToyOddRotator", None);
+        for (c, k) in [("Pitch", "Int"), ("Yaw", "Float"), ("Roll", "Int")] {
+            t.prop(k, odd_rotator, c, 0, 0);
+        }
         let remap = toy_struct(&mut t, skeletal, "SocketRemapEntry", None);
         t.prop("Name", remap, "OriginalSocketName", 0, 0);
         t.prop("Name", remap, "MangledSocketName", 0, 0);
@@ -139,7 +149,8 @@ fn env_with(reattach: bool) -> Env {
         t.prop("Object", entry, "Component", 0, component);
         t.prop("Name", entry, "BoneName", 0, 0);
         t.prop("Struct", entry, "RelativeLocation", 0, vector);
-        t.prop("Struct", entry, "RelativeRotation", 0, rotator);
+        let entry_rotator = if ODD_ATTACHMENT.with(std::cell::Cell::get) { odd_rotator } else { rotator };
+        t.prop("Struct", entry, "RelativeRotation", 0, entry_rotator);
         t.prop("Struct", entry, "RelativeScale", 0, vector);
         toy_array_of(&mut t, skeletal, "Attachments", "Struct", entry);
         t.prop("Object", skeletal, "AttachedToSkelComponent", 0, skeletal);
