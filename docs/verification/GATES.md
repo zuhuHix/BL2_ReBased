@@ -322,7 +322,7 @@ either order. Results:
   is at the unbound `RecomputeAttributeBaseValues`, and link 9 at the noun strategy-2 refusal (#523).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN (add attribute modifier).
+2026-11-19-255 (add attribute modifier).
 
 **IMPL-RESOLVE-CONTEXT (2026-11-19, pc-hummer, on main c687c135):** AI-assisted (Claude Code, Opus 5.5).
 `AttributeDefinitionBase.ResolveContext` as one shared Off rule (R1, R2, R3, then a terminal walk), bound by the
