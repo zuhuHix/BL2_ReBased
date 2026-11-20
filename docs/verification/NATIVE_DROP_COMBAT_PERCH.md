@@ -21,14 +21,16 @@ is UNVERIFIED** in the running game.
 
 ## 1. What the native does
 
-`native final function DropCombatPerch()` is declared on `WillowAIPawn`. Its exec step reads no arguments and calls one
-pawn virtual. For `WillowAIPawn` that body does this:
+`native function DropCombatPerch()` is declared on `WillowAIPawn`, without the final flag; its callers reach it with a
+virtual call. Its exec step reads no arguments and calls one pawn virtual. For `WillowAIPawn` that body does this:
 1. **The guard:** it acts only when all three hold, tested in this order:
    - the pawn's `Role` is `ROLE_Authority` (3);
    - its `PerchProjectile` (a `ProjectileDefinition`) is set;
    - its `bPerchAttached` is set (the flag `HoldingCombatPerch` returns in script).
 
-   Otherwise it returns at once, with **nothing written, loaded or drawn**.
+   Otherwise it returns at once, with **nothing written, loaded or drawn**. The script shows the same order:
+   `Behavior_CombatPerchThrow.ApplyBehaviorToContext` itself returns when `Role != 3 || PerchProjectile == None`,
+   before it uses the projectile.
 2. **When it acts** (not on link 9's path; read only to its edge):
    - it spawns an actor of the definition's `ProjectileClass` at the pawn's `Location` and `Rotation`;
    - when that spawn gives an actor:
@@ -66,7 +68,20 @@ and the native does nothing.
 **Every rule below is UNVERIFIED.**
 - **Bind in Off** the key `WillowAIPawn.DropCombatPerch()` in `ow-combat`'s pawn natives (`hit/pools.rs`), beside
   `IsStaggered` (#611), through the keep-existing `bind_fn`.
-- **Reference** keeps the stub policy and is unchanged.
+- **The existing binding it replaces in Off.** `crates/ow-combat/src/death.rs` binds `WillowGame.WillowAIPawn.
+  DropCombatPerch` as one of its `PRESENTATION_NO_OPS`, a no-op (COMBAT_DEATH.md, the presentation row). `hit.rs`
+  registers `pools::register` before `death::register`, so under keep-existing the new binding wins in Off. The
+  implementer removes the key from `PRESENTATION_NO_OPS` in Off, or leaves it there with a comment that the earlier
+  binding wins. In **Reference** the no-op stays exactly as it is.
+- **What the other callers now get in Off.** `WillowAIPawn.Died` and `WillowAIPawn.Staggered.BeginState` call the
+  same native, so they get this rule too:
+  - a pawn that is not perched gets nothing, as with the no-op;
+  - **a perched pawn** (authority, a `PerchProjectile`, `bPerchAttached`) **that dies or is staggered in Off now meets
+    D3**, where the no-op let the death path go on;
+  - an unresident pawn or a native descendant refuses D1 or D2 on the death path.
+  - COMBAT_DEATH.md's presentation row gets a matching line (planned): "`WillowAIPawn.DropCombatPerch` is answered by
+    NATIVE_DROP_COMBAT_PERCH.md in Off; the no-op stays in Reference".
+- **Reference** keeps its current answers (the stub policy, and the death pack's no-op) and is unchanged.
 
 **Preflight** (write-free, load-free, RNG-free), in this order; the first failure is the answer:
 1. **The receiver** is set, and its class is `WillowAIPawn` or a child (`by_path` and `is_child_of` only). Otherwise a
@@ -75,9 +90,14 @@ and the native does nothing.
    - an unloaded handle: "WillowAIPawn.DropCombatPerch: the pawn <path> is an unloaded handle (a load is a write)";
    - a slotless stand-in: "WillowAIPawn.DropCombatPerch: the pawn <path> is a stand-in with no properties (an object
      the store cannot load)".
-3. **D2, a native descendant** of `WillowAIPawn` (any class `research/native_by_class.json` lists under it, today
-   `WillowAICranePawn`; its slot was not read): `NotYet { NotRead }`, "WillowAIPawn.DropCombatPerch: the perch rule
-   of <class> (its virtual was not read)". Script-only children take `WillowAIPawn`'s rule.
+3. **D2, a recorded native descendant** of `WillowAIPawn`: `NotYet { NotRead }`, "WillowAIPawn.DropCombatPerch: the
+   perch rule of <class> (its virtual was not read)".
+   - **The list:** `WillowGame.WillowAICranePawn` and `WillowGame.DeployableTurretActor`. They are the two children
+     of `WillowAIPawn` in `WillowGame`'s export super chain; the layout tool reports both as extending it. Neither
+     one's slot was read.
+   - It is checked with `is_child_of` against each listed class (no load). `research/native_by_class.json` holds
+     function counts only, so it cannot decide which class is native; the list is recorded here instead.
+   - Every other child of `WillowAIPawn` takes `WillowAIPawn`'s rule, as a script-only child.
 4. **The declarations**, by name: `Role` a byte, `PerchProjectile` an object, and `bPerchAttached` a bool. A missing
    field or a wrong kind is a `VmError::Script` naming it.
 5. **The guard**, in section 1's order: `Role` not 3, or `PerchProjectile` None, or `bPerchAttached` clear: answer
@@ -101,8 +121,13 @@ writes: " from inside the native.
 4. a script-only child of `WillowAIPawn` takes the rule; an invented native child gives D2;
 5. a receiver outside `WillowAIPawn`: `VmError::Script`;
 6. an unloaded handle and a slotless stand-in: D1, each with its own text, nothing loaded;
-7. a missing `PerchProjectile` and a non-bool `bPerchAttached`: `VmError::Script` each;
-8. a key bound first keeps its binding; under `ParityMode::Reference` nothing new is bound.
+7. a missing `PerchProjectile`, a non-bool `bPerchAttached`, and a missing or non-byte `Role`: `VmError::Script`
+   each;
+8. a key bound first keeps its binding; under `ParityMode::Reference` nothing new is bound;
+9. D2 for each listed class: an invented `WillowAICranePawn` and an invented `DeployableTurretActor` child of
+   `WillowAIPawn`;
+10. **the death path:** a perched pawn's `Died` in Off gives D3, and the same call under `ParityMode::Reference`
+    still gets the death pack's no-op.
 
 ## 4. The probe (local, never pushed)
 
@@ -132,8 +157,8 @@ So link 9's next stop is `Actor.Trace`.
 
 1. **Not read:**
    - the drop's two pawn virtuals and the actor's two virtuals (section 1, step 2);
-   - the slots of `WillowAICranePawn` (D2) and of `WillowPawn`'s other C++ children (the native is declared on
-     `WillowAIPawn` only).
+   - the slots of `WillowAICranePawn` and `DeployableTurretActor` (D2), and of `WillowPawn`'s other C++ children (the
+     native is declared on `WillowAIPawn` only).
 2. **UNVERIFIED:** the field fits under the 4-byte and 16-byte shifts; the raw `Role` value of `ROLE_Authority`.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)

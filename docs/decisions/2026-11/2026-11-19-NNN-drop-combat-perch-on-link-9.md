@@ -17,3 +17,15 @@ gives one. Docs only: no code, no dependency, and no bounds check changed.
 - **Probe** (local, never pushed; stand-ins named in the note): installed Off `--slice-gate`, strict, ok 2, notyet 9,
   error 3. Link 9 passes 1 of 2 steps and stops at the unbound `Actor.Trace(...)`.
 - **Clean room:** a different lane implements this note.
+
+## Edits: review r1 of #620
+
+- **The existing binding:** the death pack's no-op (`death.rs` `PRESENTATION_NO_OPS`) is replaced in Off and kept in
+  Reference. `Died` and `Staggered.BeginState` now get the rule: a perched pawn meets D3 on the death path, and D1 or
+  D2 can refuse there. There is a death-path test, and COMBAT_DEATH.md gets a planned line.
+- **D2** is an explicit class list taken from the super chain: `WillowAICranePawn` and `DeployableTurretActor`. There
+  is a test per class.
+- **Smaller fixes:**
+  - "native function" (not final);
+  - a `Role` shape test;
+  - the behavior's own guard order cited as script evidence.
