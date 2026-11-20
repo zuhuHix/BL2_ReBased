@@ -18,11 +18,19 @@ changed, and the lane implements none of it (clean room). **Every rule is UNVERI
 - **Link 9's answer:** asked `IAIInterface`, the target's `WillowMind` answers itself, because its class lists the
   interface.
 - **Proposed Off rule for a separate implementer:** register it for `Engine.Controller` in `ow-combat`'s
-  pawn-interface registration, replacing the `GearboxMind` open answer, with a write-free, load-free preflight.
-  `Engine.PlayerController` gets a NotYet (NotRead) answer, and `WillowPlayerController`'s open answer is kept.
-  Details and the tests are in the note's section 5.
+  pawn-interface registration, replacing the `GearboxMind` open answer. `Engine.PlayerController` gets a NotYet
+  (NotRead) answer, and `WillowPlayerController`'s open answer is kept. After review r1 of #589, the rule must be
+  read-only along the whole chain it reaches:
+  - a plain answer over interface-table entries resolved at set-up, with an unresolved entry as NotRead;
+  - read-only forms of the delegate rules, with a delegate rule that has none as NotPorted;
+  - fields checked only when a step reaches them, with an outcome table that pins Script, NotRead, LayerAbsent and
+    NotPorted;
+  - a controller-keyed repeat guard, as in the game, where the port's dispatch guard keys by (object, interface).
+  Details and the tests are in the note's section 5. Reference is unchanged.
 - **Local probe (never pushed):** a merge of #535, #579, #564, #548, #555, #560, #523 and the link 9 spawn branches,
   with the open `GearboxMind` answer changed to the plain answer for `IAIInterface` only. Installed Off strict
-  `--slice-gate`: 1 ok / 3 NotYet / 10 errors (1 / 4 / 9 without the change). Link 9 becomes an error at `cast`, on
-  the unbound `GearboxMind.GetAIComponent()` (NATIVE_AI_HOLDS.md, "not resolved"). That native is the next stop.
+  `--slice-gate`: 1 ok / 3 NotYet / 10 errors (1 / 4 / 9 without the change). **In the probe's world**, link 9
+  becomes an error at `cast`, on an unbound `GearboxMind.GetAIComponent()`. The probe's registrations cause that
+  error: link 9's world does not register `ow_combat::holds`, which in Off binds `GetAIComponent` to a NotYet. With
+  that pack, the stop would be that NotYet. Either way that native is the next stop.
 - **Live check (bl-sdk; not run, no session granted):** the note's last section.

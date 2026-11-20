@@ -70,7 +70,8 @@ the pawn's player master, the `WillowPlayerController` that masters the pawn, wh
 - The dummy is a `WillowAIPawn`, whose class and parents list no `IAIInterface`, so step 1 gives none.
 - **Expected:** its `Controller` is set and is its mind, a `WillowMind`, whose class lists `IAIInterface`, so step 2
   gives the mind. That the dummy has a controller at its first hit, and that the mind answers yes, are not observed.
-  The mind's own rule was not read beyond the plain answer (whether `GearboxMind` adds steps of its own).
+  The mind's own rule was read later ([NATIVE_GEARBOXMIND_QUERYINTERFACE.md](NATIVE_GEARBOXMIND_QUERYINTERFACE.md)):
+  it is `Controller`'s, and a mind asked `IAIInterface` answers itself.
 - `Behavior_AIHold` then asks that mind for its AI component, and the component receives a demigod hold named `Safe`
   whose tag is the pawn, the context object, not the mind.
 - **Steps 1 and 2 give none** (no controller, a declining one, or the vehicle branch): step 3 asks the pawn's `Mesh`.

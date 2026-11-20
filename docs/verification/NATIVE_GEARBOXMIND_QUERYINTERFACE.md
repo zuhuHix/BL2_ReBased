@@ -40,8 +40,9 @@ repeat guard, which section 2 calls "the plain answer". `WillowPlayerController`
 Asked for an interface class `I`, a controller `C` answers as follows. "Its pawn" `P` is defined in section 3.
 
 1. **A question asked twice.** If `C` is already answering a question by this same rule, further up the same chain,
-   the answer is none at once. Otherwise `C` is marked as answering until it returns. This is the same guard as the
-   pawn's, NATIVE_PAWN_AI_INTERFACE.md section 2.
+   the answer is none at once, **whatever interface each question names**: this rule's list is keyed by the controller
+   alone. Otherwise `C` is marked as answering until it returns. The port's dispatch guard keys by (object, interface)
+   instead; section 5 covers the difference.
 2. **Two named interfaces go to the pawn first.** If `I` is set and its name is `IWorldBody` or `ISoundBehavior`, and
    `P` is set, the answer is whatever `P` answers to `QueryInterface(I)`, none included. Nothing else is tried. If `P`
    is not set, `C` goes on to step 3.
@@ -83,49 +84,109 @@ pawn is not asked back.
 
 ## 5. A proposed Off answer, for a separate implementer (UNVERIFIED)
 
-- **Where.** Replace the `GearboxMind` open answer in `ow-combat`'s pawn-interface registration with this rule,
-  registered for `Engine.Controller`, so `AIController`, `GearboxAIController`, `GearboxMind`, `WillowMind` and their
-  subclasses use it. Keep `WillowPlayerController`'s own registered answer as it is: it is still open. Classes on the
-  `PlayerController` line other than `WillowPlayerController` were not read, so register a NotYet (NotRead) answer for
-  `Engine.PlayerController` naming that, so the `Controller` rule never answers for them by inheritance. Reference
-  registers none of this, as now.
-- **"Its pawn".** `MyWillowPawn` when the controller's class is `WillowGame.WillowMind` or a subclass, else `Pawn`.
-  Both read by name; a class that does not declare the field it needs is an error, never "not set".
-- **Preflight, before any step and with nothing written or loaded.** Read `I`'s name, `P` and
-  `PlayerReplicationInfo` as plain reads. Then:
-  - an interface class that is declared but not loaded is `NotYet { NotRead }` ("the interface class `<path>` is not
-    loaded (a load is a write)"), as the hub ruled for the flag evaluator's `implements` (lane
-    FIX-FLAG-IMPLEMENTS-NOTYET);
-  - if a step the rule will reach must ask `P` or `PlayerReplicationInfo`, and that object is an unloaded stand-in,
-    the answer is `NotYet { NotRead }` naming it, because asking it could load;
-  - the controller's own class tables are read as loaded; a class that is not ready is `NotYet { NotRead }` as above.
-- **Steps.** As section 2, in order. The plain answer of step 3 is `Vm::plain_interface`, not a new dispatched
-  question, so the port's object-level repeat guard (`Vm::query_interface`) does not refuse `C`'s own plain step.
-  Steps 2, 4 and 5 ask through `Vm::query_interface`, so the asked object answers by its own rule and a question that
-  comes back to `C` gets none.
-- **Writes.** None. A NotYet from an asked object passes up unchanged. It is marked "stopped after partial writes"
-  only by a caller whose own writes came first.
-- **Tests on invented classes**, one for each branch:
-  - a controller whose class lists `I` (step 3);
-  - one that does not, with a pawn that lists it (step 4);
-  - one with no pawn (none, and `PlayerReplicationInfo` not asked);
-  - a pawn that declines, with a `PlayerReplicationInfo` that answers (step 5);
-  - `IWorldBody` with a pawn that declines, while the controller lists `IWorldBody` (still none: step 2 does not fall
-    through);
-  - the same with no pawn (step 3 answers);
-  - a mind subclass reading `MyWillowPawn` while `Pawn` names another object;
-  - a question that comes back to the controller;
-  - the unloaded-interface and unloaded-pawn refusals, with no write and no load.
+Review r1 of #589 tightened this section. The rule must be **read-only along the whole chain it reaches**: no object
+write, no class or code load, no cache fill, no random draw. Every step that cannot be answered that way is a typed
+refusal, and the refusal itself changes nothing. Reference registers none of this and keeps its current path
+(`crate::hit::ai_interface_for` and the plain answer), unchanged.
+
+**Where.**
+- Replace the `GearboxMind` open answer in `ow-combat`'s pawn-interface registration with this rule, registered for
+  `Engine.Controller`, so `AIController`, `GearboxAIController`, `GearboxMind`, `WillowMind` and their subclasses use
+  it.
+- Keep `WillowPlayerController`'s own registered answer as it is: it is still open.
+- Classes on the `PlayerController` line other than `WillowPlayerController` were not read. Register a NotYet
+  (NotRead) answer for `Engine.PlayerController` that says so, so the `Controller` rule never answers for them by
+  inheritance.
+
+**Set-up, before any question (a write the harness logs, as link 9's set-up does).** Resolve:
+- the interface-table entries of every class the rule can reach: the controller's class chain, and the classes of
+  the objects it can ask (its pawn's, the pawn's `Controller`, `DrivenVehicle` and `Mesh` classes,
+  `PlayerReplicationInfo`'s);
+- the interface classes the rules compare by path (`IAIInterface`, `IPlayerMaster`, `IWorldBody`, `ISoundBehavior`).
+
+Today `Vm::plain_interface` reaches `CodeIndex::implements`, which resolves a cold table entry and caches the target
+(`ow-object` `reflect.rs`). That is a load and a write, even when the receiver and the interface are both loaded.
+
+**A read-only plain answer (step 3).** It needs a lookup that reads only entries already resolved: yes when one
+resolved entry is the interface or derives from it, no when every entry on the chain is resolved and none is. **An
+unresolved entry on the chain is `NotYet { NotRead }`**, worded "the interface table of `<class>` has an entry not
+resolved at set-up (resolving it is a load)". This must not fall back to the caching `implements`.
+
+**Read-only dispatch down the chain (steps 2, 4 and 5).** Asking another object must not run a rule that can load.
+Two of today's rules can:
+- `Pawn`'s rule reads `DrivenVehicle` and then that vehicle's `Controller` with its field reader, which can load an
+  unloaded vehicle;
+- `WillowAIPawn`'s rule finds `IPlayerMaster` with `find_class_if_present`, which can load its code (`ow-combat`
+  `pawn_interface.rs`).
+
+So each registered rule needs a read-only form: field reads that refuse an unloaded object (`NotYet { NotRead }`
+naming it) before they read it, and class lookups by path that read only classes resolved at set-up. **A delegate
+whose class answers by a rule that has no read-only form yet is `NotYet { NotPorted }`** ("`<class>`'s QueryInterface
+rule is not ported read-only"). A delegate that is an unloaded stand-in is `NotYet { NotRead }` before anything is
+asked of it. A refusal from deep in the chain passes up with its kind and record kept, and the step that asked is
+named ahead of it (as `pawn_interface`'s `ask` names its step today).
+
+**Fields are checked only when a step reaches them.** A controller that answers itself at step 3 never reads `P` or
+`PlayerReplicationInfo`, so a missing or malformed one changes nothing there.
+
+| Case | Outcome |
+|---|---|
+| `I` is None | The script native returns None before any rule runs (`ow-vm` `natives_core.rs`, `Object.QueryInterface`), so the rule is never called with None. A direct call from Rust with None is `VmError::Script` (a caller error). |
+| Step 2: `I`'s name read | A plain read of the interface class's name. A class not resolved at set-up is `NotYet { NotRead }` |
+| Steps 2 and 4: "its pawn" field (`MyWillowPawn` or `Pawn`) not declared, or holding a value that is not an object | `VmError::Script` (a malformed class), only when the step reads it |
+| Step 5: `PlayerReplicationInfo` not declared or malformed | `VmError::Script`, only when step 5 reads it |
+| An object to ask is an unloaded stand-in | `NotYet { NotRead }`, before it is asked |
+| A world with no code layer (no definition store), so the interface tables cannot be read at all | `NotYet { LayerAbsent }` |
+| An interface-table entry not resolved at set-up | `NotYet { NotRead }` |
+| A delegate rule with no read-only form | `NotYet { NotPorted }` |
+
+**The repeat guard (step 1): an approximation, stated plainly.**
+- In the game, the guard for this rule keeps a list of the controllers answering a question by it, keyed by the
+  controller alone: while `C` is answering any interface, a question that reaches `C` again by this rule gets none.
+- The port's dispatch guard (`Vm::query_interface`) keys by (object, interface) (`ow-vm` `api.rs`). A delegate that
+  asks `C` a different interface therefore re-enters it in the port, and not in the game.
+- Proposed: the `Controller` rule keeps its own guard keyed by the controller alone, on top of the dispatch guard, so
+  it matches the game. If an implementer keeps only the dispatch guard instead, that must be documented as an
+  approximation, and the cross-interface test below must pin the port's actual behaviour.
+
+**Steps.** As section 2, in order. Step 3 is the read-only plain answer above, not a new dispatched question, so the
+dispatch guard does not refuse `C`'s own plain step. Steps 2, 4 and 5 ask through the read-only dispatch.
+
+**Writes.** None. A NotYet from an asked object passes up unchanged. It is marked "stopped after partial writes" only
+by a caller whose own writes came first.
+
+**Tests on invented classes** (synthetic fixtures). Each checks the answer, and that object state (heap
+committed writes), class state (layouts, code loaded, the interface-table cache) and generator draws are unchanged.
+- The branches: a controller whose class lists `I` (step 3); one that does not, with a pawn that lists it (step 4); one
+  with no pawn (none, and `PlayerReplicationInfo` not read); a pawn that declines, with a `PlayerReplicationInfo` that
+  answers (step 5); `IWorldBody` with a pawn that declines while the controller lists `IWorldBody` (still none: step 2
+  does not fall through); the same with no pawn (step 3 answers); a mind subclass reading `MyWillowPawn` while `Pawn`
+  names another object.
+- Lazy fields: a controller that answers itself at step 3 while `PlayerReplicationInfo` is undeclared, and while it
+  holds a malformed value (the answer is still the controller); the same field reached at step 5 (`VmError::Script`).
+- A cold interface-table entry while both the controller's class and `I` are loaded: `NotYet { NotRead }`, with the
+  entry still unresolved and nothing cached.
+- A nested refusal: a loaded `WillowAIPawn` whose `DrivenVehicle` is an unloaded stand-in, reached through step 4,
+  and a `WillowAIPawn` asked `IPlayerMaster` with that class not resolved at set-up. Each is a typed NotYet, with
+  object state, class state and draws unchanged.
+- A delegate whose class has a rule with no read-only form: `NotYet { NotPorted }`.
+- No code layer: `NotYet { LayerAbsent }`.
+- The guard: a question that comes back to `C` on the same interface (none); and a cross-interface cycle, where `C` is
+  asked `I1`, its pawn asks `C` for `I2`, and `C` gets none by its own guard (or, under the documented approximation,
+  the port's pinned behaviour).
+- `None` passed directly: `VmError::Script`.
 
 ## 6. Local probe (never pushed)
 
 The probe was a throwaway local merge of #535 (the flag evaluator), #579 (the target mind), #564, #548, #555, #560,
 #523 and the link 9 spawn branches. On it, the open `GearboxMind` answer was changed, for `IAIInterface` only, to give
 the plain answer, which is section 4's result. The installed Off strict `--slice-gate`, under the machine lock, gave 1
-ok / 3 NotYet / 10 errors. Without the change it was 1 / 4 / 9. Link 9 is now an **error** at its `cast` step, at the
-unbound native `GearboxMind.GetAIComponent()`, NATIVE_AI_HOLDS.md's open row ("not resolved"). So once this answer is
-implemented, link 9's next stop is that native. Its NotYet becomes a hard error because nothing binds it in Off, which
-is that note's open work and not this one.
+ok / 3 NotYet / 10 errors. Without the change it was 1 / 4 / 9. **In that probe's world**, link 9 is an error at its
+`cast` step, at an unbound `GearboxMind.GetAIComponent()` (NATIVE_AI_HOLDS.md's open row). The error comes from the
+probe's own registrations: link 9's world registers the pawn rules but not `ow_combat::holds`, which in Off already
+binds `GetAIComponent` to a `NotYet { NotRead }` (`ow-combat` `holds.rs`). A world that registers that pack would
+stop at that NotYet instead. Either way, `GetAIComponent` is the next stop once this answer is implemented, and it is
+that native's own open work.
 
 ## Open (each UNVERIFIED)
 
@@ -134,9 +195,9 @@ is that note's open work and not this one.
 - Whether a class below `WillowMind` overrides "its pawn" again.
 - Why `IWorldBody` and `ISoundBehavior` go to the pawn first (the rule is read; the purpose is a guess: the pawn has
   the body and the sounds).
-- The exact scope of the step 1 guard. It is one list for this rule, so a question to `C` through a different rule
-  (for example the plain answer's own guard) is not blocked by it. The port's per-object guard is close to this, but
-  that is not shown.
+- The step 1 guard's exact scope. It is one list for this rule, keyed by the controller alone, so a question to `C`
+  through a different rule (for example the plain answer's own guard) is not blocked by it. That reading is from the
+  native; it is not observed.
 
 ## Live confirmation (bl-sdk, the RTSE way; not run, no session granted)
 
