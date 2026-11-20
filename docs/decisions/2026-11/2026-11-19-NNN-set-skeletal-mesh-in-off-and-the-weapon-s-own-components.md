@@ -38,7 +38,7 @@ read the native, and this lane did not open the executable or the analysis outpu
 - **Slice probe** (installed Off `--slice-gate`, strict, under the lock, on a throwaway merge with #572, #534 and #573;
   #552 conflicts with #534 and was left out): 1 ok / 5 NotYet / 8 errors. Link 8 is 1 of 5 driver steps. `make`
   passes with 6 components instanced, and `init` stops at "stopped after partial writes: value resolver class
-  WillowGame.DamageTypeAttributeValueResolver", before the run reaches `InitMeshes`, so this native's change path
-  was not reached there.
+  WillowGame.DamageTypeAttributeValueResolver". The probe's output does not show whether the native's None resets
+  ran before that stop, and the mesh-change path (`InitMeshes`) was not reached.
 - **Verified:** the host tests and the slice probe above only. **UNVERIFIED in the running game**: every rule
   here, and the harness input (the note's live check 1 would confirm per-weapon components).
