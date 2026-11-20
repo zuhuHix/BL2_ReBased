@@ -24,8 +24,18 @@ use super::*;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 fn package() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty"]);
+    let mut t = ScriptToy::new(&["Object", "Int", "Struct"]);
     let object = t.class("Object", 0);
+    // The native's declaration (review r1 of #582, item 2): a static native of WillowWeapon taking the definition
+    // data struct, so the VM derives the key and the tests call it through the VM.
+    let weapon = t.class("WillowWeapon", object);
+    let data = ow_package::testkit::reflect::toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
+    t.prop("Object", data, "WeaponTypeDefinition", 0, object);
+    t.prop("Object", data, "ElementalPartDefinition", 0, object);
+    let mut arg = ow_package::testkit::script::Param::new("Struct", "WeaponData");
+    arg.type_ref = data;
+    let spec = ow_package::testkit::script::FunctionSpec::new(0x400 | 0x20000 | 0x2000, "StaticGetWeaponDamageType");
+    t.function(weapon, "StaticGetWeaponDamageType", &[arg], Some(("Object", object)), &[], &spec, |_| None);
     let weapon_type = t.class("ToyWeaponType", object);
     t.prop("Object", weapon_type, "DefaultDamageTypeDefinition", 0, object);
     let part = t.class("ToyPart", object);
@@ -88,7 +98,8 @@ fn fx(mode: ParityMode) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-inventory-damage-type-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
-    let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
+    let files: Vec<(&str, &[u8])> = vec![("WillowGame.upk", &bytes)];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let object = vm.find_class("WillowGame.Object").unwrap();
     let o = PropKind::Object { class: object };
@@ -254,4 +265,85 @@ fn the_core_chooses_the_custom_type_else_the_default() {
     assert_eq!(choose(Some(a), None), Some(a));
     assert_eq!(choose(Some(a), Some(b)), Some(b));
     assert_eq!(choose(None, None), None);
+}
+
+// ---- Through the VM (review r1 of #582, item 2) ---------------------------------------------------------------------
+
+const FUNCTION: &str = "WillowGame.WillowWeapon.StaticGetWeaponDamageType";
+
+/// The fixture with the pack's key-bound equip natives registered, as the inventory pack registers them
+/// (`manager::register_equip_keys`; the whole pack needs the game's other packages).
+fn packed(mode: ParityMode) -> Fx {
+    let mut x = fx(mode);
+    crate::manager::register_equip_keys(&mut x.vm).unwrap();
+    x
+}
+
+fn package_data(x: &mut Fx, fields: &[(&str, Option<ObjRef>)]) -> Value {
+    x.vm.find_class("WillowGame.WillowWeapon").unwrap();
+    let ty = x.vm.space.classes.struct_by_path("WillowGame.WillowWeapon.WeaponDefinitionData").expect("the package's struct");
+    x.args(ty, fields)
+}
+
+fn call(x: &mut Fx, arg: Value) -> Result<Value, VmError> {
+    let f = x.vm.find_function(FUNCTION).unwrap();
+    x.vm.call(f, None, vec![arg]).map(|r| r.ret)
+}
+
+fn refused_literal(r: Result<Value, VmError>, what: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => assert_eq!((&*n.what, n.missing), (what, Missing::NotRead)),
+        other => panic!("expected NotYet {what:?}, got {other:?}"),
+    }
+}
+
+/// The package's declaration gives the VM key the binding uses, and the pack binds it in Off: the answers and the two
+/// refusals come back through the VM call (the texts as literals).
+#[test]
+fn off_answers_through_the_vm() {
+    let mut x = packed(ParityMode::Off);
+    let f = x.vm.find_function(FUNCTION).unwrap();
+    assert_eq!(x.vm.function(f).and_then(|d| d.native_key.clone()).as_deref(), Some(KEY), "the VM-generated key");
+    assert!(x.vm.has_native(KEY), "the pack registered it");
+    let none = package_data(&mut x, &[]);
+    assert_eq!(call(&mut x, none).unwrap(), Value::Object(None));
+    let ty = x.handle("Type");
+    let unloaded = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty))]);
+    refused_literal(call(&mut x, unloaded), "StaticGetWeaponDamageType: the weapon type definition is not loaded (a load is a write)");
+    let ty = x.loaded("Type");
+    let part = x.handle("Part");
+    let unloaded_part = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty)), ("ElementalPartDefinition", Some(part))]);
+    refused_literal(call(&mut x, unloaded_part), "StaticGetWeaponDamageType: the elemental part definition is not loaded (a load is a write)");
+    let part = x.loaded("Part");
+    let shock = x.handle("Shock");
+    let elemental = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty)), ("ElementalPartDefinition", Some(part))]);
+    assert_eq!(call(&mut x, elemental).unwrap(), Value::Object(Some(shock)));
+}
+
+/// Review r1 of #582, item 1: a non-struct argument and a struct with no registered layout are script errors naming
+/// the field check 1 reads, through the VM call.
+#[test]
+fn a_malformed_argument_names_the_field_through_the_vm() {
+    let mut x = packed(ParityMode::Off);
+    let unregistered = Value::Struct(std::rc::Rc::new(ow_object::value::StructValue {
+        ty: ow_object::ids::StructId::new(u32::MAX >> 1),
+        fields: Vec::new(),
+    }));
+    for arg in [Value::Int(3), unregistered] {
+        match call(&mut x, arg.clone()) {
+            Err(VmError::Script { message, .. }) => assert!(message.contains("WeaponTypeDefinition"), "{arg:?}: {message}"),
+            other => panic!("{arg:?}: expected a script error, got {other:?}"),
+        }
+    }
+}
+
+/// Reference binds nothing: the VM's stub policy answers, not this binding.
+#[test]
+fn reference_does_not_answer_through_the_binding() {
+    let mut x = packed(ParityMode::Reference);
+    assert!(!x.vm.has_native(KEY));
+    let ty = x.loaded("Type");
+    let normal = x.handle("Normal");
+    let data = package_data(&mut x, &[("WeaponTypeDefinition", Some(ty))]);
+    assert_ne!(call(&mut x, data).ok(), Some(Value::Object(Some(normal))), "the binding did not answer");
 }

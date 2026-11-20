@@ -58,8 +58,15 @@ pub fn choose(type_default: Option<ObjRef>, part_custom: Option<ObjRef>) -> Opti
 
 /// Struct field `name` of `data` as an object reference; a missing or non-object field is a data error.
 fn struct_object(vm: &Vm, data: &Value, name: &str) -> Result<Option<ObjRef>, VmError> {
-    let s = data.as_struct().ok_or_else(|| bad(NATIVE, "the argument is not a WeaponDefinitionData struct"))?;
-    let layout = vm.space.classes.struct_layout(s.ty).ok_or_else(|| bad(NATIVE, "the argument's struct has no layout"))?;
+    // Both errors name the field read (review r1 of #582, item 1).
+    let s = data
+        .as_struct()
+        .ok_or_else(|| bad(NATIVE, format!("WeaponDefinitionData.{name}: the argument is not a WeaponDefinitionData struct")))?;
+    let layout = vm
+        .space
+        .classes
+        .struct_layout(s.ty)
+        .ok_or_else(|| bad(NATIVE, format!("WeaponDefinitionData.{name}: the argument's struct has no registered layout")))?;
     let (index, decl) = vm
         .space
         .names

@@ -52,3 +52,16 @@ at 3d948c43, deleted after:
 - #573 (0b9dbc0b), #534 (8fc0420b) and #552 (0438f6b3) were left out because each conflicts with #572 (`equip_run.rs`,
   `registry.rs`, `manager.rs`), and the brief included them only if they merged cleanly. So link 8 does not reach
   `StaticGetWeaponDamageType` on this probe, and #576's expected next stop (`SetSkeletalMesh`) is not confirmed here.
+
+**Review r1 of #582:**
+1. **Check 1's errors** name the field when the argument is not a struct, or when its struct has no registered
+   layout.
+2. **The tests go through the VM:**
+   - the synthetic package declares the static native, and its VM-generated key is asserted to be the binding's key;
+   - the pack's key-bound equip natives (the slots, the internal slots and this native) now register through one
+     helper, `manager::register_equip_keys`. The pack calls it, and so do the tests;
+   - the tests call the native through the VM in Off: None, the elemental answer, the two refusals as literal texts,
+     and both malformed arguments;
+   - in Reference, the binding is absent.
+
+   ow-inventory now passes 190 / 0.
