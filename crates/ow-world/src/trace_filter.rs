@@ -41,11 +41,13 @@
 //! **The touch's line check** ([`Query::PointLine`]; lane IMPL-TOUCH-PICKUP-TRACE, from NATIVE_TOUCH_PICKUP_TRACE.md
 //! sections 2 and 4, UNVERIFIED): a point line through the world's single-line routine with the flags [`TOUCH_TRACE`]
 //! (plus [`ONE_RESULT`]) and a **source actor** ([`Source`]). Two steps differ from the spawn's queries:
-//! - **the source actor's exclusion**, after the per-component test and before the owner's row: a primitive whose
-//!   owner is the source actor, or in its `Base` chain, is not tested. The chain is read only when a candidate reaches
-//!   this step, from resident objects through lookup-only names. A link the store has not loaded is
-//!   [`Unread::BaseChainLink`]; the walk stops at None and at a link already seen (a cycle); a class that declares no
-//!   `Base` is a data error;
+//! - **the source actor's exclusion**, after the primitive's own flags and before any flag of its owner is read: a
+//!   primitive whose owner is the source actor, or in its `Base` chain, is not tested. The chain is read only when a
+//!   candidate reaches this step, from resident objects through lookup-only names; the walk stops at None and at a
+//!   link already seen (a cycle); a class that declares no `Base` is a data error. A link the store has not loaded
+//!   leaves the exclusion undecided: the remaining read filters still run, and only a primitive they leave as a
+//!   possible blocker is [`Unread::BaseChainLink`] (review r1 of #638, item 1). An owner that is itself an unloaded
+//!   handle, with the chain undecided, is [`Unread::BaseChainLink`] too, since its flags cannot be read;
 //! - **a `bPawnsOnly` volume** is [`Unread::SourceVolumeTest`] (the source actor's test, not read) instead of rejected.
 //!
 //! A primitive every read test accepts is still [`Unread::HashAdmission`]. Only when a test installs the hash stand-in
@@ -391,20 +393,24 @@ pub fn tested_from(
     if !flag(space, primitive, query.blocking_flag())? {
         return Ok(Candidate::NotTested);
     }
+    // The source actor's exclusion (module documentation), before any flag of the owner is read. An undecided chain
+    // (an unloaded link) is kept pending: the read filters below still reject what they can.
+    let undecided = match source {
+        Some(s) => match chain_of(space, s, owner)? {
+            Chain::Excluded => return Ok(Candidate::NotTested),
+            Chain::Unloaded if (s.unloaded)(owner) => return Ok(Candidate::Unsupported(Unread::BaseChainLink)),
+            Chain::Unloaded => true,
+            Chain::Outside => false,
+        },
+        None => false,
+    };
+    let unsupported = |rule: Unread| Candidate::Unsupported(if undecided { Unread::BaseChainLink } else { rule });
     // The per-component test (note section 2), on the live primitive and its live owner.
     if !flag(space, primitive, "CollideActors")? || !flag(space, owner, "bCollideActors")? {
         return Ok(Candidate::NotTested);
     }
-    // The source actor's exclusion (module documentation), read only for a candidate that reaches it.
-    if let Some(s) = source {
-        match chain_of(space, s, owner)? {
-            Chain::Excluded => return Ok(Candidate::NotTested),
-            Chain::Unloaded => return Ok(Candidate::Unsupported(Unread::BaseChainLink)),
-            Chain::Outside => {}
-        }
-    }
     let Some(row) = row_of(space, class) else {
-        return Ok(Candidate::Unsupported(Unread::OwnerClass(ow_attr::eval::class_path(space, owner))));
+        return Ok(unsupported(Unread::OwnerClass(ow_attr::eval::class_path(space, owner))));
     };
     let read = |name: &str| flag(space, owner, name);
     let mut o = Owner::default();
@@ -414,7 +420,7 @@ pub fn tested_from(
             if row == Row::Volume {
                 o.pawns_only = read("bPawnsOnly")?;
                 if o.pawns_only && source.is_some() {
-                    return Ok(Candidate::Unsupported(Unread::SourceVolumeTest));
+                    return Ok(unsupported(Unread::SourceVolumeTest));
                 }
             }
         }
@@ -436,9 +442,9 @@ pub fn tested_from(
         return Ok(Candidate::NotTested);
     }
     if source.is_some_and(|s| s.admission_established) {
-        return Ok(Candidate::Unsupported(Unread::PrimitiveLineTest));
+        return Ok(unsupported(Unread::PrimitiveLineTest));
     }
-    Ok(Candidate::Unsupported(Unread::HashAdmission))
+    Ok(unsupported(Unread::HashAdmission))
 }
 
 /// One sweep hit: where, the surface normal, and the fraction of the whole sweep.

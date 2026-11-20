@@ -27,6 +27,9 @@ use ow_world::touch_trace::{AdmissionStandIn, LEVEL_PART, TOUCH_TRACE, ZERO_LENG
 use super::*;
 
 const NATIVE: u32 = 0x400 | 0x20000;
+const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
+/// A script function that calls the native with `None` for both vectors (review r1 of #638, item 2).
+const CALL_NONE_FN: &str = "Engine.DroppedPickup.ToyTouchWithNone";
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const TRACE_FN: &str = "Engine.DroppedPickup.TouchPickupTrace";
 
@@ -51,6 +54,12 @@ fn engine() -> Vec<u8> {
     t.prop("Object", actor, "CollisionComponent", 0, object);
     // Declared so the invented struct's layout is registered with the class.
     t.prop("Struct", actor, "ToyNotVectorField", 0, not_vector);
+    // Another struct named Vector, with float X, Y and Z, not the declared one (review r1 of #638, item 2).
+    let other_vector = toy_struct(&mut t, actor, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", other_vector, f, 0, 0);
+    }
+    t.prop("Struct", actor, "ToyOtherVectorField", 0, other_vector);
     let volume = t.class("Volume", actor);
     t.prop("Bool", volume, "bPawnsOnly", 0, 0);
     t.class("InterpActor", actor);
@@ -63,9 +72,22 @@ fn engine() -> Vec<u8> {
     for b in ["BulletListener", "BlockZeroExtent", "CollideActors"] {
         t.prop("Bool", primitive, b, 0, 0);
     }
+    // A primitive with its own Owner field (review r1 of #638, item 1).
+    let owned = t.class("ToyOwnedPrimitive", primitive);
+    t.prop("Object", owned, "Owner", 0, actor);
     let dropped = t.class("DroppedPickup", actor);
     let at = |name: &str| Param { type_ref: vector, ..Param::new("Struct", name) };
-    t.function(dropped, "TouchPickupTrace", &[at("StartLoc"), at("EndLoc")], Some(("Bool", 0)), &[], &FunctionSpec::new(NATIVE, "TouchPickupTrace"), |_| None);
+    let trace = t.function(dropped, "TouchPickupTrace", &[at("StartLoc"), at("EndLoc")], Some(("Bool", 0)), &[], &FunctionSpec::new(NATIVE, "TouchPickupTrace"), |_| None);
+    t.function(dropped, "ToyTouchWithNone", &[], None, &[], &FunctionSpec::new(SCRIPT, "ToyTouchWithNone"), |_| {
+        let mut a = ow_package::testkit::script::Asm::new();
+        a.stmt().final_function(trace.function, |a| {
+            a.raw(&[ow_script::ops::op::NO_OBJECT]);
+            a.raw(&[ow_script::ops::op::NO_OBJECT]);
+        });
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.build()
 }
 
@@ -164,6 +186,7 @@ fn fx_mode(mode: ParityMode, sweep: Option<Sweep>) -> Fx {
         "Engine.InterpActor",
         "Engine.Pawn",
         "Engine.PrimitiveComponent",
+        "Engine.ToyOwnedPrimitive",
     ] {
         vm.find_class(c).unwrap();
     }
@@ -463,4 +486,51 @@ fn a_primitive_that_blocks_no_zero_extent_is_not_tested() {
 fn reference_binds_nothing() {
     let x = fx_mode(ParityMode::Reference, Some(Sweep::Clear));
     assert!(!x.vm.has_native(TOUCH_PICKUP_TRACE));
+}
+
+/// Review r1 of #638, item 1: the `Base` chain is decided before the owner's flags are read, and an unloaded link
+/// refuses only a primitive the read filters leave as a possible blocker.
+#[test]
+fn an_unloaded_base_link_refuses_only_a_possible_blocker() {
+    // Only a pawn's primitive: the Pawn row rejects it, so the undecided chain does not refuse.
+    let mut x = fx(Some(Sweep::Clear));
+    let lazy = x.lazy("Actor");
+    let p = x.pickup;
+    x.set(p, "Base", Value::Object(Some(lazy)));
+    x.blocker("Engine.Pawn");
+    assert_eq!(x.call().unwrap(), Value::Bool(true));
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
+    // A primitive whose own Owner is the unloaded Base: recognised as the chain's link before its flags are read.
+    let mut x = fx(Some(Sweep::Clear));
+    let lazy = x.lazy("Actor");
+    let p = x.pickup;
+    x.set(p, "Base", Value::Object(Some(lazy)));
+    let (walked, _) = x.blocker("WillowGame.ToyGameActor");
+    let owned = make(&mut x.vm, "Engine.ToyOwnedPrimitive");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(owned, f, Value::Bool(true));
+    }
+    x.set(owned, "Owner", Value::Object(Some(lazy)));
+    x.set(walked, "CollisionComponent", Value::Object(Some(owned)));
+    assert_eq!(x.call().unwrap(), Value::Bool(true));
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
+}
+
+/// Review r1 of #638, item 2: an argument must be the declared `Vector` struct. Another struct named `Vector` is a
+/// data error, and so is a script `None`, which the interpreter hands over unchanged for this native in Off.
+#[test]
+fn only_the_declared_vector_passes() {
+    let mut x = fx(Some(Sweep::Clear));
+    let p = x.pickup;
+    let ty = x.vm.space.classes.struct_by_path("Engine.Actor.Vector").expect("the other Vector");
+    let other = Value::Struct(Rc::new(StructValue { ty, fields: vec![Value::Float(1.0); 3] }));
+    let args = vec![other, x.vector_of("Vector", END)];
+    assert!(script(x.call_with(Some(p), args)).contains("argument 0 is not a Vector"));
+    // From script: TouchPickupTrace(None, None).
+    let f = x.vm.find_function(CALL_NONE_FN).unwrap();
+    let start = marks(&x.vm);
+    let r = x.vm.call(f, Some(p), vec![]).map(|r| r.ret);
+    assert_eq!(marks(&x.vm), start, "nothing moved: {r:?}");
+    assert!(script(r).contains("not a Vector"));
+    assert!(x.service.as_ref().unwrap().asked.borrow().is_empty(), "nothing reached the collision service");
 }

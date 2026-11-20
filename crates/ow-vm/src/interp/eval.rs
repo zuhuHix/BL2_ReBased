@@ -1393,8 +1393,13 @@ fn parameter_shape(vm: &Vm, function: FuncId) -> Vec<(bool, bool)> {
 /// `==(vector,vector)` / `!=(vector,vector)`, then compares a zero vector where the C++ compares `None` (unequal to a
 /// zero vector there). The sweeps of the nine code packages make this conversion 4 times, none for those two natives
 /// (decision 2026-11-15-28).
+///
+/// A native whose key [`Vm::keep_struct_none`] holds (Off only) is handed the `None` (review r1 of #638, item 2).
 fn native_struct_zero(vm: &Vm, function: FuncId, i: usize) -> Option<Value> {
     let decl = vm.function(function).filter(|d| d.is_native())?;
+    if decl.native_key.as_deref().is_some_and(|k| vm.keeps_struct_none(k)) {
+        return None;
+    }
     match &decl.params.get(i)?.kind {
         kind @ PropKind::Struct(_) => Some(vm.space.classes.zero_value(kind)),
         _ => None,

@@ -37,8 +37,23 @@ executable. **Every rule stays UNVERIFIED** in the running game. The note's sect
   - NATIVE_INDEX gains the note's row;
   - NATIVE_PICKUP.md section 3's "direction resolved" now points to the note's correction.
 
+**Review r1 of #638:**
+- **The Base chain** is now decided after the primitive's own flags and before any flag of its owner. An owner the
+  chain names (an unloaded `Base` handle included) is not tested without its flags being read. An unloaded link
+  leaves the chain undecided, and the remaining read filters still run. Only a primitive they leave as a possible
+  blocker is "a Base-chain link the store has not loaded", so a pawn's primitive is still rejected by its row.
+- **The vectors.** Each argument's struct id must be the declared parameter's: another struct named `Vector` is a
+  data error. A script `None` no longer becomes a zero vector for this native in Off. The new
+  `Vm::keep_struct_none(key)`, Off only, exempts a native key from the interpreter's conversion (decision
+  2026-11-15-28, cause C), and the native refuses `None` as a data error. Reference keeps the conversion. The
+  change in `crates/ow-vm/src/interp/eval.rs` is that one check.
+- **The harness line.** The pickup run records the `NoLevel` service in its `harness` lines, as an UNVERIFIED
+  stand-in.
+
 **Tests** (`crates/ow-inventory/src/pickup_touch_tests.rs`): the note's 13 cases, with 10a and 10b, on invented
-packages. Every call goes through the VM and asserts #518's three counters (`Heap::committed_writes`,
+packages, and r1's two cases:
+- an unloaded `Base` with only a pawn, then with a primitive whose own `Owner` is that handle;
+- another `Vector` struct, then `None` passed from bytecode. Every call goes through the VM and asserts #518's three counters (`Heap::committed_writes`,
 `GameRng::draws`, `DefStore::load_transitions`) and the name table's length unchanged. The old stub test in
 `pickup_tests.rs` now expects `LayerAbsent` with no service. Its fixture's `Vector` gains `X`, `Y` and `Z`.
 

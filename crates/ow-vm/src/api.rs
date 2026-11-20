@@ -34,7 +34,7 @@ use ow_attr::AttributeSystem;
 use ow_attr::api::{AttrError, AttrWorld, EngineQuery, GlobalSlots, NumForms, WorldParts};
 use ow_core::rand::{CrtStream, GameRng, Rand15};
 use ow_core::sim::SimClock;
-use ow_core::{DetMap, NotYet, ObjectPath, ParityMode};
+use ow_core::{DetMap, DetSet, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_object::heap::{HeapError, ObjectSpace, Origin};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropId};
@@ -542,6 +542,8 @@ pub struct Vm {
     function_by_path: DetMap<ObjectPath, FuncId>,
     /// Natives bound VM-wide by key ([`Vm::register_native`]): every function with that key uses one.
     natives: DetMap<String, NativeFn>,
+    /// Native keys whose struct parameters receive a script `None` as given, Off only ([`Vm::keep_struct_none`]).
+    struct_none_kept: DetSet<String>,
     /// Natives bound for one package's functions ([`Vm::register_native_for`]), by (package, key); the package is
     /// the first component of the function's path, lowercased (paths compare case-insensitively).
     natives_at: DetMap<(String, String), NativeFn>,
@@ -620,6 +622,7 @@ impl Vm {
             functions: Vec::new(),
             function_by_path: DetMap::new(),
             natives: DetMap::new(),
+            struct_none_kept: DetSet::new(),
             natives_at: DetMap::new(),
             natives_at_count: DetMap::new(),
             iterators: DetMap::new(),
@@ -779,6 +782,21 @@ impl Vm {
         }
         self.natives.insert(key.to_string(), f);
         Ok(())
+    }
+
+    /// In `ParityMode::Off` only, a script `None` given by value to a struct parameter of the native bound to `key`
+    /// reaches the native as `None`, so the native can refuse it, instead of becoming the zero struct (the
+    /// interpreter's conversion, decision 2026-11-15-28, cause C). Reference keeps the conversion (review r1 of #638,
+    /// item 2). Does nothing in Reference.
+    pub fn keep_struct_none(&mut self, key: &str) {
+        if self.parity == ParityMode::Off {
+            self.struct_none_kept.insert(key.to_string());
+        }
+    }
+
+    /// Whether [`Vm::keep_struct_none`] holds `key`.
+    pub fn keeps_struct_none(&self, key: &str) -> bool {
+        self.struct_none_kept.contains(key)
     }
 
     /// Binds the native implementation `imp` to the native function `f` and to every function with the same key in

@@ -46,6 +46,7 @@
 use std::rc::Rc;
 
 use ow_core::{NotYet, ParityMode};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
@@ -85,14 +86,20 @@ pub const TOUCH_TRACE_OF: &str = "the touch trace of";
 /// The refusal of an unloaded receiver.
 pub const TOUCH_UNLOADED: &str = "the touch trace of a pickup the store has not loaded (the walk needs its Base chain)";
 
-/// Argument `i` as a `Vector` struct's three floats, else a data error.
+/// Argument `i` as the declared `Vector` struct's three floats, else a data error: a struct of any other id (another
+/// struct named `Vector` included) and a script `None` (kept by [`Vm::keep_struct_none`]) are refused (review r1 of
+/// #638, item 2).
 fn vector_arg(c: &NativeCall<'_>, i: usize, what: &str) -> Result<[f32; 3], VmError> {
     let v = c.arg(i)?;
     let not = || bad(what, format!("argument {i} is not a Vector"));
     let s = v.as_struct().ok_or_else(not)?;
     let classes = &c.vm.space.classes;
-    let layout = classes.struct_layout(s.ty).ok_or_else(not)?;
-    if !layout.path().name().eq_ignore_ascii_case("Vector") {
+    let declared = c.vm.function(c.function).and_then(|f| f.params.get(i)).map(|p| p.kind.clone());
+    let Some(PropKind::Struct(want)) = declared else {
+        return Err(bad(what, format!("parameter {i} is not declared a struct")));
+    };
+    let layout = classes.struct_layout(want).ok_or_else(not)?;
+    if s.ty != want || !layout.path().name().eq_ignore_ascii_case("Vector") {
         return Err(not());
     }
     let mut out = [0.0; 3];
@@ -204,6 +211,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     for (key, f) in natives {
         vm.register_native(key, f)?;
     }
+    // The touch trace refuses a script None in place of a vector (step 3), so the interpreter hands it over.
+    vm.keep_struct_none(TOUCH_PICKUP_TRACE);
     Ok(())
 }
 

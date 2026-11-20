@@ -1257,6 +1257,11 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
         ran[i] = Some(r);
         return;
     }
+    r.harness.push(
+        "harness input: the world's collision service is link 9's NoLevel (an UNVERIFIED stand-in: this world loads \
+         no level, so every level part of the touch trace is clear)"
+            .to_string(),
+    );
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).
