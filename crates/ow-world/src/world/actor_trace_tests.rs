@@ -748,3 +748,28 @@ fn a_collide_flag_of_another_kind_is_a_script_error() {
     }
     assert_eq!(x.counters(), before);
 }
+
+/// #659 r1: a primitive with a collide flag clear whose bounds meet the swept box is still a miss (its bounds are
+/// never asked); a terrain's primitive with both flags clear is not skipped, so its meeting bounds name the terrain
+/// handling (T7).
+#[test]
+fn a_clear_flag_wins_over_meeting_bounds_but_not_for_terrain() {
+    let (mut x, toy) = fx(Some(Toy::default()));
+    let toy = toy.unwrap();
+    let t = x.target();
+    let (a, p) = x.obstacle("Engine.Actor", "Quiet");
+    x.set(p, "CollideActors", Value::Bool(false));
+    x.set(a, "bCollideActors", Value::Bool(false));
+    toy.bounds.borrow_mut().insert(p, MEETS);
+    let before = x.counters();
+    let args = x.link9([0.0; 3]);
+    assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "meeting bounds, flags clear: a miss");
+    assert_eq!(x.counters(), before);
+    let (ground, gp) = x.obstacle("Engine.Terrain", "Ground");
+    x.set(gp, "CollideActors", Value::Bool(false));
+    x.set(ground, "bCollideActors", Value::Bool(false));
+    toy.bounds.borrow_mut().insert(gp, MEETS);
+    let args = x.link9([0.0; 3]);
+    let what = format!("Actor.Trace: {} (the live actor primitive Ground's GroundMesh)", crate::trace_filter::TERRAIN_HANDLING);
+    x.refuses(t, args, not_read(), &what);
+}

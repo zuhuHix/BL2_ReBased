@@ -11,11 +11,15 @@ native or write the note. Synthetic fixtures only.
   - Either clear: the primitive is left out, and nothing more of it is read.
   - Both set: the walk goes on as before (T5 for missing bounds, out for disjoint bounds, T7 for meeting ones).
   - Each field must be declared as a bool on the object's class, else a `VmError::Script` naming the class.
-  - `bAttached` is not used.
+  - **Not for terrain** (#659 r1): when the walked actor or the owner is a terrain, the walk goes on as before, and
+    meeting bounds are T7 with the terrain handling.
+  - A skipped primitive's bounds are never asked, so meeting bounds with a flag clear are a miss, not T7.
+  - `bAttached` and `BulletListener` are not read.
   - The change is read-only; it writes, loads, draws and interns nothing.
 - **Verified:** host tests on invented packages cover the note's five tests: the primitive's flag clear, the owner's
   flag clear (both a miss where it was T5), both set with no bounds (T5), both set meeting (T7), and an int
-  `CollideActors` (`VmError::Script`). Every answer leaves #518's three counters and the name table unchanged. The
+  `CollideActors` (`VmError::Script`). Plus #659 r1's two cases: meeting bounds with the flags clear are a miss, and a
+  terrain's primitive with the flags clear is not skipped (T7, the terrain handling). Every answer leaves #518's three counters and the name table unchanged. The
   fixture's obstacles now set both flags, so the earlier T5 and T7 tests keep their meaning.
 - **Not verified:** nothing in the running game; the rule is **UNVERIFIED**. This is the hash admission's necessary
   condition only, not the whole admission.
