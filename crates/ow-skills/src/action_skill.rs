@@ -697,22 +697,17 @@ impl NativePack for Pack {
     }
 }
 
-/// The function path the skill worlds bind `Actor.AttachComponent(object)` under.
-pub const ATTACH_COMPONENT_PATH: &str = "Engine.Actor.AttachComponent";
-
 /// `Actor.AttachComponent(object)` for the cast's worlds (lane BIND-ATTACHCOMPONENT-SKILL-WORLDS, UNVERIFIED in the
 /// running game): Phaselock's `LiftActionSkill.BeginLifting` attaches its light to the target. The one rule is
 /// `ow_inventory::attach_mesh`'s (NATIVE_ATTACH_MESH_TO_PICKUP.md part 1), bound here because the cast's worlds do not
-/// register the inventory pack. Off only and keep-existing ([`bind`]): a world whose inventory pack bound the key
-/// first keeps that binding, which is the same function. The rule still needs the world's scene layer
+/// register the inventory pack, through `ow_inventory::attach_mesh::bind_engine_attach` (`Engine`'s function only, Off
+/// only, keep-existing). A world whose inventory pack bound the key first keeps that binding, the same function; one
+/// whose inventory registers after reuses this binding (review r1 of #623). The rule still needs the world's scene layer
 /// (`ow_inventory::attach_mesh::SceneLayer`); without one it refuses layer-absent before any write.
 ///
 /// Reference: unbound, as before.
 fn register_attach_component(vm: &mut Vm) -> Result<(), VmError> {
-    if vm.parity != ow_core::ParityMode::Off {
-        return Ok(());
-    }
-    bind(vm, ATTACH_COMPONENT_PATH, Rc::new(ow_inventory::attach_mesh::attach_native))
+    ow_inventory::attach_mesh::bind_engine_attach(vm)
 }
 
 /// `AttributeDefinition.GetValue` for the cast's worlds (lane IMPL-LINK9-ATTR-GETVALUE): the Phaselock cast reads

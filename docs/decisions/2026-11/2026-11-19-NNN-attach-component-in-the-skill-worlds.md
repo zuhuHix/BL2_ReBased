@@ -31,3 +31,19 @@ NATIVE_ATTACH_MESH_TO_PICKUP.md; it reuses that note's existing implementation.
   - both combined registration orders keep one binding;
   - Reference binds nothing.
 - **UNVERIFIED** in the running game, as the rule itself is.
+
+## Edits: review r1 of #623
+
+- **The reuse is narrowed.** `attach_mesh::register` skips the key only when its single binding is
+  `bind_engine_attach`'s. That function is in `ow-inventory`, binds `Engine.Actor.AttachComponent` alone, and records
+  that it did. Any other binding of the key, such as a conflicting handler on another package's function, keeps the
+  duplicate-registration error. `attach_native` is private again, and the action-skill pack calls
+  `bind_engine_attach`.
+- **New read-only accessor:** `ow-vm` `Vm::package_bindings(key)`.
+- **The orders differ by design:**
+  - inventory first binds the key VM-wide;
+  - the action-skill pack first binds `Engine`'s function alone, and inventory then reuses it.
+
+  The order test covers both with a second invented package, and a test with a conflicting handler keeps the
+  duplicate error.
+- **The success test** asserts exactly four committed writes.

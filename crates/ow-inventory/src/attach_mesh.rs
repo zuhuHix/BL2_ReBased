@@ -398,14 +398,47 @@ fn hide_bone_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-/// The `Actor.AttachComponent(object)` native: [`attach_component`] on the call's receiver and argument. Public so the
-/// skill worlds bind the same rule (`ow_skills::action_skill::Pack`, lane BIND-ATTACHCOMPONENT-SKILL-WORLDS); there is
-/// one implementation.
-pub fn attach_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+fn attach_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let actor = this(c, ATTACH_COMPONENT)?;
     let component = object_of(c.arg(0)?, ATTACH_COMPONENT)?;
     attach_component(c.vm, actor, component)?;
     Ok(Value::None)
+}
+
+/// The function path the skill worlds bind `Actor.AttachComponent(object)` under.
+pub const ATTACH_COMPONENT_PATH: &str = "Engine.Actor.AttachComponent";
+
+/// The record that [`bind_engine_attach`] bound the attach for `Engine` (a VM service, set once).
+struct EngineAttachBound;
+
+/// Binds this module's `Actor.AttachComponent` rule to [`ATTACH_COMPONENT_PATH`] alone in `ParityMode::Off`, for the
+/// skill worlds (`ow_skills::action_skill::Pack`, lane BIND-ATTACHCOMPONENT-SKILL-WORLDS), which do not register this
+/// module. Keep-existing: a function the VM does not declare, one that is not native, or one already bound gets
+/// nothing. Reference binds nothing.
+///
+/// Unlike [`register`], this binds `Engine`'s function only, not the key VM-wide: a same-keyed function of another
+/// package stays unbound (review r1 of #623).
+pub fn bind_engine_attach(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let Ok(id) = vm.find_function(ATTACH_COMPONENT_PATH) else {
+        return Ok(());
+    };
+    if !vm.function(id).is_some_and(|d| d.is_native()) || vm.is_bound(id) {
+        return Ok(());
+    }
+    vm.register_native_for(id, Rc::new(attach_native))?;
+    vm.add_service(EngineAttachBound)?;
+    Ok(())
+}
+
+/// Whether the key's only binding is [`bind_engine_attach`]'s: its record is set, no VM-wide binding exists, and one
+/// package binds the key.
+fn reuses_engine_attach(vm: &Vm) -> bool {
+    vm.service::<EngineAttachBound>().is_some()
+        && !vm.native_keys().any(|k| k == ATTACH_COMPONENT)
+        && vm.package_bindings(ATTACH_COMPONENT) == 1
 }
 
 /// Binds the natives of parts 1 and 2 in `ParityMode::Off`; Reference binds nothing. The scene layer is the world set-up's to add
@@ -418,9 +451,9 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(SET_HIDDEN, Rc::new(hidden_native))?;
     vm.register_native(SET_OWNER_NO_SEE, Rc::new(owner_no_see_native))?;
     vm.register_native(HIDE_BONE_BY_NAME, Rc::new(hide_bone_native))?;
-    // Keep-existing (lane BIND-ATTACHCOMPONENT-SKILL-WORLDS): the action-skill pack may have bound the same function
-    // for `Engine` first; a second registration would be refused as a duplicate.
-    if !vm.has_native(ATTACH_COMPONENT) {
+    // The one reuse allowed (review r1 of #623): [`bind_engine_attach`] bound this rule for `Engine` alone, and nothing
+    // else binds the key. Any other binding of the key keeps the duplicate-registration error.
+    if !reuses_engine_attach(vm) {
         vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))?;
     }
     // Part 2's keys, first wins (review r1 of #520): a key an earlier pack bound keeps its handler, and the others are

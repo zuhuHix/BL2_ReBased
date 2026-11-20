@@ -20,11 +20,11 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
-use ow_vm::api::{NativePack, StubPolicy, Vm};
+use ow_vm::api::{NativeCall, NativePack, StubPolicy, Vm};
 use ow_vm::error::VmError;
 use ow_world::world::{BalanceState, World};
 
-use super::ATTACH_COMPONENT_PATH;
+use ow_inventory::attach_mesh::ATTACH_COMPONENT_PATH;
 
 const NATIVE: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -55,6 +55,20 @@ fn engine() -> Vec<u8> {
     t.build()
 }
 
+/// A second invented package, `Other`, whose own `Actor` declares a native `AttachComponent` under the same key (review
+/// r1 of #623): a package binding of it is the conflicting handler.
+fn other() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&IMPORTS);
+    let object = t.class("Object", 0);
+    let actor = t.class("Actor", object);
+    let component = t.class("ActorComponent", object);
+    let new_component = Param { type_ref: component, ..Param::new("Object", "NewComponent") };
+    t.function(actor, "AttachComponent", &[new_component], None, &[], &FunctionSpec::new(NATIVE, "AttachComponent"), |_| None);
+    t.build()
+}
+
+const OTHER_ATTACH: &str = "Other.Actor.AttachComponent";
+
 struct Fx {
     world: World,
     dir: PathBuf,
@@ -80,6 +94,11 @@ enum Inventory {
 /// A world in `mode` built with the action skill pack, the inventory's registration placed by `inventory`, and the
 /// empty scene layer when `scene` is set.
 fn fx(mode: ParityMode, scene: bool, inventory: Inventory) -> Fx {
+    fx_with(mode, scene, inventory, false)
+}
+
+/// [`fx`]; with `conflict`, a refusing handler bound for `Other`'s function before any pack.
+fn fx_with(mode: ParityMode, scene: bool, inventory: Inventory, conflict: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-attach-component-{}-{}",
         std::process::id(),
@@ -87,12 +106,23 @@ fn fx(mode: ParityMode, scene: bool, inventory: Inventory) -> Fx {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     let e = engine();
-    let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", e.as_slice())], IdentityPolicy::FirstInScanOrder, mode)
-        .unwrap();
+    let o = other();
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("Engine.upk", e.as_slice()), ("Other.upk", o.as_slice())],
+        IdentityPolicy::FirstInScanOrder,
+        mode,
+    )
+    .unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode)
         .with_stub_policy(StubPolicy::refuse_all());
-    for c in ["Engine.Actor", "Engine.Pawn", "Engine.PointLightComponent"] {
+    for c in ["Engine.Actor", "Engine.Pawn", "Engine.PointLightComponent", "Other.Actor"] {
         vm.find_class(c).unwrap();
+    }
+    if conflict {
+        let f = vm.find_function(OTHER_ATTACH).unwrap();
+        vm.register_native_for(f, Rc::new(|_: &mut NativeCall<'_>| Err(NotYet::not_ported("Other attach", "TEST").into())))
+            .unwrap();
     }
     if inventory == Inventory::Before {
         ow_inventory::attach_mesh::register(&mut vm).unwrap();
@@ -154,7 +184,11 @@ impl Fx {
     }
 
     fn bound(&mut self) -> bool {
-        let f = self.world.vm.find_function(ATTACH_COMPONENT_PATH).unwrap();
+        self.bound_at(ATTACH_COMPONENT_PATH)
+    }
+
+    fn bound_at(&mut self, path: &str) -> bool {
+        let f = self.world.vm.find_function(path).unwrap();
         self.world.vm.is_bound(f)
     }
 }
@@ -167,8 +201,8 @@ fn not_yet(r: Result<Value, VmError>) -> NotYet {
 }
 
 /// Phaselock's case in the skill world: a light component attached to a pawn. The attach makes only the rule's
-/// script-visible writes: both flags false, `Owner` the pawn, the component appended to `Components`. No draw and no
-/// load.
+/// script-visible writes, exactly four committed (the two flags, `Owner`, `Components`): both flags false, `Owner` the
+/// pawn, the component appended. No draw and no load.
 #[test]
 fn the_skill_world_attaches_a_light_to_a_pawn() {
     let mut x = fx(ParityMode::Off, true, Inventory::Absent);
@@ -177,15 +211,16 @@ fn the_skill_world_attaches_a_light_to_a_pawn() {
     let light = x.obj("Engine.PointLightComponent");
     x.set(light, "bNeedsReattach", Value::Bool(true));
     x.set(light, "bNeedsUpdateTransform", Value::Bool(true));
-    let [_, draws, loads] = x.counters();
+    let before = x.counters();
     assert_eq!(x.attach(pawn, light).unwrap(), Value::None);
+    let after = x.counters();
+    assert_eq!(after[0] - before[0], 4, "exactly the four planned writes");
+    assert_eq!((after[1], after[2]), (before[1], before[2]), "no draw and no load");
     assert_eq!(
         x.written(light),
         vec![Value::Object(Some(pawn)), Value::Bool(false), Value::Bool(false), Value::Bool(false)]
     );
     assert_eq!(x.get(pawn, "Components"), Value::array(vec![Value::Object(Some(light))]));
-    let [_, draws_after, loads_after] = x.counters();
-    assert_eq!((draws_after, loads_after), (draws, loads), "no draw and no load");
 }
 
 /// Without the world's scene layer (the Phaselock world installs none) the rule refuses layer-absent before any write:
@@ -218,12 +253,14 @@ fn an_attached_light_refuses_before_any_write() {
 }
 
 /// A world with both registrations, in either order, binds the one function once (no duplicate registration) and
-/// gives the same attach.
+/// gives the same attach. The orders differ in coverage, by design: inventory first binds the key VM-wide, so
+/// `Other`'s function is bound too; the action-skill pack first binds `Engine`'s alone, and inventory reuses it.
 #[test]
 fn both_registration_orders_keep_one_binding() {
-    for order in [Inventory::Before, Inventory::After] {
+    for (order, other_bound) in [(Inventory::Before, true), (Inventory::After, false)] {
         let mut x = fx(ParityMode::Off, true, order);
         assert!(x.bound());
+        assert_eq!(x.bound_at(OTHER_ATTACH), other_bound);
         let pawn = x.obj("Engine.Pawn");
         let light = x.obj("Engine.PointLightComponent");
         x.attach(pawn, light).unwrap();
@@ -237,4 +274,21 @@ fn both_registration_orders_keep_one_binding() {
 fn reference_binds_nothing_new() {
     let mut x = fx(ParityMode::Reference, true, Inventory::Absent);
     assert!(!x.bound());
+}
+
+/// Review r1 of #623: a conflicting handler bound for another package's same-keyed function is never mistaken for the
+/// reuse. The inventory's registration keeps its duplicate-registration error with or without the action-skill pack's
+/// `Engine` binding, and the action-skill pack still binds `Engine`'s function.
+#[test]
+fn a_conflicting_binding_keeps_the_duplicate_error() {
+    let mut x = fx_with(ParityMode::Off, true, Inventory::Absent, true);
+    assert!(x.bound(), "the action-skill pack binds Engine's function beside the conflict");
+    assert!(matches!(
+        ow_inventory::attach_mesh::register(&mut x.world.vm),
+        Err(VmError::Registration { reason: "duplicate native registration", .. })
+    ));
+    let pawn = x.obj("Engine.Pawn");
+    let light = x.obj("Engine.PointLightComponent");
+    x.attach(pawn, light).unwrap();
+    assert_eq!(x.get(light, "Owner"), Value::Object(Some(pawn)));
 }

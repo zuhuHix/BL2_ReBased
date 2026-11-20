@@ -797,6 +797,12 @@ impl Vm {
             .cloned()
     }
 
+    /// How many packages bind `key` through [`Vm::register_native_for`] (read only; review r1 of #623). The VM-wide
+    /// binding, if any, is not counted: [`Vm::native_keys`] lists those.
+    pub fn package_bindings(&self, key: &str) -> usize {
+        self.natives_at_count.get(key).copied().unwrap_or(0)
+    }
+
     /// Every registered native key, in key order (read only; lane IMPL-LINK1-AFTER-LOGIN's read-back census).
     pub fn native_keys(&self) -> impl Iterator<Item = &str> {
         self.natives.keys().map(String::as_str)
