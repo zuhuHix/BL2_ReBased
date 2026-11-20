@@ -20,13 +20,13 @@ lane implements it). The decision number is pending from the hub (three digits);
   remap, the sockets and the bones. It refuses `NotRead` for the detach, the by-fit `ParentAnimComponent` stop and the
   decal case, and `LayerAbsent` for the placement when the parent is attached. Then it writes the `Attachments`
   entries and the back links in the build's write phase. The `Parent` link stays under ruling 3; when revisited, it
-  reads both meshes' bone names through the same layer. Reference is unchanged. The note has a 12-item test list.
+  reads both meshes' bone names through the same layer. Reference is unchanged. The note has a 13-item test list.
 - **Maya (installed data):**
   - three socket hits (`Shield`, `ClassMod`, `Launcher`) and five bone hits (`Root`, `Spine3` twice, `R_Thigh`,
     `Hips`): eight entries in order;
-  - the mesh's 13 socket objects are unloaded in the port, so with this answer the next stop is the first of them (the
-    store's load);
-  - a harness preload beside #592's mesh preload is left to the hub.
+  - the mesh's 13 socket objects are unloaded in the port. **The hub ruled (05:35Z)** that the implementer preloads
+    them as a harness input beside #592's mesh preload (Off only, logged before and after, "UNVERIFIED stand-in");
+    left out, the expected result is the unloaded-socket refusal at the first socket the lookup reaches.
 - **Sources:**
   - the records (#529, #622, #569);
   - the packages: class layouts, and the socket objects' names and bones;
@@ -40,3 +40,14 @@ lane implements it). The decision number is pending from the hub (three digits);
   Char_Siren.Mesh.Skel_SirenBody" in `maya:8`, ok 4 / notyet 9 / error 1. Past it (measurement only), the next stop is
   `AnimNodeSpecialMoveBlend`'s owner interface (NATIVE_ANIM_NODE_INIT.md).
 - **Index:** a NATIVE_INDEX row was added.
+- **Review r1 of #636** (FIX):
+  1. section 3 keeps the socket count and the three names the outcomes need; the inventory stays in local/;
+  2. test 10 asserts the build-wide preflight (no write, no committed entry, no prefix), and test 12 runs the plan in
+     isolation or without a `Parent` identifier;
+  3. an ordered, read-only `skeletal::find_socket` that stops at the first match, and the None-name and no-mesh exits
+     before any socket or skeleton read;
+  4. the decal-versus-detach precedence stated as deliberate, overlaps in test 9, the parent-animation stop writing no
+     entry or back link, and the placement refusal called conservative;
+  5. the harness preload is the implementer's (hub ruling);
+  6. name identity by id (the table's one id per text; bone text through `names.find`), with a numbered-name test 13;
+  7. the first gate's observed exit, inferred reading and Off assumption separated.

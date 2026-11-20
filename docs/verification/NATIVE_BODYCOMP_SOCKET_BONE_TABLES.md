@@ -66,8 +66,9 @@ In order. The answer is true or false, and false sends #529's owner retry.
      with the offsets unchanged.
 
    The bone-name map is the mesh's map from bone name to index, built from its reference skeleton's names (by fit;
-   the same names the port's `reference_skeleton` reads). Name equality is the engine's name equality: case-blind,
-   with the number part compared.
+   the same names the port's `reference_skeleton` reads). Name equality is the engine's name equality: one name
+   identity, its base compared case-blind and its instance number compared too (section 4, rule 2, says how the port
+   keeps it).
 3. **The decal case.** It applies only when the parent's `bAcceptsDynamicDecals` is clear and the attached object's
    class is **exactly** Engine's `DecalComponent`. Then the parent's `bAcceptsDynamicDecals` is set, and its
    deferred reattach runs: `bNeedsReattach`, and the owner's component update.
@@ -76,11 +77,13 @@ In order. The answer is true or false, and false sends #529's owner retry.
 
 ### 2.1 The component attach
 
-1. A virtual test of the parent, not identified. By its place, an object-state test (being destroyed). When it
-   answers true, the attach does nothing.
+1. **A virtual test of the parent.** Observed: the attach returns at once, with nothing written, when a virtual of
+   the parent answers true. Inferred, not read: by its place, an object-state test (being destroyed); **UNVERIFIED**.
+   Off's assumption (section 4): a component the build has just made passes it.
 2. **The detach first.** When the attached object's `bAttached` is set, it is detached from where it is.
-3. A field of the parent is tested, by fit its `ParentAnimComponent`. When it is set, the attach stops here with
-   nothing written. **UNVERIFIED:** the object the test reads is by fit.
+3. A field of the parent is tested, by fit its `ParentAnimComponent`. When it is set, the attach stops here: the
+   entry (step 4) and the back link (step 5) are **not** written, and the answer to the body composition is still true.
+   **UNVERIFIED:** the object the test reads is by fit.
 4. **The entry.** The parent's `Attachments` list (`Component`, `BoneName`, `RelativeLocation`, `RelativeRotation`,
    `RelativeScale`):
    - an entry whose `Component` is the attached object gets its other four fields overwritten;
@@ -108,11 +111,9 @@ In order. The answer is true or false, and false sends #529's owner retry.
 The parent is attachment 0's component, of mesh `Char_Siren.Mesh.Skel_SirenBody`.
 - **The parent's template:** `SocketMappings` is empty, `Attachments` is empty, `bAcceptsDynamicDecals` is set,
   `bOverrideAttachmentOwnerVisibility` is clear and `ParentAnimComponent` is None.
-- **The mesh:** it holds **13 sockets**, and the port's skeleton source gives **27 bones**.
-- **The sockets:**
-  - by name: `LilithMeleeFX`, `StorageDeck`, `FX_Mark`, `BlightPhoenixFX`, `ClassMod`, `Grenade`, `FX_RFoot`,
-    `FX_LFoot`, `Shield`, `SnapZoom`, `Weapon`, `ShieldParticle` and `Launcher`;
-  - in the port they are 13 handles the store has **not loaded**.
+- **The mesh:** it holds **13 sockets**, and the port's skeleton source gives **27 bones**. Of the sockets, only the
+  three named below matter to the eight attaches: none is named `Root`, `Spine3`, `R_Thigh` or `Hips`. (The full
+  inventory stays under ignored `local/analysis/sock/`.) In the port all 13 are handles the store has **not loaded**.
 
 | Attachment | Socket name | Matched as | Bone |
 |---|---|---|---|
@@ -130,8 +131,8 @@ So every attach answers true. In order, the parent's `Attachments` gets eight en
 - unit scale for all eight.
 
 Each new component's `AttachedToSkelComponent` becomes the parent, and none is a decal. A bone match needs every socket
-read first, because no socket of that name may exist. So each of the eight reads all 13 socket objects or stops at its
-own hit.
+read first, because no socket of that name may exist. So each of the eight reads the socket objects in order up to its
+own hit, or all 13 for a bone.
 
 **The placement branch (2.1 step 6) in the port.** The port's actor attach of attachment 0 does not set `bAttached`,
 and the template's is clear, so in the port the branch is skipped. In the running game the pawn is spawned in a world,
@@ -148,16 +149,30 @@ the skeletal mesh data layer) at the same site in the body composition's preflig
 1. **The remap:** the parent's `GestaltData.SocketMappings`, read from the settled template values the preflight
    already uses (#622 r1, item 3), applied as section 2 step 1. A missing field or a wrong kind is a
    `VmError::Script`.
-2. **The sockets:** `skeletal::sockets(parent mesh)`, in order.
-   - The layer's own refusals pass through unchanged. An unloaded socket handle is `NotYet { LayerAbsent }`, "the
-     skeletal mesh data layer: the unloaded socket <name>", the store's load. **That is Maya's next stop in the
-     port.** The layer loads nothing, and neither does this.
-   - A first name match is the hit (section 2 step 2).
-3. **The bones**, on a miss: `skeletal::reference_skeleton(parent mesh).bone_index(name)`. No source, or no skeleton
-   for the mesh, is the layer's `NotYet { LayerAbsent }`. No bone means the answer is false: the existing owner retry
-   with no socket name.
-4. **The attach's gates,** on a hit or a bone:
-   - the parent's unidentified state test (2.1 step 1) is taken as passing for a made component (UNVERIFIED);
+2. **The early exits, before any socket or skeleton read:** a remapped name that is None, or a parent with no
+   `SkeletalMesh`, is the answer false: the existing owner retry with no socket name. Nothing of the mesh is read.
+3. **The sockets: an ordered lookup that stops at the first match.** `skeletal::sockets` decodes the whole array, so
+   one unloaded entry after a valid hit would refuse; the rule needs a new read-only lookup in the same layer,
+   `skeletal::find_socket(vm, mesh, name) -> Result<Option<MeshSocket>, VmError>`:
+   - it walks the mesh's `Sockets` in order and, for each entry it reaches, applies the layer's existing checks (a
+     None entry is `NotRead`, an unloaded handle or slotless stand-in is `LayerAbsent`, the store's load, a wrong kind
+     is `VmError::Script`); it returns at the first entry whose `SocketName` matches, and reads nothing after it;
+   - **name identity:** it compares the entry's `SocketName` name id with the attachment's (remapped) name id, not
+     their printed text. The port's name table keeps one id per text (`Foo_0` is the entry `Foo` with number 1, so a
+     literal `Foo_0` and a numbered `Foo` are the same name, as in UE3), and ids compare their base case-blind and
+     their number exactly;
+   - it loads nothing and interns nothing.
+
+   An unloaded socket handle reached before the hit is `NotYet { LayerAbsent }`, "the skeletal mesh data layer: the
+   unloaded socket <name>". **That is Maya's next stop in the port when the harness input below is left out.**
+4. **The bones**, on a miss: `skeletal::reference_skeleton(parent mesh)`. No source, or no skeleton for the mesh, is
+   the layer's `NotYet { LayerAbsent }`. The source's bone names are text: each is matched by
+   `vm.space.names.find(text)` (the table's own split into base and number, without interning) and compared by id
+   with the attachment's name. A bone text the table has never seen cannot be that name. No bone means the answer
+   is false: the owner retry.
+5. **The attach's gates,** on a hit or a bone, in this order:
+   - the parent's unidentified state test (2.1 step 1) is taken as passing for a component the build just made
+     (UNVERIFIED; the early exit is observed, its meaning is not);
    - the new component's `bAttached` set: `NotYet { NotRead }`, "InitializeBodyComposition: the detach before a
      socket attach";
    - the parent's `ParentAnimComponent` set (2.1 step 3, by fit): `NotYet { NotRead }`, "InitializeBodyComposition: a
@@ -166,29 +181,39 @@ the skeletal mesh data layer) at the same site in the body composition's preflig
      `bAcceptsDynamicDecals` clear): `NotYet { NotRead }`, "InitializeBodyComposition: a decal attached to a skeletal
      component" (the deferred reattach, as in #622);
    - the parent's `bAttached` set: `NotYet { LayerAbsent }`, "InitializeBodyComposition: the placement of a socket
-     attach", with the bone-transform layer as 9554's note names it.
-5. **The planned entry:** for the parent, against its planned `Attachments`, that is the template's list plus the
+     attach", with the bone-transform layer as 9554's note names it. This is **conservative**: the native places the
+     child only when the bone name is set, the parent has a mesh and the bone index is below `SpaceBases`' length,
+     so some attached parents would not reach the placement; Off refuses them all.
+
+   **Precedence (deliberate).** The native runs the decal case (section 2 step 3) before the attach, and the detach
+   and the parent-animation test inside it. Off checks the detach and `ParentAnimComponent` before the decal. Every
+   one of the three is a refusal with nothing written, so whichever reports first, the answer writes nothing; Off
+   orders them by its own preflight, and test 9 pins which one is reported when two overlap.
+6. **The planned entry:** for the parent, against its planned `Attachments`, that is the template's list plus the
    entries this build planned before it. An existing entry for the same component is an overwrite; otherwise an
    append.
 
-**The writes,** in the build's write phase, after every preflight, in the attachments' order:
+**The writes,** in the build's write phase, after the preflight of **every** attachment of the build (the build plans
+all attaches before its first write), in the attachments' order:
 - the parent's `Attachments` entry: an append or an overwrite, with `Component`, `BoneName`, location, rotation and
   scale (1, 1, 1);
 - the new component's `AttachedToSkelComponent`, when its class is a `SkeletalMeshComponent`.
 
-Nothing else is written: the streaming notice has no port state. A refusal after earlier writes of the build is
-marked "stopped after partial writes: " by the build's existing write tracker.
+Nothing else is written: the streaming notice has no port state. Because every refusal above comes from the
+build-wide preflight, a refusal on any attach leaves the whole build unwritten: no entry of an earlier attach is
+committed, and no "stopped after partial writes: " prefix is added.
 
 **The `Parent` link** (#529 section 4.1 step 7, hub ruling 3) comes right after attachment 1's attach and stays
 `NotRead`. When it is revisited, its parent-bone map reads both meshes' bone names through the same
 `reference_skeleton` layer. That is the one table this note shares with it.
 
-**Not in scope:** the placement branch (9554's transforms), and the harness question below.
+**Not in scope:** the placement branch (9554's transforms).
 
-**A harness choice for the hub, not a rule:** with this answer in place, the six links stop at the first unloaded
-socket of `Skel_SirenBody` (`SkeletalMeshSocket_20`, the store's load). The mesh's 13 socket objects are in the same
-package as the mesh. A harness preload of them, beside #592's mesh preload, is the obvious stand-in for the streaming
-load (UNVERIFIED), and that is the hub's ruling. The rule does not load them itself.
+**The harness input (hub ruling, 05:35Z; the implementer's task, not the rule's):** the mesh's 13 socket objects
+are in the same package as the mesh. The implementer preloads them as a harness input beside #592's mesh preload, in
+Off only, logged before and after and labelled "UNVERIFIED stand-in" for the streaming load. The rule itself loads
+nothing. Left out, the expected result is the unloaded-socket refusal of rule 3 at the first socket handle the lookup
+reaches.
 
 ### 4.1 Test list
 
@@ -197,21 +222,32 @@ On synthetic classes (`package()` / `tag()`, every value invented):
    socket's own scale is ignored. The new component's `AttachedToSkelComponent` is the parent.
 2. A bone hit (no socket of that name): zero offsets, the name as the bone. A socket and a bone of the same name: the
    socket wins.
-3. No socket and no bone: false, and the owner retry runs as today. A None name, and a parent without a mesh: false.
+3. No socket and no bone: false, and the owner retry runs as today. A None name, and a parent without a mesh: false,
+   reaching the owner retry with no socket and no skeleton read (an unloaded socket handle and a missing skeleton
+   source in the fixture are never touched).
 4. The remap: a `SocketMappings` entry rewrites the name before the search, and the first matching entry wins.
 5. Two attaches of the same component: the second overwrites the entry, and the list does not grow. Two different
    components: two entries in order.
 6. A non-skeletal new component (an invented primitive): the entry is written and the back link is not.
 7. An unloaded socket handle before the hit: the layer's `LayerAbsent`, nothing loaded or written, #518's three
-   counters unchanged. An unloaded handle after the hit is never read: the answer stands.
+   counters unchanged. An unloaded handle after the hit is never read (the ordered lookup): the answer stands.
 8. No skeleton source on a bone search: `LayerAbsent`, the counters unchanged.
 9. Each gate refusal (the new component's `bAttached`, the parent's `ParentAnimComponent`, the exact decal class with
    the flag clear, the parent's `bAttached`): its own refusal with the counters unchanged. A decal **child** class,
-   and a decal with the flag set, are not refused.
-10. A refusal on the second of two socket attaches, after the build wrote the first: marked "stopped after partial
-    writes: " by the build's tracker.
+   and a decal with the flag set, are not refused. **Overlaps:** a decal whose own `bAttached` is set reports the
+   detach; a decal on a parent with a `ParentAnimComponent` reports the parent-animation stop; in neither case is an
+   entry or a back link written.
+10. A refusal on the second of two socket attaches: the build-wide preflight refuses before any write, so #518's
+    three counters are unchanged, no `Attachments` entry of the first attach is committed, and the refusal carries no
+    "stopped after partial writes: " prefix.
 11. Under `ParityMode::Reference`: unchanged.
 12. Maya's shape (invented names): three socket hits and five bone hits in her order give eight entries in that order.
+    It runs the attach plan in isolation, or on a fixture whose attachments carry no `Parent` identifier, so the
+    `Parent` link's refusal (ruling 3) does not stop it first.
+13. **Numbered names:** a socket whose `SocketName` is a numbered name (`Foo` with number 2, printed `Foo_1`) matches an
+    attachment name `Foo_1` and not `Foo`; a skeleton source bone text `Foo_0` matches the name `Foo_0` (the table's
+    one id for it) and not `Foo`; a bone text the name table has never seen matches nothing, and nothing is interned
+    (the name table's length unchanged).
 
 ## 5. Local probe (never pushed)
 
