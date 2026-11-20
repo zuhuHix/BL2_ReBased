@@ -563,28 +563,35 @@ pub const IS_EDITOR: &str = "WillowGameInfo.IsEditor()";
 /// too: a listed controller that is destroyed answers false, and a listed controller whose `Player` is None answers
 /// true.
 fn is_local_player_controller(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let players = match c.vm.service::<Actors>() {
-        Some(a) => a
-            .try_borrow()
-            .map_err(|_| VmError::ServiceBorrowed("Actors"))?
-            .local_players()
-            .to_vec(),
-        None => {
-            return Err(NotYet::layer_absent(
-                "PlayerController.IsLocalPlayerController: the engine's local player list",
-                "ow-world (a World)",
-                "docs/verification/NATIVE_ENGINE_CORE.md",
-            )
-            .into());
-        }
-    };
     let Some(this) = c.this else {
+        // The world is still asked first, as before the split (lane IMPL-BODYCOMP-RENDER-HOOKS).
+        local_players(c.vm)?;
         return Ok(Value::Bool(false));
     };
-    if players.contains(&this) {
-        return Ok(Value::Bool(!is_destroyed(&c.vm.space, this)?));
+    Ok(Value::Bool(is_local_player(c.vm, this)?))
+}
+
+/// The local-player list, else the native's `LayerAbsent` (no world).
+fn local_players(vm: &Vm) -> Result<Vec<ObjRef>, VmError> {
+    match vm.service::<Actors>() {
+        Some(a) => Ok(a.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.local_players().to_vec()),
+        None => Err(NotYet::layer_absent(
+            "PlayerController.IsLocalPlayerController: the engine's local player list",
+            "ow-world (a World)",
+            "docs/verification/NATIVE_ENGINE_CORE.md",
+        )
+        .into()),
     }
-    if object(&c.vm.space, this, "Player")?.is_some() {
+}
+
+/// [`is_local_player_controller`]'s answer for controller `this`, read only, with the same refusals: for a caller
+/// that plans on it without a call (the body composition's rendering hooks, lane IMPL-BODYCOMP-RENDER-HOOKS).
+pub fn is_local_player(vm: &Vm, this: ObjRef) -> Result<bool, VmError> {
+    let players = local_players(vm)?;
+    if players.contains(&this) {
+        return Ok(!is_destroyed(&vm.space, this)?);
+    }
+    if object(&vm.space, this, "Player")?.is_some() {
         return Err(NotYet::not_ported(
             "PlayerController.IsLocalPlayerController on a controller outside the world's local-player list whose \
              Player is set (the world does not model Player objects)",
@@ -592,7 +599,7 @@ fn is_local_player_controller(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
         )
         .into());
     }
-    Ok(Value::Bool(false))
+    Ok(false)
 }
 
 /// The native key of `WillowGameInfo.TravelPostCountdownInProcess()`.
@@ -664,6 +671,7 @@ pub mod per_bone_weights;
 /// The tree initialisation's component pass and per-bone control arrays in Off (lane IMPL-COPY-COMPONENT-PASS).
 pub mod control_arrays;
 pub mod component_setters;
+pub mod render_hooks;
 pub mod pawn_meshes;
 
 /// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).

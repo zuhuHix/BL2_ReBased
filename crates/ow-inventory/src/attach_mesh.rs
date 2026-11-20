@@ -65,7 +65,7 @@ use crate::equip::{bad, object_of, required, write};
 // The setters' planning and apply sides live in ow-world (lane IMPL-BODYCOMP-RENDER-HOOKS, review r1 of #622, item 1),
 // so the body composition's rendering hooks share them; the bindings below stay here.
 pub use ow_world::world::component_setters::{REATTACH_OWNER, REATTACH_SCENE, set_flag, set_light_environment};
-use ow_world::world::component_setters::{REATTACH_FIELDS, Slots, Want, bool_of, declared, is_zero, reattach_check, schemas};
+use ow_world::world::component_setters::{REATTACH_FIELDS, Slots, Want, bool_of, declared, fits, is_zero, reattach_check, schemas};
 
 pub mod particle_activation;
 pub mod pickup_particles;
