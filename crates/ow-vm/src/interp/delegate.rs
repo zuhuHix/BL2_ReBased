@@ -597,6 +597,25 @@ mod tests {
         toy
     }
 
+    /// Lane FIX-FLAG-PROVIDER-ORDER, finding 2: `Vm::implements_read_only` reads only resolved entries. A cold
+    /// interface-table target stays cold (no load, no write), and once the caching lookup has resolved it the answer
+    /// is the same as `implements_checked`'s.
+    #[test]
+    fn implements_read_only_leaves_a_cold_target_cold() {
+        let mut toy = interfaces();
+        let mut r = toy.run(ParityMode::Off);
+        let class = |r: &mut Run, p: &str| r.vm.find_class(p).unwrap();
+        let (impl_, thing, plain) = (class(&mut r, "Core.Impl"), class(&mut r, "Core.IThing"), class(&mut r, "Core.Plain"));
+        let counts = |vm: &crate::api::Vm| (vm.space.heap.committed_writes(), vm.defs.load_transitions(), vm.space.classes.len());
+        let before = counts(&r.vm);
+        assert_eq!(r.vm.implements_read_only(impl_, thing).unwrap(), None, "cold: would need a load");
+        assert_eq!(r.vm.implements_read_only(impl_, thing).unwrap(), None, "still cold");
+        assert_eq!(counts(&r.vm), before, "nothing loaded or written");
+        assert_eq!(r.vm.implements_read_only(plain, thing).unwrap(), Some(false));
+        assert!(r.vm.implements_checked(impl_, thing).unwrap(), "the caching lookup resolves it");
+        assert_eq!(r.vm.implements_read_only(impl_, thing).unwrap(), Some(true));
+    }
+
     #[test]
     fn query_interface_reads_the_interface_tables_of_the_class_chain() {
         let mut toy = interfaces();

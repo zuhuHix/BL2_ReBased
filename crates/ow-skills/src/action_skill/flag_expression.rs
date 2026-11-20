@@ -166,6 +166,21 @@ fn implements(vm: &mut Vm, o: ObjRef, path: &str) -> Result<bool, VmError> {
     vm.implements_checked(class, iface)
 }
 
+/// [`implements`] reading only interface-table entries already resolved (lane FIX-FLAG-PROVIDER-ORDER, finding 2): the
+/// rule engine search reads only, and resolving a cold entry loads its target class. An entry not resolved yet, when
+/// no resolved one answers yes, is `NotYet { NotRead }`, and the entry stays cold.
+fn implements_read_only(vm: &Vm, o: ObjRef, path: &str) -> Result<bool, VmError> {
+    let iface = interface(vm, path)?;
+    let class = vm.space.heap.get(o)?.class;
+    match vm.implements_read_only(class, iface)? {
+        Some(answer) => Ok(answer),
+        None => Err(not_read(format!(
+            "the interface table of {} has an entry not resolved (resolving it is a load), asked for {path}",
+            ow_attr::eval::class_path(&vm.space, o)
+        ))),
+    }
+}
+
 /// Refuses an object the store has not loaded, where the note reads by reads only (the rule engine's search).
 fn loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
@@ -282,13 +297,14 @@ fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<
     Ok((me, out, operator))
 }
 
-/// The context's rule engine `R` (note section 3, step 1), by reads only; a None context gives none.
-fn rule_engine(vm: &mut Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, VmError> {
+/// The context's rule engine `R` (note section 3, step 1), by reads only (nothing resolved or loaded: the interface
+/// question reads resolved entries only, finding 2); a None context gives none.
+fn rule_engine(vm: &Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, VmError> {
     let Some(c) = context else {
         return Ok(None);
     };
-    let owner_engine = |vm: &mut Vm, o: ObjRef| -> Result<Option<Option<ObjRef>>, VmError> {
-        if !implements(vm, o, RULE_ENGINE_OWNER)? {
+    let owner_engine = |vm: &Vm, o: ObjRef| -> Result<Option<Option<ObjRef>>, VmError> {
+        if !implements_read_only(vm, o, RULE_ENGINE_OWNER)? {
             return Ok(None);
         }
         loaded(vm, o, "rule engine owner")?;
@@ -338,6 +354,7 @@ fn rule_engine(vm: &mut Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, V
 pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<bool, VmError> {
     let (_, chain, operator) = chain_of(vm, me, context)?;
     let mut engine: Option<Option<ObjRef>> = None;
+    provider_first(vm, &chain, context, &mut engine, operator)?;
     let mut result = true;
     for (i, c) in chain.iter().enumerate() {
         let answer = match c.definition {
@@ -357,6 +374,10 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
                 // order), so a refusal there is not marked because of the definition's load.
                 if engine.is_none() {
                     engine = Some(rule_engine(vm, context)?);
+                }
+                // Finding 3: a loaded definition that takes the store path reports that before the provider guard.
+                if !vm.defs.is_unloaded(&vm.space, definition) && takes_store_path(vm, definition, engine.flatten())? {
+                    return Err(not_read("a rule engine's own flag store".to_string()));
                 }
                 if context.is_some() && may_need_store(vm, definition)? {
                     interface(vm, FLAG_PROVIDER)?;
@@ -382,6 +403,66 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
         }
     }
     Ok(result)
+}
+
+/// The `IFlagProvider` guard ahead of the chain's first side effect (lane FIX-FLAG-PROVIDER-ORDER, finding 1). A
+/// conditional's context resolvers and loads are writes, so a later conditional's missing-interface refusal, met after
+/// them on an Or (or And) chain, would come after writes. This reads the chain in order, as the loop will reach it,
+/// until the first conditional that refuses with no side effect of its own (a timed test, a type past the tests, or a
+/// loaded definition on the store path): if any conditional before that may still need a store, `IFlagProvider` is
+/// required now. While every answer so far is known (only None definitions, each false), the loop's early exits are
+/// followed too, so a conditional the chain cannot reach asks for nothing (an And stops at its first None definition).
+/// The rule engine `R` this needs is worked out here (reads only) and kept for the loop. A field this cannot read
+/// leniently is left to the loop, which reports it when the conditional is reached.
+fn provider_first(
+    vm: &Vm,
+    chain: &[Conditional],
+    context: Option<ObjRef>,
+    engine: &mut Option<Option<ObjRef>>,
+    operator: u8,
+) -> Result<(), VmError> {
+    if context.is_none() {
+        return Ok(());
+    }
+    // The chain's result while it is known (Some: every conditional so far had a None definition).
+    let mut known: Option<bool> = Some(true);
+    for (i, c) in chain.iter().enumerate() {
+        let Some(definition) = c.definition else {
+            if let Some(so_far) = known {
+                let result = if i == 0 {
+                    false
+                } else {
+                    match operator {
+                        0 => so_far,
+                        1 => false,
+                        _ => false,
+                    }
+                };
+                if (operator == 0 && result) || (operator == 1 && !result) {
+                    return Ok(());
+                }
+                known = Some(result);
+            }
+            continue;
+        };
+        known = None;
+        if c.kind > 1 {
+            return Ok(());
+        }
+        if engine.is_none() {
+            *engine = Some(rule_engine(vm, context)?);
+        }
+        if !vm.defs.is_unloaded(&vm.space, definition)
+            && takes_store_path(vm, definition, engine.flatten()).unwrap_or(false)
+        {
+            return Ok(());
+        }
+        if may_need_store(vm, definition)? {
+            interface(vm, FLAG_PROVIDER)?;
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// Whether a reached definition may still ask for `IFlagProvider` (module documentation), by reads only: a handle not

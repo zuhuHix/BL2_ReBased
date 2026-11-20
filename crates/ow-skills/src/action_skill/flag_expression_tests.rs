@@ -800,3 +800,48 @@ fn a_load_is_a_write_and_a_failed_retry_is_not() {
     assert!(!again.what.starts_with("stopped after partial writes: "), "a retry of a failed handle: {again}");
     assert_eq!(again.missing, first.missing);
 }
+
+// ---- Lane FIX-FLAG-PROVIDER-ORDER --------------------------------------------------------------------------------
+
+/// Finding 1: on an Or chain whose first conditional's context resolver would load a cold answer (a write), the second
+/// conditional's missing-`IFlagProvider` refusal comes first: no counter moves and the cold answer stays cold.
+#[test]
+fn the_provider_refusal_comes_before_an_earlier_conditionals_resolver() {
+    let mut x = fx_full(true, Some("GearboxFramework.IFlagProvider"));
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let lazy = x.held("Held");
+    let fixed = x.obj("Toy.FixedContextResolver", "Fixed");
+    FIXED.with(|c| c.set(Some(lazy)));
+    // First: a definition with neither field (no store needed), whose chain answers the cold object.
+    let first = x.definition("First");
+    x.set(first, "ContextResolverChain", Value::array(vec![Value::Object(Some(fixed))]));
+    // Second: a store flag, which needs IFlagProvider.
+    let second = x.store_flag(vec![]);
+    let e = x.evaluator(&[(0, Some(first)), (0, Some(second))], 0);
+    let start = WriteCounters::of(&x.vm);
+    let text = not_read(x.eval(e, Some(pawn)), "the interface class GearboxFramework.IFlagProvider is not loaded");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(!start.moved(&x.vm), "no counter moved");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the cold answer stays cold");
+    // A chain that refuses at its first conditional with no side effect (a timed test) reports that, not the provider.
+    let timed = x.evaluator(&[(2, Some(first)), (0, Some(second))], 0);
+    not_read(x.eval(timed, Some(pawn)), "the timed flag tests");
+}
+
+/// Finding 3: a loaded computed definition with a known rule engine and no value resolver reports the rule engine's own
+/// store before the provider guard (`IFlagProvider` missing), write-free.
+#[test]
+fn the_store_path_is_reported_before_the_provider_guard() {
+    let mut x = fx_full(true, Some("GearboxFramework.IFlagProvider"));
+    let engine = x.obj("GearboxFramework.RuleEngine", "Engine");
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    x.set(mind, "MyRuleEngine", Value::Object(Some(engine)));
+    let empty = x.evaluator(&[], 1);
+    let computed = x.computed(empty);
+    let e = x.evaluator(&[(0, Some(computed))], 1);
+    let start = WriteCounters::of(&x.vm);
+    let text = not_read(x.eval(e, Some(mind)), "a rule engine's own flag store");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(!start.moved(&x.vm), "write-free");
+}
+

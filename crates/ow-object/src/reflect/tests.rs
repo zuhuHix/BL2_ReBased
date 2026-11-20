@@ -220,6 +220,29 @@ fn implements_follows_the_interface_tables() {
     );
 }
 
+/// The read-only lookup (lane FIX-FLAG-PROVIDER-ORDER, as #602's): a cold entry is named, not resolved, and stays cold
+/// however often it is asked; once `implements` has resolved it, the answers agree.
+#[test]
+fn implements_resolved_leaves_cold_entries_cold() {
+    let tree = Tree::new("implements-resolved-cold");
+    tree.write("Core.upk", &interface_fixture().0.build());
+    let mut store = tree.store();
+    let mut index = CodeIndex::new();
+    let mut key = |path: &str| index.find_class(&mut store, path).unwrap();
+    let thing = key("Core.IThing");
+    let child = key("Core.IThingChild");
+    let (implementer, derived, plain) = (key("Core.Impl"), key("Core.Derived"), key("Core.Plain"));
+    assert!(index.implements_resolved(derived, thing).is_err(), "a cold entry is not an answer");
+    assert!(index.implements_resolved(derived, thing).is_err(), "asking resolved nothing: still cold");
+    assert_eq!(index.implements_resolved(plain, thing), Ok(false), "no entry: a proven no");
+    assert!(index.implements(&mut store, derived, thing), "the caching lookup resolves it");
+    assert_eq!(index.implements_resolved(derived, thing), Ok(true));
+    assert_eq!(index.implements_resolved(implementer, thing), Ok(true), "the same resolved entry");
+    let want = index.implements(&mut store, implementer, child);
+    assert_eq!(index.implements_resolved(implementer, child), Ok(want));
+    assert_eq!(index.implements_resolved(implementer, plain), Ok(false), "not an interface class");
+}
+
 /// `--interface-compare` over a store whose eight other code packages are empty; a missing one fails the command.
 #[test]
 fn compare_interfaces_counts_every_pair() {
