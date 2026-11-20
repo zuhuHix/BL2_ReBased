@@ -44,7 +44,7 @@ Opus 5.5). An attach record on the scene layer. `GetBoundingCylinder`'s live pat
 refuses L for unrecorded ones, then S unconditionally. `cargo test --workspace --locked -j 2 --no-fail-fast` 3,204
 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict, under the machine lock:
 4 ok / 9 NotYet / 1 error. Links 6 and 7 pass `make` (1 of 3, 1 of 4) and stop in `touch` at refusal S (they stopped
-at L before). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+at L before). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-253.
 
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
