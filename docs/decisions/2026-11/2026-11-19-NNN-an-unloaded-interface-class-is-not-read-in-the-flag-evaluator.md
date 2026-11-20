@@ -9,15 +9,19 @@ fixtures only.
   and `GearboxFramework.IFlagProvider` (the flag store) by their class tables. Those tables only answer for an
   interface class that is loaded. Before this change, an interface class that was not loaded answered "no" for
   `implements`, so a store or a rule engine could be missed silently. Now:
-  - with a context, both interface classes must be loaded. This is checked after the receiver's type check and
-    before its load, so before any write. Otherwise the answer is `NotYet { NotRead }`, "the interface class <path>
-    is not loaded (a load is a write)";
-  - a loaded class that does not implement the interface still answers "no";
-  - with no context, nothing is checked: no interface question is reached (the rule engine is None, and the
-    definition path's None context answers false);
-  - the check is eager. A chain that would never reach an interface question (all None definitions, or a short
-    circuit first) also refuses when a class is missing. That is the price of refusing write-free, and it is the
-    port's own choice, not the note's.
+  - an interface class that is not loaded answers `NotYet { NotRead }`, "the interface class <path> is not loaded
+    (a load is a write)", never "no". A loaded class that does not implement the interface still answers "no";
+  - each class is required only where the remaining path may still ask for it, and before the next load, write or
+    draw (review r1 of #586):
+    - `IRuleEngineOwner` where the rule engine search asks for it. That search reads only and comes before the
+      conditional's first load;
+    - `IFlagProvider` before a reached definition is loaded, when the definition may still need a store: it is not
+      loaded yet, or it has a `ValueResolver` or an `EvaluationExpression`. A nested evaluator may ask either
+      interface, which is the port's conservative choice;
+    - both before a receiver handle is loaded, because its chain is unknown until then;
+  - so an empty chain, a short-circuited branch, a None definition and a definition with neither field answer as
+    before, even when an interface class is missing. With no context, nothing is required: no interface question is
+    reached.
 - **Callers checked.** The module's `implements` has two callers, both inside the evaluator: the rule engine owner
   check, and `RuleEngineFlagValueResolver`'s store check. The function-call path's `QueryInterface` already refused
   an unloaded `IFlagProvider` with `NotRead`, but after writes; it now meets the same eager check. No native outside
@@ -26,13 +30,21 @@ fixtures only.
   `implements_interface`, the ow-behavior kernel, ow-combat `pawn_interface`) are unchanged. What changes outside is
   what `Evaluate` returns to its script callers, such as `CanLiftTargetIf` on link 9: a missing interface class now
   stops them with `NotRead` where they used to get false.
-- **Tests** (invented classes, rule 9): `an_unloaded_interface_class_is_not_read_before_any_write`, which covers:
+- **Tests** (invented classes, rule 9): `a_cold_receiver_stays_unloaded_on_an_interface_refusal` (an unloaded
+  receiver handle stays unloaded and moves no counter on the refusal, and loads once the interfaces are there), and
+  `an_unloaded_interface_class_is_not_read_before_any_write`, which covers:
   - a loaded class that implements `IFlagProvider` (its store is read);
   - a loaded class that does not (false);
   - each interface class left out of the loaded classes: `NotRead` with that text, no write counter moved, nothing
     marked, and the store untouched;
-  - no context: false.
+  - no context: false;
+  - with a missing class and a loaded receiver: an empty chain (true), an And that stops at a None definition
+    (false), and a definition with neither field (false without `IFlagProvider`; with `IRuleEngineOwner` missing,
+    the rule engine search still asks for it, so `NotRead`).
 - **Verified:** the host tests only. **UNVERIFIED in the running game**: every rule of the evaluator, as before.
-  The slice was not probed in this lane. Link 9's set-up on #579 preloads `IFlagProvider`. Whether
-  `IRuleEngineOwner` is loaded there is not checked here; if it is not, link 9 will now stop at this `NotRead`
-  instead of reading false.
+  The slice was not probed in this lane.
+- **Link 9 (#579, not changed here).** The ordinary Phaselock path reaches the rule engine search, which asks for
+  `IRuleEngineOwner`. #579's set-up preloads only `IFlagProvider`. In the combined stack, if nothing else loads
+  `IRuleEngineOwner`, link 9 stops at this `NotRead` where it used to read "no". Recommendation: link 9's set-up
+  should preload `GearboxFramework.IRuleEngineOwner` alongside `IFlagProvider`, logged as the same kind of harness
+  input. In the game both are classes of the loaded `GearboxFramework` package.

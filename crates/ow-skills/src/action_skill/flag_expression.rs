@@ -23,13 +23,21 @@
 //! definition store, `NotRead` for a stand-in). The rule engine search alone reads without loading (an unloaded
 //! object there is `NotRead`).
 //!
-//! **The interface classes** (lane FIX-FLAG-IMPLEMENTS-NOTYET): the rule asks objects for `IRuleEngineOwner` and
-//! `IFlagProvider` by their class tables, which only hold an interface class once it is loaded. With a context, both
-//! must be loaded classes, checked after the receiver's type and before its load, so before any write; otherwise
-//! `NotYet { NotRead }`, "the interface class <path> is not loaded (a load is a write)". A loaded class that does not
-//! implement one still answers no. The check is eager: a chain that would never reach an interface question (all
-//! None definitions, or a short circuit first) refuses too, the price of refusing write-free. With no context no
-//! interface question is reached (step 4's None context answers false, and `R` is None), so nothing is checked.
+//! **The interface classes** (lane FIX-FLAG-IMPLEMENTS-NOTYET, review r1 of #586): the rule asks objects for
+//! `IRuleEngineOwner` and `IFlagProvider` by their class tables, which only hold an interface class once it is
+//! loaded. An interface class that is not loaded is `NotYet { NotRead }`, "the interface class <path> is not loaded (a
+//! load is a write)", never a "no"; a loaded class that does not implement one still answers no. Each is required
+//! only where the remaining path may still ask for it, and before the next load, write or draw:
+//! - `IRuleEngineOwner` where it is asked, in the rule engine search (step 3), which reads only and comes before the
+//!   conditional's first load;
+//! - `IFlagProvider` before a reached definition is loaded, when the definition may still need a store: it is a
+//!   handle not loaded yet (its fields are unknown), or it has a `ValueResolver` (both read resolvers ask a store) or
+//!   an `EvaluationExpression` (a nested evaluator may ask either interface; the port's conservative choice);
+//! - both before a receiver handle is loaded, since its chain is unknown until then.
+//!
+//! With no context no interface question is reached (step 4's None context answers false, and `R` is None), so
+//! nothing is required. An empty chain, a short-circuited branch, a None definition and a definition with neither
+//! field answer as before.
 //!
 //! **Also `NotYet { NotRead }`:** a value resolver class other than the two read; a computed flag that also has a value
 //! resolver (the hand-off); a flag store that is not a `GearboxMind`'s; a store whose two arrays are out of step. Two
@@ -249,13 +257,13 @@ struct Conditional {
 }
 
 /// The receiver's chain and operator: the note's eager checks (section 6), the receiver loaded when it is a handle.
-/// With a context, the interface classes are checked first, before the load (module documentation).
+/// With a context, a receiver handle's load needs both interface classes first (module documentation).
 fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
     let me = me.ok_or_else(|| script("called with no evaluator".to_string()))?;
     if !is_a(vm, me, EVALUATOR)? {
         return Err(script(format!("{} is not a FlagExpressionEvaluator", path_of(vm, me))));
     }
-    if context.is_some() {
+    if context.is_some() && vm.defs.is_unloaded(&vm.space, me) {
         for path in [RULE_ENGINE_OWNER, FLAG_PROVIDER] {
             interface(vm, path)?;
         }
@@ -350,6 +358,9 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
                 if engine.is_none() {
                     engine = Some(rule_engine(vm, context)?);
                 }
+                if context.is_some() && may_need_store(vm, definition)? {
+                    interface(vm, FLAG_PROVIDER)?;
+                }
                 load(vm, definition)?;
                 if takes_store_path(vm, definition, engine.flatten())? {
                     return Err(not_read("a rule engine's own flag store".to_string()));
@@ -371,6 +382,26 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
         }
     }
     Ok(result)
+}
+
+/// Whether a reached definition may still ask for `IFlagProvider` (module documentation), by reads only: a handle not
+/// loaded yet, or a set `ValueResolver` or `EvaluationExpression`. A field the class does not declare, or one that
+/// holds no object reference, counts as "may": the reads after the load report it.
+fn may_need_store(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+    if vm.defs.is_unloaded(&vm.space, definition) {
+        return Ok(true);
+    }
+    let class = vm.space.heap.get(definition)?.class;
+    for name in ["ValueResolver", "EvaluationExpression"] {
+        let Some(p) = vm.space.prop(class, name) else {
+            return Ok(true);
+        };
+        match vm.space.read(definition, PropAddr::scalar(p))? {
+            Value::Object(None) | Value::Interface(None) => {}
+            _ => return Ok(true),
+        }
+    }
+    Ok(false)
 }
 
 /// Whether a definition takes the store path (note section 3, step 3.2) given `R`.

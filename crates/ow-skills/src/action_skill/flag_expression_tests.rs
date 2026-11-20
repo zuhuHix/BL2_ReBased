@@ -94,29 +94,47 @@ impl Drop for Fx {
 
 /// `ToyFlag.upk`: a holder whose `Held` names `Thing_0`, an export the store keeps unloaded until it is loaded, and
 /// whose `Broken` names `Broken_0`, an export whose archetype is `Other_0` (an object of an unrelated class), so its
-/// load fails with the store's `NotYet`.
+/// load fails with the store's `NotYet`, and whose `Cold` names `GearboxFramework.Evaluator_0` ([`gearbox_package`];
+/// review r1 of #586).
 fn toy_package() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    let gearbox = t.p.add_import("Core", "Package", 0, "GearboxFramework");
+    let gearbox_object = t.p.add_import("Core", "Class", gearbox, "Object");
+    let cold = t.p.add_import("GearboxFramework", "FlagExpressionEvaluator", gearbox, "Evaluator_0");
     let object = t.class("Object", 0);
     let thing = t.class("Thing", object);
     let holder = t.class("Holder", object);
     let other = t.class("Other", object);
     t.prop("Object", holder, "Held", 0, object);
     t.prop("Object", holder, "Broken", 0, object);
+    t.prop("Object", holder, "Cold", 0, gearbox_object);
     let holder_ref = t.p.next_export();
     let (held, unrelated, broken) = (holder_ref + 1, holder_ref + 2, holder_ref + 3);
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Held", held));
     payload.extend(t.p.object_tag("Broken", broken));
+    payload.extend(t.p.object_tag("Cold", cold));
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(holder, "Holder_0", payload));
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(thing, "Thing_0", payload.clone()));
     t.p.add_export_with(Export::new(other, "Other_0", payload.clone()));
-    let mut e = Export::new(thing, "Broken_0", payload);
+    let mut e = Export::new(thing, "Broken_0", payload.clone());
     e.archetype = unrelated;
     t.p.add_export_with(e);
+    t.build()
+}
+
+/// `GearboxFramework.upk`: the class `FlagExpressionEvaluator` (no fields of its own) and `Evaluator_0`, an export of
+/// it with no tagged fields, which `ToyFlag`'s holder names (review r1 of #586: a receiver handle).
+fn gearbox_package() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    let object = t.class("Object", 0);
+    let evaluator = t.class("FlagExpressionEvaluator", object);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(evaluator, "Evaluator_0", payload));
     t.build()
 }
 
@@ -128,9 +146,14 @@ fn fx_with(world_info: bool) -> Fx {
     fx_full(world_info, None)
 }
 
-/// The fixture; `world_info`: whether a `WorldInfo` is placed (the world's time); `missing`: an interface class left
-/// out of the loaded classes (its subclasses then derive from `Core.Object`).
 fn fx_full(world_info: bool, missing: Option<&str>) -> Fx {
+    fx_all(world_info, missing, false)
+}
+
+/// The fixture; `world_info`: whether a `WorldInfo` is placed (the world's time); `missing`: an interface class left
+/// out of the loaded classes (its subclasses then derive from `Core.Object`); `package_evaluator`: the evaluator class
+/// is left to `GearboxFramework.upk` (a cold receiver's class) instead of defined here.
+fn fx_all(world_info: bool, missing: Option<&str>, package_evaluator: bool) -> Fx {
     let mut s = ObjectSpace::new();
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
@@ -197,12 +220,19 @@ fn fx_full(world_info: bool, missing: Option<&str>) -> Fx {
         d(&mut s, "FlagChain", PropKind::Array(Box::new(PropKind::Struct(conditional)))),
         d(&mut s, "FlagChainOperator", byte),
     ];
-    s.classes.define("GearboxFramework.FlagExpressionEvaluator", Some(expression), decls).unwrap();
+    if !package_evaluator {
+        s.classes.define("GearboxFramework.FlagExpressionEvaluator", Some(expression), decls).unwrap();
+    }
     let dir = std::env::temp_dir().join(format!("ow-skills-flag-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let package = toy_package();
-    let defs = DefStore::from_synthetic(&dir, &[("ToyFlag.upk", package.as_slice())], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
-        .unwrap();
+    let (package, gearbox) = (toy_package(), gearbox_package());
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("ToyFlag.upk", package.as_slice()), ("GearboxFramework.upk", gearbox.as_slice())],
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
     let attrs = AttributeSystem::new_empty()
         .with_context_resolver("Toy.PassContextResolver", Pass)
         .unwrap()
@@ -342,6 +372,11 @@ impl Fx {
         o
     }
 
+    /// The toy package's unloaded `Evaluator_0` (its holder's `Cold`).
+    fn cold_evaluator(&mut self) -> ObjRef {
+        self.held("Cold")
+    }
+
     /// Writes `v` into `o`'s field `name` through the slot (a toy-package object the typed write would refuse).
     fn set_slot(&mut self, o: ObjRef, name: &str, v: Value) {
         let class = self.vm.space.heap.get(o).unwrap().class;
@@ -455,10 +490,10 @@ fn the_flag_tests_through_the_minds_store() {
     }
 }
 
-/// The interface checks (lane FIX-FLAG-IMPLEMENTS-NOTYET): a loaded class that implements `IFlagProvider` is read as
-/// the store; a loaded class that does not answers no (no store, false); an interface class that is not loaded is
-/// `NotRead` before any write (no counter moves, nothing is marked), for either interface, and only
-/// with a context.
+/// The interface checks (lane FIX-FLAG-IMPLEMENTS-NOTYET, review r1 of #586): a loaded class that implements
+/// `IFlagProvider` is read as the store; a loaded class that does not answers no (no store, false); an interface
+/// class that is not loaded is `NotRead` before any write (no counter moves, nothing is marked), for either
+/// interface, where the path may still ask for it, and only with a context.
 #[test]
 fn an_unloaded_interface_class_is_not_read_before_any_write() {
     // Loaded and implemented: the mind's store is read (the definition is added there).
@@ -484,7 +519,50 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
         assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap().len(), 0, "{missing}: the store untouched");
         // With no context no interface question is reached: false, as before.
         assert!(!x.eval(e, None).unwrap(), "{missing}: no context");
+        // A loaded receiver whose path never asks for the missing interface answers as before: an empty chain, a
+        // short-circuited And after a None definition, and (IFlagProvider only) a definition with neither a value
+        // resolver nor an expression.
+        let empty = x.evaluator(&[], 1);
+        assert!(x.eval(empty, Some(mind)).unwrap(), "{missing}: an empty chain is true");
+        let and = x.evaluator(&[(0, None), (0, Some(f))], 1);
+        assert!(!x.eval(and, Some(mind)).unwrap(), "{missing}: the And stops at the None definition");
+        let bare = x.definition("Bare");
+        let plain = x.evaluator(&[(0, Some(bare))], 1);
+        let r = x.eval(plain, Some(mind));
+        if missing.ends_with("IFlagProvider") {
+            assert!(!r.unwrap(), "a definition with neither field is false without a store");
+        } else {
+            // The rule engine search asks for IRuleEngineOwner before the definition's load.
+            not_read(r, "is not loaded (a load is a write)");
+        }
     }
+}
+
+/// Review r1 of #586, item 2: a receiver handle that is not loaded yet needs both interface classes before its load,
+/// so a refusal leaves it unloaded and moves no counter.
+#[test]
+fn a_cold_receiver_stays_unloaded_on_an_interface_refusal() {
+    for missing in ["GearboxFramework.IRuleEngineOwner", "GearboxFramework.IFlagProvider"] {
+        let mut x = fx_all(true, Some(missing), true);
+        let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+        let cold = x.cold_evaluator();
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, cold));
+        let start = WriteCounters::of(&x.vm);
+        let text = not_read(x.eval(cold, Some(mind)), &format!("the interface class {missing} is not loaded"));
+        assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+        assert!(!start.moved(&x.vm), "{missing}: write-free");
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "{missing}: the receiver was not loaded");
+    }
+    // With every interface loaded, the guard passes and the handle is loaded; the invented class declares no
+    // FlagChain, so the read after the load is the Script error.
+    let mut x = fx_all(true, None, true);
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    let cold = x.cold_evaluator();
+    match x.eval(cold, Some(mind)).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("declares no FlagChain"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, cold), "loaded once the interfaces are there");
 }
 
 /// A reached unloaded flag definition is loaded (a write), and a refusal before any write is not marked: an unread
