@@ -31,7 +31,8 @@ fixtures only.
   Every answer and refusal leaves the heap fingerprint (classes, slots, `is_unloaded` and `is_failed` per object,
   and the name table's size) and the RNG state unchanged.
   #518's counters (`committed_writes`, `load_transitions`, `draws`) were not in #595's base. With #595 and this
-  change on main, lane FOLLOWUP-627-COUNTERS added that assertion, with the name table's length, to every refusal
-  and answer of the module's tests; no counter moves.
+  change on main, lane FOLLOWUP-627-COUNTERS added them and the name table's length to that snapshot. The tests check
+  the whole snapshot (fingerprint, RNG state, counters, name table) around every refusal, every direct answer, each
+  host call and each script error; nothing moves.
 - **Not verified:** nothing is checked against the running game, so the rule is **UNVERIFIED** in game. Whether an
   export on the chain is an archetype stays unread (refusal T).

@@ -171,6 +171,22 @@ impl Fx {
         (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
     }
 
+    /// Everything a refusal or an answer must leave as it was (review r1 of #642, item 3): the heap fingerprint
+    /// ([`Fx::fingerprint`]: every object's class, slots and store state, and the name table's size), the RNG streams'
+    /// whole state, and [`Fx::counters`].
+    fn snapshot(&self) -> (String, ow_core::rand::GameRng, (u64, u64, u64, usize)) {
+        (self.fingerprint(), self.vm.rng.clone(), self.counters())
+    }
+
+    /// Runs `f` and asserts [`Fx::snapshot`] is unchanged (review r1 of #642, item 1: the direct host calls and the
+    /// script errors).
+    fn same<T>(&mut self, label: &str, f: impl FnOnce(&mut Fx) -> T) -> T {
+        let before = self.snapshot();
+        let r = f(self);
+        assert!(self.snapshot() == before, "{label}: the heap, the RNG, #518's counters and the name table unchanged");
+        r
+    }
+
     fn export(&mut self, class: &str) -> ObjRef {
         let c = self.vm.find_class(class).unwrap();
         self.vm.space.alloc(c, "ToyExport", None, Origin::Export { package: 0, index: 1 }).unwrap()
@@ -241,23 +257,21 @@ impl Fx {
     /// The answer for `o` must be a `NotYet` of `missing` with `what` on `record`, and leave the heap and store as
     /// they were.
     fn refuses(&self, o: ObjRef, missing: Missing, what: &str, record: &str) {
-        let before = self.fingerprint();
-        let counters = self.counters();
+        let before = self.snapshot();
         match answer(&self.vm, o) {
             Err(VmError::NotYet(n)) => {
                 assert_eq!((n.missing, n.what.as_ref(), n.record), (missing, what, record));
             }
             other => panic!("expected the NotYet {what:?}, got {other:?}"),
         }
-        assert_eq!(self.fingerprint(), before, "a refusal writes, makes and loads nothing");
-        assert_eq!(self.counters(), counters, "#518's counters and the name table");
+        assert!(self.snapshot() == before, "a refusal writes, makes, loads, draws and interns nothing");
     }
 
     /// The answer for `o` must be `want`, with #518's counters unchanged (the answer itself writes nothing).
     fn answers(&self, o: ObjRef, want: (f32, f32), label: &str) {
-        let counters = self.counters();
+        let before = self.snapshot();
         assert_eq!(answer(&self.vm, o).unwrap(), want, "{label}");
-        assert_eq!(self.counters(), counters, "{label}: #518's counters");
+        assert!(self.snapshot() == before, "{label}: the heap, the RNG, #518's counters and the name table unchanged");
     }
 }
 
@@ -285,9 +299,11 @@ fn the_three_keys_are_bound_and_write_the_outs() {
     let nav = x.live("Engine.NavigationPoint");
     let c = x.cylinder(40.0, 80.0);
     x.set(nav, "CylinderComponent", Value::Object(Some(c)));
-    assert_eq!(x.call("NavigationPoint", Some(nav)).unwrap(), (Value::Float(40.0), Value::Float(80.0)));
+    let outs = x.same("a host call", |x| x.call("NavigationPoint", Some(nav)).unwrap());
+    assert_eq!(outs, (Value::Float(40.0), Value::Float(80.0)));
     let pickup = x.live("WillowGame.WillowPickup");
-    assert_eq!(x.call("Actor", Some(pickup)).unwrap(), (Value::Float(0.0), Value::Float(0.0)), "no components");
+    let outs = x.same("a host call", |x| x.call("Actor", Some(pickup)).unwrap());
+    assert_eq!(outs, (Value::Float(0.0), Value::Float(0.0)), "no components");
     let r = fx_mode(ParityMode::Reference);
     for key in KEYS {
         assert!(!r.vm.native_keys().any(|k| k == key), "Reference binds no {key}");
@@ -307,10 +323,8 @@ fn a_live_pickup_s_cylinder_entry_is_l() {
     x.components(pickup, vec![None, Some(cyl), Some(light), Some(mesh)]);
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
     // From the host the outs are copies, so the check is that the call fails before writing: no out comes back.
-    let (before, counters) = (x.fingerprint(), x.counters());
-    assert!(matches!(x.call("Actor", Some(pickup)), Err(VmError::NotYet(ref n)) if n.what == REFUSAL_L));
-    assert_eq!(x.fingerprint(), before);
-    assert_eq!(x.counters(), counters, "#518's counters and the name table");
+    let r = x.same("a host refusal", |x| x.call("Actor", Some(pickup)));
+    assert!(matches!(r, Err(VmError::NotYet(ref n)) if n.what == REFUSAL_L));
 }
 
 /// A class-default actor: unattached (or attached but not colliding) loaded entries give 0 and 0; an attached
@@ -321,7 +335,7 @@ fn a_template_reads_its_entries_then_meets_the_skip_flag() {
     let t = x.template("Engine.Actor");
     let (unattached, quiet, colliding) = (x.primitive(false, true), x.primitive(true, false), x.primitive(true, true));
     x.components(t, vec![None, Some(unattached), Some(quiet)]);
-    assert_eq!(answer(&x.vm, t).unwrap(), (0.0, 0.0));
+    x.answers(t, (0.0, 0.0), "");
     x.components(t, vec![Some(unattached), Some(colliding)]);
     x.refuses(t, Missing::NotRead, SKIP_FLAG, RECORD);
 }
@@ -339,16 +353,16 @@ fn the_pawn_rule_by_origin() {
 
         let live = x.live(class);
         x.set(live, "CylinderComponent", Value::Object(Some(c)));
-        assert_eq!(answer(&x.vm, live).unwrap(), (0.0, 0.0), "{class}: the actor default, no components");
+        x.answers(live, (0.0, 0.0), "{class}: the actor default, no components");
         x.components(live, vec![Some(c)]);
         x.refuses(live, l(), REFUSAL_L, RECORD);
 
         let t = x.template(class);
         x.set(t, "CylinderComponent", Value::Object(Some(c)));
-        assert_eq!(answer(&x.vm, t).unwrap(), (22.0, 44.0), "{class}");
+        x.answers(t, (22.0, 44.0), "{class}");
         // The same component as the collision component: the actor default.
         x.set(t, "CollisionComponent", Value::Object(Some(c)));
-        assert_eq!(answer(&x.vm, t).unwrap(), (0.0, 0.0), "{class}");
+        x.answers(t, (0.0, 0.0), "{class}");
     }
 }
 
@@ -361,10 +375,10 @@ fn a_navigation_point_answers_its_cylinder() {
     for nav in [live, t] {
         let c = x.cylinder(50.0, 75.0);
         x.set(nav, "CylinderComponent", Value::Object(Some(c)));
-        assert_eq!(answer(&x.vm, nav).unwrap(), (50.0, 75.0));
+        x.answers(nav, (50.0, 75.0), "");
     }
     let nav = x.live("Engine.NavigationPoint");
-    assert_eq!(answer(&x.vm, nav).unwrap(), (0.0, 0.0));
+    x.answers(nav, (0.0, 0.0), "");
     let colliding = x.primitive(true, true);
     x.components(nav, vec![Some(colliding)]);
     x.refuses(nav, l(), REFUSAL_L, RECORD);
@@ -380,10 +394,8 @@ fn lazy_handles_are_n_or_skipped_and_never_loaded() {
     x.components(pickup, vec![Some(cyl)]);
     x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
     x.components(pickup, vec![Some(lamp)]);
-    let (before, counters) = (x.fingerprint(), x.counters());
-    assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0));
-    assert_eq!(x.fingerprint(), before, "the non-primitive lazy entry was skipped, not loaded");
-    assert_eq!(x.counters(), counters, "#518's counters and the name table");
+    // `answers` checks the snapshot, so the non-primitive lazy entry was skipped, not loaded.
+    x.answers(pickup, (0.0, 0.0), "the non-primitive lazy entry");
     let t = x.template("Engine.Pawn");
     x.set(t, "CylinderComponent", Value::Object(Some(cyl)));
     x.refuses(t, Missing::NotRead, REFUSAL_N, RECORD);
@@ -410,8 +422,8 @@ fn malformed_data_is_a_script_error() {
     let t = x.template("Engine.Pawn");
     let mesh = x.primitive(false, false);
     x.set(t, "CylinderComponent", Value::Object(Some(mesh)));
-    script_error(answer(&x.vm, t), "CollisionRadius");
-    script_error(x.call("Actor", None), NATIVE);
+    script_error(x.same("a script error", |x| answer(&x.vm, t)), "CollisionRadius");
+    script_error(x.same("a host script error", |x| x.call("Actor", None)), NATIVE);
 }
 
 /// Template-or-live is asked only where it is used (note section 4, step 2): an export-origin `WillowPickup` with no
@@ -423,11 +435,11 @@ fn an_export_receiver_is_t_only_where_its_origin_is_used() {
     let pickup = x.export("WillowGame.WillowPickup");
     let light = x.live("Engine.DynamicLightEnvironmentComponent");
     x.components(pickup, vec![None, Some(light)]);
-    assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0));
+    x.answers(pickup, (0.0, 0.0), "");
     let nav = x.export("Engine.NavigationPoint");
     let c = x.cylinder(31.0, 62.0);
     x.set(nav, "CylinderComponent", Value::Object(Some(c)));
-    assert_eq!(answer(&x.vm, nav).unwrap(), (31.0, 62.0));
+    x.answers(nav, (31.0, 62.0), "");
     let actor = x.export("Engine.Actor");
     let mesh = x.primitive(false, false);
     x.components(actor, vec![Some(mesh)]);
