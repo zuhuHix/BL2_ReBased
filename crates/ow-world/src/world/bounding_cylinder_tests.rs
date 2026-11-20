@@ -33,19 +33,34 @@ fn engine() -> Vec<u8> {
         "BoolProperty",
         "FloatProperty",
         "ArrayProperty",
+        "ScriptStruct",
+        "StructProperty",
     ]);
     let object = t.class("Object", 0);
+    let vector = ow_package::testkit::reflect::toy_struct(&mut t, object, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Bool", primitive, "bAttached", 0, 0);
     t.prop("Bool", primitive, "CollideActors", 0, 0);
     t.prop("Bool", primitive, "BulletListener", 0, 0);
+    for b in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+        t.prop("Bool", primitive, b, 0, 0);
+    }
+    t.prop("Struct", primitive, "Translation", 0, vector);
     t.prop("Object", primitive, "Owner", 0, object);
     let cylinder = t.class("CylinderComponent", primitive);
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
     t.class("SkeletalMeshComponent", primitive);
+    // Lane IMPL-SKIP-FLAG: two more primitive classes whose per-component check was not read, and a toy one.
+    t.class("StaticMeshComponent", primitive);
+    t.class("ParticleSystemComponent", primitive);
+    t.class("ToyCylinderKind", cylinder);
     t.class("DynamicLightEnvironmentComponent", object);
     let actor = t.class("Actor", object);
+    t.prop("Struct", actor, "Location", 0, vector);
     t.prop("Object", actor, "CollisionComponent", 0, object);
     let array = t.p.next_export();
     t.prop("Array", actor, "Components", 0, array + 1);
@@ -72,7 +87,9 @@ fn willow() -> Vec<u8> {
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let actor = t.p.add_import("Core", "Class", engine, "Actor");
     let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
+    let cylinder = t.p.add_import("Core", "Class", engine, "CylinderComponent");
     t.class("WillowPickup", actor);
+    t.class("BulletListenerComponent", cylinder);
     t.class("WillowPlayerPawn", pawn);
     t.p.build()
 }
@@ -137,6 +154,11 @@ fn fx_mode(mode: ParityMode) -> Fx {
         "Engine.Trigger",
         "Engine.CylinderComponent",
         "Engine.SkeletalMeshComponent",
+        "Engine.PrimitiveComponent",
+        "Engine.StaticMeshComponent",
+        "Engine.ParticleSystemComponent",
+        "Engine.ToyCylinderKind",
+        "WillowGame.BulletListenerComponent",
         "Engine.DynamicLightEnvironmentComponent",
         "WillowGame.WillowPickup",
         "WillowGame.WillowPlayerPawn",
@@ -207,8 +229,9 @@ impl Fx {
         c
     }
 
+    /// A plain `PrimitiveComponent` entry (its per-component check passes; lane IMPL-SKIP-FLAG).
     fn primitive(&mut self, attached: bool, collides: bool) -> ObjRef {
-        let c = self.live("Engine.SkeletalMeshComponent");
+        let c = self.live("Engine.PrimitiveComponent");
         self.set(c, "bAttached", Value::Bool(attached));
         self.set(c, "CollideActors", Value::Bool(collides));
         c
@@ -349,16 +372,19 @@ fn a_live_pickup_s_cylinder_entry_is_l() {
 }
 
 /// A class-default actor: unattached (or attached but not colliding) loaded entries give 0 and 0; an attached
-/// colliding entry is S.
+/// colliding entry reads the skip flag: set, it is skipped; clear, it reaches the bounds step, refusal L (lane
+/// IMPL-SKIP-FLAG; S before).
 #[test]
-fn a_template_reads_its_entries_then_meets_the_skip_flag() {
+fn a_template_reads_its_entries_then_the_skip_flag() {
     let mut x = fx();
     let t = x.template("Engine.Actor");
     let (unattached, quiet, colliding) = (x.primitive(false, true), x.primitive(true, false), x.primitive(true, true));
     x.components(t, vec![None, Some(unattached), Some(quiet)]);
     x.answers(t, (0.0, 0.0), "");
     x.components(t, vec![Some(unattached), Some(colliding)]);
-    x.refuses(t, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.refuses(t, l(), REFUSAL_L, RECORD);
+    x.set(colliding, "BulletListener", Value::Bool(true));
+    x.answers(t, (0.0, 0.0), "a bullet listener is skipped");
 }
 
 /// The pawn rule: an export-origin pawn with a separate cylinder is T; a live one gets the actor default, not the
@@ -504,7 +530,7 @@ fn a_run_time_object_with_a_template_outer_is_a_template() {
     x.components(actor, vec![Some(unattached)]);
     x.answers(actor, (0.0, 0.0), "an unattached entry is skipped");
     x.components(actor, vec![Some(unattached), Some(colliding)]);
-    x.refuses(actor, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.refuses(actor, l(), REFUSAL_L, RECORD);
 }
 
 /// The rest of the walk: a run-time object under only run-time outers is live (refusal L at its colliding entry), and
@@ -566,20 +592,26 @@ fn a_lazy_outer_is_t_and_never_loaded_or_tried() {
 
 // ---- Lane IMPL-COMPONENT-BOUNDS (NATIVE_COMPONENT_BOUNDS.md section 7 tests, #639 r1) ----------------------------
 
-/// Tests 1 and 2: a recorded colliding cylinder is refusal S (main's `SKIP_FLAG` text), whatever its stored bounds and
-/// the fitted skip bit, which is not read.
+/// Tests 1 and 2 (#639), with the skip flag read (lane IMPL-SKIP-FLAG): a recorded colliding cylinder whose
+/// `BulletListener` is set is skipped; clear, it reaches the bounds step and answers its box.
 #[test]
-fn a_recorded_colliding_entry_is_s_and_the_skip_bit_is_not_read() {
+fn a_recorded_colliding_entry_reads_the_skip_flag() {
     let mut x = fx();
     let pickup = x.live("WillowGame.WillowPickup");
     let cyl = x.cylinder(64.0, 20.0);
     x.set(cyl, "CollideActors", Value::Bool(true));
     x.attach(pickup, cyl);
     x.components(pickup, vec![Some(cyl)]);
-    for bit in [false, true] {
-        x.set(cyl, "BulletListener", Value::Bool(bit));
-        x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
-    }
+    x.set(cyl, "BulletListener", Value::Bool(true));
+    x.answers(pickup, (0.0, 0.0), "a bullet listener is skipped");
+    x.set(cyl, "BulletListener", Value::Bool(false));
+    x.answers(pickup, cylinder_box(64.0, 20.0), "the cylinder's box");
+}
+
+/// The answer for one cylinder entry of radius `r` and half height `h` at the owner's origin.
+fn cylinder_box(r: f32, h: f32) -> (f32, f32) {
+    let [radius, _, height] = crate::placement::box_cylinder(&[([0.0; 3], [r, r, h])]);
+    (radius, height)
 }
 
 /// Tests 3 and 4: a colliding entry not in the record is L; non-colliding entries, recorded or not, are skipped, and
@@ -601,7 +633,7 @@ fn an_unrecorded_colliding_entry_is_l_and_non_colliding_ones_are_skipped() {
 }
 
 /// Test 5, order: a non-colliding recorded entry, then an unrecorded colliding one, is L; a recorded colliding entry
-/// first is S, before the later (lazy) entry is read.
+/// first is counted, then the later (lazy) entry is N, never loaded.
 #[test]
 fn the_first_reached_entry_decides() {
     let mut x = fx();
@@ -616,8 +648,8 @@ fn the_first_reached_entry_decides() {
     x.attach(pickup, first);
     let lazy = x.lazy("HolderCyl");
     x.components(pickup, vec![Some(first), Some(lazy)]);
-    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
-    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the later entry was never read");
+    x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the later entry was never loaded");
 }
 
 /// Tests 6 and 7: the record's lifecycle and the scoped lookup. A record naming another owner, a component whose
@@ -637,19 +669,19 @@ fn stale_or_foreign_records_are_attachment_unknown() {
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
     // Recorded with this owner, then its Owner changed.
     x.attach(pickup, cyl);
-    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.answers(pickup, cylinder_box(64.0, 20.0), "attached and current");
     x.set(cyl, "Owner", Value::Object(Some(other)));
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
     // Review r1 of #643, item 1: attached to A, its Owner changed to B, then back to A with no new attach. The
     // record is stale (its Owner write count moved), so attachment is unknown: L, not S.
     x.attach(pickup, cyl);
-    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.answers(pickup, cylinder_box(64.0, 20.0), "attached and current");
     x.set(cyl, "Owner", Value::Object(Some(other)));
     x.set(cyl, "Owner", Value::Object(Some(pickup)));
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
     // A new attach to A makes it current again.
     x.attach(pickup, cyl);
-    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.answers(pickup, cylinder_box(64.0, 20.0), "attached and current");
     // A destroyed component (the world's destroy path is tested in `world::tests`).
     x.vm.space.heap.destroy(cyl).unwrap();
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
@@ -676,3 +708,100 @@ fn the_record_does_not_write_b_attached() {
     assert_eq!(x.vm.space.read(cyl, PropAddr::scalar(p)).unwrap(), &Value::Bool(false));
 }
 
+// ---- Lane IMPL-SKIP-FLAG (NATIVE_COMPONENT_SKIP_FLAG.md section 5 tests) -------------------------------------------
+
+/// Note tests 1 and 2: `BulletListener` set skips an entry on a live and on a template receiver, with no refusal;
+/// clear, the entry goes on to the bounds step (the live entry's own box rule, L on a template).
+#[test]
+fn the_skip_flag_skips_a_set_entry_and_passes_a_clear_one() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let plain = x.primitive(false, true);
+    x.attach(pickup, plain);
+    x.components(pickup, vec![Some(plain)]);
+    x.set(plain, "BulletListener", Value::Bool(true));
+    x.answers(pickup, (0.0, 0.0), "live: skipped");
+    x.set(plain, "BulletListener", Value::Bool(false));
+    x.refuses(pickup, Missing::NotRead, "Actor.GetBoundingCylinder: the bounds update of Engine.PrimitiveComponent", BOUNDS_RECORD);
+    let t = x.template("Engine.Actor");
+    let entry = x.primitive(true, true);
+    x.components(t, vec![Some(entry)]);
+    x.set(entry, "BulletListener", Value::Bool(true));
+    x.answers(t, (0.0, 0.0), "template: skipped");
+    x.set(entry, "BulletListener", Value::Bool(false));
+    x.refuses(t, l(), REFUSAL_L, RECORD);
+}
+
+/// Note test 3: a `BulletListener` that holds another kind is a `VmError::Script` naming it, with nothing changed.
+#[test]
+fn a_skip_flag_of_another_kind_is_a_script_error() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let plain = x.primitive(false, true);
+    x.attach(pickup, plain);
+    x.components(pickup, vec![Some(plain)]);
+    let class = x.vm.space.heap.get(plain).unwrap().class;
+    let p = x.vm.space.prop(class, SKIP_FIELD).unwrap();
+    *x.vm.space.slot_mut(plain, PropAddr::scalar(p)).unwrap() = Value::Int(1);
+    let r = x.same("a data error", |x| answer(&x.vm, pickup));
+    script_error(r, SKIP_FIELD);
+}
+
+/// Note test 4: the per-component check, asked last, on a live recorded colliding entry with the bit clear and on a
+/// template's attached colliding entry: a `CylinderComponent` passes and gives its box (L on a template); a
+/// `BulletListenerComponent` passes, then meets B.7's `NotRead`; skeletal, static-mesh, particle and a toy cylinder
+/// subclass are the check's `NotRead`. With the bit set, or not colliding, none of them is asked.
+#[test]
+fn the_component_check_passes_the_read_classes_and_refuses_the_rest() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let listener = x.live("WillowGame.BulletListenerComponent");
+    x.set(listener, "CollideActors", Value::Bool(true));
+    x.attach(pickup, listener);
+    x.components(pickup, vec![Some(listener)]);
+    x.refuses(
+        pickup,
+        Missing::NotRead,
+        "Actor.GetBoundingCylinder: the bounds update of WillowGame.BulletListenerComponent",
+        BOUNDS_RECORD,
+    );
+    let t = x.template("Engine.Actor");
+    for class in [
+        "Engine.SkeletalMeshComponent",
+        "Engine.StaticMeshComponent",
+        "Engine.ParticleSystemComponent",
+        "Engine.ToyCylinderKind",
+    ] {
+        let c = x.live(class);
+        x.attach(pickup, c);
+        x.set(c, "bAttached", Value::Bool(true));
+        let want = format!("{COMPONENT_CHECK_OF} {class} (not read)");
+        // Not colliding: skipped before the check.
+        x.components(pickup, vec![Some(c)]);
+        x.components(t, vec![Some(c)]);
+        x.answers(pickup, (0.0, 0.0), "live, not colliding");
+        x.answers(t, (0.0, 0.0), "template, not colliding");
+        x.set(c, "CollideActors", Value::Bool(true));
+        x.refuses(pickup, Missing::NotRead, &want, SKIP_RECORD);
+        x.refuses(t, Missing::NotRead, &want, SKIP_RECORD);
+        // The bit set: skipped before the check.
+        x.set(c, "BulletListener", Value::Bool(true));
+        x.answers(pickup, (0.0, 0.0), "live, a bullet listener");
+        x.answers(t, (0.0, 0.0), "template, a bullet listener");
+    }
+}
+
+/// Note test 5: an unrecorded colliding entry is still L before its skip flag is read, set or not.
+#[test]
+fn an_unrecorded_entry_is_l_before_the_skip_flag() {
+    let mut x = fx();
+    x.scene();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.components(pickup, vec![Some(cyl)]);
+    for bit in [false, true] {
+        x.set(cyl, "BulletListener", Value::Bool(bit));
+        x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    }
+}

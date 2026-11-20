@@ -37,6 +37,7 @@ fn engine() -> Vec<u8> {
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Bool", primitive, "bAttached", 0, 0);
     t.prop("Bool", primitive, "CollideActors", 0, 0);
+    t.prop("Bool", primitive, "BulletListener", 0, 0);
     let cylinder = t.class("CylinderComponent", primitive);
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
@@ -130,10 +131,18 @@ fn a_willow_pickup_template_takes_the_actor_rule() {
     x.set(entry, "CollideActors", Value::Bool(true));
     x.set(pickup, "Components", Value::array(vec![Value::Object(Some(entry))]));
     assert_eq!(extent(&x.vm, pickup).unwrap(), [0.0; 3]);
-    // An attached, colliding entry reaches the skip flag the port cannot read, as for `Actor`.
+    // An attached, colliding entry reads the skip flag (lane IMPL-SKIP-FLAG): clear, it reaches the bounds step,
+    // refusal L's `LayerAbsent`, as for `Actor`; set, it is skipped.
     x.set(entry, "bAttached", Value::Bool(true));
-    let what = not_read(extent(&x.vm, pickup));
-    assert!(what.starts_with(&format!("{BOUNDING_CYLINDER_OF} WillowGame.WillowPickup:")), "{what}");
+    match extent(&x.vm, pickup) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.what, crate::world::bounding_cylinder::REFUSAL_L, "{n}");
+            assert_eq!(n.missing, Missing::LayerAbsent(crate::world::bounding_cylinder::BOUNDS_LAYER), "{n}");
+        }
+        other => panic!("expected L, got {other:?}"),
+    }
+    x.set(entry, "BulletListener", Value::Bool(true));
+    assert_eq!(extent(&x.vm, pickup).unwrap(), [0.0; 3]);
 }
 
 /// A cylinder `CollisionComponent` still comes first (the spawn's own step 1), for a pickup as for any class.

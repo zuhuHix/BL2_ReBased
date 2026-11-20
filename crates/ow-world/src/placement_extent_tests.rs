@@ -14,7 +14,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
 use super::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, box_cylinder, extent};
-use crate::trace_filter::SKIP_FLAG;
+use crate::world::bounding_cylinder::{BOUNDS_LAYER, COMPONENT_CHECK_OF, REFUSAL_L, SKIP_RECORD};
 
 struct Fx {
     vm: Vm,
@@ -29,8 +29,14 @@ fn fx() -> Fx {
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let obj = PropKind::Object { class: object };
     let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
-    let decls = vec![d(&mut s, "bAttached", PropKind::Bool), d(&mut s, "CollideActors", PropKind::Bool)];
+    let decls = vec![
+        d(&mut s, "bAttached", PropKind::Bool),
+        d(&mut s, "CollideActors", PropKind::Bool),
+        d(&mut s, "BulletListener", PropKind::Bool),
+    ];
     let primitive = s.classes.define("Engine.PrimitiveComponent", Some(object), decls).unwrap();
+    // A primitive class whose per-component check was not read (lane IMPL-SKIP-FLAG).
+    s.classes.define("Engine.SkeletalMeshComponent", Some(primitive), vec![]).unwrap();
     let decls = vec![d(&mut s, "CollisionRadius", PropKind::Float), d(&mut s, "CollisionHeight", PropKind::Float)];
     s.classes.define("Engine.CylinderComponent", Some(primitive), decls).unwrap();
     s.classes.define("Test.AudioComponent", Some(object), vec![]).unwrap();
@@ -133,16 +139,47 @@ fn a_pawn_without_a_cylinder_and_unattached_components_has_the_zero_extent() {
     assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3]);
 }
 
-/// `Actor`'s rule on an attached colliding primitive meets the unresolved skip flag: a named `NotYet`.
+/// `Actor`'s rule on an attached colliding primitive reads the skip flag (lane IMPL-SKIP-FLAG,
+/// NATIVE_COMPONENT_SKIP_FLAG.md section 5, test 6): set, the entry is skipped and the extent stays (0, 0, 0); clear,
+/// the component check passes a `PrimitiveComponent` and the bounds step is refusal L's `LayerAbsent`; a class whose
+/// check was not read is the check's `NotRead`. Nothing changes on any path.
 #[test]
-fn an_attached_colliding_primitive_needs_the_skip_flag() {
+fn an_attached_colliding_primitive_reads_the_skip_flag() {
     let mut x = fx();
     let t = x.obj("Engine.Actor");
     let p = x.primitive(true, true);
     x.components(t, vec![Some(p)]);
-    let what = not_read(extent(&x.vm, t).unwrap_err());
-    assert!(what.starts_with(&format!("{BOUNDING_CYLINDER_OF} Engine.Actor")), "{what}");
-    assert!(what.contains(SKIP_FLAG), "{what}");
+    let marks = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions(), x.vm.space.names.len());
+    let before = marks(&x);
+    match extent(&x.vm, t).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::LayerAbsent(BOUNDS_LAYER), "{n}");
+            assert_eq!((n.what.as_ref(), n.record), (REFUSAL_L, EXTENT_RECORD));
+        }
+        other => panic!("expected L, got {other:?}"),
+    }
+    assert_eq!(marks(&x), before);
+    let skel = x.obj("Engine.SkeletalMeshComponent");
+    x.set(skel, "bAttached", Value::Bool(true));
+    x.set(skel, "CollideActors", Value::Bool(true));
+    x.components(t, vec![Some(skel)]);
+    let before = marks(&x);
+    match extent(&x.vm, t).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead, "{n}");
+            assert_eq!(n.what, format!("{COMPONENT_CHECK_OF} Engine.SkeletalMeshComponent (not read)"));
+            assert_eq!(n.record, SKIP_RECORD);
+        }
+        other => panic!("expected the component check, got {other:?}"),
+    }
+    assert_eq!(marks(&x), before);
+    for c in [p, skel] {
+        x.set(c, "BulletListener", Value::Bool(true));
+    }
+    x.components(t, vec![Some(p), Some(skel)]);
+    let before = marks(&x);
+    assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3], "bullet listeners are skipped");
+    assert_eq!(marks(&x), before);
 }
 
 /// Any class other than the five read is a named `NotYet`, even a subclass of `Actor`.

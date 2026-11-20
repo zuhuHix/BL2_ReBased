@@ -24,6 +24,16 @@ steps, `cast` at `Actor.Trace`'s T5 on the controller's non-colliding cylinder. 
 skip stood in locally: ok 4, notyet 9, error 1, `cast` at the unbound
 `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet`. UNVERIFIED in game.
 
+**IMPL-SKIP-FLAG (2026-11-20, zuhu desktop, on fix/rust-trace-skip-flag from main b9dfca8b):** AI-assisted (Claude
+Code, Opus 5.5). Refusal S is lifted in `Actor.GetBoundingCylinder` (live and template) and in the spawn extent's
+`Actor` rule, from NATIVE_COMPONENT_SKIP_FLAG.md (#653 at 4fd8587d). `BulletListener` set skips an entry; clear goes
+on to the per-component check (passes for the primitive, cylinder and bullet-listener classes, `NotRead` for the
+rest), then the box. `cargo test --workspace -j 2`: 3,285 passed / 0 failed / 51 ignored. Clippy flags nothing in the
+changed files. Installed Off `--slice-gate` strict, under the machine lock: 4 ok / 10 NotYet / 0 errors. Links 6 and
+7 pass `make` (1 of 3 and 1 of 4 driver steps) and stop in `touch` at "Actor.GetBoundingCylinder: the component
+check of Engine.SkeletalMeshComponent (not read)", the stop the note predicts; the pickup's cylinder now gives its
+box. No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/skip/`.
+
 **LINK9-GETAICOMPONENT-BINDING (2026-11-20, pc-hummer, on fix/rust-link9-holds-binding from main 241a6c47):**
 AI-assisted (Claude Code, Opus 5.5). Link 9's set-up registers the AI holds' natives (`ow_combat::holds::register`),
 `GearboxMind.GetAIComponent` among them. `cargo test --workspace`: 3200 passed / 0 failed / 51 ignored;

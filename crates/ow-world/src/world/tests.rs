@@ -2878,14 +2878,15 @@ mod placement {
     /// NATIVE_SPAWN_EXTENT.md section 5, step 5 (lane IMPL-LINK9-EXTENT), through the spawn: the primitive entry is
     /// loaded before the spot search, the None and non-primitive entries load nothing, and every `NotYet` after the
     /// load is marked "stopped after partial writes: ", its kind kept, nothing made.
-    /// - Attached and colliding: the skip flag the port cannot read, marked.
+    /// - Attached and colliding, its skip flag clear: the bounds step's refusal L (`LayerAbsent`), marked (lane
+    ///   IMPL-SKIP-FLAG; the unread skip flag before).
     /// - Unattached: the extent is (0, 0, 0), the spot search's first test is a zero-extent box test, and the next
     ///   `NotYet` (the instancing's, on this fixture's primitive class, which is no `Core.Component`) is marked too.
     #[test]
     fn the_extent_loads_the_primitive_entries_and_marks_what_follows() {
         run(|| {
             for (name, want) in [
-                ("Actor_ExtentLive", crate::trace_filter::SKIP_FLAG),
+                ("Actor_ExtentLive", crate::world::bounding_cylinder::REFUSAL_L),
                 ("Actor_ExtentQuiet", "a sub-object of the template that is not a component"),
             ] {
                 let mut x = fx_files(true, ParityMode::Off, true);
@@ -2897,7 +2898,12 @@ mod placement {
                 let actor = x.class("Actor");
                 let req = SpawnRequest::new(Some(actor)).with_template(Some(arch));
                 let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
-                assert_eq!(missing, Missing::NotRead, "{name}: {text}");
+                let kind = if name == "Actor_ExtentLive" {
+                    Missing::LayerAbsent(crate::world::bounding_cylinder::BOUNDS_LAYER)
+                } else {
+                    Missing::NotRead
+                };
+                assert_eq!(missing, kind, "{name}: {text}");
                 assert!(text.starts_with("stopped after partial writes: "), "{name}: {text}");
                 assert_eq!(text.matches("stopped after partial writes: ").count(), 1, "{name}: marked once: {text}");
                 assert!(text.contains(want), "{name}: {text}");

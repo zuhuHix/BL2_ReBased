@@ -24,19 +24,17 @@
 //!    (decided from the class the handle carries) are skipped; a lazy handle is refusal **N**, never a load; then
 //!    `bAttached`, read from the entry on a template (clear: skipped), refusal **L** on a live receiver (the port does
 //!    not track attachment), refusal **T** on an export or resource receiver; then `CollideActors` clear is skipped;
-//!    then the skip flag, refusal **S** with main's `trace_filter::SKIP_FLAG` text. `Bounds` would come next; it is not
-//!    reached while S refuses, and is refusal L when it is. No entry left gives 0 and 0, through main's
+//!    then the skip flag, which was refusal **S** and is now read (lane IMPL-SKIP-FLAG, below). `Bounds` comes next, and
+//!    is refusal L. No entry left gives 0 and 0, through main's
 //!    `placement::box_cylinder` of no boxes.
 //!
 //! **Lane IMPL-COMPONENT-BOUNDS** (coded from NATIVE_COMPONENT_BOUNDS.md alone, analyst lane ANALYST-COMPONENT-BOUNDS,
 //! PR #639, and the hub's rulings on its review; clean room). On a **live** receiver the actor default now runs, per
 //! entry: None and a non-primitive skipped; a lazy handle refusal N; **`CollideActors` clear skipped** (before
 //! attachment is asked about); **not attached by the attach record** ([`crate::actors::attached_to`]: recorded with
-//! this receiver as owner, still owned by it, neither destroyed) refusal L; then **refusal S, unconditionally**: the
-//! hub kept it, and the skip bit is not read. The component virtual the box routine asks first (not read) is taken as
-//! passing, before `CollideActors` (UNVERIFIED, as #595). Past S, an entry's box comes from [`entry_box`], at query time from
-//! stored fields (nothing is written to `Bounds`). [`entry_box`] is not reached while S refuses, and is tested on its
-//! own. Template receivers keep #595's path unchanged.
+//! this receiver as owner, still owned by it, neither destroyed) refusal L; then refusal S, which lane IMPL-SKIP-FLAG
+//! lifts (below). Past the skip check, an entry's box comes from [`entry_box`], at query time from stored fields
+//! (nothing is written to `Bounds`).
 //!
 //! **Nothing is loaded.** Classes are looked up only through the class table's `by_path`; a class not in the table
 //! counts as "not this class". The cylinder components and the walked primitive entries that the store holds as lazy
@@ -46,6 +44,16 @@
 //! **Malformed data** (a field the class does not declare, `Components` that is not an array of objects, an object or
 //! bool field of another kind) is a `VmError::Script` naming the field, through the world's field reads
 //! (`crate::actors`).
+//!
+//! **Lane IMPL-SKIP-FLAG** (coded from NATIVE_COMPONENT_SKIP_FLAG.md section 5 alone, as accepted at 4fd8587d; analyst
+//! lane ANALYST-SKIP-FLAG, PR #653, with the hub's rulings; clean room). Refusal S is lifted on both paths:
+//! - **the skip check**, where S stood: `BulletListener` (the bool the note reads as bit 10 of the collision word; the
+//!   name is a structural fit, UNVERIFIED) set skips the entry, clear goes on;
+//! - **the per-component check** ([`component_check`]), asked last, only of an entry every other test would count,
+//!   right before its box: an entry whose exact class is one of [`COMPONENT_CHECK_PASSES`] passes (read). Any other
+//!   class, the skeletal, static-mesh and particle components among them, is `NotYet { NotRead }`
+//!   ([`COMPONENT_CHECK_OF`]);
+//! - **the box:** [`entry_box`] on a live receiver, refusal L on a template (#595's bounds step).
 //!
 //! Every refusal comes before the native's only write, so none carries the "stopped after partial writes: " prefix
 //! from inside it; a caller that wrote earlier marks its own.
@@ -61,7 +69,6 @@ use ow_vm::error::VmError;
 
 use crate::actors::{attached_to, field, flag, float, object, objects};
 use crate::placement::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, PAWN_RULE_CLASSES, box_cylinder};
-use crate::trace_filter::SKIP_FLAG;
 
 /// The record of refusals T, N, L and S.
 pub const RECORD: &str = "docs/verification/NATIVE_GET_BOUNDING_CYLINDER.md";
@@ -82,6 +89,15 @@ pub const REFUSAL_N: &str = "Actor.GetBoundingCylinder: a component the store ha
 /// Refusal L's text and layer (the pickup targeting's layer text).
 pub const REFUSAL_L: &str = "Actor.GetBoundingCylinder: the colliding components' bounds";
 pub const BOUNDS_LAYER: &str = "component bounds (the headless world has none)";
+/// The exact classes whose per-component check passes (NATIVE_COMPONENT_SKIP_FLAG.md section 3; UNVERIFIED in game).
+pub const COMPONENT_CHECK_PASSES: [&str; 3] =
+    ["Engine.PrimitiveComponent", "Engine.CylinderComponent", "WillowGame.BulletListenerComponent"];
+/// The refusal of an entry whose per-component check was not read (followed by its class path).
+pub const COMPONENT_CHECK_OF: &str = "Actor.GetBoundingCylinder: the component check of";
+/// The skip check's field (bit 10 of the collision bool word by the note; the name is UNVERIFIED).
+pub const SKIP_FIELD: &str = "BulletListener";
+/// The record of the per-component check and the skip check.
+pub const SKIP_RECORD: &str = "docs/verification/NATIVE_COMPONENT_SKIP_FLAG.md";
 /// The native's name in its errors.
 const NATIVE: &str = "Actor.GetBoundingCylinder";
 
@@ -208,34 +224,45 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
         }
         resident(vm, c)?;
         if template(space, this)? {
-            // #595's template path, unchanged.
-            if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? {
+            // #595's template path: bAttached, CollideActors, the skip check, the component check, then the bounds,
+            // which the port does not compute for a template: L.
+            if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? || flag(space, c, SKIP_FIELD)? {
                 continue;
             }
-            return Err(NotYet::not_read(SKIP_FLAG, RECORD).into());
+            component_check(space, c)?;
+            return Err(bounds_refusal());
         }
-        // A live receiver (lane IMPL-COMPONENT-BOUNDS, note section 7 B). The component virtual the box routine asks
-        // first is not read: every component is taken as passing it (UNVERIFIED, as #595). Then a non-colliding entry
-        // is never counted, attached or not.
+        // A live receiver (lane IMPL-COMPONENT-BOUNDS, note section 7 B): a non-colliding entry is never counted,
+        // attached or not.
         if !flag(space, c, "CollideActors")? {
             continue;
         }
         if !attached_to(vm, c, this)? {
             return Err(bounds_refusal());
         }
-        // The skip flag: refusal S whenever an entry reaches it (the hub's ruling on #639; the bit is not read).
-        if !READ_SKIP_FLAG {
-            return Err(NotYet::not_read(SKIP_FLAG, RECORD).into());
+        // The skip check (lane IMPL-SKIP-FLAG): a bullet listener is left out of the box.
+        if flag(space, c, SKIP_FIELD)? {
+            continue;
         }
-        // Future cases (note section 7 B.7), unreachable while S refuses.
+        // The per-component check, right before the box (the hub's ruling on #653).
+        component_check(space, c)?;
         boxes.push(entry_box(vm, this, c)?);
     }
     let [radius, _, height] = box_cylinder(&boxes);
     Ok((radius, height))
 }
 
-/// Whether the skip flag is read on a live receiver: no, by the hub's ruling on #639 (refusal S stands).
-const READ_SKIP_FLAG: bool = false;
+/// The per-component check (NATIVE_COMPONENT_SKIP_FLAG.md section 3): it passes for the exact classes of
+/// [`COMPONENT_CHECK_PASSES`] (read: they always pass). Every other class's answer was not read, so it is
+/// `NotYet { NotRead }` ([`COMPONENT_CHECK_OF`]), the hub's ruling. Classes are looked up through `by_path` only. The
+/// virtual is taken as a pure predicate (UNVERIFIED: only its answers were read), so it is asked last.
+pub(crate) fn component_check(space: &ObjectSpace, c: ObjRef) -> Result<(), VmError> {
+    let class = space.heap.get(c)?.class;
+    if COMPONENT_CHECK_PASSES.iter().any(|p| space.classes.by_path(p) == Some(class)) {
+        return Ok(());
+    }
+    Err(NotYet::not_read(format!("{COMPONENT_CHECK_OF} {} (not read)", class_path(space, c)), SKIP_RECORD).into())
+}
 
 /// The cylinder entry's refusal when its world position is not the owner's `Location` by the note's rule.
 pub const WORLD_TRANSFORM: &str = "Actor.GetBoundingCylinder: the component's world transform";

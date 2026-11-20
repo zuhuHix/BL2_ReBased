@@ -334,10 +334,11 @@ pub fn extent(vm: &Vm, template: ObjRef) -> Result<[f32; 3], VmError> {
 ///    (the caller skipped the loads), and a loaded stand-in with no slots is `NotYet { NotRead }`;
 /// 4. `bAttached` clear: skipped;
 /// 5. `CollideActors` clear: skipped;
-/// 6. the skip flag, the trace filters' unresolved bit ([`crate::trace_filter::SKIP_FLAG`]): the port cannot read it,
-///    so an entry that passed steps 2 to 5 is `NotYet { NotRead }` naming it, and no box is built from an unread flag
-///    (UNVERIFIED);
-/// 7. `Bounds`: not reached while step 6 refuses; [`box_cylinder`] is the box's cylinder for when it is read.
+/// 6. the skip check (lane IMPL-SKIP-FLAG, NATIVE_COMPONENT_SKIP_FLAG.md section 5): `BulletListener` set skips the
+///    entry; clear goes on. The field's name is UNVERIFIED;
+/// 7. the per-component check (`world::bounding_cylinder`'s, the same rule): pass, or `NotYet { NotRead }`;
+/// 8. the bounds: the port computes none for a template's components, so `NotYet { LayerAbsent }` with the bounding
+///    cylinder's refusal L text and layer, on [`EXTENT_RECORD`].
 ///
 /// No qualifying entry gives (0, 0, 0). For the installed class defaults every loaded entry is expected unattached,
 /// so none reaches step 6 (UNVERIFIED, note section 4).
@@ -369,14 +370,12 @@ fn actor_rule(vm: &Vm, template: ObjRef, class: &str) -> Result<[f32; 3], VmErro
             )
             .into());
         }
-        if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? {
+        if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? || flag(space, c, trace_filter::SKIP_FLAG_FIELD)? {
             continue;
         }
-        return Err(NotYet::not_read(
-            format!("{BOUNDING_CYLINDER_OF} {class}: {} on an attached colliding component", trace_filter::SKIP_FLAG),
-            EXTENT_RECORD,
-        )
-        .into());
+        crate::world::bounding_cylinder::component_check(space, c)?;
+        use crate::world::bounding_cylinder::{BOUNDS_LAYER, REFUSAL_L};
+        return Err(NotYet::layer_absent(REFUSAL_L, BOUNDS_LAYER, EXTENT_RECORD).into());
     }
     Ok(box_cylinder(&[]))
 }

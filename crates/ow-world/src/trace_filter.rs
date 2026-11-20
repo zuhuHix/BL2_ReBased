@@ -113,10 +113,11 @@ pub const PAST_BSP: f32 = 5.0;
 pub const TERRAIN_HANDLING: &str = "the trace filter's terrain handling";
 pub const BSP_ACTOR_COMPARATOR: &str = "the trace filter's comparator between a BSP hit and an actor hit";
 pub const TIE_ORDER: &str = "the trace filter's order among tied actor hits";
-pub const SKIP_FLAG: &str = "the trace filter's skip flag (bit 10 of a primitive's collision flag word, unresolved)";
-/// The skip flag's field as NATIVE_SPAWN_TRACE_FILTER.md section 4 infers it (UNVERIFIED), read by [`tested`]. The
-/// spawn extent's rule (`crate::placement`) still answers its own `NotYet` with [`SKIP_FLAG`]: NATIVE_SPAWN_EXTENT.md
-/// leaves the flag unread there.
+pub const SKIP_FLAG: &str = "the trace filter's skip flag (`BulletListener`, bit 10 of a primitive's collision flag word)";
+/// The skip flag's field as NATIVE_SPAWN_TRACE_FILTER.md section 4 infers it and NATIVE_COMPONENT_SKIP_FLAG.md confirms
+/// it by structure (the name stays UNVERIFIED), read by [`tested`]. The spawn extent's rule (`crate::placement`) and
+/// `Actor.GetBoundingCylinder` read it by NATIVE_COMPONENT_SKIP_FLAG.md's rule (lane IMPL-SKIP-FLAG); no refusal is
+/// raised with [`SKIP_FLAG`] on those paths.
 pub const SKIP_FLAG_FIELD: &str = "BulletListener";
 /// Bit 30: a sweep that sets it ignores the skip flag. The spawn's queries never set it.
 pub const SKIP_IGNORED: u32 = 1 << 30;
