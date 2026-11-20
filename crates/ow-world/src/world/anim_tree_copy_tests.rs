@@ -29,6 +29,9 @@ struct Fx {
     list_head: StructId,
     n: u32,
     object: ClassId,
+    /// The class `component()` makes: `Engine.SkeletalMeshComponent`, or on an owner store (whose Engine package
+    /// declares it, with the two lookups and `bAnimTreeInitialised`) the hand-declared `Test.ToyMeshComponent` below it.
+    component_class: &'static str,
 }
 
 fn decl(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
@@ -208,6 +211,8 @@ impl Fx {
             ("AnimTickArray", arr(o.clone())),
             ("TickTag", PropKind::Int),
             ("bAnimTreeInitialised", PropKind::Bool),
+            // The initialisation's own gate (review r1 of #631, item 1).
+            ("ParentAnimComponent", o.clone()),
             ("SkeletalMesh", if shape == Shape::IntMesh { PropKind::Int } else { o.clone() }),
             ("Owner", o.clone()),
             // The component pass and the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS).
@@ -222,8 +227,20 @@ impl Fx {
         if shape != Shape::NoComposeFlag {
             component_props.push(("bUpdateComposeSkeletonPasses", PropKind::Bool));
         }
-        class(&mut vm, "Engine.SkeletalMeshComponent", object, &component_props);
-        Fx { vm, child, group, list_head, n: 0, object }
+        // An owner store's Engine declares the class (review r1 of #631, item 6: its event calls the two natives through
+        // bytecode); the rest of the fields go on a hand-declared class below it.
+        let component_class = match vm.find_class_if_present(SKELETAL).ok().flatten() {
+            Some(package) => {
+                component_props.retain(|(n, _)| *n != "bAnimTreeInitialised");
+                class(&mut vm, "Test.ToyMeshComponent", package, &component_props);
+                "Test.ToyMeshComponent"
+            }
+            None => {
+                class(&mut vm, SKELETAL, object, &component_props);
+                SKELETAL
+            }
+        };
+        Fx { vm, child, group, list_head, n: 0, object, component_class }
     }
 
     fn obj(&mut self, class: &str) -> ObjRef {
@@ -272,7 +289,7 @@ impl Fx {
     }
 
     fn component(&mut self) -> ObjRef {
-        self.obj("Engine.SkeletalMeshComponent")
+        self.obj(self.component_class)
     }
 
     fn list(v: &Value) -> Vec<Option<ObjRef>> {
@@ -364,11 +381,12 @@ fn refused_clean(x: &mut Fx, component: ObjRef, template: ObjRef) -> VmError {
             x.vm.space.heap.handles().len(),
             x.vm.rng.draws(),
             x.vm.defs.load_transitions(),
+            x.vm.space.names.len(),
         )
     };
     let before = counts(x);
     let e = instance(&mut x.vm, component, template).unwrap_err();
-    assert_eq!(counts(x), before, "write-free: no heap write, no object, no draw, no load");
+    assert_eq!(counts(x), before, "write-free: no heap write, no object, no draw, no load, no name interned");
     e
 }
 
@@ -2051,6 +2069,9 @@ enum OwnerShape {
     IntAimOffset,
     /// `Actor`'s version calls an invented native `ToyUnread`, which nothing binds (test 18).
     UnreadNative,
+    /// A second package, `ToyOther`, declares its own `SkeletalMeshComponent.FindAnimNode(name)` native (review r1 of
+    /// #631, item 4: a same-key binding in another package).
+    OtherMeshPackage,
 }
 
 /// Toy `Core`, `Engine` and `WillowGame` packages with the three read versions of `PostInitAnimTree` at their
@@ -2063,7 +2084,7 @@ fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
     let dir = std::env::temp_dir().join(format!("ow-world-animcopy-ev-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let guard = DirGuard(dir.clone());
     let _ = std::fs::remove_dir_all(&dir);
-    let kinds = ["Class", "Function", "State", "ObjectProperty", "IntProperty", "NameProperty"];
+    let kinds = ["Class", "Function", "State", "ObjectProperty", "IntProperty", "NameProperty", "BoolProperty"];
     let event_calling = |t: &mut ScriptToy, owner: i32, object: i32, record: Option<i32>, call: Option<i32>| {
         let params = [Param { type_ref: object, ..Param::new("Object", "SkelComp") }];
         t.function(owner, "PostInitAnimTree", &params, None, &[], &FunctionSpec::new(EVENT_FLAGS, "PostInitAnimTree"), |ids| {
@@ -2099,6 +2120,15 @@ fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
         }
         event(&mut t, pawn, object, None);
         t.class("ToyActorOnly", actor);
+        // The component class with the initialised flag and the two lookups as natives (review r1 of #631, item 6),
+        // so the player event below reaches the bound natives through bytecode; `Fx::on` adds the other fields on a
+        // hand-declared class below it.
+        let mesh = t.class("SkeletalMeshComponent", object);
+        t.prop("Bool", mesh, "bAnimTreeInitialised", 0, 0);
+        for find in ["FindAnimNode", "FindSkelControl"] {
+            let params = [Param::new("Name", "InName")];
+            t.function(mesh, find, &params, Some(("Object", object)), &[], &FunctionSpec::new(NATIVE_FLAGS, find), |_| None);
+        }
         t.build()
     };
     let willow = {
@@ -2108,16 +2138,47 @@ fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
         let engine = t.p.add_import("Core", "Package", 0, "Engine");
         let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
         let player = t.class("WillowPlayerPawn", pawn);
-        for f in ["ArmBoneBlend", "LeftHandIK", "BodyClass"] {
-            t.prop("Object", player, f, 0, object);
-        }
+        let caches: Vec<i32> = ["ArmBoneBlend", "LeftHandIK", "BodyClass"].iter().map(|f| t.prop("Object", player, f, 0, object)).collect();
         if shape == OwnerShape::IntAimOffset {
             t.prop("Int", player, "AimOffset", 0, 0);
         } else {
             t.prop("Object", player, "AimOffset", 0, object);
         }
         let seen = t.prop("Object", player, "ToySeen", 0, object);
-        event(&mut t, player, object, Some(seen));
+        // WillowPlayerPawn's version, its order kept (review r1 of #631, item 6): the argument recorded, the flag the
+        // call sees recorded, then the two finds through the bound natives, each stored in its cache. The casts and the
+        // aim-offset find (through `BodyClass`) are not reproduced: the cast classes are hand-declared, which bytecode
+        // cannot name, and the preflight's cast answers are tested on their own.
+        let flag_seen = t.prop("Bool", player, "ToyFlagSeen", 0, 0);
+        let (arm_cache, left_cache) = (caches[0], caches[1]);
+        let mesh = t.p.add_import("Core", "Class", engine, "SkeletalMeshComponent");
+        let flag = t.p.add_import("Core", "BoolProperty", mesh, "bAnimTreeInitialised");
+        let find_node = t.p.add_import("Core", "Function", mesh, "FindAnimNode");
+        let find_control = t.p.add_import("Core", "Function", mesh, "FindSkelControl");
+        let arm_name = t.p.fname("ArmBoneBlend", 0);
+        let grip_name = t.p.fname("LeftHandGrip", 0);
+        let params = [Param { type_ref: object, ..Param::new("Object", "SkelComp") }];
+        t.function(player, "PostInitAnimTree", &params, None, &[], &FunctionSpec::new(EVENT_FLAGS, "PostInitAnimTree"), |ids| {
+            let c = ids.get("SkelComp");
+            let mut a = Asm::new();
+            a.stmt().raw(&[0x0F]).instance(seen).local(c);
+            a.stmt().raw(&[0x14]).instance(flag_seen).context(|a| { a.local(c); }, |a| { a.instance(flag); });
+            for (cache, find, name) in [(arm_cache, find_node, &arm_name), (left_cache, find_control, &grip_name)] {
+                a.stmt().raw(&[0x0F]).instance(cache).context(
+                    |a| {
+                        a.local(c);
+                    },
+                    |a| {
+                        a.final_function(find, |a| {
+                            a.raw(&[0x21]).raw(name);
+                        });
+                    },
+                );
+            }
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        });
         let over = t.class("ToyOverridePawn", player);
         event(&mut t, over, object, None);
         t.class("ToyEnemyPawn", pawn);
@@ -2148,12 +2209,24 @@ fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
         t.p.add_export(holder, "Holder", payload);
         t.build()
     };
-    let files: Vec<(&str, &[u8])> = vec![
+    let other = {
+        let mut t = ScriptToy::with_imports(&kinds);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let mesh = t.class("SkeletalMeshComponent", object);
+        let params = [Param::new("Name", "InName")];
+        t.function(mesh, "FindAnimNode", &params, Some(("Object", object)), &[], &FunctionSpec::new(NATIVE_FLAGS, "FindAnimNode"), |_| None);
+        t.build()
+    };
+    let mut files: Vec<(&str, &[u8])> = vec![
         ("Core.upk", core.as_slice()),
         ("Engine.upk", engine.as_slice()),
         ("WillowGame.upk", willow.as_slice()),
         ("GD_ToyBodies.upk", data.as_slice()),
     ];
+    if shape == OwnerShape::OtherMeshPackage {
+        files.push(("ToyOther.upk", other.as_slice()));
+    }
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
     (Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off), guard)
 }
@@ -2277,7 +2350,12 @@ fn a_player_owner_gets_its_event_with_the_component_and_the_lookups_answer_on_th
     instance(&mut x.vm, comp, t.root).unwrap();
     assert_eq!(x.vm.rng.draws(), draws, "no random number");
     assert_eq!(x.get(owner, "ToySeen"), Value::Object(Some(comp)), "called with the component");
+    assert_eq!(x.get(owner, "ToyFlagSeen"), Value::Bool(false), "sent before bAnimTreeInitialised is set");
     assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(true));
+    // The caches the event's bytecode filled through the bound natives (review r1 of #631, item 6).
+    assert_eq!(x.get(owner, "ArmBoneBlend"), Value::Object(None), "no ArmBoneBlend node");
+    let left = object_of(&x.get(owner, "LeftHandIK")).expect("the grip control, through FindSkelControl");
+    assert_eq!((x.name_of(left), x.outer(left)), (x.name_of(t.k1), Some(comp)), "the copy, not the template");
     let arm = x.vm.space.names.intern("ArmBoneBlend");
     assert_eq!(find_anim_node(&x.vm, comp, arm).unwrap(), None);
     assert_eq!(find_anim_node(&x.vm, comp, name).unwrap(), Some(copy_of(&x, comp, aim)));
@@ -2410,14 +2488,22 @@ fn the_attach_check_plans_the_passed_owner_s_event() {
     x.set(template, "AnimTreeTemplate", Value::Object(Some(t.root)));
     x.set(template, "Owner", Value::Object(Some(over)));
     x.set(enemy, "Mesh", Value::Object(Some(template)));
-    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.space.heap.handles().len(), x.vm.defs.load_transitions());
+    let counts = |x: &Fx| {
+        (
+            x.vm.space.heap.committed_writes(),
+            x.vm.space.heap.handles().len(),
+            x.vm.defs.load_transitions(),
+            x.vm.space.names.len(),
+            x.vm.rng.draws(),
+        )
+    };
     let before = counts(&x);
     attach_check(&x.vm, template, None).unwrap();
     attach_check(&x.vm, template, Some(enemy)).unwrap();
     let e = attach_check(&x.vm, template, Some(over)).unwrap_err();
     event_refused(e, &event_override("WillowGame.ToyOverridePawn.PostInitAnimTree"));
     event_refused(attach_check(&x.vm, template, Some(cold)).unwrap_err(), EVENT_NOT_LOADED);
-    assert_eq!(counts(&x), before, "nothing written, made or loaded");
+    assert_eq!(counts(&x), before, "nothing written, made, loaded, interned or drawn");
 }
 
 /// Test 19 and the binding's other rules: no tree is None; the gather path (a tree that is not the component's own, or
@@ -2532,4 +2618,131 @@ fn reference_binds_no_lookup_and_off_keeps_an_existing_binding() {
     vm.register_native(FIND_ANIM_NODE, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Int(7)))).unwrap();
     crate::world::tree_lookup::register(&mut vm).unwrap();
     assert!(vm.has_native(FIND_SKEL_CONTROL));
+}
+
+/// Review r1 of #631, item 1: a component with a `ParentAnimComponent` gets the copy and no initialisation, so no
+/// owner event: on the instance (an owner whose event would be refused runs nothing) and on the attach check.
+#[test]
+fn a_component_with_a_parent_animation_component_is_not_initialised() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let over = owner_of(&mut x, "WillowGame.ToyOverridePawn", true);
+    let player = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let t = diamond(&mut x);
+    let parent = x.component();
+    let comp = x.component();
+    x.set(comp, "ParentAnimComponent", Value::Object(Some(parent)));
+    x.set(comp, "Owner", Value::Object(Some(player)));
+    let p = plan(&x.vm, comp, t.root).unwrap();
+    assert!(!p.initialise && p.event.is_none() && p.steps.is_empty() && p.order.is_empty());
+    let root = instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(comp, "Animations"), Value::Object(Some(root)), "the copy is made");
+    assert_eq!(x.get(comp, "TickTag"), Value::Int(0));
+    assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(false));
+    assert_eq!(x.get(player, "ToySeen"), Value::Object(None), "no event");
+    let template = x.component();
+    x.set(template, "AnimTreeTemplate", Value::Object(Some(t.root)));
+    let e = attach_check(&x.vm, template, Some(over)).unwrap_err();
+    event_refused(e, &event_override("WillowGame.ToyOverridePawn.PostInitAnimTree"));
+    x.set(template, "ParentAnimComponent", Value::Object(Some(parent)));
+    attach_check(&x.vm, template, Some(over)).unwrap();
+}
+
+/// Review r1 of #631, item 2: neither lookup answers from a tree that is not the receiving component's own (a shared
+/// template, or another component's copy), nor from a tick list holding another tree's node.
+#[test]
+fn the_lookups_refuse_a_foreign_tree() {
+    use crate::world::tree_lookup::{FOREIGN, GATHER, RECORD as LOOKUP_RECORD};
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let (t, _aim, comp) = player_tree(&mut x);
+    let grip = x.vm.space.names.intern("LeftHandGrip");
+    let any = x.vm.space.names.intern("AimOffset");
+    let refused = |e: VmError, what: &str| {
+        let n = not_yet(e);
+        assert_eq!((&*n.what, n.missing, n.record), (what, Missing::NotRead, LOOKUP_RECORD));
+    };
+    // The shared template as the component's tree.
+    let other = x.component();
+    x.set(other, "Animations", Value::Object(Some(t.root)));
+    x.set(other, "AnimTickArray", Fx::objects(&[t.root, t.a]));
+    refused(find_anim_node(&x.vm, other, any).unwrap_err(), GATHER);
+    refused(find_skel_control(&x.vm, other, grip).unwrap_err(), FOREIGN);
+    // Another component's copy.
+    let root = instance(&mut x.vm, comp, t.root).unwrap();
+    assert!(find_skel_control(&x.vm, comp, grip).unwrap().is_some(), "its own tree answers");
+    x.set(other, "Animations", Value::Object(Some(root)));
+    refused(find_skel_control(&x.vm, other, grip).unwrap_err(), FOREIGN);
+    // The own tree with a template node in its tick list.
+    x.set(comp, "AnimTickArray", Fx::objects(&[root, t.a]));
+    refused(find_anim_node(&x.vm, comp, any).unwrap_err(), GATHER);
+    // The documented None results stay: a None name, no tree, a root that is not an AnimTree.
+    assert_eq!(find_skel_control(&x.vm, other, NameId::NONE).unwrap(), None);
+    x.set(other, "Animations", Value::Object(None));
+    assert_eq!(find_skel_control(&x.vm, other, grip).unwrap(), None);
+    assert_eq!(find_anim_node(&x.vm, other, any).unwrap(), None);
+    x.set(other, "Animations", Value::Object(Some(t.a)));
+    assert_eq!(find_skel_control(&x.vm, other, grip).unwrap(), None);
+}
+
+struct ToyService;
+
+/// Review r1 of #631, item 3: a service borrow held over the instance is the event call's refusal in the preflight
+/// (`Vm::check_call`), before any write, rather than an unlabelled error after the copy.
+#[test]
+fn a_held_service_borrow_is_refused_in_the_preflight() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "Engine.ToyActorOnly", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    let cell = x.vm.add_service(ToyService).unwrap();
+    let held = cell.borrow_mut();
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::ServiceBorrowed(name) => assert!(name.contains("ToyService"), "{name}"),
+        e => panic!("expected ServiceBorrowed, got {e:?}"),
+    }
+    drop(held);
+    instance(&mut x.vm, comp, t.root).unwrap();
+}
+
+/// Review r1 of #631, item 4: another package's binding of the same key does not stand for Engine's: the Off binding
+/// still binds Engine's two natives, and the player event reaches them.
+#[test]
+fn a_same_key_binding_in_another_package_does_not_bind_engine_s() {
+    use crate::world::tree_lookup::PACKAGE;
+    let (mut vm, _dir) = owner_store(OwnerShape::OtherMeshPackage);
+    let f = vm.find_function("ToyOther.SkeletalMeshComponent.FindAnimNode").unwrap();
+    vm.register_native_for(f, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Int(7)))).unwrap();
+    assert!(vm.has_native(FIND_ANIM_NODE) && !vm.is_bound_in(PACKAGE, FIND_ANIM_NODE));
+    crate::world::tree_lookup::register(&mut vm).unwrap();
+    assert!(vm.is_bound_in(PACKAGE, FIND_ANIM_NODE) && vm.is_bound_in(PACKAGE, FIND_SKEL_CONTROL));
+    let mut x = cast_ready(Fx::on(vm, Shape::Good));
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let (t, _aim, comp) = player_tree(&mut x);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(owner, "ToySeen"), Value::Object(Some(comp)));
+    assert!(object_of(&x.get(owner, "LeftHandIK")).is_some(), "Engine's FindSkelControl answered");
+}
+
+/// Review r1 of #631, item 5: with `LeftHandIK` None and the `LeftHandGrip` literal not interned yet, the run's
+/// control search still reads every control's `ControlName`, so a control that declares none is a script error in
+/// the preflight, with nothing written or interned.
+#[test]
+fn an_uninterned_grip_literal_still_checks_the_controls() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let t = diamond(&mut x);
+    assert!(x.vm.space.names.find("LeftHandGrip").is_none(), "the literal is not interned");
+    let object = x.object;
+    let o = PropKind::Object { class: object };
+    class(&mut x.vm, "Test.ToyNamelessControl", object, &[
+        ("NextControl", o),
+        ("ControlTickTag", PropKind::Int),
+        ("bPostPhysicsController", PropKind::Bool),
+    ]);
+    let bare = x.obj("Test.ToyNamelessControl");
+    x.set(t.k2, "NextControl", Value::Object(Some(bare)));
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    script_error(refused_clean(&mut x, comp, t.root), "ControlName");
 }

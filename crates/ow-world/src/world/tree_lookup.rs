@@ -14,12 +14,18 @@
 //!   as a whole name (name and number; a None name matches a None `NodeName`). Anything else is the gather path, not
 //!   read: [`GATHER`], `NotYet { NotRead }`.
 //! - **Skeletal control by name:** None at once for a None name; None when there is no tree or the tree is not an
-//!   `AnimTree`. Otherwise `SkelControlLists` in array order, each list's `ControlHead`, then the `NextControl` chain;
+//!   `AnimTree`; a tree that is not the component's own (its heap outer is not the component) is [`FOREIGN`],
+//!   `NotYet { NotRead }` (review r1 of #631, item 2: a shared template's or another component's controls are not
+//!   what #543 read). Otherwise `SkelControlLists` in array order, each list's `ControlHead`, then the `NextControl` chain;
 //!   the first control whose `ControlName` equals the name (a whole name). A chain that loops is a `VmError::Script`.
 //! - An unloaded or failed handle met on the way is #543's refusal ([`crate::world::anim_node_lookup::refusal`]),
 //!   raised with nothing loaded. Nothing is written.
 //!
-//! A key already bound keeps its binding (keep-existing).
+//! A tick-list entry whose heap outer is not the component is the gather path too (review r1 of #631, item 2).
+//!
+//! Both are bound under their package-qualified identity, `Engine` plus the key ([`ow_vm::api::Vm::register_native_in`],
+//! review r1 of #631, item 4): a binding of the same key in another package does not stand for Engine's. A key already
+//! bound for Engine, or VM-wide, keeps its binding (keep-existing).
 
 use std::rc::Rc;
 
@@ -38,6 +44,10 @@ pub const FIND_ANIM_NODE: &str = "SkeletalMeshComponent.FindAnimNode(name)";
 pub const FIND_SKEL_CONTROL: &str = "SkeletalMeshComponent.FindSkelControl(name)";
 /// The node lookup's other path (the tree's gather step), not read.
 pub const GATHER: &str = "the animation-node lookup's gather path (no tick list, or not the component's own tree)";
+/// The control lookup on a tree that is not the component's own (review r1 of #631, item 2).
+pub const FOREIGN: &str = "the skeletal-control lookup on a tree that is not the component's own (not read)";
+/// The package both natives are declared in (their package-qualified identity).
+pub const PACKAGE: &str = "Engine";
 
 fn script(message: String) -> VmError {
     VmError::Script { function: "SkeletalMeshComponent.FindAnimNode / FindSkelControl".to_string(), message }
@@ -85,6 +95,9 @@ pub fn find_anim_node(vm: &Vm, component: ObjRef, name: NameId) -> Result<Option
     }
     for t in &ticks {
         let Some(node) = object_of(t) else { continue };
+        if vm.space.heap.get(readable(vm, node)?)?.outer != Some(component) {
+            return Err(NotYet::not_read(GATHER, RECORD).into());
+        }
         if name_in(vm, readable(vm, node)?, "NodeName")? == name {
             return Ok(Some(node));
         }
@@ -102,6 +115,9 @@ pub fn find_skel_control(vm: &Vm, component: ObjRef, name: NameId) -> Result<Opt
     };
     if !is_tree(vm, root)? {
         return Ok(None);
+    }
+    if vm.space.heap.get(root)?.outer != Some(component) {
+        return Err(NotYet::not_read(FOREIGN, RECORD).into());
     }
     for list in elements(&read(vm, root, "SkelControlLists")?, "SkelControlLists")? {
         let mut seen = ow_core::DetSet::new();
@@ -137,13 +153,14 @@ fn skel_control_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Object(find_skel_control(c.vm, component, name)?))
 }
 
-/// Binds both natives (Off only; the caller checks the mode). A key bound first keeps its binding.
+/// Binds both natives for [`PACKAGE`] (Off only; the caller checks the mode). A key bound first for Engine, or
+/// VM-wide, keeps its binding; one bound only in another package does not count.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
-    if !vm.has_native(FIND_ANIM_NODE) {
-        vm.register_native(FIND_ANIM_NODE, Rc::new(anim_node_native))?;
+    if !vm.is_bound_in(PACKAGE, FIND_ANIM_NODE) {
+        vm.register_native_in(PACKAGE, FIND_ANIM_NODE, Rc::new(anim_node_native))?;
     }
-    if !vm.has_native(FIND_SKEL_CONTROL) {
-        vm.register_native(FIND_SKEL_CONTROL, Rc::new(skel_control_native))?;
+    if !vm.is_bound_in(PACKAGE, FIND_SKEL_CONTROL) {
+        vm.register_native_in(PACKAGE, FIND_SKEL_CONTROL, Rc::new(skel_control_native))?;
     }
     Ok(())
 }

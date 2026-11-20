@@ -830,6 +830,29 @@ impl Vm {
         Ok(())
     }
 
+    /// Binds `imp` to native key `key` in package `package` only (its package-qualified identity, as
+    /// [`Vm::register_native_for`] binds), without a loaded function (lane IMPL-TREE-INIT-OWNER-EVENT, review r1 of
+    /// #631, item 4): a binding of the same key in another package leaves this one unbound. Refused: the key already
+    /// bound in `package`, or bound VM-wide.
+    pub fn register_native_in(&mut self, package: &str, key: &str, imp: NativeFn) -> Result<(), VmError> {
+        let at = (package.to_ascii_lowercase(), key.to_string());
+        if self.natives.contains_key(key) || self.natives_at.contains_key(&at) {
+            return Err(VmError::Registration {
+                key: key.to_string(),
+                reason: "duplicate native registration",
+            });
+        }
+        self.natives_at.insert(at, imp);
+        *self.natives_at_count.entry(key.to_string()).or_insert(0) += 1;
+        Ok(())
+    }
+
+    /// Whether a call of native key `key` declared in package `package` has an implementation: that package's
+    /// binding, or the VM-wide one ([`Vm::native_of`]'s order, by identity rather than by a loaded function).
+    pub fn is_bound_in(&self, package: &str, key: &str) -> bool {
+        self.natives_at.contains_key(&(package.to_ascii_lowercase(), key.to_string())) || self.natives.contains_key(key)
+    }
+
     /// Whether a native implementation is registered for `key`, VM-wide or for some package.
     pub fn has_native(&self, key: &str) -> bool {
         self.natives.contains_key(key) || self.natives_at_count.get(key).is_some_and(|&n| n > 0)
@@ -1237,8 +1260,10 @@ impl Vm {
     /// Whether [`Vm::call`] of `f` with `args` would be refused at the call's entry, without making the call or
     /// changing anything: the same argument binding, and for a script function the same entry checks
     /// (`interp::check_entry`, shared with the call). Lane FIX-RUN-BEHAVIORS, review r2 of #439: a walk checks
-    /// every call before it makes the first.
+    /// every call before it makes the first. A service borrow still held is the call's own first refusal
+    /// (`VmError::ServiceBorrowed`), checked here the same way (review r1 of #631, item 3).
     pub fn check_call(&self, f: FuncId, args: Vec<Value>) -> Result<(), VmError> {
+        self.services.check_none_borrowed()?;
         let bound = self.bind_args(f, args)?;
         crate::interp::check_entry(self, f, &bound)
     }
