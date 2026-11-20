@@ -83,6 +83,11 @@ query values and unsound primitive bounds refuse as `NotRead` (UNVERIFIED policy
 --workspace -j 2` OK; `cargo test --workspace -j 2` 3,144 passed / 0 failed / 51 ignored; `crate_edges_test.py` 19 OK;
 clippy (ow-object, ow-vm, ow-world): no new warning. Slice gate not rerun for the fix round.
 
+**ANALYST-COMPONENT-BOUNDS (2026-11-20, pc-hummer, on main df0970ec):** AI-assisted (Claude Code, Opus 5.5). Docs
+only: NATIVE_COMPONENT_BOUNDS.md. Installed Off strict `--slice-gate` (release, under the machine lock): 4 ok / 10
+NotYet / 0 errors; links 6 and 7 pass `make` and stop in `touch` at `GetBoundingCylinder`'s refusal L. A throwaway
+probe with a stand-in past L stopped both at `DroppedPickup.TouchPickupTrace`. No real-game run.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
