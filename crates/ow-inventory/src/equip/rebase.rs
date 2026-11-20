@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES. AI-assisted (Claude Code). `WillowWeapon.RecomputeAttributeBaseValues()`,
 //! implemented from NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md alone (PR #539 at 31d529e5, accepted; this lane's decision
-//! 2026-11-19-NNN). Every rule is the record's reading, **UNVERIFIED** in the running game.
+//! 2026-11-19-169). Every rule is the record's reading, **UNVERIFIED** in the running game.
 //!
 //! **What it does** (the record's section 3): it bakes each modified value into its base. For every stack-attribute
 //! property of the weapon's runtime class, **inherited ones included** (the hub's ruling in the record: 41 triples on

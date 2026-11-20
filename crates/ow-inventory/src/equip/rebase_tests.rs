@@ -1,4 +1,4 @@
-//! `RecomputeAttributeBaseValues` on an invented class set (AGENTS.md rule 9; this lane's decision 2026-11-19-NNN).
+//! `RecomputeAttributeBaseValues` on an invented class set (AGENTS.md rule 9; this lane's decision 2026-11-19-169).
 //! Expected values are written by hand from NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md section 4.
 
 use std::cell::Cell;
