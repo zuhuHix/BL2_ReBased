@@ -445,7 +445,7 @@ reads; the equip harness sets `ManufacturerDefinition` and `ManufacturerGradeInd
 machine lock) on a throwaway local merge with #534, #552, #558 and the particle implementation, never pushed: 1 ok / 5
 NotYet / 8 errors. Link 8 runs `make` and stops in `init` at the unread `DamageTypeAttributeValueResolver` (marked),
 before this native (A/B without its registration: the same stop). ctest and verify_packages not run (no C++ change).
-No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/gel-impl/`.
+No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-196; logs under ignored `local/analysis/gel-impl/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

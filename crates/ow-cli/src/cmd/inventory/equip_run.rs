@@ -954,7 +954,7 @@ mod tests {
 
     /// Review r2 of #577: the real preparation paths on invented data. The pickup links' held weapon
     /// (`prepare_line_typed`) and link 7's decoy (`prepare_unowned_typed`) keep `ManufacturerDefinition` None and
-    /// `ManufacturerGradeIndex` 0; link 8's path (`prepare_line`) in Off sets them (the balance's manufacturer, the
+    /// `ManufacturerGradeIndex` 0; link 8's path (`prepare_link8_typed`) in Off sets them (the balance's manufacturer, the
     /// level), so the fixture can see the writes. The held weapon's and link 8's paths go on to the owners' accuracy
     /// pool, which the toy data does not hold, so they stop there, after the weapon's definition data is written.
     #[test]
@@ -965,13 +965,13 @@ mod tests {
         let held = prepare_line_typed(&mut vm, TOY_LINE, &mut false);
         assert!(held.is_err(), "the toy data holds no accuracy pool");
         assert_eq!(manufacturer_fields(&mut vm), (false, 0), "the pickup links' held weapon");
-        let _ = prepare_line(&mut vm, TOY_LINE);
+        let _ = prepare_link8_typed(&mut vm, TOY_LINE, &mut false);
         assert_eq!(manufacturer_fields(&mut vm), (true, 7), "link 8 sets both in Off");
         drop(vm);
         let _ = std::fs::remove_dir_all(&dir);
         // Reference: no route sets them.
         let (mut vm, dir) = toy_gun_vm(ParityMode::Reference);
-        let _ = prepare_line(&mut vm, TOY_LINE);
+        let _ = prepare_link8_typed(&mut vm, TOY_LINE, &mut false);
         assert_eq!(manufacturer_fields(&mut vm), (false, 0), "Reference leaves them");
         drop(vm);
         let _ = std::fs::remove_dir_all(&dir);

@@ -74,3 +74,7 @@ lane's analysis output. Synthetic fixtures only.
     balance is refused and a 64-deep chain answers. The loot roll keeps the C++ order;
   - tests: `exp_level` 9 (the two shape cases, the depth tails at 64 and 65, the stand-in versus canonical fixture).
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's live checks would confirm it.
+- **Landing (hub run, 2026-11-20).** Merged with #506 r2 and #573 on the chain: link 8's weapon is made by
+  `prepare_link8_typed` (`WeaponRoute::Link8`, with #506's write mark), so link 8 keeps the manufacturer inputs;
+  `--equip-run` makes its weapon with #573's `prepare_equip` on `WeaponRoute::EquipRun`; the pickup links stay on
+  `prepare_line_typed` (`WeaponRoute::Pickup`). The manufacturer-fields test uses `prepare_link8_typed`.
