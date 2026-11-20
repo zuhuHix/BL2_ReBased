@@ -1,6 +1,6 @@
 # Native rules of InstanceDataHelper.InitializeBodyComposition (draft, 2026-11-19, review r1 of #529 folded in)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODY-COMPOSITION (decision 2026-11-19-NNN, number pending).
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODY-COMPOSITION (decision 2026-11-19-140, number pending).
 Analyst only: a different lane implements it (clean room). This lane's author implemented the caller's Off rule
 earlier (IMPL-INIT-PAWN-MESHES, #522), so that author must not implement this note.
 
