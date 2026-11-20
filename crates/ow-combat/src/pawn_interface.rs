@@ -26,7 +26,8 @@
 //!   interfaces); a `WillowMind`, the Fire dummy's mind, takes it;
 //! - `WillowPlayerController`'s answer for `IAIInterface` (other interfaces keep the plain answer: the note's open item
 //!   is that one question);
-//! - a component class other than exactly `ActorComponent` and `SkeletalMeshComponent`, for every interface (below).
+//! - a component class other than exactly `ActorComponent`, `SkeletalMeshComponent`, `AIComponent` and
+//!   `WillowAIComponent`, for every interface (below).
 //!
 //! **A component's answer** ([`component_answer`], the note's section 6.4 at 17b9c330, lane
 //! IMPL-LINK11-QUERY-INTERFACE): for a receiver whose class is exactly `Engine.ActorComponent` or
@@ -35,6 +36,16 @@
 //! both classes; the VM lets every other component class inherit it, so the rule tests the exact class first and any
 //! other class is the open `NotYet { NotRead }`, never `ActorComponent`'s rule by inheritance. It writes and loads
 //! nothing: an unloaded receiver or `Owner` is `NotYet { NotRead }`.
+//!
+//! **The AI components** (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, #600 at c24a2a51; lane
+//! IMPL-WILLOWAICOMPONENT-QUERYINTERFACE): exactly `GearboxFramework.AIComponent` and `WillowGame.WillowAIComponent`
+//! hold `ActorComponent`'s body too, so they take the same rule, with one Off refusal (the hub's ruling): `Owner` None on
+//! a component whose `bAttached` is false is `NotYet { NotRead }`, because the port does not run the attach step that
+//! sets `Owner` and so cannot tell "never attached" from "not attached by the port". `Owner` None on an attached one
+//! answers none. A spawned mind's component gets its `Owner` on the spawn path (#605), so the refusal is reachable
+//! for a map-placed mind's component. The check reads `bAttached` only once `Owner` reads None; undeclared or not a
+//! bool is a `VmError::Script`. `ActorComponent` and `SkeletalMeshComponent` keep "`Owner` None answers none". Their
+//! subclasses keep the open answer. `WillowAIComponent.PhaseLockOnHold` is `crate::holds`'.
 //!
 //! **`WillowAIPawn`** ([`willow_ai_pawn_answer`], section 3): `Pawn`'s rule, then, only when that gives none and the
 //! asked class is `IPlayerMaster`, its player master. That field's identification is open (UNVERIFIED), so the step
@@ -63,8 +74,15 @@ pub const RECORD: &str = "docs/verification/NATIVE_PAWN_AI_INTERFACE.md";
 pub const PAWN: &str = "Engine.Pawn";
 pub const ACTOR_COMPONENT: &str = "Engine.ActorComponent";
 pub const SKELETAL_MESH_COMPONENT: &str = "Engine.SkeletalMeshComponent";
-/// The classes whose answer is `ActorComponent`'s body (the note's section 6.1), compared exactly.
-pub const COMPONENT_RULE_CLASSES: [&str; 2] = [ACTOR_COMPONENT, SKELETAL_MESH_COMPONENT];
+pub const AI_COMPONENT: &str = "GearboxFramework.AIComponent";
+pub const WILLOW_AI_COMPONENT: &str = "WillowGame.WillowAIComponent";
+/// The classes whose answer is `ActorComponent`'s body (the note's section 6.1, and
+/// NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md section 1 for the AI components), compared exactly.
+pub const COMPONENT_RULE_CLASSES: [&str; 4] = [ACTOR_COMPONENT, SKELETAL_MESH_COMPONENT, AI_COMPONENT, WILLOW_AI_COMPONENT];
+/// The component classes whose unattached `Owner` None is refused in Off (module notes, the hub's ruling).
+pub const ATTACH_CHECKED_CLASSES: [&str; 2] = [AI_COMPONENT, WILLOW_AI_COMPONENT];
+/// The record of the AI components' rules.
+pub const AI_COMPONENT_RECORD: &str = "docs/verification/NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md";
 pub const WILLOW_AI_PAWN: &str = "WillowGame.WillowAIPawn";
 pub const WILLOW_VEHICLE: &str = "WillowGame.WillowVehicle";
 
@@ -100,11 +118,13 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     // The component rule's `Owner` declarations, judged once here from the class metadata (review r1 of #524, item
     // 3): a declared target the class table has only reserved (its superclass not filled in) is defined now, so its
     // ancestry is read from the packages and never from a half-built runtime chain.
+    // The AI components' `bAttached` declarations are judged here too (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md r1).
     let mut owners = BTreeMap::new();
     for path in COMPONENT_RULE_CLASSES {
         if let Some(class) = vm.find_class_if_present(path)? {
-            let verdict = owner_declaration(vm, class)?;
-            owners.insert(class, verdict);
+            let owner = owner_declaration(vm, class)?;
+            let attached = ATTACH_CHECKED_CLASSES.contains(&path).then(|| attached_declaration(vm, class));
+            owners.insert(class, ComponentDeclarations { owner, attached });
         }
     }
     let owners = Rc::new(owners);
@@ -276,17 +296,34 @@ pub fn owner_declaration(vm: &mut Vm, class: ClassId) -> Result<OwnerDeclaration
     })
 }
 
+/// An exact component class's declarations, judged at registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComponentDeclarations {
+    /// How the class declares `Owner`.
+    pub owner: OwnerDeclaration,
+    /// For an AI component ([`ATTACH_CHECKED_CLASSES`]) only: `bAttached`, when declared as a bool (`Some(None)`:
+    /// undeclared or another kind). `None` for the other classes, whose `bAttached` is never read.
+    pub attached: Option<Option<ow_object::ids::PropId>>,
+}
+
+/// `class`'s `bAttached`, when it is declared as a bool (from the class table; nothing loaded).
+fn attached_declaration(vm: &Vm, class: ClassId) -> Option<ow_object::ids::PropId> {
+    let prop = vm.space.prop(class, "bAttached")?;
+    matches!(vm.space.classes.decl(prop).map(|d| &d.kind), Some(ow_object::layout::PropKind::Bool)).then_some(prop)
+}
+
 /// The unit the component rule's errors and refusals name (the note's section 6.4).
 pub const COMPONENT_UNIT: &str = "ActorComponent.QueryInterface";
 
 /// A component's answer (the note's section 6.4, the hub's rulings on review r1 of #512, at 17b9c330):
-/// 1. the receiver's class exactly `ActorComponent` or `SkeletalMeshComponent`; any other class reaching this rule by
+/// 1. the receiver's class exactly one of [`COMPONENT_RULE_CLASSES`]; any other class reaching this rule by
 ///    inheritance is the open `NotYet { NotRead }`, "what a <class> answers to QueryInterface is not read (asked of
 ///    <class> for <interface>)";
 /// 2. the plain answer: an object is the answer, a `NotYet` or error passes through, only a successful none goes on;
 /// 3. the `Owner` field: undeclared, or declared as anything but an object reference to `Engine.Actor` or a subclass,
 ///    is a `VmError::Script` with the note's text; the receiver or the `Owner` an unloaded definition handle is
-///    `NotYet { NotRead }` (nothing is loaded: a load is a store write); `Owner` None answers none;
+///    `NotYet { NotRead }` (nothing is loaded: a load is a store write); `Owner` None answers none, except on an
+///    unattached AI component ([`ATTACH_CHECKED_CLASSES`], the module notes);
 /// 4. the owner's answer through [`Vm::query_interface`], the VM's cycle guard and depth limit unchanged, passed
 ///    through as it is.
 ///
@@ -295,10 +332,10 @@ pub fn component_answer(
     vm: &mut Vm,
     component: ObjRef,
     iface: ClassId,
-    owners: &BTreeMap<ClassId, OwnerDeclaration>,
+    owners: &BTreeMap<ClassId, ComponentDeclarations>,
 ) -> Result<Option<ObjRef>, VmError> {
     let class = vm.space.heap.get(component)?.class;
-    let Some(declaration) = owners.get(&class).copied() else {
+    let Some(ComponentDeclarations { owner: declaration, attached }) = owners.get(&class).copied() else {
         let name = class_path(vm, class);
         return Err(NotYet::not_read(
             format!(
@@ -344,7 +381,10 @@ pub fn component_answer(
         }
     };
     let Some(owner) = owner else {
-        return Ok(None);
+        return match attached {
+            Some(attached) => unowned(vm, component, class, attached, iface),
+            None => Ok(None),
+        };
     };
     if vm.defs.is_unloaded(&vm.space, owner) {
         return Err(NotYet::not_read(
@@ -358,6 +398,37 @@ pub fn component_answer(
         .into());
     }
     vm.query_interface(owner, iface)
+}
+
+/// `Owner` None on an AI component (module notes): none when attached; not attached is the hub's
+/// `NotYet { NotRead }`. `attached` is its `bAttached` as judged at registration; undeclared or not a bool is a
+/// `VmError::Script`. Reads only.
+fn unowned(
+    vm: &Vm,
+    component: ObjRef,
+    class: ClassId,
+    attached: Option<ow_object::ids::PropId>,
+    iface: ClassId,
+) -> Result<Option<ObjRef>, VmError> {
+    let path = class_path(vm, class);
+    let script = |message: String| VmError::Script { function: COMPONENT_UNIT.to_string(), message };
+    let Some(p) = attached else {
+        return Err(script(format!("{COMPONENT_UNIT}: {path}.bAttached is not declared as a bool")));
+    };
+    match vm.space.read(component, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Bool(true) => Ok(None),
+        Value::Bool(false) => Err(NotYet::not_read(
+            format!(
+                "the component {} has no Owner and is not attached: the attach step that sets Owner is not ported \
+                 (asked for {})",
+                object_path(vm, component),
+                class_path(vm, iface)
+            ),
+            AI_COMPONENT_RECORD,
+        )
+        .into()),
+        other => Err(script(format!("{COMPONENT_UNIT}: {path}.bAttached holds {}, not a bool", other.kind_name()))),
+    }
 }
 
 /// `o`'s full path name for a refusal's text, best effort (review r1 of #524, item 4): when the path cannot be made

@@ -88,6 +88,10 @@ pub const TEMPLATE_COMPONENT: &str =
     "GearboxMind.GetAIComponent: the mind's AIComponent is its class default's template, not an instance";
 
 
+/// `WillowAIComponent.PhaseLockOnHold()` (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md section 2; lane
+/// IMPL-WILLOWAICOMPONENT-QUERYINTERFACE).
+pub const PHASE_LOCK_ON_HOLD: &str = "WillowGame.WillowAIComponent.PhaseLockOnHold";
+
 fn error(message: String) -> VmError {
     VmError::Script {
         function: "ai holds".to_string(),
@@ -95,7 +99,8 @@ fn error(message: String) -> VmError {
     }
 }
 
-/// Binds the four kinds' twelve natives, [`GET_AI_COMPONENT`] ([`get_ai_component`]) and the pawn `QueryInterface` rule
+/// Binds the four kinds' twelve natives, [`PHASE_LOCK_ON_HOLD`], [`GET_AI_COMPONENT`] ([`get_ai_component`]) and
+/// the pawn `QueryInterface` rule
 /// ([`crate::pawn_interface::register`]) in Off; nothing under Reference. A key another pack bound first keeps its
 /// binding.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -108,6 +113,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(vm, &format!("{COMPONENT}.Release{kind}"), release(list))?;
         bind(vm, &format!("{COMPONENT}.{kind}OnHold"), on_hold(list))?;
     }
+    bind(vm, PHASE_LOCK_ON_HOLD, Rc::new(phase_lock_on_hold))?;
     bind(vm, GET_AI_COMPONENT, Rc::new(get_ai_component))
 }
 
@@ -456,6 +462,46 @@ fn release(list: &'static str) -> NativeFn {
         set(c.vm, me, list, Value::Array(Rc::new(items)))?;
         Ok(Value::None)
     })
+}
+
+/// The record of `PhaseLockOnHold` and of the AI components' `QueryInterface`.
+pub const RECORD_PHASE_LOCK: &str = "docs/verification/NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md";
+
+/// `WillowAIComponent.PhaseLockOnHold()` in Off (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, UNVERIFIED): whether the
+/// receiver's `PhaseLockHolds` has an entry. In the hub's order: no object is a `VmError::Script`; a class other than
+/// exactly `WillowAIComponent` (a subclass may replace the virtual) is `NotYet { NotRead }`; `PhaseLockHolds`
+/// undeclared or not declared an array is a `VmError::Script`; an unloaded receiver is `NotYet { NotRead }`, not
+/// loaded; then the array's length. It reads the class table, the declaration and the slot only, with its own reads
+/// (not [`this`] or [`read_list`], which load): no load, not even a class-code load, no write, no draw.
+fn phase_lock_on_hold(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const UNIT: &str = "PhaseLockOnHold";
+    let vm = &*c.vm;
+    let me = c.this.ok_or_else(|| error(format!("{UNIT} called without an object")))?;
+    let class = vm.space.heap.get(me)?.class;
+    if vm.space.classes.by_path(WILLOW_COMPONENT) != Some(class) {
+        return Err(NotYet::not_read(
+            format!("{UNIT} on a {} is not read", vm.space.classes.layout(class).path()),
+            RECORD_PHASE_LOCK,
+        )
+        .into());
+    }
+    let Some(p) = vm.space.prop(class, "PhaseLockHolds") else {
+        return Err(error(format!("{UNIT}: {WILLOW_COMPONENT} declares no PhaseLockHolds")));
+    };
+    if !matches!(vm.space.classes.decl(p).map(|d| &d.kind), Some(ow_object::layout::PropKind::Array(_))) {
+        return Err(error(format!("{UNIT}: {WILLOW_COMPONENT}.PhaseLockHolds is not an array")));
+    }
+    if vm.defs.is_unloaded(&vm.space, me) {
+        return Err(NotYet::not_read(
+            format!("{UNIT}: the component is an unloaded definition handle (a load is a write)"),
+            RECORD_PHASE_LOCK,
+        )
+        .into());
+    }
+    match vm.space.read(me, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Array(items) => Ok(Value::Bool(!items.is_empty())),
+        other => Err(error(format!("{UNIT}: {WILLOW_COMPONENT}.PhaseLockHolds holds {}, not an array", other.kind_name()))),
+    }
 }
 
 /// `<Kind>OnHold` on `list`.

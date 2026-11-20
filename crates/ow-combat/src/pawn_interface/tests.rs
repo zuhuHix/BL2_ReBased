@@ -70,9 +70,10 @@ enum Owners {
 }
 
 /// [`engine`] with the `Owner` declarations of `owners`.
-fn engine_with(owners: Owners) -> Vec<u8> {
+fn engine_with(owners: Owners, attached: Attached) -> Vec<u8> {
     let mistyped = owners == Owners::Mistyped;
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty", "ToyUnsupportedProperty"]);
+    let mut t =
+        ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty", "ToyUnsupportedProperty", "BoolProperty"]);
     let object = real_class(&mut t, "Object", 0, 1, 2, &[]);
     let thing = real_class(&mut t, "IToyThing", object, object, INTERFACE, &[]);
     // `Engine.Actor`, the class a component's `Owner` must reference (lane IMPL-LINK11-QUERY-INTERFACE).
@@ -93,6 +94,12 @@ fn engine_with(owners: Owners) -> Vec<u8> {
     if mistyped {
         t.prop("Int", actor_component, "Owner", 0, 0);
     }
+    // `bAttached`, declared on `ActorComponent` (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md r1), as `attached` says.
+    match attached {
+        Attached::Bool => t.prop("Bool", actor_component, "bAttached", 0, 0),
+        Attached::Int => t.prop("Int", actor_component, "bAttached", 0, 0),
+        Attached::Missing => 0,
+    };
     let component = real_class(&mut t, "SkeletalMeshComponent", actor_component, object, 2, &[]);
     let owner_target = if matches!(owners, Owners::Reserved | Owners::Unsupported) {
         let target = real_class(&mut t, "ToyOwnerActor", actor, object, 2, &[]);
@@ -128,6 +135,14 @@ fn engine_with(owners: Owners) -> Vec<u8> {
     t.build()
 }
 
+/// How the invented `ActorComponent` declares `bAttached`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Attached {
+    Bool,
+    Int,
+    Missing,
+}
+
 struct Env {
     vm: Vm,
     dir: PathBuf,
@@ -147,13 +162,22 @@ impl Env {
     }
 
     fn with(mode: ParityMode, owners: Owners) -> Env {
+        Env::build(mode, owners, Attached::Bool)
+    }
+
+    /// The world with `bAttached` on the AI components declared as `attached` says.
+    fn with_attached(attached: Attached) -> Env {
+        Env::build(ParityMode::Off, Owners::Plain, attached)
+    }
+
+    fn build(mode: ParityMode, owners: Owners, attached: Attached) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-combat-pawn-interface-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let engine = engine_with(owners);
+        let engine = engine_with(owners, attached);
         let defs =
             DefStore::from_synthetic(&dir, &[("Engine.upk", engine.as_slice())], IdentityPolicy::FirstInScanOrder, mode)
                 .unwrap();
@@ -172,6 +196,18 @@ impl Env {
         let master = classes.define("WillowGame.IPlayerMaster", Some(object), vec![]).unwrap();
         classes.define("Toy.IToyPlayerMasterChild", Some(master), vec![]).unwrap();
         classes.define("GearboxFramework.IAIInterface", Some(object), vec![]).unwrap();
+        // The AI components (lane IMPL-WILLOWAICOMPONENT-QUERYINTERFACE), at their installed paths under the decoded
+        // `ActorComponent` (whose `bAttached` they inherit): `Owner` to `Engine.Actor` on `AIComponent`,
+        // `WillowAIComponent` under it, and a subclass of that.
+        let (actor, actor_component) = (class(&mut vm, "Engine.Actor"), class(&mut vm, "Engine.ActorComponent"));
+        let decls = vec![ow_object::layout::PropertyDecl::new(
+            vm.space.names.intern("Owner"),
+            ow_object::layout::PropKind::Object { class: actor },
+        )];
+        let classes = &mut vm.space.classes;
+        let ai = classes.define(AI_COMPONENT, Some(actor_component), decls).unwrap();
+        let willow = classes.define(WILLOW_AI_COMPONENT, Some(ai), vec![]).unwrap();
+        classes.define("WillowGame.ToySubWillowAIComponent", Some(willow), vec![]).unwrap();
         register(&mut vm).unwrap();
         let iface = class(&mut vm, "Engine.IToyThing");
         Env { vm, dir, iface }
@@ -607,4 +643,130 @@ fn a_refusal_names_a_deep_component_by_its_leaf_name() {
     e.link(mesh, "Owner", lazy);
     assert!(ow_vm::path_name::path_name(&e.vm, mesh).is_err(), "the chain is past PathName's limit");
     not_read(e.ask(mesh), "of DeepMesh_0 is an unloaded definition handle");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The AI components (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, with the hub's ruling on an unattached component;
+// lane IMPL-WILLOWAICOMPONENT-QUERYINTERFACE)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// #518's counters: heap committed writes, generator draws and definition-store load transitions.
+fn counters(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+}
+
+impl Env {
+    /// The question, checked write-, load- and draw-free.
+    fn ask_counted(&mut self, o: ObjRef) -> Result<Option<ObjRef>, VmError> {
+        let before = counters(&self.vm);
+        let r = self.ask(o);
+        assert_eq!(counters(&self.vm), before, "no write, draw or load: {r:?}");
+        r
+    }
+
+    fn attach(&mut self, o: ObjRef, attached: bool) {
+        set(&mut self.vm, o, "bAttached", Value::Bool(attached)).unwrap();
+    }
+}
+
+fn ai_not_read(r: Result<Option<ObjRef>, VmError>, words: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead, "{n}");
+            assert_eq!(n.record, AI_COMPONENT_RECORD, "{n}");
+            assert!(n.what.contains(words), "{n}");
+        }
+        other => panic!("expected NotYet NotRead naming {words:?}, got {other:?}"),
+    }
+}
+
+/// A spawned mind's component (#605 sets its `Owner`): both exact classes take `ActorComponent`'s rule and answer
+/// what their `Owner` answers, attached or not (`bAttached` is read only when `Owner` is None). A subclass keeps the
+/// open answer, even with an `Owner` that would answer.
+#[test]
+fn an_owned_ai_component_answers_its_owner_s_answer() {
+    let mut e = Env::new(ParityMode::Off);
+    let pawn = e.make("Engine.Pawn", "Pawn_0");
+    let controller = e.make("Engine.ToyThingController", "Controller_0");
+    e.link(pawn, "Controller", controller);
+    for path in [AI_COMPONENT, WILLOW_AI_COMPONENT] {
+        let component = e.make(path, "AIComponent_0");
+        e.link(component, "Owner", pawn);
+        for attached in [false, true] {
+            e.attach(component, attached);
+            assert_eq!(e.ask_counted(component).unwrap(), Some(controller), "{path}, attached {attached}");
+        }
+    }
+    let sub = e.make("WillowGame.ToySubWillowAIComponent", "Sub_0");
+    e.link(sub, "Owner", pawn);
+    not_read(e.ask_counted(sub), "what a WillowGame.ToySubWillowAIComponent answers to QueryInterface is not read");
+}
+
+/// The rest of the note's component cases, for both exact classes: a class the component derives from is its plain
+/// answer (itself) before `Owner` is read; an `Owner` that declines gives none; a question that comes back to the
+/// component (its owner pawn asks its `Mesh`, the component) gives none at once.
+#[test]
+fn an_ai_component_s_plain_answer_a_declining_owner_and_a_question_back() {
+    let mut e = Env::new(ParityMode::Off);
+    let base = e.vm.find_class("Engine.ActorComponent").unwrap();
+    for path in [AI_COMPONENT, WILLOW_AI_COMPONENT] {
+        let component = e.make(path, "AIComponent_0");
+        let before = counters(&e.vm);
+        assert_eq!(e.vm.query_interface(component, base).unwrap(), Some(component), "{path}: the plain answer");
+        assert_eq!(counters(&e.vm), before);
+        let pawn = e.make("Engine.Pawn", "Pawn_0");
+        e.link(component, "Owner", pawn);
+        assert_eq!(e.ask_counted(component).unwrap(), None, "{path}: the owner declines");
+        e.link(pawn, "Mesh", component);
+        assert_eq!(e.ask_counted(component).unwrap(), None, "{path}: the question back gets none");
+        assert!(!e.vm.interface_asked(component, e.iface), "the chain is unwound");
+    }
+}
+
+/// A map-placed mind's component (no spawn sets `Owner`): `Owner` None on an unattached AI component is the hub's
+/// `NotYet { NotRead }`; an attached one answers none. `ActorComponent` and `SkeletalMeshComponent` keep "`Owner` None
+/// answers none" with `bAttached` false: the ruling does not reach them.
+#[test]
+fn an_unowned_ai_component_is_refused_unless_attached() {
+    let mut e = Env::new(ParityMode::Off);
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.attach(mesh, false);
+    assert_eq!(e.ask_counted(mesh).unwrap(), None, "SkeletalMeshComponent: Owner None answers none");
+    let mut e = Env::with(ParityMode::Off, Owners::Reserved);
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.attach(mesh, false);
+    assert_eq!(e.ask_counted(mesh).unwrap(), None, "SkeletalMeshComponent (another Owner target): none");
+    for path in [AI_COMPONENT, WILLOW_AI_COMPONENT] {
+        let component = e.make(path, "AIComponent_0");
+        e.attach(component, false);
+        ai_not_read(
+            e.ask_counted(component),
+            "has no Owner and is not attached: the attach step that sets Owner is not ported (asked for Engine.IToyThing)",
+        );
+        e.attach(component, true);
+        assert_eq!(e.ask_counted(component).unwrap(), None, "{path}: attached, Owner None answers none");
+    }
+}
+
+/// `bAttached` undeclared or not a bool is a `VmError::Script`, and only once `Owner` reads None: an owned component
+/// still answers its owner's answer.
+#[test]
+fn a_missing_or_mistyped_b_attached_is_a_script_error_only_when_unowned() {
+    for attached in [Attached::Missing, Attached::Int] {
+        let mut e = Env::with_attached(attached);
+        for path in [AI_COMPONENT, WILLOW_AI_COMPONENT] {
+            let component = e.make(path, "AIComponent_0");
+            assert_eq!(
+                script_text(e.ask_counted(component)),
+                format!("ActorComponent.QueryInterface: {path}.bAttached is not declared as a bool"),
+                "{attached:?}"
+            );
+            let owner = e.make("Engine.ToyThingPawn", "Owner_0");
+            e.link(component, "Owner", owner);
+            assert_eq!(e.ask_counted(component).unwrap(), Some(owner), "{attached:?}: Owner set, bAttached not read");
+        }
+        // The other component classes never read it.
+        let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+        assert_eq!(e.ask_counted(mesh).unwrap(), None, "{attached:?}");
+    }
 }

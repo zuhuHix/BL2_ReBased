@@ -587,3 +587,177 @@ fn the_spawn_s_attach_makes_a_movement_hold_terminal() {
     let names: Vec<String> = e.pairs(component, "MovementHolds").into_iter().map(|(n, _)| n).collect();
     assert_eq!(names, ["Before", "After"], "the pair was appended before the refusal");
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// `WillowAIComponent.PhaseLockOnHold` (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md; lane
+// IMPL-WILLOWAICOMPONENT-QUERYINTERFACE), on an invented `WillowGame.upk`
+// ---------------------------------------------------------------------------------------------------------------
+
+/// How the invented `WillowAIComponent` declares `PhaseLockHolds`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PhaseLockField {
+    Array,
+    Missing,
+    Int,
+}
+
+/// The invented `WillowGame.upk`: `Object`; `WillowAIComponent` with `PhaseLockHolds` as `field` says;
+/// `ToySubWillowAIComponent` under it; and a holder whose `Held` names `ToyLazyComponent_0`, a `WillowAIComponent`
+/// export the store keeps unloaded until it is loaded.
+fn willow_package(field: PhaseLockField) -> Vec<u8> {
+    let mut t = ScriptToy::new(&["Object", "Array", "Int"]);
+    let object = t.class("Object", 0);
+    let component = t.class("WillowAIComponent", object);
+    match field {
+        PhaseLockField::Array => {
+            let array = t.p.next_export();
+            t.prop("Array", component, "PhaseLockHolds", 0, array + 1);
+            t.prop("Object", array, "PhaseLockHolds", 0, object);
+        }
+        PhaseLockField::Int => {
+            t.prop("Int", component, "PhaseLockHolds", 0, 0);
+        }
+        PhaseLockField::Missing => {}
+    }
+    t.class("ToySubWillowAIComponent", component);
+    let holder = t.class("ToyHolder", object);
+    t.prop("Object", holder, "Held", 0, object);
+    let held = t.p.next_export() + 1;
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend(t.p.object_tag("Held", held));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(holder, "ToyHolder_0", payload));
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(component, "ToyLazyComponent_0", payload));
+    t.build()
+}
+
+struct PhaseEnv {
+    vm: Vm,
+    dir: PathBuf,
+    native: FuncId,
+}
+
+impl Drop for PhaseEnv {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// #518's counters: heap committed writes, generator draws and definition-store load transitions.
+fn counters(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+}
+
+impl PhaseEnv {
+    fn new(field: PhaseLockField) -> PhaseEnv {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-combat-phase-lock-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let package = willow_package(field);
+        let defs = DefStore::from_synthetic(
+            &dir,
+            &[("WillowGame.upk", package.as_slice())],
+            IdentityPolicy::FirstInScanOrder,
+            ParityMode::Off,
+        )
+        .expect("store");
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let class = vm.find_class(WILLOW_COMPONENT).unwrap();
+        vm.find_class("WillowGame.ToySubWillowAIComponent").unwrap();
+        let native = declare(&mut vm, class, PHASE_LOCK_ON_HOLD, vec![], Some(PropKind::Bool));
+        register(&mut vm).unwrap();
+        PhaseEnv { vm, dir, native }
+    }
+
+    fn make(&mut self, path: &str, name: &str) -> ObjRef {
+        let class = self.vm.find_class(path).unwrap();
+        self.vm.instantiate(class, name).unwrap()
+    }
+
+    /// The holder's unloaded `ToyLazyComponent_0`.
+    fn lazy(&mut self) -> ObjRef {
+        let path = ObjectPath::parse("WillowGame.ToyHolder_0").unwrap();
+        let holder = self.vm.defs.find(&mut self.vm.space, &path).unwrap().unwrap();
+        let class = self.vm.space.heap.get(holder).unwrap().class;
+        let p = self.vm.space.prop(class, "Held").unwrap();
+        let Value::Object(Some(o)) = self.vm.space.read(holder, ow_object::ids::PropAddr::scalar(p)).unwrap().clone()
+        else {
+            panic!("a held component")
+        };
+        assert!(self.vm.defs.is_unloaded(&self.vm.space, o), "the fixture's component is a lazy handle");
+        o
+    }
+
+    /// The native on `this`, checked write-, load- and draw-free on every path.
+    fn ask(&mut self, this: Option<ObjRef>) -> Result<Value, VmError> {
+        let before = counters(&self.vm);
+        let r = self.vm.call(self.native, this, vec![]).map(|r| r.ret);
+        assert_eq!(counters(&self.vm), before, "no write, draw or load: {r:?}");
+        r
+    }
+}
+
+fn script_message(r: Result<Value, VmError>) -> String {
+    match r {
+        Err(VmError::Script { message, .. }) => message,
+        other => panic!("expected a Script error, got {other:?}"),
+    }
+}
+
+fn phase_not_read(r: Result<Value, VmError>, words: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead, "{n}");
+            assert_eq!(n.record, RECORD_PHASE_LOCK, "{n}");
+            assert!(n.what.contains(words), "{n}");
+        }
+        other => panic!("expected NotYet NotRead naming {words:?}, got {other:?}"),
+    }
+}
+
+/// An exact `WillowAIComponent`: false with no entry, true with one; the list is unchanged.
+#[test]
+fn phase_lock_on_hold_is_whether_the_list_has_an_entry() {
+    let mut e = PhaseEnv::new(PhaseLockField::Array);
+    let me = e.make(WILLOW_COMPONENT, "ToyComponent_0");
+    assert_eq!(e.ask(Some(me)).unwrap(), Value::Bool(false));
+    let tag = e.make("WillowGame.Object", "ToyTag_0");
+    set(&mut e.vm, me, "PhaseLockHolds", Value::array(vec![Value::Object(Some(tag))])).unwrap();
+    assert_eq!(e.ask(Some(me)).unwrap(), Value::Bool(true));
+    assert_eq!(array(&mut e.vm, me, "PhaseLockHolds").unwrap(), vec![Value::Object(Some(tag))], "unchanged");
+}
+
+/// The hub's order: no object is `Script`; a subclass is `NotRead` (its virtual is not read); an unloaded exact
+/// receiver is `NotRead` and stays unloaded.
+#[test]
+fn phase_lock_on_hold_refuses_no_object_a_subclass_and_an_unloaded_receiver() {
+    let mut e = PhaseEnv::new(PhaseLockField::Array);
+    assert!(script_message(e.ask(None)).contains("called without an object"));
+    let sub = e.make("WillowGame.ToySubWillowAIComponent", "ToySub_0");
+    phase_not_read(e.ask(Some(sub)), "PhaseLockOnHold on a WillowGame.ToySubWillowAIComponent is not read");
+    let lazy = e.lazy();
+    phase_not_read(e.ask(Some(lazy)), "the component is an unloaded definition handle");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, lazy), "still not loaded");
+}
+
+/// `PhaseLockHolds` undeclared or not declared an array is `Script`, before the unloaded check: an unloaded receiver
+/// gets the same `Script` error, and stays unloaded.
+#[test]
+fn phase_lock_on_hold_checks_the_field_before_the_unloaded_receiver() {
+    for (field, words) in [
+        (PhaseLockField::Missing, "declares no PhaseLockHolds"),
+        (PhaseLockField::Int, "PhaseLockHolds is not an array"),
+    ] {
+        let mut e = PhaseEnv::new(field);
+        let me = e.make(WILLOW_COMPONENT, "ToyComponent_0");
+        assert!(script_message(e.ask(Some(me))).contains(words), "{field:?}");
+        let lazy = e.lazy();
+        assert!(script_message(e.ask(Some(lazy))).contains(words), "{field:?}: the field check comes first");
+        assert!(e.vm.defs.is_unloaded(&e.vm.space, lazy), "{field:?}: still not loaded");
+    }
+}
