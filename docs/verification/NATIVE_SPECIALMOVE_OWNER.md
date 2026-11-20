@@ -1,7 +1,7 @@
 # What `AnimNodeSpecialMoveBlend` asks its owner (draft, 2026-11-20)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-SPECIALMOVE-OWNER (decision
-`docs/decisions/2026-11/2026-11-19-NNN-special-move-blend-owner.md`, number pending). Analyst only: a different lane
+`docs/decisions/2026-11/2026-11-19-259-special-move-blend-owner.md`, number pending). Analyst only: a different lane
 implements it (clean room). This lane's author implemented #575 (the per-node initialisation, from
 NATIVE_ANIM_NODE_INIT.md), whose step H is the starting point here, so a third lane should implement this note.
 
