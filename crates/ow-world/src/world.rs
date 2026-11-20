@@ -491,7 +491,7 @@ impl NativePack for Pack {
         // not bind it (R3; decision 2026-11-16-81).
         if vm.parity != ParityMode::Reference {
             vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
-            // WillowGameInfo.IsEditor (link 1's stop in `FindPlayerStart`; lane IMPL-IS-EDITOR, decision 2026-11-19-NNN):
+            // WillowGameInfo.IsEditor (link 1's stop in `FindPlayerStart`; lane IMPL-IS-EDITOR, decision 2026-11-19-120):
             // the hub's ruling, a port answer like the empty online-subsystem slot. The port always runs the game,
             // never the editor, so false: no read, no write, UNVERIFIED in game.
             vm.register_native(IS_EDITOR, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;

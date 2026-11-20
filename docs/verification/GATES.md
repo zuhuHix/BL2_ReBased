@@ -17,7 +17,7 @@ ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED
 `cargo test --workspace --locked -j 4` 2,422 passed / 0 failed / 48 ignored; `crate_edges_test.py` 19 OK. Installed Off
 `--slice-gate` strict (release build, under the machine lock): 0 ok / 5 NotYet / 9 errors; links 1, 3, 4, 5, 13 and 14
 get past `IsEditor` and stop in `maya:8` at the unbound `Engine.IsSplitScreen()` (link 1: 0 of 1 driver step). ctest and
-verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-120; logs under
 ignored `local/p2/is-editor/`.
 
 **IMPL-LINK1-AFTER-LOGIN (2026-11-19, pc-hummer, on fix/rust-engine-object-offline aca14fa0, #501 on #479):**
