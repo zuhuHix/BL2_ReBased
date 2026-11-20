@@ -382,21 +382,45 @@ fn write_t(vm: &mut Vm, object: ObjRef, name: &str, v: Value) -> Result<(), VmEr
     Ok(vm.space.write(object, PropAddr::scalar(p), v)?)
 }
 
-/// The line logged for the harness input of [`instance_weapon_components`].
+/// The line logged for the harness input of [`own_components`], before it runs; its outcome follows as
+/// `<line>: <n> component(s)` or `<line>: failed (<error>)`.
 pub(crate) const WEAPON_COMPONENTS_INPUT: &str =
     "harness input: the weapon's components instanced through the spawn path (UNVERIFIED harness input)";
 
 /// A harness input, **UNVERIFIED** (the hub's ruling on #583; NATIVE_SET_SKELETAL_MESH.md section 4): in the game every
 /// spawned weapon owns its mesh components, but the run makes its weapon from the class defaults, which leaves the
-/// shared template components in its slots. So the weapon gets its own copy of each component the class default owns,
-/// through the spawn path's instancing (`ow_world::actors::instance_components`, #435), and the run logs that it did.
-fn instance_weapon_components(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
-    let defaults = vm.defs.class_default(&mut vm.space, WEAPON);
-    vm.log.extend(vm.defs.take_log());
-    let defaults = defaults.map_err(VmError::from)?;
-    let pairs = ow_world::actors::instance_components(vm, defaults, weapon)?;
-    vm.log.push(format!("{WEAPON_COMPONENTS_INPUT}: {} component(s)", pairs.len()));
-    Ok(())
+/// shared template components in its slots. So the weapon gets its own copy of each component `template` (the class
+/// default) owns, in the spawn path's order (`ow_world::actors::spawn`, #435): the plan first
+/// (`plan_components_tracked`, whose lazy loads are writes), then `make` makes the object, then `apply_plan`. The line
+/// [`WEAPON_COMPONENTS_INPUT`] is logged before the plan, and its outcome after. `wrote` is set once the plan loaded
+/// something or the object exists. Answers the made object.
+fn own_components(
+    vm: &mut Vm,
+    template: ObjRef,
+    wrote: &mut bool,
+    make: impl FnOnce(&mut Vm) -> Result<ObjRef, VmError>,
+) -> Result<ObjRef, VmError> {
+    vm.log.push(WEAPON_COMPONENTS_INPUT.to_string());
+    let outcome = (|| {
+        let mut loaded = false;
+        let plan = ow_world::actors::plan_components_tracked(vm, template, &mut loaded);
+        *wrote |= loaded;
+        let plan = plan?;
+        let made = make(vm)?;
+        *wrote = true;
+        let pairs = ow_world::actors::apply_plan(vm, &plan, made)?;
+        Ok((made, pairs.len()))
+    })();
+    match outcome {
+        Ok((made, n)) => {
+            vm.log.push(format!("{WEAPON_COMPONENTS_INPUT}: {n} component(s)"));
+            Ok(made)
+        }
+        Err(e) => {
+            vm.log.push(format!("{WEAPON_COMPONENTS_INPUT}: failed ({e})"));
+            Err(e)
+        }
+    }
 }
 
 fn make_t(vm: &mut Vm, class: &str) -> Result<ObjRef, VmError> {
@@ -850,13 +874,18 @@ fn manufacturer_inputs(vm: &mut Vm, data: &mut Value, balance: ObjRef, level: i3
 }
 
 /// The weapon of a request, its definition data and level set, with no owner. `wrote` is set once the weapon exists.
-/// In Off it gets its own components first ([`instance_weapon_components`]).
+/// In Off it gets its own components, in the spawn path's order ([`own_components`]).
 fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -> Result<ObjRef, VmError> {
-    let weapon = make_t(vm, WEAPON)?;
-    *wrote = true;
-    if vm.parity == ParityMode::Off {
-        instance_weapon_components(vm, weapon)?;
-    }
+    let weapon = if vm.parity == ParityMode::Off {
+        let defaults = vm.defs.class_default(&mut vm.space, WEAPON);
+        vm.log.extend(vm.defs.take_log());
+        let defaults = defaults.map_err(VmError::from)?;
+        own_components(vm, defaults, wrote, |vm| make_t(vm, WEAPON))?
+    } else {
+        let weapon = make_t(vm, WEAPON)?;
+        *wrote = true;
+        weapon
+    };
     let weapon_type = find_object_t(vm, &r.weapon_type)?;
     let balance = find_object_t(vm, &r.balance)?;
     let mut data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
@@ -1007,6 +1036,45 @@ mod tests {
         assert_eq!(manufacturer_fields(&mut vm), (false, 0), "Reference leaves them");
         drop(vm);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review r1 of #599, item 2: on an invented template that owns one component, the made object's slot names a
+    /// copy outered to it, not the template's component; the harness line is logged before, with its outcome.
+    #[test]
+    fn own_components_copies_the_templates_component_and_logs_the_input() {
+        use ow_object::heap::Origin;
+        use ow_object::layout::{PropKind, PropertyDecl};
+        let mut space = ObjectSpace::new();
+        let object = space.classes.define("Core.Object", None, vec![]).unwrap();
+        let base = space.classes.define("Core.Component", Some(object), vec![]).unwrap();
+        let toy = space.classes.define("Test.ToyMeshComponent", Some(base), vec![]).unwrap();
+        let decls = vec![PropertyDecl::new(space.names.intern("Mesh"), PropKind::Object { class: toy })];
+        let weapon_class = space.classes.define("Test.ToyWeapon", Some(object), decls).unwrap();
+        let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let template = vm.space.alloc(weapon_class, "Default__ToyWeapon", None, Origin::Runtime).unwrap();
+        let component = vm.space.alloc(toy, "MeshComp", Some(template), Origin::Runtime).unwrap();
+        write_t(&mut vm, template, "Mesh", Value::Object(Some(component))).unwrap();
+        let mut wrote = false;
+        let weapon = own_components(&mut vm, template, &mut wrote, |vm| {
+            let made = vm.instantiate(weapon_class, "ToyWeapon_0")?;
+            let slots = vm.space.heap.get(template)?.slots.clone();
+            vm.space.heap.get_mut(made)?.slots = slots;
+            Ok(made)
+        })
+        .unwrap();
+        assert!(wrote);
+        let p = vm.space.prop(weapon_class, "Mesh").unwrap();
+        let Value::Object(Some(copy)) = vm.space.read(weapon, PropAddr::scalar(p)).unwrap().clone() else {
+            panic!("a component")
+        };
+        assert_ne!(copy, component, "the weapon's own copy");
+        assert_eq!(vm.space.heap.get(copy).unwrap().outer, Some(weapon), "outered to the weapon");
+        let p = vm.space.prop(weapon_class, "Mesh").unwrap();
+        assert_eq!(vm.space.read(template, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(component)), "template kept");
+        let lines: Vec<&String> = vm.log.iter().filter(|l| l.starts_with(WEAPON_COMPONENTS_INPUT)).collect();
+        assert_eq!(lines.len(), 2, "{:?}", vm.log);
+        assert_eq!(lines[0], WEAPON_COMPONENTS_INPUT, "logged before it runs");
+        assert_eq!(lines[1], &format!("{WEAPON_COMPONENTS_INPUT}: 1 component(s)"));
     }
 
     #[test]

@@ -42,6 +42,8 @@ fn script(message: String) -> VmError {
 
 fn set_skeletal_mesh(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let component = c.this.ok_or_else(|| script("called with no component".to_string()))?;
+    // Rule 1 before the argument shapes (the note's section 4 order; review r1 of #599, item 4).
+    resident(c.vm, component)?;
     let new_mesh = match c.arg(0)? {
         Value::Object(o) => *o,
         other => return Err(script(format!("NewMesh holds {}, not an object reference", other.kind_name()))),
@@ -60,8 +62,12 @@ fn set_skeletal_mesh(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-/// The rule on its inputs (module documentation): `Ok` when the mesh is already `new_mesh`.
-pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>) -> Result<(), VmError> {
+/// Rule 1: the receiver is resident. An unloaded handle is `NotRead`; one whose load already failed says so
+/// (review r1 of #599, item 6).
+fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
+    if vm.defs.is_failed(&vm.space, component) {
+        return Err(NotYet::not_read(format!("{UNIT}: the component is a handle whose load failed"), RECORD).into());
+    }
     if vm.defs.is_unloaded(&vm.space, component) {
         return Err(NotYet::not_read(
             format!("{UNIT}: the component is an unloaded handle (a load is a write)"),
@@ -69,6 +75,12 @@ pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>) -> Result<()
         )
         .into());
     }
+    Ok(())
+}
+
+/// The rule on its inputs (module documentation): `Ok` when the mesh is already `new_mesh`.
+pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>) -> Result<(), VmError> {
+    resident(vm, component)?;
     let current = current_mesh(vm, component)?;
     if current == new_mesh {
         return Ok(());

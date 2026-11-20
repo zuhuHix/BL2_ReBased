@@ -100,6 +100,15 @@ stop in `make` at "stopped after partial writes: WillowPickup.InitializePickupFo
 set-up" (0 of 3 and 0 of 4 driver steps; #587 not on main yet). They spawn with `bNoCollisionFail` and never ask for
 the extent. This is what the host did, not parity.
 
+**IMPL-SET-SKELETAL-MESH r1 (2026-11-20, zuhu desktop, review r1 of #599, on main 3ad58b0):** AI-assisted (Claude Code,
+Opus 5.5). The tests check #518's three counters around every call; the harness logs its input before the
+instancing and follows the spawn's order; the receiver check comes before the arguments. `cargo build --workspace -j
+2` clean; `cargo test --workspace -j 2` 2,668 passed / 0 failed / 48 ignored (1 new test in `ow-cli`); clippy flags
+nothing in the changed files. Installed Off `--slice-gate` strict on this branch alone, under the machine lock: 2 ok / 10
+NotYet / 2 errors; link 8 is 1 of 5 driver steps, at "stopped after partial writes: WillowWeapon.CacheWeaponCard: the
+card's slot count"; links 6 and 7 stay at 0 of 1 step (`make`) at main's `InitializePickupForRBPhysics` stop. No
+real-game run; `UNVERIFIED` in game.
+
 **IMPL-SET-SKELETAL-MESH (2026-11-20, zuhu desktop, from main 97a3e39):** AI-assisted (Claude Code, Opus 5.5).
 `SkeletalMeshComponent.SetSkeletalMesh` in Off from NATIVE_SET_SKELETAL_MESH.md (#583 at 231bbaed): the same mesh does
 nothing, a change is `LayerAbsent` before any write; plus the equip harness's own weapon components (an UNVERIFIED

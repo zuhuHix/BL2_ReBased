@@ -79,11 +79,10 @@ fn fx() -> Fx {
     Fx { vm, dir }
 }
 
-/// What a call could change that the tests can see from outside: the object count. The rule itself takes the VM
-/// by shared reference (`answer(&Vm, ..)`), so it cannot write, load or draw; the tests also check that the mesh slot
-/// and every unloaded handle stay as they were.
-fn counters(vm: &Vm) -> usize {
-    vm.space.heap.len()
+/// #518's counters: heap committed writes, generator draws and definition-store load transitions (review r1 of #599,
+/// item 1). Every call, refusals included, must leave all three as they were.
+fn counters(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
 }
 
 impl Fx {
@@ -124,7 +123,7 @@ impl Fx {
         let f = self.vm.find_function(PATH).unwrap();
         let before = counters(&self.vm);
         let r = self.vm.call(f, Some(c), args).map(|r| r.ret);
-        assert_eq!(counters(&self.vm), before, "no object made: {r:?}");
+        assert_eq!(counters(&self.vm), before, "no write, draw or load: {r:?}");
         r
     }
 }
