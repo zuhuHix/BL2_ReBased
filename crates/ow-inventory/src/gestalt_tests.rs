@@ -635,7 +635,8 @@ fn a_component_class_without_gestalt_data_is_a_data_error() {
     let class = x.vm.find_class("Engine.ToyDeclaringComponent").unwrap();
     let declaring = ow_vm::interp::instantiate_from_defaults(&mut x.vm, class).unwrap();
     let e = script(refused_copy(&mut x, Some(declaring), Some(c2)));
-    assert!(e.contains("declares no GestaltData"), "the argument's field: {e}");
+    // The argument's class is named, so a receiver-side refusal cannot pass here (review r2 of #634, item 2).
+    assert!(e.contains("Engine.SkeletalMeshComponent declares no GestaltData"), "the argument's field: {e}");
 }
 
 /// A runtime `ToyLookalike`: not a component, but its class declares a struct `GestaltData`.
@@ -800,6 +801,23 @@ fn register_keeps_an_existing_handler_per_key() {
             let f = declare_init(&mut x);
             let c = x.o("ToyComp1");
             assert_eq!(x.vm.call(f, Some(c), vec![some(c)]).unwrap().ret, Value::Int(7), "the earlier handler kept");
+        } else {
+            // The pre-bound Build handler is the one that answers (review r2 of #634, item 1).
+            let object = x.vm.space.classes.by_path("Engine.Object").unwrap();
+            let weapon = x.vm.space.classes.by_path("Engine.WillowWeapon").unwrap();
+            let data_ty = x.vm.space.classes.struct_by_path("Engine.WillowWeapon.WeaponDefinitionData").unwrap();
+            let param = |vm: &mut Vm, n: &str, k: PropKind| {
+                PropertyDecl::new(vm.space.names.intern(n), k).with_flags(PropertyDecl::PARAM)
+            };
+            let params =
+                vec![param(&mut x.vm, "Comp", PropKind::Object { class: object }), param(&mut x.vm, "Data", PropKind::Struct(data_ty))];
+            let path = ObjectPath::parse("Engine.WillowWeapon.BuildCompositeMesh").unwrap();
+            let decl = FunctionDecl::native(path, BUILD_COMPOSITE_MESH).with_owner(weapon).with_params(params);
+            let f = x.vm.declare_function(decl).unwrap();
+            let w = x.o("ToyWeapon");
+            let data = x.data(vec![]);
+            let got = x.vm.call(f, Some(w), vec![Value::Object(None), data]).unwrap().ret;
+            assert_eq!(got, Value::Int(7), "the earlier Build handler kept");
         }
         register(&mut x.vm).unwrap();
     }
