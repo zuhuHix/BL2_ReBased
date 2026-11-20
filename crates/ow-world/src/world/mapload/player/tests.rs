@@ -275,8 +275,8 @@ fn reference_has_no_local_player_spawn() {
 // ------------------------------------------------------------------------------------------ installed
 
 /// Sanctuary on the installed game (`OW_BL2_ROOT`) in Off: the map load, the map route (lane 2), then one local player
-/// of the engine's configured class (`Engine.LocalPlayer`: the installed `BaseEngine.ini`'s `LocalPlayerClassName`,
-/// which `DefaultEngine.ini` does not override) through the local-player spawn with the map URL's text. The remote
+/// of the engine's configured class (`Engine.LocalPlayer`: the installed base engine config file's
+/// `LocalPlayerClassName`, which the default engine config file does not override) through the local-player spawn with the map URL's text. The remote
 /// role is a harness input (1, `ROLE_SimulatedProxy`: the single-player value is not read, UNVERIFIED). Asserts what is
 /// reachable: lane 2's game info, and an outcome that agrees with the world (a play actor and a local player exactly
 /// when it spawned). Reports the rest to `local/p2/mapload-player/play_actor_Off.md` (class paths and counts only).
