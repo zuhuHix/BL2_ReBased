@@ -1,6 +1,6 @@
 # The tree initialisation's owner event: `PostInitAnimTree` (2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-TREE-INIT-OWNER-EVENT (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-TREE-INIT-OWNER-EVENT (decision 2026-11-19-222, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented the step before it
 (#608, the component pass and the control arrays). It implements nothing here.
 
