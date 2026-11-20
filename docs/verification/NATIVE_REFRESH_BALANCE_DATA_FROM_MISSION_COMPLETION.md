@@ -1,7 +1,7 @@
 # WillowPlayerController.RefreshBalanceDataFromMissionCompletion (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-REFRESH-BALANCE-DATA-FROM-MISSION-COMPLETION (decision
-2026-11-19-NNN, a placeholder), for slice link 12. **Analyst only:** a different lane implements it (clean room). This
+2026-11-19-170, a placeholder), for slice link 12. **Analyst only:** a different lane implements it (clean room). This
 lane's author implemented `MissionTracker.AllExpansionSideMissionsComplete` (#554), not this native, and will not
 implement this note.
 
