@@ -1,5 +1,5 @@
 //! Owner: lane IMPL-GEARBOXMIND-QUERYINTERFACE. `Controller`'s `QueryInterface` rule in Off, and the read-only forms
-//! of the pawn rules it can reach. AI-assisted (Claude Code). Decision 2026-11-19-NNN.
+//! of the pawn rules it can reach. AI-assisted (Claude Code). Decision 2026-11-19-238.
 //!
 //! **Clean room.** Implemented from `docs/verification/NATIVE_GEARBOXMIND_QUERYINTERFACE.md` alone (#589, the analyst
 //! lane ANALYST-GEARBOXMIND-QUERYINTERFACE), by a lane that did not read the natives. Every rule is **UNVERIFIED** in

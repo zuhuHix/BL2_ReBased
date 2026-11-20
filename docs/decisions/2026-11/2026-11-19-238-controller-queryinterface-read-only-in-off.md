@@ -114,3 +114,5 @@ names) and #595, deleted after:
   stop was the NotYet at GearboxMind's own QueryInterface. The note's section 6 predicts exactly this world's stop:
   link 9's world does not register `ow_combat::holds`, which binds that native to a `NotRead` in Off. With an
   answer for GetAIComponent (#594), the next stop is the AI component's own QueryInterface (b6d8's probe).
+
+Landing (hub ruling, 2026-11-20): #575 landed first with `CodeIndex::implements_resolved` (`Option<bool>`), so this lane's whole-chain read is named `implements_resolved_chain` (reflect.rs, its test, ow-vm `interface_read_only.rs`); and #614's `an_owned_ai_component_answers_its_owner_s_answer` resolves the controller's interface tables first (`resolve_interface_tables`), since the controller now answers by this lane's read-only rule.
