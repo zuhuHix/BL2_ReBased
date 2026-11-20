@@ -214,6 +214,54 @@ So **under the probe's stand-ins**, link 9's next stop is `Actor.AttachComponent
 stand-ins the stop would be earlier. Note too that the probe's trace stand-in answered a plain miss, which section 3's
 answer gives only when every primitive is known to be clear.
 
+## 5. Primitives no query meets (amendment, 2026-11-20)
+
+AI-assisted (Claude Code, Claude Opus 5.5), lane LINK9-NEXT-STOP-2, analyst only. Its author wrote this note and
+NATIVE_SPAWN_TRACE_FILTER.md, so a different lane implements it. **UNVERIFIED** in the running game.
+
+**The stop it answers.** On a local throwaway merge, never pushed, of main b9dfca8b with #650, #655 and #616's own
+commits (installed Off `--slice-gate`, strict), link 9's `cast` stops at T5, "Actor.Trace: the colliding components'
+bounds". A probe line named the primitive: the `CylinderComponent` of Maya's `WillowPlayerController`, which has
+`bAttached` clear, `CollideActors` clear, and an owner whose `bCollideActors` is clear. #643's bounds work does not
+change this. It covers `GetBoundingCylinder` and the attach record, not the collision service's `actor_bounds`, which
+link 9's `NoLevel` world cannot answer.
+
+**The rule, already read.** NATIVE_SPAWN_TRACE_FILTER.md section 5: a primitive enters the world's collision hash only
+if the per-component test of its section 2 passes. That test needs the primitive's `CollideActors` set, and no owner or
+an owner whose `bCollideActors` is set. So a primitive that fails it is not in the hash, and **no query meets it**,
+traces included. Its section 6 records this same cylinder, for the spawn's traces. Section 3 adds that each walker
+test only rejects, so a primitive that any one of them rejects is passed over, whatever the order.
+
+**Proposed change to section 3.3, step 2** (for a separate implementer; UNVERIFIED):
+- **Before the bounds,** for each primitive the walk reaches, after the residency checks, read:
+  - the live primitive's `CollideActors`;
+  - the live owner's `bCollideActors`, the owner being `trace_filter::owner_of`'s, as the walk already uses.
+- **If either is clear,** the primitive is left out: no bounds are asked and nothing more is read. This is the hash
+  admission's necessary condition, not the whole admission.
+- **If both are set,** the walk goes on as now: missing bounds give T5, disjoint bounds leave it out, meeting bounds
+  give T7.
+- **The fields' shapes:** a class that declares either as something other than a bool, or does not declare it, is a
+  `VmError::Script` naming the class.
+- **`bAttached` is not used:** NATIVE_SPAWN_TRACE_FILTER.md leaves a clear `bAttached` unread on its own.
+- **Purity:** the change is read-only. It writes, loads, draws and interns nothing.
+
+**Tests** (synthetic, `package()` / `tag()`, every value invented; each refusal with #518's three counters and the
+name table's length unchanged):
+1. a primitive with `CollideActors` clear and no bounds in the service: left out, so the trace is a miss (it was T5);
+2. the same with the owner's `bCollideActors` clear and the primitive's set: left out;
+3. both set and no bounds: T5 as before;
+4. both set and bounds meeting the swept box: T7 as before;
+5. a class declaring `CollideActors` as an int: `VmError::Script`.
+
+**What the probe saw past it** (the same throwaway, with this change stood in locally, never pushed): ok 4, notyet 9,
+error 1 of 14. Link 9 still passes 1 of 2 steps.
+- `Actor.Trace` answers a miss.
+- The light's `Actor.AttachComponent` (#623) runs.
+- `cast` stops with an **error** at the unbound native
+  `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet(byte,int,bool,bool)`. Main holds no record or
+  binding for it. It is not NATIVE_UNLOCK_ACHIEVEMENT_IF_CONDITIONS_MET.md's `UnlockAchievementIfConditionsMet`, so it
+  needs its own reading.
+
 ## Open questions
 
 1. **Not read:**
@@ -223,7 +271,8 @@ answer gives only when every primitive is known to be clear.
    - the `HitInfo` fill;
    - the bullet listeners.
 2. **The headless world:** `NoLevel` holds no bounds, so T5 stops link 9 whenever another live actor has a
-   primitive. Whether the link 9 world has one was not checked.
+   primitive the hash would admit. Link 9's one such primitive so far is the controller's cylinder, which section 5
+   leaves out.
 3. **UNVERIFIED:** that the blocking bit's effect is the swap in section 1. The bit names are `trace_filter.rs`'s,
    which NATIVE_SPAWN_PLACEMENT.md section 7 recorded.
 

@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK9-NEXT-STOP-2 (2026-11-20, pc-hummer, docs only, on docs/native-actor-trace-hash-admission from main
+b9dfca8b):** AI-assisted (Claude Code, Opus 5.5). No code changed, so no measured number moved. On a local throwaway
+(main + #650 + #655 + #616's own commits; installed Off `--slice-gate` strict): ok 4, notyet 10, error 0, link 9 1 of 2
+steps, `cast` at `Actor.Trace`'s T5 on the controller's non-colliding cylinder. With NATIVE_ACTOR_TRACE.md section 5's
+skip stood in locally: ok 4, notyet 9, error 1, `cast` at the unbound
+`WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet`. UNVERIFIED in game.
+
 **LINK9-GETAICOMPONENT-BINDING (2026-11-20, pc-hummer, on fix/rust-link9-holds-binding from main 241a6c47):**
 AI-assisted (Claude Code, Opus 5.5). Link 9's set-up registers the AI holds' natives (`ow_combat::holds::register`),
 `GearboxMind.GetAIComponent` among them. `cargo test --workspace`: 3200 passed / 0 failed / 51 ignored;
