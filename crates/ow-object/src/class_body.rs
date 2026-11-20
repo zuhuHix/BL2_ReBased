@@ -20,6 +20,12 @@ use ow_package::tables;
 /// Class flag bit 14 marks an interface class (C++ `CLASS_Interface`).
 pub const CLASS_INTERFACE: u32 = 0x4000;
 
+/// Class flag bit 7 (value 128) marks a native class (C++ `CLASS_Native`). **Fitted, UNVERIFIED** (lane
+/// FOLLOWUP-602-CLASS-POLICY): over the installed code packages it is set on 2,547 of the 3,339 decoded classes, and on
+/// every one of the 101 loaded classes that declare a native function. A census, not a proof that a class without it
+/// has no native code.
+pub const CLASS_NATIVE: u32 = 1 << 7;
+
 /// The end-of-script token a non-empty class script ends in (`script::EX_EndOfScript` in `src/script.hpp`; the
 /// opcode table is `ow-script`'s, which this crate may not depend on).
 pub const EX_END_OF_SCRIPT: u8 = 0x53;
@@ -53,6 +59,11 @@ impl ClassBody {
     /// Whether class flag bit 14 is set (C++ `Class::isInterface`, once the body decoded).
     pub fn is_interface(&self) -> bool {
         self.class_flags & CLASS_INTERFACE != 0
+    }
+
+    /// Whether the fitted native-class bit is set ([`CLASS_NATIVE`], UNVERIFIED).
+    pub fn is_native(&self) -> bool {
+        self.class_flags & CLASS_NATIVE != 0
     }
 }
 

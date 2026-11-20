@@ -34,6 +34,8 @@ use crate::pawn_interface::{pawn_answer, register, willow_ai_pawn_answer};
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 const INTERFACE: u32 = 2 | 0x4000;
+/// A native class's flags (the fitted native bit, `ow_object::class_body::CLASS_NATIVE`).
+const NATIVE: u32 = 2 | ow_object::class_body::CLASS_NATIVE;
 
 /// A class export with a decodable body naming `table`'s interfaces, and its default object.
 fn real_class(t: &mut ScriptToy, name: &str, super_ref: i32, within: i32, flags: u32, table: &[i32]) -> i32 {
@@ -69,6 +71,11 @@ fn engine() -> Vec<u8> {
     real_class(&mut t, "OtherController", controller, object, 2, &[other]);
     real_class(&mut t, "ColdController", controller, object, 2, &[other]);
     real_class(&mut t, "PlayerController", controller, object, 2, &[]);
+    // Lane FOLLOWUP-602-CLASS-POLICY: a native class under `Controller` whose answer was not read, listing the
+    // interface, and its script child; and a native class for the accessor-apart case.
+    let native = real_class(&mut t, "NativeController", controller, object, NATIVE, &[thing]);
+    real_class(&mut t, "ScriptUnderNative", native, object, 2, &[]);
+    real_class(&mut t, "AccessorController", controller, object, NATIVE, &[thing]);
     let mind = real_class(&mut t, "ToyMind", controller, object, 2, &[]);
     t.prop("Object", mind, "MyWillowPawn", 0, object);
     real_class(&mut t, "BareController", object, object, 2, &[thing]);
@@ -103,7 +110,10 @@ fn objects() -> Vec<u8> {
 }
 
 /// The classes the tests resolve at set-up (all but `ColdController`).
-const RESOLVED: [&str; 18] = [
+const RESOLVED: [&str; 21] = [
+    "Engine.NativeController",
+    "Engine.ScriptUnderNative",
+    "Engine.AccessorController",
     "Engine.Object",
     "Engine.IToyThing",
     "Engine.IWorldBody",
@@ -139,6 +149,13 @@ impl Drop for Env {
 
 impl Env {
     fn new(mode: ParityMode) -> Env {
+        Env::new_with(mode, false)
+    }
+
+    /// With `production`, the production classes the fixture's package lacks are defined by hand before
+    /// [`register`] runs (`AIController`, `GearboxMind`, `WillowMind` with `MyWillowPawn`, `WillowPlayerController`),
+    /// so every binding is present.
+    fn new_with(mode: ParityMode, production: bool) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-combat-controller-interface-{}-{}",
             std::process::id(),
@@ -160,6 +177,17 @@ impl Env {
         }
         let object = vm.find_class("Engine.Object").unwrap();
         vm.space.classes.define("WillowGame.IPlayerMaster", Some(object), vec![]).unwrap();
+        if production {
+            let controller = vm.find_class("Engine.Controller").unwrap();
+            let player = vm.find_class("Engine.PlayerController").unwrap();
+            let c = &mut vm.space.classes;
+            let ai = c.define("Engine.AIController", Some(controller), vec![]).unwrap();
+            let gearbox = c.define("GearboxFramework.GearboxMind", Some(ai), vec![]).unwrap();
+            let decl = PropertyDecl::new(vm.space.names.intern("MyWillowPawn"), PropKind::Object { class: object });
+            let c = &mut vm.space.classes;
+            c.define("WillowGame.WillowMind", Some(gearbox), vec![decl]).unwrap();
+            c.define("WillowGame.WillowPlayerController", Some(player), vec![]).unwrap();
+        }
         let echoed = Rc::new(RefCell::new(Vec::new()));
         if mode == ParityMode::Off {
             register(&mut vm).unwrap();
@@ -225,11 +253,12 @@ impl Env {
     }
 }
 
-/// #518's counters (heap writes, draws, load transitions) and the class table's length.
-type Counts = (u64, u64, u64, usize);
+/// #518's counters (heap writes, draws, load transitions), the class table's length and the name table's length.
+type Counts = (u64, u64, u64, usize, usize);
 
 fn counters(vm: &Vm) -> Counts {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.classes.len())
+    let space = &vm.space;
+    (space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), space.classes.len(), space.names.len())
 }
 
 fn not_yet(r: Result<Option<ObjRef>, VmError>, missing: Missing, words: &[&str]) {
@@ -480,3 +509,128 @@ fn the_set_up_resolves_what_the_rule_reaches_and_loads_no_object() {
     assert!(e.vm.defs.is_unloaded(&e.vm.space, vehicle), "the set-up loads no object");
     assert_eq!(e.ask(cold, "Engine.IOther").unwrap(), Some(cold));
 }
+
+// ---- Lane FOLLOWUP-602-CLASS-POLICY --------------------------------------------------------------------------------
+
+/// The ordinary dispatch's answer, with the counters unchanged around it.
+fn ask_ordinary(e: &mut Env, o: ObjRef, iface: &str) -> Result<Option<ObjRef>, VmError> {
+    let i = e.class(iface);
+    let before = counters(&e.vm);
+    let r = e.vm.query_interface(o, i);
+    assert_eq!(counters(&e.vm), before, "no write, draw, load, class or name: {r:?}");
+    r
+}
+
+/// The holder's `DrivenVehicle`: the store's unloaded `Vehicle_1` handle.
+fn cold_vehicle(e: &mut Env) -> ObjRef {
+    let path = ow_core::ObjectPath::parse("ToyObjects.Holder").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    e.vm.defs.ensure_loaded(&mut e.vm.space, holder).unwrap();
+    let class = e.vm.space.heap.get(holder).unwrap().class;
+    let p = e.vm.space.prop(class, "DrivenVehicle").unwrap();
+    let Value::Object(Some(vehicle)) = e.vm.space.read(holder, PropAddr::scalar(p)).unwrap().clone() else {
+        panic!("the holder names its vehicle")
+    };
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, vehicle));
+    vehicle
+}
+
+/// Review point 1: every production binding present. The exact `Controller` and `WillowMind` rules, the
+/// `PlayerController` `NotYet` and `WillowPlayerController`'s open answer each sit on their own class; `AIController`
+/// and `GearboxMind` have none and take `Controller`'s. On both dispatch paths, a `WillowMind` reads `MyWillowPawn`
+/// (never `Pawn`, which names another pawn), a `GearboxMind` reads `Pawn`, and a `PlayerController` is refused.
+#[test]
+fn every_binding_present_resolves_to_the_nearest_rule_on_both_paths() {
+    let mut e = Env::new_with(ParityMode::Off, true);
+    for (path, own) in [
+        ("Engine.Controller", true),
+        ("WillowGame.WillowMind", true),
+        ("Engine.PlayerController", true),
+        ("Engine.AIController", false),
+        ("GearboxFramework.GearboxMind", false),
+    ] {
+        let c = e.class(path);
+        assert_eq!(e.vm.has_read_only_interface_rule(c), own, "{path}: read-only form");
+        assert_eq!(e.vm.has_interface_rule(c), own, "{path}: ordinary rule");
+    }
+    let wpc = e.class("WillowGame.WillowPlayerController");
+    assert!(e.vm.has_interface_rule(wpc) && e.vm.has_read_only_interface_rule(wpc), "the open answer, kept");
+    let (a, b) = (e.make("Engine.WorldPawn"), e.make("Engine.WorldPawn"));
+    let mind = e.make("WillowGame.WillowMind");
+    e.link(mind, "Pawn", a);
+    e.link(mind, "MyWillowPawn", b);
+    assert_eq!(e.ask(mind, "Engine.IWorldBody").unwrap(), Some(b), "read-only: MyWillowPawn");
+    assert_eq!(ask_ordinary(&mut e, mind, "Engine.IWorldBody").unwrap(), Some(b), "ordinary: MyWillowPawn");
+    let gearbox = e.make("GearboxFramework.GearboxMind");
+    e.link(gearbox, "Pawn", a);
+    assert_eq!(e.ask(gearbox, "Engine.IWorldBody").unwrap(), Some(a), "read-only: Pawn");
+    assert_eq!(ask_ordinary(&mut e, gearbox, "Engine.IWorldBody").unwrap(), Some(a), "ordinary: Pawn");
+    let player = e.make("Engine.PlayerController");
+    not_yet(e.ask(player, "Engine.IToyThing"), Missing::NotRead, &["PlayerController"]);
+    not_yet(ask_ordinary(&mut e, player, "Engine.IToyThing"), Missing::NotRead, &["PlayerController"]);
+    // Registering again keeps every existing binding.
+    register(&mut e.vm).unwrap();
+    assert_eq!(e.ask(mind, "Engine.IWorldBody").unwrap(), Some(b));
+}
+
+/// Review point 2: a native class under `Controller` whose own answer was not read, though its class lists the
+/// interface, and its script child, are `NotRead` naming the native class, on both paths, before anything is read.
+#[test]
+fn an_unread_native_class_and_its_script_child_are_not_read() {
+    let mut e = Env::new(ParityMode::Off);
+    for path in ["Engine.NativeController", "Engine.ScriptUnderNative"] {
+        let c = e.make(path);
+        let words = ["the interface answer of Engine.NativeController", "own answer was not read", path];
+        not_yet(e.ask(c, "Engine.IToyThing"), Missing::NotRead, &words);
+        not_yet(ask_ordinary(&mut e, c, "Engine.IToyThing"), Missing::NotRead, &words);
+    }
+    // A script-only class under a read one inherits the rule: the toy `ListingController` answers itself.
+    let listing = e.make("Engine.ListingController");
+    assert_eq!(e.ask(listing, "Engine.IToyThing").unwrap(), Some(listing));
+}
+
+/// Review point 2: an unknown pawn accessor is kept apart from an unknown interface answer. Under a policy that reads
+/// `AccessorController`'s answer but not its accessor, a plain hit answers (the pawn is never needed), and each step
+/// that reads the pawn is `NotRead` naming the accessor.
+#[test]
+fn an_unread_pawn_accessor_is_named_only_when_a_step_reads_the_pawn() {
+    let mut e = Env::new(ParityMode::Off);
+    let class = e.class("Engine.AccessorController");
+    let policy = ClassPolicy { interface_answer: &["Engine.AccessorController"], pawn_accessor: &["Engine.Controller"] };
+    e.vm.register_read_only_interface_rule(class, controller_rule_with("Pawn", policy)).unwrap();
+    let c = e.make("Engine.AccessorController");
+    let pawn = e.make("Engine.ThingPawn");
+    e.link(c, "Pawn", pawn);
+    assert_eq!(e.ask(c, "Engine.IToyThing").unwrap(), Some(c), "step 3 never reads the pawn");
+    for iface in ["Engine.IOther", "Engine.IWorldBody"] {
+        let r = e.ask(c, iface);
+        not_yet(r, Missing::NotRead, &["the pawn accessor of Engine.AccessorController", "own accessor was not read"]);
+    }
+}
+
+/// Review point 3: field shape and residency only where the ordered rule reaches them. A plain hit answers over a
+/// cold, or a malformed, pawn it never reads; the reached branch refuses the cold pawn; a reserved but undefined
+/// interface is `NotRead` before any step.
+#[test]
+fn the_rule_reads_the_pawn_only_on_the_branch_that_reaches_it() {
+    let mut e = Env::new(ParityMode::Off);
+    let vehicle = cold_vehicle(&mut e);
+    let c = e.make("Engine.ListingController");
+    e.link(c, "Pawn", vehicle);
+    assert_eq!(e.ask(c, "Engine.IToyThing").unwrap(), Some(c), "a plain hit, the cold pawn skipped");
+    assert_eq!(ask_ordinary(&mut e, c, "Engine.IToyThing").unwrap(), Some(c));
+    not_yet(e.ask(c, "Engine.IOther"), Missing::NotRead, &["goes to its pawn", "unloaded Engine.Vehicle"]);
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, vehicle), "still cold");
+    let controller = e.class("Engine.Controller");
+    let p = e.vm.space.prop(controller, "Pawn").unwrap();
+    let sp = &mut e.vm.space;
+    *sp.heap.slot_mut(&sp.classes, c, PropAddr::scalar(p)).unwrap() = Value::Int(7);
+    assert_eq!(e.ask(c, "Engine.IToyThing").unwrap(), Some(c), "a malformed pawn never read");
+    script(e.ask(c, "Engine.IOther"), "Pawn holds");
+    let reserved = e.vm.space.classes.declare("Engine.IReserved").unwrap();
+    let before = counters(&e.vm);
+    let r = query_read_only(&e.vm, c, Some(reserved));
+    not_yet(r, Missing::NotRead, &["Engine.IReserved", "reserved but not defined"]);
+    assert_eq!(counters(&e.vm), before);
+}
+

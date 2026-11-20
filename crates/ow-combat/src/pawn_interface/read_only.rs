@@ -16,6 +16,13 @@
 //! 4. with no pawn, none; else the pawn's answer when it gives one;
 //! 5. else its `PlayerReplicationInfo`'s answer when that is set, none included; else none.
 //!
+//! **Which classes it covers** (lane FOLLOWUP-602-CLASS-POLICY, [`ClassPolicy`]): the note read the answer and the
+//! pawn accessor for `Controller`, `AIController`, `GearboxAIController`, `GearboxMind` and `WillowMind` only. From the
+//! asked object's class upward, the first native class outside that list (the fitted native-class bit, UNVERIFIED)
+//! stops the rule with `NotYet { NotRead }`: "the interface answer of <class>" before any step, and "the pawn
+//! accessor of <class>" only when a step reads the pawn. Script-only classes inherit. Order: the guard, the class
+//! policy, a defined interface layout, then each step's fields only when reached.
+//!
 //! **Read-only along the chain.** Each rule here takes `&Vm`: it writes, loads and draws nothing. Fields are read only
 //! when a step reaches them; an object to ask, or whose field is read, that is an unloaded stand-in is
 //! `NotYet { NotRead }`; an object whose class answers by a rule with no read-only form is `NotYet { NotPorted }`
@@ -53,6 +60,54 @@ pub const PAWN_FIRST: [&str; 2] = ["IWorldBody", "ISoundBehavior"];
 /// The guard's mark (step 1): keyed by the controller alone.
 const GUARD: &str = "Controller.QueryInterface";
 
+/// The classes whose interface answer the note read (section 1): each uses `Controller`'s.
+pub const READ_INTERFACE_ANSWER: [&str; 5] = [
+    CONTROLLER,
+    "Engine.AIController",
+    "GearboxFramework.GearboxAIController",
+    "GearboxFramework.GearboxMind",
+    WILLOW_MIND,
+];
+/// The classes whose pawn accessor ("its pawn") the note read (section 3). The same five today, kept apart so an
+/// unread accessor is named as such.
+pub const READ_PAWN_ACCESSOR: [&str; 5] = READ_INTERFACE_ANSWER;
+
+/// Which classes a registered `Controller` rule may answer for (lane FOLLOWUP-602-CLASS-POLICY, review point 2): from
+/// the asked object's class upward, the first native class (the fitted [`ow_object::class_body::CLASS_NATIVE`] bit;
+/// an engine stand-in; a class whose body did not decode) not in the read list stops the rule with `NotRead`. A read
+/// class ends the walk, and so does the top of the chain. Script-only classes inherit.
+#[derive(Clone, Copy)]
+pub struct ClassPolicy {
+    pub interface_answer: &'static [&'static str],
+    pub pawn_accessor: &'static [&'static str],
+}
+
+/// The note's policy.
+pub const POLICY: ClassPolicy = ClassPolicy { interface_answer: &READ_INTERFACE_ANSWER, pawn_accessor: &READ_PAWN_ACCESSOR };
+
+/// The first class from `class` upward that may override a virtual whose readings are `read`: native and not read.
+/// `None` when a read class or the top of the chain comes first. Reads only.
+fn first_unread_native(vm: &Vm, class: ClassId, read: &[&str]) -> Option<ClassId> {
+    let code = vm.defs.code();
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.get_layout(c)?;
+        let path = layout.path().to_string();
+        if read.iter().any(|p| p.eq_ignore_ascii_case(&path)) {
+            return None;
+        }
+        let native = match code.key_of(c) {
+            Some(k) => code.class(k).body.as_ref().map_or(true, |b| b.is_native()),
+            None => vm.space.classes.is_native(c),
+        };
+        if native {
+            return Some(c);
+        }
+        cursor = layout.super_class();
+    }
+    None
+}
+
 /// `this`'s read-only answer to `QueryInterface(iface)`, the entry a caller in Rust uses: `None` is a caller error
 /// (`VmError::Script`; the script native returns None before any rule runs).
 pub fn query_read_only(vm: &Vm, this: ObjRef, iface: Option<ClassId>) -> Result<Option<ObjRef>, VmError> {
@@ -65,17 +120,71 @@ pub fn query_read_only(vm: &Vm, this: ObjRef, iface: Option<ClassId>) -> Result<
     vm.query_interface_read_only(&mut InterfaceAsking::default(), this, iface)
 }
 
-/// `Controller`'s rule with `pawn_field` as "its pawn" (module notes).
+/// `Controller`'s rule with `pawn_field` as "its pawn" (module notes), under the note's [`POLICY`].
 pub fn controller_rule(pawn_field: &'static str) -> ReadOnlyInterfaceRuleFn {
+    controller_rule_with(pawn_field, POLICY)
+}
+
+/// `Controller`'s rule under `policy`. In order (review point 3 of lane FOLLOWUP-602-CLASS-POLICY): the guard; the
+/// class policy (the receiver itself was checked resident by the dispatch); a defined interface layout; then each
+/// step, which reads a field, and checks its shape and the residency of what it names, only when it reaches it. The
+/// pawn accessor's policy is checked only when a step reads the pawn.
+pub fn controller_rule_with(pawn_field: &'static str, policy: ClassPolicy) -> ReadOnlyInterfaceRuleFn {
     Rc::new(move |vm: &Vm, asking: &mut InterfaceAsking, c: ObjRef, iface: ClassId| {
         if asking.marks.contains(&(GUARD, c)) {
             return Ok(None);
         }
+        let class = vm.space.heap.get(c)?.class;
+        if let Some(unread) = first_unread_native(vm, class, policy.interface_answer) {
+            return Err(NotYet::not_read(
+                format!(
+                    "Controller.QueryInterface: the interface answer of {} (a native class whose own answer was not \
+                     read), asked of a {}",
+                    class_path(vm, unread),
+                    class_path(vm, class)
+                ),
+                RECORD,
+            )
+            .into());
+        }
+        defined_interface(vm, iface)?;
         asking.marks.push((GUARD, c));
-        let answer = controller_steps(vm, asking, c, iface, pawn_field);
+        let answer = controller_steps(vm, asking, c, iface, pawn_field, policy);
         asking.marks.pop();
         answer
     })
+}
+
+/// `iface` must have a defined layout: the class table also holds reserved ids with none (a declared class not
+/// loaded yet), `NotYet { NotRead }`.
+fn defined_interface(vm: &Vm, iface: ClassId) -> Result<(), VmError> {
+    match vm.space.classes.get_layout(iface) {
+        Some(layout) if layout.is_defined() => Ok(()),
+        Some(layout) => Err(NotYet::not_read(
+            format!("the interface class {} is reserved but not defined (not loaded at set-up)", layout.path()),
+            RECORD,
+        )
+        .into()),
+        None => Err(NotYet::not_read(format!("the interface class {iface:?} is not resolved at set-up"), RECORD).into()),
+    }
+}
+
+/// "Its pawn": the accessor's policy, then the field.
+fn pawn_of(vm: &Vm, c: ObjRef, pawn_field: &str, policy: ClassPolicy, who: &str) -> Result<Option<ObjRef>, VmError> {
+    let class = vm.space.heap.get(c)?.class;
+    if let Some(unread) = first_unread_native(vm, class, policy.pawn_accessor) {
+        return Err(NotYet::not_read(
+            format!(
+                "Controller.QueryInterface: the pawn accessor of {} (a native class whose own accessor was not read), \
+                 asked of a {}",
+                class_path(vm, unread),
+                class_path(vm, class)
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    field(vm, c, pawn_field, who)
 }
 
 fn controller_steps(
@@ -84,12 +193,13 @@ fn controller_steps(
     c: ObjRef,
     iface: ClassId,
     pawn_field: &str,
+    policy: ClassPolicy,
 ) -> Result<Option<ObjRef>, VmError> {
     let who = "a controller";
     // Step 2.
     let name = interface_name(vm, iface)?;
     if PAWN_FIRST.iter().any(|n| n.eq_ignore_ascii_case(&name))
-        && let Some(p) = field(vm, c, pawn_field, who)?
+        && let Some(p) = pawn_of(vm, c, pawn_field, policy, who)?
     {
         return ask(vm, asking, p, iface, who, "its pawn");
     }
@@ -98,7 +208,7 @@ fn controller_steps(
         return Ok(Some(me));
     }
     // Step 4.
-    let Some(p) = field(vm, c, pawn_field, who)? else {
+    let Some(p) = pawn_of(vm, c, pawn_field, policy, who)? else {
         return Ok(None);
     };
     if let Some(answer) = ask(vm, asking, p, iface, who, "its pawn")? {

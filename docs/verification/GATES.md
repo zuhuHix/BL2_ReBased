@@ -24,6 +24,16 @@ preload loads all 13 of `Skel_SirenBody`'s sockets.
 Links 3, 4, 5, 13 and 14 are blocked behind link 1. Both stops come before the socket attaches, so the new rule is
 not reached on installed data yet. UNVERIFIED in game.
 
+**FOLLOWUP-602-CLASS-POLICY (2026-11-20, pc-hummer, on #602's head 5e1ca57a):** AI-assisted (Claude Code, Opus 5.5).
+Controller's QueryInterface rule stops at a native class whose answer was not read (a fitted native-class bit), the
+pawn accessor is checked apart, and a reserved interface is refused. `cargo test -p ow-combat read_only` 14 passed;
+`cargo test --workspace --locked -j 2 --no-fail-fast` 3,189 passed / 1 failed / 51 ignored. The failure,
+`ow-skills` `attach_component_tests::without_a_scene_layer_the_attach_refuses_before_any_write`, fails the same on
+the base 5e1ca57a without this change. `crate_edges_test.py` OK. Installed Off `--slice-gate` strict, under the
+machine lock: 4 ok / 9 NotYet / 1 error on both the branch and its base, row for row. Link 9 runs `spawn` (1 of 2
+steps) and `cast` stops at the unbound `GearboxMind.GetAIComponent()`. No real-game run; `UNVERIFIED` in game.
+Decision 2026-11-19-NNN.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
