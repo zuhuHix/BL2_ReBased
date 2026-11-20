@@ -1,7 +1,7 @@
 # Native rules of ActionSkill.GetBehaviorProviderDefinition (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-GET-BEHAVIOR-PROVIDER-DEFINITION (decision
-2026-11-19-NNN, number pending). Analyst only: a different lane implements it (clean room).
+2026-11-19-164, number pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
 - the installed script, read with `research/script_disasm.py`;

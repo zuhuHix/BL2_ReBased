@@ -1,4 +1,4 @@
-# ActionSkill.GetBehaviorProviderDefinition: analyst note
+## 2026-11-19: ActionSkill.GetBehaviorProviderDefinition: analyst note
 
 AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-GET-BEHAVIOR-PROVIDER-DEFINITION, 2026-11-19. Number pending (NNN).
 
