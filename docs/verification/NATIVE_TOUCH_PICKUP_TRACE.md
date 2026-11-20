@@ -1,6 +1,6 @@
 # `DroppedPickup.TouchPickupTrace`: what blocks a pickup's touch
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-6-7-PAST-TOUCH (decision 2026-11-19-NNN), the analyst half of
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-6-7-PAST-TOUCH (decision 2026-11-19-236), the analyst half of
 the clean room. This lane read the native in `Borderlands2.exe` locally. Ghidra 12.1.4 ran read-only through
 `tools/ghidra/run.ps1`, with a local copy of a throwaway constructor-slot helper for the table lookup. The raw output
 stays under ignored `local/analysis/touch_pickup_trace/`. No bl-sdk session was granted, so **every rule here is
