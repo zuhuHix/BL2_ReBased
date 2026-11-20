@@ -32,6 +32,10 @@ enum Shape {
     NoProjectile,
     /// `bPerchAttached` an int.
     IntFlag,
+    /// No `Role`.
+    NoRole,
+    /// `Role` an int.
+    IntRole,
 }
 
 /// `WillowGame.upk` (invented): `WillowPawn` (`Role`, an object field `ToyLink`), `WillowAIPawn` (the perch fields as
@@ -43,7 +47,15 @@ fn willow(shape: Shape) -> Vec<u8> {
     let object = t.class("Object", 0);
     let definition = t.class("ProjectileDefinition", object);
     let pawn = t.class("WillowPawn", object);
-    t.prop("Byte", pawn, "Role", 0, 0);
+    match shape {
+        Shape::NoRole => {}
+        Shape::IntRole => {
+            t.prop("Int", pawn, "Role", 0, 0);
+        }
+        _ => {
+            t.prop("Byte", pawn, "Role", 0, 0);
+        }
+    }
     t.prop("Object", pawn, "ToyLink", 0, object);
     let ai = t.class("WillowAIPawn", pawn);
     if shape != Shape::NoProjectile {
@@ -64,6 +76,11 @@ fn willow(shape: Shape) -> Vec<u8> {
     });
     t.class("ToyAIPawnChild", ai);
     t.class("ToyNativeAIPawn", ai);
+    // The two listed native descendants (D2), and an invented child of each.
+    let crane = t.class("WillowAICranePawn", ai);
+    t.class("ToyCraneChild", crane);
+    let turret = t.class("DeployableTurretActor", ai);
+    t.class("ToyTurretChild", turret);
     t.class("ToyPlainPawn", pawn);
     t.p.build()
 }
@@ -219,7 +236,24 @@ fn a_script_child_takes_the_rule_and_a_native_child_is_d2() {
     x.refuses(child, PERCH_DROP);
     let native = x.pawn("ToyNativeAIPawn", 3, false, false);
     x.refuses_with(native, &["WillowGame.ToyNativeAIPawn"], "the perch rule of WillowGame.ToyNativeAIPawn");
-    assert_eq!(NATIVE_AI_PAWN_DESCENDANTS, ["WillowGame.WillowAICranePawn"], "the list carried with the binding");
+    assert_eq!(
+        NATIVE_AI_PAWN_DESCENDANTS,
+        ["WillowGame.WillowAICranePawn", "WillowGame.DeployableTurretActor"],
+        "the list carried with the binding"
+    );
+}
+
+/// Test 9: D2 for each listed class, `WillowAICranePawn` and `DeployableTurretActor`, and for an invented child of
+/// each, through the list carried with the binding; a perched one refuses D2 before the guard is read.
+#[test]
+fn the_listed_native_descendants_are_d2() {
+    let mut x = fx();
+    for class in ["WillowAICranePawn", "ToyCraneChild", "DeployableTurretActor", "ToyTurretChild"] {
+        for perched in [false, true] {
+            let pawn = x.pawn(class, 3, perched, perched);
+            x.refuses(pawn, &format!("the perch rule of WillowGame.{class} (its virtual was not read)"));
+        }
+    }
 }
 
 /// Test 5: a receiver outside `WillowAIPawn` (a plain `WillowPawn` subclass) is a `VmError::Script`; so is a call with
@@ -253,10 +287,16 @@ fn an_unresident_pawn_is_d1() {
     x.refuses(stand_in, "the pawn WillowGame.WillowAIPawn ToyStandIn is a stand-in with no properties (an object the store cannot load)");
 }
 
-/// Test 7: a missing `PerchProjectile` and a non-bool `bPerchAttached` are a `VmError::Script` each.
+/// Test 7: a missing `PerchProjectile`, a non-bool `bPerchAttached`, and a missing or non-byte `Role` are a
+/// `VmError::Script` each.
 #[test]
 fn malformed_perch_fields_are_script_errors() {
-    for (shape, wanted) in [(Shape::NoProjectile, "PerchProjectile is not declared"), (Shape::IntFlag, "bPerchAttached is not a bool")] {
+    for (shape, wanted) in [
+        (Shape::NoProjectile, "PerchProjectile is not declared"),
+        (Shape::IntFlag, "bPerchAttached is not a bool"),
+        (Shape::NoRole, "Role is not declared"),
+        (Shape::IntRole, "Role is not a byte"),
+    ] {
         let mut x = fx_with(ParityMode::Off, shape);
         let pawn = x.make("WillowAIPawn");
         let before = x.counters();
@@ -290,7 +330,7 @@ fn both_registration_orders_and_reference() {
     assert!(!x.vm.is_bound(f), "unbound under Reference");
 }
 
-/// `Died` reaches the rule in Off (review r1 of #620): `death.rs` binds `DropCombatPerch` as a presentation no-op under
+/// Test 10, the death path: `Died` reaches the rule in Off (review r1 of #620): `death.rs` binds `DropCombatPerch` as a presentation no-op under
 /// Reference only, so in Off a perched pawn's `Died` reaches D3 and the slice shape's `Died` does nothing, whichever of
 /// the two packs registers first. Under Reference the no-op answers, perched or not.
 #[test]
