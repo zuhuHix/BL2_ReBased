@@ -84,7 +84,7 @@ use crate::json::quote;
 /// `Actor.SetTimer` and `Actor.ClearTimer`, which the C++ also stubs there, are not listed: the Rust world binds them.
 pub const REFERENCE_STUBS: &[(&str, &str)] = &[
     ("AIComponent.ActivateEvent(name)", "the AI component's event dispatch; the C++ has none (Off binds it, decision 2026-11-19-42)"),
-    ("Actor.AttachComponent(object)", "component attachment; the VM has no scene or component model (Off binds it, decision 2026-11-19-NNN)"),
+    ("Actor.AttachComponent(object)", "component attachment; the VM has no scene or component model (Off binds it, decision 2026-11-19-123)"),
     ("Actor.LocalPlayerControllers(class,object)", "the local-controller iterator; the C++ has none (Off binds it, decision 81)"),
     ("GFxMoviePlayer.GetVariableObject(string,class)", "a Flash movie query; the mission screen is not hosted (Off: a named NotYet, decision 2026-11-19-93)"),
     ("MissionTracker.AllExpansionSideMissionsComplete(object,object)", "a tracker query; the C++ has none (Off binds it, decision 2026-11-19-10)"),
