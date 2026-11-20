@@ -1763,3 +1763,6 @@ mod tests;
 #[cfg(test)]
 #[path = "slice_gate_driver_tests.rs"]
 mod driver_tests;
+#[cfg(test)]
+#[path = "slice_gate_preload_tests.rs"]
+mod preload_tests;

@@ -52,6 +52,25 @@ fn package() -> Vec<u8> {
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export(mesh, "ToyMesh_0", payload);
+    // The failed loads: `ToyType_Broken` names `ToyGestalt_Cut` (cut short: no terminator), and `ToyGestalt_Whole` (a
+    // well-formed definition) names `ToyMesh_Cut` (cut short too).
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("GestaltMesh", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(weapon_type, "ToyType_Broken", payload);
+    t.p.add_export(gestalt, "ToyGestalt_Cut", ints(&[0]));
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("GestaltMesh", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(weapon_type, "ToyType_MeshBroken", payload);
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("GestaltSkeletalMesh", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(gestalt, "ToyGestalt_Whole", payload);
+    t.p.add_export(mesh, "ToyMesh_Cut", ints(&[0]));
     t.p.build()
 }
 
@@ -227,4 +246,77 @@ fn the_new_mesh_preload_is_nothing_without_a_gestalt_and_under_reference() {
     preload_gestalt_skeletal_mesh(&mut r.vm, weapon).unwrap();
     assert_eq!(r.counts(), before, "Reference writes and loads nothing");
     assert!(r.new_mesh_lines().is_empty());
+}
+
+/// Every heap object with its name, slots, origin and store state.
+fn snapshot(vm: &Vm) -> Vec<String> {
+    vm.space
+        .heap
+        .handles()
+        .into_iter()
+        .map(|h| {
+            let o = vm.space.heap.get(h).unwrap();
+            let state = (vm.defs.is_unloaded(&vm.space, h), vm.defs.is_failed(&vm.space, h));
+            format!("{h:?} {} {:?} {:?} {state:?}", vm.space.names.text(o.name), o.slots, o.origin)
+        })
+        .collect()
+}
+
+/// The failed attempt's footprint: every object that existed is as it was, except `failed`, which turns from the
+/// store's unloaded handle into its failed one; every new object is a class's default object, which the store makes
+/// when it first meets a class (its only heap writes).
+fn only_the_stores_own(vm: &Vm, before: &[String], failed: ObjRef) {
+    let after = snapshot(vm);
+    let failed = format!("{failed:?} ");
+    for l in before {
+        if l.starts_with(&failed) {
+            continue;
+        }
+        assert!(after.contains(l), "changed: {l}");
+    }
+    assert!(after.iter().any(|l| l.starts_with(&failed) && l.ends_with("(true, true)")), "the failed handle");
+    for l in after.iter().filter(|l| !before.contains(l) && !l.starts_with(&failed)) {
+        assert!(l.contains(" Default__"), "a new object that is not a class default: {l}");
+    }
+}
+
+/// Review lows of #650 and #651: a gestalt definition the store cannot load. The preload returns the store's error,
+/// logs its line before and ": failed (" after, and nothing else changes ([`only_the_stores_own`]): the cut-short
+/// definition is left as the store's failed handle.
+#[test]
+fn a_gestalt_definition_that_fails_to_load_is_an_error_and_logged() {
+    let mut x = fx(ParityMode::Off);
+    let weapon_type = x.find("WillowGame.ToyType_Broken");
+    let gestalt = x.gestalt_of(weapon_type);
+    let weapon = x.weapon(Some(weapon_type));
+    let before = snapshot(&x.vm);
+    let r = preload_gestalt_mesh(&mut x.vm, weapon);
+    assert!(r.is_err(), "the store's error: {r:?}");
+    let lines = x.harness();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("ToyGestalt_Cut") && lines[0].ends_with("UNVERIFIED stand-in)"), "{lines:?}");
+    assert!(lines[1].contains("ToyGestalt_Cut: failed ("), "{lines:?}");
+    only_the_stores_own(&x.vm, &before, gestalt);
+    assert!(x.new_mesh_lines().is_empty(), "the new-mesh preload did not run");
+}
+
+/// The same for the gestalt definition's mesh: the definition loads, its mesh fails to, the preload returns the error,
+/// logs ": failed (", and changes nothing else ([`only_the_stores_own`]).
+#[test]
+fn a_gestalt_mesh_that_fails_to_load_is_an_error_and_logged() {
+    let mut x = fx(ParityMode::Off);
+    let weapon_type = x.find("WillowGame.ToyType_MeshBroken");
+    let gestalt = x.gestalt_of(weapon_type);
+    let weapon = x.weapon(Some(weapon_type));
+    preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
+    let mesh = x.mesh_of(gestalt);
+    let before = snapshot(&x.vm);
+    let r = preload_gestalt_skeletal_mesh(&mut x.vm, weapon);
+    assert!(r.is_err(), "the store's error: {r:?}");
+    let lines = x.new_mesh_lines();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("ToyMesh_Cut") && lines[0].ends_with("UNVERIFIED stand-in)"), "{lines:?}");
+    assert!(lines[1].contains("ToyMesh_Cut: failed ("), "{lines:?}");
+    only_the_stores_own(&x.vm, &before, mesh);
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, gestalt), "the definition stays loaded");
 }

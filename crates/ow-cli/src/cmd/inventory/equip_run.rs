@@ -26,7 +26,10 @@
 //!   the body class and #541 the unlock data. A logged harness input, not a rule. Then the weapon type's
 //!   `GestaltMesh` ([`preload_gestalt_mesh`], lane HARNESS-LINK8-GESTALT-PRELOAD): `BuildCompositeMesh`'s preflight
 //!   refuses a cold gestalt definition, so the harness loads it, an UNVERIFIED stand-in for the game keeping it
-//!   resident.
+//!   resident. Then that definition's `GestaltSkeletalMesh` ([`preload_gestalt_skeletal_mesh`], lane
+//!   LINK8-NEWMESH-PRELOAD): `SetSkeletalMesh` refuses an unloaded new mesh, so the harness loads it, an UNVERIFIED
+//!   stand-in for the mesh being resident with its definition. Each preload logs its line before it runs and its
+//!   outcome after (": loaded", or ": failed (...)" with the error kept).
 //! - **init**: the installed `WillowWeapon.InitializeInternal(false)`, the spawn's script (bases, ammo, the attribute
 //!   slots, the weapon's own effects and slot modifiers, the card).
 //! - **bases**: `CalculateWeaponBaseValues` (the crate's override), so the equip phases start from computed bases
@@ -790,8 +793,10 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -
     Ok(weapon)
 }
 
-/// [`prepare`] and then the muzzle-flash preload: the equip run's own (`--equip-run` and link 8; review r1 of #573,
-/// item 3). The pickup links prepare their weapons with [`prepare`] alone.
+/// [`prepare`] and then the equip run's three Off harness preloads, in order: the muzzle flashes
+/// ([`preload_muzzle_flashes`]), the gestalt definition ([`preload_gestalt_mesh`]) and its skeletal mesh
+/// ([`preload_gestalt_skeletal_mesh`]). The equip run's own (`--equip-run`; review r1 of #573, item 3); link 8's driver
+/// in the slice gate calls the same three itself. The pickup links prepare their weapons with [`prepare`] alone.
 fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
