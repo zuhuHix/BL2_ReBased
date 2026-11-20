@@ -81,7 +81,7 @@ ow-world` 314 passed / 0 failed / 5 ignored after review r1 of #575; `cargo test
 `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #570, #500 and
 #528: ok 1 / NotYet 10 / error 3 of 14. Links 1, 3, 4, 5, 13 and 14 run 0 steps (link 1 0 of 1) and stop unmarked at the
 per-bone weight build's `MESH_LAYER` `LayerAbsent`. ctest and verify_packages not run (no C++ change). No real-game
-run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+run; `UNVERIFIED` in game. Decision 2026-11-19-193.
 
 **IMPL-COPY-ANIM-TREE (2026-11-19, pc-hummer, on #542 at b2b4de8a, with #557 at 9694cc30 merged):** AI-assisted
 (Claude Code, Opus 5.5). The animation tree's copy and initialisation in Off from NATIVE_COPY_ANIM_TREE.md (#551 at

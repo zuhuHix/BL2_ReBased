@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-ANIM-NODE-INIT (decision 2026-11-19-NNN, number pending). The animation tree's per-node
+//! Owner: lane IMPL-ANIM-NODE-INIT (decision 2026-11-19-193, number pending). The animation tree's per-node
 //! initialisation (the copy's initialisation, section 2 step 4 of NATIVE_COPY_ANIM_TREE.md), in `ParityMode::Off`.
 //! AI-assisted (Claude Code).
 //!
