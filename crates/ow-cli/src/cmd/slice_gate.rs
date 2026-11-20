@@ -1658,6 +1658,69 @@ pub fn preload_object(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<()
     }
 }
 
+/// The text that starts each set-up interface check's line ([`resolve_interface`]).
+pub const SETUP_INTERFACE_INPUT: &str = "harness input: set-up interface check";
+
+/// Resolves, at set-up, the interface entries `implements(class, iface)` reads on `class`'s chain, so a later
+/// read-only check answers without a load (lane HARNESS-GEARLIKENESS-SETUP: the body composition's hook 1,
+/// NATIVE_BODYCOMP_RENDER_HOOKS.md). Both classes must be in the packages; each is loaded first if it is not (a
+/// write, as [`preload_class`] reports one).
+///
+/// The line says where the answer came from:
+/// - **read:** the chain's bodies decoded, so the answer is the packages' own interface lists, each entry resolved to
+///   its class. Resolving them at set-up, rather than when the game first asks, is the harness input (a write when an
+///   entry was not resolved yet);
+/// - **UNVERIFIED stand-in:** a chain whose bodies did not all decode answers by the structural fallback (as
+///   `implements` does), which is not the game's interface list.
+///
+/// A class or interface the packages do not hold is reported and nothing is resolved.
+pub fn resolve_interface(
+    vm: &mut ow_vm::api::Vm,
+    class: &str,
+    iface: &str,
+) -> (String, Result<(), ow_vm::error::VmError>) {
+    let found = |vm: &mut ow_vm::api::Vm, path: &str| vm.find_class_if_present(path);
+    let (c, i) = match (found(vm, class), found(vm, iface)) {
+        (Ok(Some(c)), Ok(Some(i))) => (c, i),
+        (Err(e), _) | (_, Err(e)) => {
+            let text = ow_combat::hit::access::error_text(&e);
+            return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: the load failed: {text}"), Err(e));
+        }
+        _ => {
+            return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: not in the packages, nothing resolved"), Ok(()));
+        }
+    };
+    let (decoded, before) = {
+        let code = vm.defs.code();
+        match (code.key_of(c), code.key_of(i)) {
+            (Some(ck), Some(ik)) => (
+                code.class(ik).body_decoded() && code.super_chain(ck).all(|k| code.class(k).body_decoded()),
+                code.implements_resolved(ck, ik),
+            ),
+            _ => {
+                return (
+                    format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: no code key, nothing resolved"),
+                    Ok(()),
+                );
+            }
+        }
+    };
+    let answer = vm.implements(c, i);
+    let yes_no = if answer { "yes" } else { "no" };
+    let line = if !decoded {
+        format!(
+            "{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, by the structural fallback (the class bodies              did not all decode; UNVERIFIED stand-in for the packages' interface lists)"
+        )
+    } else if before.is_some() {
+        format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, read from the packages' interface lists, already resolved, nothing resolved")
+    } else {
+        format!(
+            "{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, read from the packages' interface lists; their              entries resolved at set-up (a write; UNVERIFIED stand-in for when the game resolves them)"
+        )
+    };
+    (line, Ok(()))
+}
+
 /// Link 9's set-up (review r1 of #579): each of [`phaselock_setup_classes`] is resolved and its line pushed onto
 /// `harness`, a failure included (the first failure stops the set-up); then each of [`PHASELOCK_SETUP_OBJECTS`]
 /// ([`preload_object`], lane LINK9-RESOLVER-PRELOAD), the same way. Then `Pawn`'s `QueryInterface` rules are
