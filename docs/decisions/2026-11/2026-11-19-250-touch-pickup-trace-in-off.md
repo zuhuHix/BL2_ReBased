@@ -1,4 +1,4 @@
-# DroppedPickup.TouchPickupTrace in Off, from the analyst note
+## 2026-11-19: DroppedPickup.TouchPickupTrace in Off, from the analyst note
 
 AI-assisted (Claude Code, Claude Opus 5.5), lane IMPL-TOUCH-PICKUP-TRACE, on main 4c4522d. This is the implementer
 half of the clean room. The code follows only `docs/verification/NATIVE_TOUCH_PICKUP_TRACE.md`: #624, lane

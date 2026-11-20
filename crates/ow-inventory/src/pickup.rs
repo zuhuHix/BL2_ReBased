@@ -8,7 +8,7 @@
 //!   `WillowPlayerPawn`, which answers as no vehicle. Any other pawn, a subclass included, is `NotYet { NotRead }`,
 //!   because the note leaves the vehicle test open (question 4) and a vehicle gives its `Driver` instead. A failed
 //!   class lookup is that error, not the refusal (review r2 of #452).
-//! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (lane IMPL-TOUCH-PICKUP-TRACE, decision 2026-11-19-NNN),
+//! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (lane IMPL-TOUCH-PICKUP-TRACE, decision 2026-11-19-250),
 //!   coded from NATIVE_TOUCH_PICKUP_TRACE.md section 4 alone (#624, accepted at 6dbdea1e; clean room: analyst lane
 //!   ANALYST-LINKS-6-7-PAST-TOUCH read the native, this lane did not), UNVERIFIED. It replaces the earlier
 //!   `NotYet { NotRead }` stub. Steps 1 to 4 are here, each before anything else is read:
