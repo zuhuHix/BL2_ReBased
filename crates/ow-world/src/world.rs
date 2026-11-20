@@ -518,6 +518,9 @@ impl NativePack for Pack {
             // 2026-11-19-20): whether the game info's TravelPostCountdownTime is above 0; nothing else is read or written.
             // The C++ does not bind it, so Reference keeps the stub (R3).
             vm.register_native(TRAVEL_COUNTDOWN, Rc::new(travel_countdown_in_process))?;
+            // Actor/Pawn/NavigationPoint.GetBoundingCylinder (NATIVE_GET_BOUNDING_CYLINDER.md; lane
+            // IMPL-GET-BOUNDING-CYLINDER, decision 2026-11-19-NNN). The C++ binds none, so Reference keeps the stub (R3).
+            bounding_cylinder::register(vm)?;
         }
         Ok(())
     }
@@ -635,6 +638,9 @@ pub mod pawn_meshes;
 
 /// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).
 pub mod set_base_value;
+
+/// `Actor.GetBoundingCylinder` and its `Pawn` and `NavigationPoint` keys (lane IMPL-GET-BOUNDING-CYLINDER).
+pub mod bounding_cylinder;
 
 #[cfg(test)]
 mod tests;
