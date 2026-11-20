@@ -20,8 +20,9 @@
 //!    [`set_active_child`];
 //! 4. E: the component's class must declare `bUpdateComposeSkeletonPasses` as a bool (`VmError::Script` otherwise);
 //!    the write is the hub's ruling, **fitted, UNVERIFIED**;
-//! 5. F with the component's `SkeletalMesh` set: #529's `MESH_LAYER` refusal, `NotYet { LayerAbsent }`
-//!    ([`per_bone_weights`]); with no mesh, F skips the build;
+//! 5. F: its weight builder's preflight (crate::world::per_bone_weights, NATIVE_PER_BONE_WEIGHTS.md, lane
+//!    IMPL-PER-BONE-WEIGHTS): a null mesh skips the build; #569's layer refusals pass through; more than 256 bones is
+//!    `NotYet { NotRead }`; a missing or mistyped field is a `VmError::Script`;
 //! 6. H with an `AnimParameters` entry past the first naming a `CustomAnimDef` (after its step 7): [`ENTRY_WEIGHTS`];
 //! 7. H with an owner: the owner's class must be known, without side effects, to implement
 //!    `GearboxFramework.SpecialMoveInterface` ([`owner_implements`]: answered only when the owner class's interface
@@ -42,7 +43,8 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
 use super::anim_tree_copy::{class_of, class_path, elements, object_of, read, truth, write};
-use super::body_composition::{MESH_LAYER, field, set_field};
+use super::body_composition::{field, set_field};
+use super::per_bone_weights::Build;
 
 /// The analyst note.
 pub const RECORD: &str = "docs/verification/NATIVE_ANIM_NODE_INIT.md";
@@ -67,10 +69,6 @@ pub fn set_active_child(class: &str) -> String {
     format!("{class}: set active child during initialisation")
 }
 
-/// F's refusal while the mesh layer is absent (#529's `MESH_LAYER`): what it would build.
-pub fn per_bone_weights(class: &str) -> String {
-    format!("the per-bone weight build of {class}")
-}
 
 /// The note's eight implementations, and H's slot part on its own (`AnimNodeSlot`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,11 +246,9 @@ fn check_node(vm: &Vm, component: ObjRef, node: ObjRef) -> Result<(), VmError> {
                 )));
             }
         }
-        Kind::F => {
-            if object_of(&read(vm, component, "SkeletalMesh")?).is_some() {
-                return Err(NotYet::layer_absent(per_bone_weights(&path), MESH_LAYER, RECORD).into());
-            }
-        }
+        // F's weight builder (NATIVE_PER_BONE_WEIGHTS.md, lane IMPL-PER-BONE-WEIGHTS): planned, refusals typed.
+        // F's builder is planned with each of its heads (see `plan`).
+        Kind::F => {}
         Kind::G => {}
         Kind::Slot | Kind::H => {
             read(vm, node, "TargetWeight")?;
@@ -323,8 +319,10 @@ pub enum Step {
     Tick(ObjRef),
     /// H's step 2 on a child past the first: its `SkelComponent`.
     Child(ObjRef),
-    /// A node's initialisation up to a slot's children (A, B, and the whole of every other implementation).
-    Head(ObjRef),
+    /// A node's initialisation up to a slot's children (A, B, and the whole of every other implementation). For an F
+    /// node, the index of its build in the plan's builds, planned in the preflight for this head on its own (review r1
+    /// of #585, item 2: the writes replay it, never rerun the builder).
+    Head(ObjRef, Option<usize>),
     /// A slot's steps after its children (H's steps 3 to 9).
     Tail(ObjRef),
 }
@@ -353,7 +351,7 @@ fn expand(vm: &Vm, node: ObjRef, out: &mut Vec<Step>) -> Result<(), VmError> {
                 stack.push(Frame::Enter(c));
             }
             Frame::Enter(n) => {
-                out.push(Step::Head(n));
+                out.push(Step::Head(n, None));
                 let (k, path_text) = kind(vm, n)?;
                 if matches!(k, Kind::Slot | Kind::H) {
                     if path.contains(&n) {
@@ -388,21 +386,27 @@ fn expand(vm: &Vm, node: ObjRef, out: &mut Vec<Step>) -> Result<(), VmError> {
 /// The preflight (module documentation): the steps for `order` (every node of the tick list, in order) and their
 /// checks. Every node a step initialises is checked, H's re-initialised children included, whether or not it is on the
 /// tick list (review r1 of #575, item 1).
-pub fn plan(vm: &Vm, component: ObjRef, order: &[ObjRef]) -> Result<Vec<Step>, VmError> {
+pub fn plan(vm: &Vm, component: ObjRef, order: &[ObjRef]) -> Result<(Vec<Step>, Vec<Build>), VmError> {
     let mut steps = Vec::new();
     for &n in order {
         steps.push(Step::Tick(n));
         expand(vm, n, &mut steps)?;
     }
     let mut checked = ow_core::DetSet::new();
-    for step in &steps {
-        if let Step::Head(n) = step
-            && checked.insert(*n)
-        {
-            check_node(vm, component, *n)?;
+    let mut builds = Vec::new();
+    for step in &mut steps {
+        if let Step::Head(n, slot) = step {
+            if checked.insert(*n) {
+                check_node(vm, component, *n)?;
+            }
+            // Every F head's build, planned on its own (the note's section 6, "Where it runs").
+            if kind(vm, *n)?.0 == Kind::F {
+                builds.push(super::per_bone_weights::plan(vm, component, *n)?);
+                *slot = Some(builds.len() - 1);
+            }
         }
     }
-    Ok(steps)
+    Ok((steps, builds))
 }
 
 /// Writes `v` into the integer property `name` of `o` by its declared kind (an int, or a byte).
@@ -431,7 +435,7 @@ fn fix_target_weight(vm: &mut Vm, node: ObjRef, children: usize) -> Result<(), V
 
 /// The head of `node`'s initialisation for `component` ([`Step::Head`]): A, B, and every implementation's steps but a
 /// slot's (whose steps after its children are [`write_tail`]).
-pub fn write_head(vm: &mut Vm, component: ObjRef, node: ObjRef) -> Result<(), VmError> {
+pub fn write_head(vm: &mut Vm, component: ObjRef, node: ObjRef, build: Option<&Build>) -> Result<(), VmError> {
     let (k, _) = kind(vm, node)?;
     // A.
     write(vm, node, "bRelevant", Value::Bool(false))?;
@@ -474,7 +478,18 @@ pub fn write_head(vm: &mut Vm, component: ObjRef, node: ObjRef) -> Result<(), Vm
         }
         Kind::E => write(vm, component, "bUpdateComposeSkeletonPasses", Value::Bool(true))?,
         Kind::F | Kind::G => {
-            // F: no mesh (the preflight refused one), so no weight build; F and G: the first child's weight 1.0.
+            // F: the weight builder's two writes, after B and before the first child's weight (lane
+            // IMPL-PER-BONE-WEIGHTS); a null mesh builds nothing. F and G: the first child's weight 1.0.
+            if k == Kind::F {
+                match build {
+                    Some(Build::Write(w, l)) => {
+                        write(vm, node, "Child2PerBoneWeight", Value::array(w.iter().copied().map(Value::Float).collect()))?;
+                        write(vm, node, "LocalToCompReqBones", Value::array(l.iter().copied().map(Value::Byte).collect()))?;
+                    }
+                    Some(Build::Skip) => {}
+                    None => return Err(script("an F head with no planned build".into())),
+                }
+            }
             let mut list = slots(vm, node)?;
             if let Some(first) = list.first_mut()
                 && float(&field(vm, first, "Weight", "AnimBlendChild")?) != 1.0

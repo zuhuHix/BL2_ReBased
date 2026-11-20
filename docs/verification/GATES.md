@@ -74,6 +74,15 @@ the tree preload loads 71 objects, and link 1 runs 0 of 1 step, stopped unmarked
 5, 13 and 14 blocked behind it). ctest and verify_packages not run (no C++ change). No real-game run; every rule
 UNVERIFIED.
 
+**IMPL-PER-BONE-WEIGHTS (2026-11-19, pc-hummer, on #575 at e30b7fa9 with #569 at 10be0643 merged):** AI-assisted
+(Claude Code, Opus 5.5). The per-bone weight builders in Off from NATIVE_PER_BONE_WEIGHTS.md (#580 at 5b1a567). `cargo
+test -p ow-world` 337 passed / 0 failed / 5 ignored; `cargo test -p ow-object` 138 / 0; `cargo test --workspace --locked
+-j 2` 2,570 passed / 0 failed / 49 ignored; `cargo clippy -p ow-world --all-targets` adds no warning in the touched
+files; `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #570,
+#500 and #528: ok 1 / NotYet 10 / error 3 of 14. Links 1, 3, 4, 5, 13 and 14 moved from the F `MESH_LAYER` refusal to
+#569's "the unloaded skeletal mesh Skel_SirenBody", unmarked. ctest and verify_packages not run (no C++ change). No
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **IMPL-ANIM-NODE-INIT (2026-11-19, pc-hummer, on #561 at d83f2fee):** AI-assisted (Claude Code, Opus 5.5). The aim-offset
 fix-up and the per-node initialisation in Off from NATIVE_ANIM_NODE_INIT.md (#566 at 07b2dd68). `cargo test -p
 ow-world` 314 passed / 0 failed / 5 ignored after review r1 of #575; `cargo test --workspace --locked -j 2` 2,511 passed

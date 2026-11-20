@@ -63,6 +63,14 @@ enum Shape {
     AimNoBase,
     /// `AnimBlendChild.Anim` declared interface-typed (review r2 of #575, item 2).
     InterfaceAnim,
+    /// The component's `SkeletalMesh` declared an int (lane IMPL-PER-BONE-WEIGHTS).
+    IntMesh,
+    /// The feather blend's `BlendWeight` member declared an int (lane IMPL-PER-BONE-WEIGHTS).
+    IntBlendWeight,
+    /// The feather blend's target struct without `StartBoneName` (review r1 of #585, item 1).
+    NoStartBone,
+    /// The feather blend's `BlendWeight` member declared `float[2]` (review r2 of #585, item 1).
+    ArrayBlendWeight,
 }
 
 impl Fx {
@@ -119,7 +127,31 @@ impl Fx {
         class(&mut vm, "Engine.AnimNodeScaleRateBySpeed", blend, &[]);
         let weights = [("TargetWeight", arr(PropKind::Float)), ("ActiveChildIndex", PropKind::Int)];
         class(&mut vm, "Engine.AnimNodeBlendBySpeed", blend, &weights);
-        class(&mut vm, "Engine.AnimNodeBlendPerBone", blend, &[]);
+        // The per-bone weight builders' fields (lane IMPL-PER-BONE-WEIGHTS).
+        let lists = [("Child2PerBoneWeight", arr(PropKind::Float)), ("LocalToCompReqBones", arr(PropKind::Byte { enum_: None }))];
+        let mut per_bone = vec![("BranchStartBoneName", arr(PropKind::Name))];
+        per_bone.extend(lists.iter().cloned());
+        class(&mut vm, "Engine.AnimNodeBlendPerBone", blend, &per_bone);
+        let weight = if shape == Shape::IntBlendWeight { PropKind::Int } else { PropKind::Float };
+        let target_fields: Vec<(&str, PropKind)> = if shape == Shape::NoStartBone {
+            vec![("BlendWeight", weight)]
+        } else {
+            vec![("StartBoneName", PropKind::Name), ("BlendWeight", weight)]
+        };
+        let target_path = "WillowGame.WillowAnimNodeFeatherBlend.BoneBlendTarget";
+        let target = if shape == Shape::ArrayBlendWeight {
+            let props = vec![
+                decl(&mut vm, "StartBoneName", PropKind::Name),
+                decl(&mut vm, "BlendWeight", PropKind::Float).with_array_dim(2),
+            ];
+            vm.space.classes.define_struct(target_path, None, props).unwrap()
+        } else {
+            strukt(&mut vm, target_path, &target_fields)
+        };
+        let mut feather = vec![("BoneBlendTargets", arr(PropKind::Struct(target))), ("bForceLocalSpaceBlend", PropKind::Bool)];
+        feather.extend(lists.iter().cloned());
+        class(&mut vm, "WillowGame.WillowAnimNodeFeatherBlend", blend, &feather);
+        class(&mut vm, "Engine.SkeletalMesh", object, &[]);
         class(&mut vm, "Engine.AnimNodeAdditiveBlending", blend, &[]);
         let slot = class(&mut vm, "Engine.AnimNodeSlot", blend, &[("TargetWeight", arr(PropKind::Float)), ("SynchNode", o.clone())]);
         let params = strukt(&mut vm, "GearboxFramework.AnimNodeSpecialMoveBlend.SlotAnimParameters", &[("CustomAnimDef", o.clone())]);
@@ -167,7 +199,7 @@ impl Fx {
             ("AnimTickArray", arr(o.clone())),
             ("TickTag", PropKind::Int),
             ("bAnimTreeInitialised", PropKind::Bool),
-            ("SkeletalMesh", o.clone()),
+            ("SkeletalMesh", if shape == Shape::IntMesh { PropKind::Int } else { o.clone() }),
             ("Owner", o.clone()),
         ];
         if shape != Shape::NoComposeFlag {
@@ -809,7 +841,7 @@ impl Drop for DirGuard {
 
 use crate::world::anim_node_init::{
     CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_NOT_SMI, RECORD as INIT_RECORD, SEQUENCE_CHANGE, answer_owner_for_tests,
-    per_bone_weights, set_active_child, unknown_class,
+    set_active_child, unknown_class,
 };
 
 /// The copy of template node `n` on `comp`'s instance (by name, in the component's tick list).
@@ -988,15 +1020,18 @@ fn f_and_g_set_the_first_weight_and_f_needs_the_mesh_layer() {
         instance(&mut x.vm, comp, t.root).unwrap();
         assert_eq!(slot_field(&x, copy_of(&x, comp, n), 0, "Weight"), Value::Float(1.0), "{class}");
     }
+    // With a mesh and no skeleton source installed, #569's layer refusal passes through unchanged (lane
+    // IMPL-PER-BONE-WEIGHTS).
     let mut x = Fx::new();
     answer_init_steps_for_tests(true);
+    crate::world::per_bone_weights::skeleton_for_tests(None);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_node(&mut x, n);
-    let mesh = x.obj(NODE);
+    let mesh = x.obj("Engine.SkeletalMesh");
     x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
     let e = not_yet(refused_clean(&mut x, comp, t.root));
-    assert_eq!(&*e.what, per_bone_weights("Engine.AnimNodeBlendPerBone"));
     assert_eq!(e.missing, Missing::LayerAbsent(crate::world::body_composition::MESH_LAYER));
+    assert_eq!(e.record, crate::world::skeletal::RECORD, "the layer's own refusal");
 }
 
 /// H: the slot part (the children past the first initialised again, `TargetWeight`, the first weight, `SynchNode`)
@@ -1266,6 +1301,345 @@ fn an_interface_typed_child_link_is_a_script_error_before_any_write() {
     let comp = x.component();
     match refused_clean(&mut x, comp, t.root) {
         VmError::Script { message, .. } => assert!(message.contains("not an object reference"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+// ---- The per-bone weight builders (NATIVE_PER_BONE_WEIGHTS.md; lane IMPL-PER-BONE-WEIGHTS) ------------------------
+
+use crate::world::per_bone_weights::{skeleton_for_tests, too_many_bones};
+use crate::world::skeletal::{ReferenceSkeleton, SkeletonBone};
+
+/// An invented skeleton: bone `i` named `B<i>`, with these parents.
+fn skeleton(parents: &[Option<usize>]) -> ReferenceSkeleton {
+    ReferenceSkeleton {
+        bones: parents.iter().enumerate().map(|(i, &parent)| SkeletonBone { name: format!("B{i}"), parent }).collect(),
+    }
+}
+
+/// Root 0; B1 under 0; B2 under 1; B3 under 2; B4 under 1.
+fn five() -> ReferenceSkeleton {
+    skeleton(&[None, Some(0), Some(1), Some(2), Some(1)])
+}
+
+fn names(x: &mut Fx, list: &[&str]) -> Value {
+    Value::array(list.iter().map(|n| Value::Name(x.vm.space.names.intern(n))).collect())
+}
+
+fn floats(v: &Value) -> Vec<f32> {
+    v.elements().unwrap().iter().map(|e| match e { Value::Float(f) => *f, o => panic!("{o:?}") }).collect()
+}
+
+fn bytes(v: &Value) -> Vec<u8> {
+    v.elements().unwrap().iter().map(|e| match e { Value::Byte(b) => *b, o => panic!("{o:?}") }).collect()
+}
+
+/// The diamond with F node `n` in C's second slot, a component holding a mesh, and the invented skeleton.
+fn with_mesh(x: &mut Fx, n: ObjRef, s: ReferenceSkeleton) -> (Diamond, ObjRef) {
+    let (t, comp) = with_node(x, n);
+    let mesh = x.obj("Engine.SkeletalMesh");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    skeleton_for_tests(Some(s));
+    (t, comp)
+}
+
+/// The per-bone builder: one branch bone's weight passes down its chain; the list holds the bones whose weight changes,
+/// with their missing ancestors inserted ahead of them; the first child's weight is set after.
+#[test]
+fn the_per_bone_builder_weights_a_branch_and_lists_its_ancestors() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let branch = names(&mut x, &["b2", "NoSuchBone", "None"]);
+    x.set(n, "BranchStartBoneName", branch);
+    slots_of(&mut x, n, &[(None, 0.25, false, 1.0)]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let c = copy_of(&x, comp, n);
+    assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), vec![0.0, 0.0, 1.0, 1.0, 0.0], "B2 and its child B3");
+    assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), vec![0, 1, 2], "B2, after its ancestors B1 and the root");
+    assert_eq!(slot_field(&x, c, 0, "Weight"), Value::Float(1.0));
+}
+
+/// The root as a branch bone: every weight 1, no bone differs from its parent, so the list is empty.
+#[test]
+fn the_root_as_branch_gives_an_empty_list() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let branch = names(&mut x, &["B0", "B0"]);
+    x.set(n, "BranchStartBoneName", branch);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let c = copy_of(&x, comp, n);
+    assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), vec![1.0; 5]);
+    assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), Vec::<u8>::new());
+}
+
+/// The feather builder: the clamp (negative, above 1, not a number), the first entry for a bone winning, a partial
+/// weight inherited unchanged still listed; with `bForceLocalSpaceBlend` the list stays empty.
+#[test]
+fn the_feather_builder_clamps_lists_partial_weights_and_obeys_local_space() {
+    for force in [false, true] {
+        let mut x = Fx::new();
+        answer_init_steps_for_tests(true);
+        let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
+        let (t, comp) = with_mesh(&mut x, n, five());
+        let class = x.vm.space.heap.get(n).unwrap().class;
+        let p = x.vm.space.prop(class, "BoneBlendTargets").unwrap();
+        let PropKind::Array(inner) = x.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
+        let PropKind::Struct(ty) = *inner else { panic!() };
+        let entry = |x: &mut Fx, bone: &str, w: f32| {
+            let mut v = x.vm.space.classes.struct_defaults(ty).unwrap();
+            let name = Value::Name(x.vm.space.names.intern(bone));
+            set_field(&x.vm, &mut v, "StartBoneName", name, "t").unwrap();
+            set_field(&x.vm, &mut v, "BlendWeight", Value::Float(w), "t").unwrap();
+            v
+        };
+        let targets = vec![entry(&mut x, "B1", 0.5), entry(&mut x, "B1", 0.9), entry(&mut x, "B3", 7.0), entry(&mut x, "B4", -2.0)];
+        x.set(n, "BoneBlendTargets", Value::array(targets));
+        x.set(n, "bForceLocalSpaceBlend", Value::Bool(force));
+        instance(&mut x.vm, comp, t.root).unwrap();
+        skeleton_for_tests(None);
+        let c = copy_of(&x, comp, n);
+        // B1 0.5 (the first entry), B2 inherits 0.5, B3 clamped to 1, B4 clamped to 0.
+        assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), vec![0.0, 0.5, 0.5, 1.0, 0.0], "force {force}");
+        let want: Vec<u8> = if force { Vec::new() } else { vec![0, 1, 2, 3, 4] };
+        // B1 differs from the root; B2 equals B1 at a partial weight (listed); B3 differs; B4 (0) differs from its
+        // parent B1 (0.5); the parents pass puts the root first.
+        assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), want, "force {force}");
+    }
+    assert_eq!(crate::world::per_bone_weights::clamp(f32::NAN), 0.0);
+}
+
+/// The parents pass inserts a missing ancestor chain ahead of its bone, each looked at in turn.
+#[test]
+fn the_parents_pass_inserts_the_missing_chain() {
+    let s = five();
+    let mut list = vec![3, 4];
+    crate::world::per_bone_weights::parents_pass(&s, &mut list);
+    assert_eq!(list, vec![0, 1, 2, 3, 4]);
+}
+
+/// A null mesh builds nothing: both arrays keep the template's values, and the first child's weight is still set.
+#[test]
+fn a_null_mesh_keeps_both_arrays() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "Child2PerBoneWeight", Value::array(vec![Value::Float(0.25)]));
+    x.set(n, "LocalToCompReqBones", Value::array(vec![Value::Byte(7)]));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!(x.get(c, "Child2PerBoneWeight"), Value::array(vec![Value::Float(0.25)]));
+    assert_eq!(x.get(c, "LocalToCompReqBones"), Value::array(vec![Value::Byte(7)]));
+}
+
+/// More than 256 bones, a mesh field of another kind and a target member of another kind: each refused, write-free.
+#[test]
+fn the_builder_s_refusals_are_write_free() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let mut parents = vec![None];
+    parents.extend((0..256).map(Some));
+    let (t, comp) = with_mesh(&mut x, n, skeleton(&parents));
+    let e = not_yet(refused_clean(&mut x, comp, t.root));
+    skeleton_for_tests(None);
+    assert_eq!((&*e.what, e.missing), (too_many_bones("Engine.AnimNodeBlendPerBone").as_str(), Missing::NotRead));
+    let mut x = Fx::with(Shape::IntMesh);
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_node(&mut x, n);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("SkeletalMesh"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+    let mut x = Fx::with(Shape::IntBlendWeight);
+    answer_init_steps_for_tests(true);
+    let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "BoneBlendTargets").unwrap();
+    let PropKind::Array(inner) = x.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
+    let PropKind::Struct(ty) = *inner else { panic!() };
+    let v = x.vm.space.classes.struct_defaults(ty).unwrap();
+    x.set(n, "BoneBlendTargets", Value::array(vec![v]));
+    let r = refused_clean(&mut x, comp, t.root);
+    skeleton_for_tests(None);
+    match r {
+        VmError::Script { message, .. } => assert!(message.contains("BlendWeight"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// An F node in an H node's second slot is built at H's nested initialisation and again at its own place: the writes
+/// land, and both builds agree.
+#[test]
+fn an_f_node_under_h_is_built_at_both_initialisations() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let h = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, f) = (x.obj(NODE), x.obj("Engine.AnimNodeBlendPerBone"));
+    x.parents(h0, &[h]);
+    x.parents(f, &[h]);
+    let (t, comp) = with_mesh(&mut x, h, five());
+    slots_of(&mut x, h, &[(Some(h0), 1.0, false, 1.0), (Some(f), 0.0, false, 1.0)]);
+    let branch = names(&mut x, &["B4"]);
+    x.set(f, "BranchStartBoneName", branch);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let c = copy_of(&x, comp, f);
+    assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), vec![0.0, 0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), vec![0, 1, 4]);
+}
+
+// ---- Review r1 of #585 ----------------------------------------------------------------------------------------------
+
+/// Item 2: the F node under H has two scheduled heads (H's nested initialisation and its own), each carrying its own
+/// build planned in the preflight; the writes replay them.
+#[test]
+fn both_f_heads_carry_their_planned_builds() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let h = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, f) = (x.obj(NODE), x.obj("Engine.AnimNodeBlendPerBone"));
+    x.parents(h0, &[h]);
+    x.parents(f, &[h]);
+    let (t, comp) = with_mesh(&mut x, h, five());
+    slots_of(&mut x, h, &[(Some(h0), 1.0, false, 1.0), (Some(f), 0.0, false, 1.0)]);
+    let branch = names(&mut x, &["B4"]);
+    x.set(f, "BranchStartBoneName", branch);
+    let p = plan(&x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    use crate::world::anim_node_init::Step;
+    use crate::world::per_bone_weights::Build;
+    let heads: Vec<Option<usize>> =
+        p.steps.iter().filter_map(|s| match s { Step::Head(n, b) if *n == f => Some(*b), _ => None }).collect();
+    assert_eq!(heads.len(), 2, "two heads: H's nested initialisation and the node's own");
+    let want = Build::Write(vec![0.0, 0.0, 0.0, 0.0, 1.0], vec![0, 1, 4]);
+    let heads: Vec<usize> = heads.into_iter().map(|b| b.expect("a planned build")).collect();
+    // Review r2 of #585, item 2: each head has its own build, and each one's replay writes both arrays by itself, with
+    // the skeleton source gone (the replay reads only the preflight's arrays).
+    assert_ne!(heads[0], heads[1], "two builds, not one shared");
+    for b in heads {
+        assert_eq!(p.builds[b], want);
+        x.set(f, "Child2PerBoneWeight", Value::array(Vec::new()));
+        x.set(f, "LocalToCompReqBones", Value::array(Vec::new()));
+        crate::world::anim_node_init::write_head(&mut x.vm, comp, f, Some(&p.builds[b])).unwrap();
+        assert_eq!(floats(&x.get(f, "Child2PerBoneWeight")), vec![0.0, 0.0, 0.0, 0.0, 1.0], "head build {b}");
+        assert_eq!(bytes(&x.get(f, "LocalToCompReqBones")), vec![0, 1, 4], "head build {b}");
+    }
+}
+
+/// Item 1: an empty `BoneBlendTargets` whose declared struct lacks `StartBoneName`, or declares `BlendWeight` as an
+/// int, is refused before any entry is read.
+#[test]
+fn an_empty_target_list_still_needs_its_declared_members() {
+    for (shape, member) in [(Shape::NoStartBone, "StartBoneName"), (Shape::IntBlendWeight, "BlendWeight")] {
+        let mut x = Fx::with(shape);
+        answer_init_steps_for_tests(true);
+        let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
+        let (t, comp) = with_mesh(&mut x, n, five());
+        let r = refused_clean(&mut x, comp, t.root);
+        skeleton_for_tests(None);
+        match r {
+            VmError::Script { message, .. } => assert!(message.contains(member), "{member}: {message}"),
+            e => panic!("{member}: {e:?}"),
+        }
+    }
+}
+
+/// Item 3: a bool-declared `bForceLocalSpaceBlend` holding an int is a script error naming the class and the field.
+/// Item 4: a name index outside the table is a script error naming the field. Both written past the heap's check.
+#[test]
+fn a_flag_of_another_kind_and_a_name_outside_the_table_are_script_errors() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "bForceLocalSpaceBlend").unwrap();
+    let sp = &mut x.vm.space;
+    *sp.heap.slot_mut(&sp.classes, n, PropAddr::scalar(p)).unwrap() = Value::Int(1);
+    let r = refused_clean(&mut x, comp, t.root);
+    match r {
+        VmError::Script { message, .. } => {
+            assert!(message.contains("bForceLocalSpaceBlend") && message.contains("WillowAnimNodeFeatherBlend"), "{message}")
+        }
+        e => panic!("{e:?}"),
+    }
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let mut other = ow_object::names::NameTable::new();
+    let mut far = ow_object::ids::NameId::NONE;
+    for i in 0..(x.vm.space.names.len() + 10) {
+        far = other.intern(&format!("Far{i}"));
+    }
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "BranchStartBoneName").unwrap();
+    let sp = &mut x.vm.space;
+    *sp.heap.slot_mut(&sp.classes, n, PropAddr::scalar(p)).unwrap() = Value::array(vec![Value::Name(far)]);
+    let r = refused_clean(&mut x, comp, t.root);
+    skeleton_for_tests(None);
+    match r {
+        VmError::Script { message, .. } => assert!(message.contains("BranchStartBoneName"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// Item 5, through `instance` (review r2 of #585, item 3): a 256-bone chain whose last bone is the branch passes the
+/// size guard and stores every bone, ending with byte 255; and a branching skeleton whose ascending candidates [B2, B3]
+/// become [B0, B2, B1, B3] as the ancestors are inserted, stored unsorted.
+#[test]
+fn a_full_byte_chain_and_an_unsorted_ancestor_insertion() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let mut parents = vec![None];
+    parents.extend((0..255).map(Some));
+    let (t, comp) = with_mesh(&mut x, n, skeleton(&parents));
+    let branch = names(&mut x, &["B255"]);
+    x.set(n, "BranchStartBoneName", branch);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let c = copy_of(&x, comp, n);
+    let mut weights = vec![0.0; 255];
+    weights.push(1.0);
+    assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), weights);
+    assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), (0..=255u8).collect::<Vec<u8>>(), "every bone, byte 255 last");
+    // Root 0; B1 and B2 under 0; B3 under 1. Branches B2 and B3: candidates [2, 3]; B2's parent (the root) goes ahead
+    // of it, then B3's parent B1 ahead of B3.
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_mesh(&mut x, n, skeleton(&[None, Some(0), Some(0), Some(1)]));
+    let branch = names(&mut x, &["B2", "B3"]);
+    x.set(n, "BranchStartBoneName", branch);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let c = copy_of(&x, comp, n);
+    assert_eq!(floats(&x.get(c, "Child2PerBoneWeight")), vec![0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(bytes(&x.get(c, "LocalToCompReqBones")), vec![0, 2, 1, 3], "inserted ahead, never sorted");
+}
+
+/// Review r2 of #585, item 1: a target member declared as a static array (`BlendWeight` as `float[2]`) is refused on
+/// an empty list, before any entry, write-free.
+#[test]
+fn a_static_array_target_member_is_refused() {
+    let mut x = Fx::with(Shape::ArrayBlendWeight);
+    answer_init_steps_for_tests(true);
+    let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
+    let (t, comp) = with_mesh(&mut x, n, five());
+    let r = refused_clean(&mut x, comp, t.root);
+    skeleton_for_tests(None);
+    match r {
+        VmError::Script { message, .. } => assert!(message.contains("BoneBlendTargets.BlendWeight"), "{message}"),
         e => panic!("{e:?}"),
     }
 }

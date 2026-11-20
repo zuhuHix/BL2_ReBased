@@ -629,6 +629,8 @@ pub mod body_composition;
 pub mod anim_tree_copy;
 // Lane IMPL-ANIM-NODE-INIT: the per-node initialisation (NATIVE_ANIM_NODE_INIT.md).
 pub mod anim_node_init;
+// Lane IMPL-PER-BONE-WEIGHTS: the per-bone weight builders (NATIVE_PER_BONE_WEIGHTS.md).
+pub mod per_bone_weights;
 pub mod pawn_meshes;
 
 /// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).

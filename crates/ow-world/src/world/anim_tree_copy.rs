@@ -275,6 +275,8 @@ pub struct Plan {
     pub steps: Vec<crate::world::anim_node_init::Step>,
     /// The planned tick list, on template nodes.
     pub order: Vec<ObjRef>,
+    /// The F heads' planned builds, which their steps index (review r1 of #585, item 2).
+    pub builds: Vec<crate::world::per_bone_weights::Build>,
 }
 
 /// The gather order (section 1.3): depth first from the root, a node taken the first time it is reached, then its
@@ -419,6 +421,7 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
     let initialise = !truth(&read(vm, component, "bAnimTreeInitialised")?);
     let mut order = Vec::new();
     let mut steps = Vec::new();
+    let mut builds = Vec::new();
     if initialise {
         let next = int(&read(vm, component, "TickTag")?).wrapping_add(1);
         for &n in &nodes {
@@ -430,9 +433,10 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
         // planned steps and their checks (review r1 of #575, item 1).
         let tree: DetSet<ObjRef> = std::iter::once(template).chain(nodes.iter().copied()).collect();
         let planned_order = tick_order(vm, template, &tree, next)?;
-        let planned_steps = crate::world::anim_node_init::plan(vm, component, &planned_order)?;
+        let (planned_steps, planned_builds) = crate::world::anim_node_init::plan(vm, component, &planned_order)?;
         order = planned_order;
         steps = planned_steps;
+        builds = planned_builds;
         let answered = init_steps_answered();
         let steps: [VmError; 3] = [
             not_read(COMPONENT_PASS),
@@ -443,7 +447,7 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
             return Err(e);
         }
     }
-    Ok(Plan { template, nodes, controls, initialise, steps, order })
+    Ok(Plan { template, nodes, controls, initialise, steps, order, builds })
 }
 
 /// A copy of `t` with outer `outer`: its class and name, and its values (the port's archetype, module documentation).
@@ -681,7 +685,7 @@ fn initialise(
                 write(vm, n, "NodeTickTag", Value::Int(tag))?;
             }
             Step::Child(t) => write(vm, copy_of(&t), "SkelComponent", Value::Object(Some(component)))?,
-            Step::Head(t) => write_head(vm, component, copy_of(&t))?,
+            Step::Head(t, b) => write_head(vm, component, copy_of(&t), b.map(|i| &plan.builds[i]))?,
             Step::Tail(t) => write_tail(vm, component, copy_of(&t))?,
         }
     }
