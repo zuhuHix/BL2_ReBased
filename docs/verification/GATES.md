@@ -436,6 +436,17 @@ Link 8 passes 1 of 5 steps and stops at `init` on the unbound `WillowWeapon.Cach
 (#573, #534 and #552 conflict with #572 and were left out). ctest and verify_packages not run (no C++ change). No
 real-game run; `UNVERIFIED` in game. Decision 2026-11-19-192.
 
+**IMPL-GET-EXP-LEVEL (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5).
+`InventoryBalanceDefinition.GetExpLevelFromManufacturerData` in Off from the accepted
+NATIVE_GET_EXP_LEVEL_FROM_MANUFACTURER_DATA.md (#567 at 11798cc1): one rule shared with the loot roll, non-loading
+reads; the equip harness sets `ManufacturerDefinition` and `ManufacturerGradeIndex` (UNVERIFIED inputs). `cargo build
+--workspace -j 2` clean; `cargo test --workspace -j 2` 2,450 passed / 0 failed / 46 ignored (ow-combat 193, exp_level
+6); clippy no new warnings; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build, under the
+machine lock) on a throwaway local merge with #534, #552, #558 and the particle implementation, never pushed: 1 ok / 5
+NotYet / 8 errors. Link 8 runs `make` and stops in `init` at the unread `DamageTypeAttributeValueResolver` (marked),
+before this native (A/B without its registration: the same stop). ctest and verify_packages not run (no C++ change).
+No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/gel-impl/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

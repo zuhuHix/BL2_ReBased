@@ -963,7 +963,7 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let log_before = vm.log.len();
     let made = make_marked(vm, |vm, wrote| {
         // The equip run's own preparation (prepare, then the muzzle-flash preload of #573), inside #506's mark.
-        let weapon = crate::cmd::inventory::equip_run::prepare_line_typed(vm, EQUIP_WEAPON, wrote)?;
+        let weapon = crate::cmd::inventory::equip_run::prepare_link8_typed(vm, EQUIP_WEAPON, wrote)?;
         crate::cmd::inventory::equip_run::preload_muzzle_flashes(vm, weapon)?;
         Ok(weapon)
     });

@@ -603,7 +603,8 @@ fn inventory_definition_for(
 
 /// `GetExpLevelFromManufacturerData` (C++ `expLevelFor`): 1 by default; an interpolating balance answers the word;
 /// otherwise the grade's `ExpLevel` (or the word's high half, at most 63) from this balance's own entry, else the
-/// base's answer.
+/// base's answer. The loot roll's reads ([`LootReads`]: they load as they go, as the C++ does) over the one rule,
+/// [`exp_level_rule`].
 fn exp_level_for(
     vm: &mut Vm,
     balance: ObjRef,
@@ -611,40 +612,302 @@ fn exp_level_for(
     word: i32,
     active: &mut Vec<ObjRef>,
 ) -> Result<i32, VmError> {
+    exp_level_rule(vm, &mut LootReads, balance, Some(manufacturer), word, active)
+}
+
+/// The reads [`exp_level_rule`] makes, so one rule serves the loot roll (which loads, [`LootReads`]) and the Off
+/// native (which loads nothing, [`exp_level::OffReads`]).
+trait ExpLevelReads {
+    /// Called on each balance the walk visits, before anything of it is read.
+    fn enter(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<(), VmError>;
+    fn interpolates(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<bool, VmError>;
+    /// The first `Manufacturers` entry naming `manufacturer` (None matches none).
+    fn entry(&mut self, vm: &mut Vm, balance: ObjRef, manufacturer: Option<ObjRef>) -> Result<Option<Value>, VmError>;
+    /// A grade's `GradeModifiers.ExpLevel`, 1 when absent.
+    fn grade_level(&mut self, vm: &mut Vm, grade: &Value) -> Result<i32, VmError>;
+    fn base(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<Option<ObjRef>, VmError>;
+    /// Whether the depth limit is checked on every fresh visit, before the interpolation test (the Off native, review
+    /// r1 of #577), rather than only before a non-interpolating balance is entered (the loot roll's C++ order).
+    fn depth_first(&self) -> bool {
+        false
+    }
+    /// The shapes of a visited balance that its answer does not read (the Off native's preflight), checked before it
+    /// answers. Nothing by default.
+    fn check_balance(&mut self, _vm: &mut Vm, _balance: ObjRef) -> Result<(), VmError> {
+        Ok(())
+    }
+    /// The shape of a picked grade, checked whether or not its `ExpLevel` is the answer. Nothing by default.
+    fn check_grade(&mut self, _vm: &mut Vm, _grade: &Value) -> Result<(), VmError> {
+        Ok(())
+    }
+}
+
+/// The rule (NATIVE_LOOT.md; NATIVE_GET_EXP_LEVEL_FROM_MANUFACTURER_DATA.md section 2): the cycle guard first (a
+/// balance already in `active` answers 1), then the interpolation test (the word as it is), then the depth limit (a
+/// port rule, [`MAX_BALANCE_CHAIN`]); a non-interpolating balance's own entry and grade, else its base's answer, else 1.
+fn exp_level_rule<R: ExpLevelReads>(
+    vm: &mut Vm,
+    r: &mut R,
+    balance: ObjRef,
+    manufacturer: Option<ObjRef>,
+    word: i32,
+    active: &mut Vec<ObjRef>,
+) -> Result<i32, VmError> {
     if active.contains(&balance) {
         return Ok(1);
     }
-    if flag(vm, balance, "bInterpolateExpLevel")? {
+    let too_deep = || error(format!("{UNIT}: a balance chain deeper than {MAX_BALANCE_CHAIN}"));
+    // The Off native counts every fresh visit, an interpolating tail included (review r1 of #577); the loot roll keeps
+    // the C++ order, the limit after the interpolation test.
+    if r.depth_first() && active.len() >= MAX_BALANCE_CHAIN {
+        return Err(too_deep());
+    }
+    r.enter(vm, balance)?;
+    r.check_balance(vm, balance)?;
+    if r.interpolates(vm, balance)? {
         return Ok(word);
     }
     if active.len() >= MAX_BALANCE_CHAIN {
-        return Err(error(format!("{UNIT}: a balance chain deeper than {MAX_BALANCE_CHAIN}")));
+        return Err(too_deep());
     }
     active.push(balance);
     let mut level = 1;
     let mut resolved = false;
-    if let Some(entry) = manufacturer_entry(vm, balance, manufacturer)?
+    if let Some(entry) = r.entry(vm, balance, manufacturer)?
         && let Some(grade) = grade_of(vm, &entry, word)
     {
+        r.check_grade(vm, &grade)?;
         let high = (word >> 16) & 0xffff;
-        level = if high == 0 {
-            match field(vm, &grade, "GradeModifiers").and_then(|m| field(vm, &m, "ExpLevel")) {
-                Some(x) => crate::hit::access::low_i32(integer(&x)),
-                None => 1,
-            }
-        } else {
-            high.min(MAX_ITEM_LEVEL)
-        };
+        level = if high == 0 { r.grade_level(vm, &grade)? } else { high.min(MAX_ITEM_LEVEL) };
         resolved = true;
     }
-    if !resolved
-        && let Some(base) = get(vm, balance, "BaseDefinition")?
-        && let Some(base) = load(vm, &base)?
-    {
-        level = exp_level_for(vm, base, manufacturer, word, active)?;
+    if !resolved && let Some(base) = r.base(vm, balance)? {
+        level = exp_level_rule(vm, r, base, manufacturer, word, active)?;
     }
     active.pop();
     Ok(level)
+}
+
+/// The loot roll's reads: as the C++ `expLevelFor` reads (each object loaded when it is read).
+struct LootReads;
+
+impl ExpLevelReads for LootReads {
+    fn enter(&mut self, _vm: &mut Vm, _balance: ObjRef) -> Result<(), VmError> {
+        Ok(())
+    }
+
+    fn interpolates(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<bool, VmError> {
+        flag(vm, balance, "bInterpolateExpLevel")
+    }
+
+    fn entry(&mut self, vm: &mut Vm, balance: ObjRef, manufacturer: Option<ObjRef>) -> Result<Option<Value>, VmError> {
+        match manufacturer {
+            Some(m) => manufacturer_entry(vm, balance, m),
+            None => Ok(None),
+        }
+    }
+
+    fn grade_level(&mut self, vm: &mut Vm, grade: &Value) -> Result<i32, VmError> {
+        Ok(match field(vm, grade, "GradeModifiers").and_then(|m| field(vm, &m, "ExpLevel")) {
+            Some(x) => crate::hit::access::low_i32(integer(&x)),
+            None => 1,
+        })
+    }
+
+    fn base(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<Option<ObjRef>, VmError> {
+        match get(vm, balance, "BaseDefinition")? {
+            Some(base) => load(vm, &base),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Owner: lane IMPL-GET-EXP-LEVEL. `InventoryBalanceDefinition.GetExpLevelFromManufacturerData(object,int)` in
+/// `ParityMode::Off`, coded from docs/verification/NATIVE_GET_EXP_LEVEL_FROM_MANUFACTURER_DATA.md alone (#567 at
+/// 11798cc1; clean room: lane ANALYST-GET-EXP-LEVEL-FROM-MANUFACTURER-DATA read the native, this lane did not).
+/// AI-assisted (Claude Code). **Every rule is UNVERIFIED in the running game.** Reference binds nothing (its stub
+/// policy stands).
+///
+/// **The rule** is [`exp_level_rule`], the loot roll's own, with reads that load nothing ([`OffReads`], note section
+/// 4): each balance the walk visits must be loaded (else `NotYet { NotRead }`, [`UNLOADED`]); the shapes are checked
+/// on the visited balances (`bInterpolateExpLevel` a bool, `BaseDefinition` an object, and for a non-interpolating
+/// one `Manufacturers` an array of structs with `Manufacturer` and `Grades`, a picked grade's `GradeModifiers.ExpLevel`
+/// an int when present), else `VmError::Script`; the manufacturer is matched by `ObjRef` identity with no load, a
+/// listed stand-in that identity cannot settle being `NotYet { NotRead }` ([`UNSETTLED`]); the cycle guard is a
+/// call-local list checked before the interpolation test; a chain deeper than 64 is the port's `VmError::Script`. 0
+/// is a valid answer. The native writes nothing, so its refusals are never marked.
+///
+/// **Review r1 of #577:** every visited balance's shapes are checked before it answers, an interpolating one's unused
+/// `BaseDefinition` included (never followed), and a picked grade's `ExpLevel` shape whether or not it is the answer;
+/// the depth limit is checked on each fresh visit, an interpolating tail included; a listed package object that is not
+/// one of the store's definitions (neither its loaded object nor its unloaded handle), whatever its class's slot count,
+/// is the unsettled stand-in.
+pub mod exp_level {
+    use std::rc::Rc;
+
+    use ow_core::{NotYet, ParityMode};
+    use ow_object::ids::{ObjRef, PropAddr};
+    use ow_object::value::Value;
+    use ow_vm::api::{NativeCall, Vm};
+    use ow_vm::error::VmError;
+
+    use super::{ExpLevelReads, exp_level_rule};
+
+    /// The function path the rule is bound under.
+    pub const PATH: &str = "WillowGame.InventoryBalanceDefinition.GetExpLevelFromManufacturerData";
+    /// The record of the rule.
+    pub const RECORD: &str = "docs/verification/NATIVE_GET_EXP_LEVEL_FROM_MANUFACTURER_DATA.md";
+    pub const UNLOADED: &str = "GetExpLevelFromManufacturerData: the balance is not loaded (a load is a write)";
+    pub const UNSETTLED: &str = "GetExpLevelFromManufacturerData: a manufacturer identity the store cannot settle";
+    const UNIT: &str = "GetExpLevelFromManufacturerData";
+
+    fn script(message: String) -> VmError {
+        VmError::Script { function: UNIT.to_string(), message: format!("{UNIT}: {message}") }
+    }
+
+    /// Binds the rule in Off, first-wins; nothing under Reference.
+    pub fn register(vm: &mut Vm) -> Result<(), VmError> {
+        if vm.parity != ParityMode::Off {
+            return Ok(());
+        }
+        crate::hit::bind(
+            vm,
+            PATH,
+            Rc::new(|c: &mut NativeCall<'_>| {
+                let me = c.this.ok_or_else(|| script("called with no balance".to_string()))?;
+                let manufacturer = match c.arg(0)? {
+                    Value::Object(o) => *o,
+                    Value::None => None,
+                    other => return Err(script(format!("the manufacturer holds {}, not an object", other.kind_name()))),
+                };
+                let word = match c.arg(1)? {
+                    Value::Int(i) => *i,
+                    other => return Err(script(format!("the grade index holds {}, not an int", other.kind_name()))),
+                };
+                exp_level(c.vm, me, manufacturer, word).map(Value::Int)
+            }),
+        )
+    }
+
+    /// The native's answer for `balance` (module documentation). Reads only.
+    pub fn exp_level(vm: &mut Vm, balance: ObjRef, manufacturer: Option<ObjRef>, word: i32) -> Result<i32, VmError> {
+        exp_level_rule(vm, &mut OffReads, balance, manufacturer, word, &mut Vec::new())
+    }
+
+    /// A handle the store has not loaded, or a stand-in with no slots whose class has some.
+    fn unloaded(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+        let x = vm.space.heap.get(o)?;
+        let stand_in = x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0);
+        Ok(vm.defs.is_unloaded(&vm.space, o) || stand_in)
+    }
+
+    /// A package object (an export or resource origin) that is not one of the store's definitions.
+    fn unsettled(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+        let package_object = matches!(
+            vm.space.heap.get(o)?.origin,
+            ow_object::heap::Origin::Export { .. } | ow_object::heap::Origin::Resource { .. }
+        );
+        Ok(package_object && !vm.defs.is_loaded(&vm.space, o) && !vm.defs.is_unloaded(&vm.space, o))
+    }
+
+    fn prop(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
+        let class = vm.space.heap.get(o)?.class;
+        let p = vm.space.prop(class, name).ok_or_else(|| script(format!("a balance without {name}")))?;
+        Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
+    }
+
+    fn field(vm: &Vm, v: &Value, name: &str) -> Option<Value> {
+        super::field(vm, v, name)
+    }
+
+    fn object(v: &Value, what: &str) -> Result<Option<ObjRef>, VmError> {
+        match v {
+            Value::Object(o) => Ok(*o),
+            Value::None => Ok(None),
+            other => Err(script(format!("{what} holds {}, not an object", other.kind_name()))),
+        }
+    }
+
+    /// The Off native's reads: nothing is loaded (note section 4).
+    pub(super) struct OffReads;
+
+    impl ExpLevelReads for OffReads {
+        fn enter(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<(), VmError> {
+            if unloaded(vm, balance)? {
+                return Err(NotYet::not_read(UNLOADED, RECORD).into());
+            }
+            Ok(())
+        }
+
+        fn interpolates(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<bool, VmError> {
+            match prop(vm, balance, "bInterpolateExpLevel")? {
+                Value::Bool(b) => Ok(b),
+                other => Err(script(format!("bInterpolateExpLevel holds {}, not a bool", other.kind_name()))),
+            }
+        }
+
+        fn entry(&mut self, vm: &mut Vm, balance: ObjRef, manufacturer: Option<ObjRef>) -> Result<Option<Value>, VmError> {
+            let list = prop(vm, balance, "Manufacturers")?;
+            let entries = list.elements().ok_or_else(|| script("Manufacturers is not an array".to_string()))?;
+            for e in entries {
+                if e.as_struct().is_none() {
+                    return Err(script("a Manufacturers entry is not a struct".to_string()));
+                }
+                let listed = object(&field(vm, e, "Manufacturer").ok_or_else(|| script("a Manufacturers entry without Manufacturer".to_string()))?, "Manufacturer")?;
+                let grades = field(vm, e, "Grades").ok_or_else(|| script("a Manufacturers entry without Grades".to_string()))?;
+                if grades.elements().is_none() {
+                    return Err(script("a Manufacturers entry's Grades is not an array".to_string()));
+                }
+                let Some(m) = manufacturer else {
+                    continue;
+                };
+                let Some(listed) = listed else {
+                    continue;
+                };
+                if listed == m {
+                    return Ok(Some(e.clone()));
+                }
+                // One handle per export settles identity: the store's loaded object or its unloaded handle. A package
+                // object outside the store (a resource stand-in), whatever its class's slot count, cannot (review r1
+                // of #577).
+                if unsettled(vm, listed)? {
+                    return Err(NotYet::not_read(UNSETTLED, RECORD).into());
+                }
+            }
+            Ok(None)
+        }
+
+        fn grade_level(&mut self, vm: &mut Vm, grade: &Value) -> Result<i32, VmError> {
+            let Some(modifiers) = field(vm, grade, "GradeModifiers") else {
+                return Ok(1);
+            };
+            match field(vm, &modifiers, "ExpLevel") {
+                None => Ok(1),
+                Some(Value::Int(i)) => Ok(i),
+                Some(other) => Err(script(format!("GradeModifiers.ExpLevel holds {}, not an int", other.kind_name()))),
+            }
+        }
+
+        fn base(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<Option<ObjRef>, VmError> {
+            object(&prop(vm, balance, "BaseDefinition")?, "BaseDefinition")
+        }
+
+        fn depth_first(&self) -> bool {
+            true
+        }
+
+        fn check_balance(&mut self, vm: &mut Vm, balance: ObjRef) -> Result<(), VmError> {
+            object(&prop(vm, balance, "BaseDefinition")?, "BaseDefinition").map(|_| ())
+        }
+
+        fn check_grade(&mut self, vm: &mut Vm, grade: &Value) -> Result<(), VmError> {
+            self.grade_level(vm, grade).map(|_| ())
+        }
+    }
+
+    #[cfg(test)]
+    #[path = "../exp_level_tests.rs"]
+    mod tests;
 }
 
 /// The candidates of a balance at a stage (C++ `expandBalance`): the balance, then its bases, stopping at the first

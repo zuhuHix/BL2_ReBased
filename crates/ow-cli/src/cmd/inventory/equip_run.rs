@@ -401,13 +401,21 @@ fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
     })
 }
 
+/// Link 8's weapon (lane SLICE-GATE-DRIVERS) as [`prepare_line_typed`] makes it, with `wrote` kept for the make's
+/// mark (review r2 of #506), on [`WeaponRoute::Link8`] (#577's manufacturer inputs). `--slice-gate`'s link 8 then
+/// runs [`preload_muzzle_flashes`], as [`prepare_equip`] does for `--equip-run`.
+pub(crate) fn prepare_link8_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
+    let r = diff_request(line).map_err(script)?;
+    prepare(vm, &r, wrote, WeaponRoute::Link8)
+}
+
 /// One weapon of a weapons-file line, as the run makes it: the weapon, its owner and the owner's accuracy pool (module
 /// documentation), with its `VmError` kept, and `wrote` set once its first mutation succeeded (the weapon's creation;
-/// lane IMPL-PICKUP, review r3 of #452). Shared with `--slice-gate`'s link 8 (lane SLICE-GATE-DRIVERS), which marks a
-/// failure after that write (review r2 of #506).
+/// lane IMPL-PICKUP, review r3 of #452), on [`WeaponRoute::Pickup`]: the pickup links' held weapon. Link 8 has
+/// [`prepare_link8_typed`].
 pub(crate) fn prepare_line_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
     let r = diff_request(line).map_err(script)?;
-    prepare(vm, &r, wrote)
+    prepare(vm, &r, wrote, WeaponRoute::Pickup)
 }
 
 /// Phase `name` of [`PHASES`] on `weapon`: its error text, if any; an unknown name is an error text.
@@ -654,11 +662,31 @@ fn equip_globals(vm: &mut Vm, globals: ObjRef) -> Result<(), VmError> {
 /// [`prepare_line_typed`].
 pub(crate) fn prepare_unowned_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
     let r = diff_request(line).map_err(script)?;
-    weapon_of(vm, &r, wrote)
+    weapon_of(vm, &r, wrote, WeaponRoute::PickupDecoy)
 }
 
-fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmError> {
-    let weapon = weapon_of(vm, r, wrote)?;
+/// Which run a weapon is made for (review r1 of #577): the manufacturer inputs are link 8's and `--equip-run`'s only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WeaponRoute {
+    /// `--equip-run`.
+    EquipRun,
+    /// `--slice-gate`'s link 8 (`prepare_link8_typed`).
+    Link8,
+    /// The pickup links' held weapon (`prepare_line_typed`).
+    Pickup,
+    /// Link 7's unowned decoy (`prepare_unowned_typed`).
+    PickupDecoy,
+}
+
+impl WeaponRoute {
+    /// Whether the Off harness sets the definition data's manufacturer inputs ([`manufacturer_inputs`]).
+    pub(crate) fn manufacturer_inputs(self) -> bool {
+        matches!(self, WeaponRoute::EquipRun | WeaponRoute::Link8)
+    }
+}
+
+fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -> Result<ObjRef, VmError> {
+    let weapon = weapon_of(vm, r, wrote, route)?;
     let pawn = make_t(vm, PAWN)?;
     let controller = make_t(vm, CONTROLLER)?;
     let manager = make_t(vm, MANAGER)?;
@@ -675,7 +703,7 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmE
 /// [`prepare`] and then the muzzle-flash preload: the equip run's own (`--equip-run` and link 8; review r1 of #573,
 /// item 3). The pickup links prepare their weapons with [`prepare`] alone.
 fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
-    let weapon = prepare(vm, r, &mut false)?;
+    let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
     Ok(weapon)
 }
@@ -772,8 +800,29 @@ fn preload_flash(vm: &mut Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     loaded.map_err(VmError::from)
 }
 
+/// Off only (lane IMPL-GET-EXP-LEVEL; the hub's ruling on NATIVE_GET_EXP_LEVEL_FROM_MANUFACTURER_DATA.md section 3):
+/// the definition data's `ManufacturerDefinition` and `ManufacturerGradeIndex`, as the game's spawn sets them (the
+/// candidate expansion: the balance's manufacturer, the grade index word the level). The manufacturer is the balance's
+/// first listed one (`GD_Manufacturers.Manufacturers.Bandit` for link 8's rifle). Each is logged as an UNVERIFIED
+/// harness input. A balance listing no manufacturer leaves both as they are.
+fn manufacturer_inputs(vm: &mut Vm, data: &mut Value, balance: ObjRef, level: i32) -> Result<(), VmError> {
+    let first = ow_inventory::equip::read_prop(vm, balance, "Manufacturers")
+        .and_then(|list| list.elements().and_then(|e| e.first().cloned()))
+        .and_then(|entry| ow_combat::hit::access::field(vm, &entry, "Manufacturer"));
+    let Some(Value::Object(Some(manufacturer))) = first else {
+        return Ok(());
+    };
+    set_field(vm, data, "ManufacturerDefinition", Value::Object(Some(manufacturer))).map_err(script)?;
+    set_field(vm, data, "ManufacturerGradeIndex", Value::Int(level)).map_err(script)?;
+    let path = ow_vm::path_name::path_name(vm, manufacturer).unwrap_or_default();
+    vm.log.push(format!(
+        "harness input: DefinitionData.ManufacturerDefinition {path}, ManufacturerGradeIndex {level} (UNVERIFIED)"
+    ));
+    Ok(())
+}
+
 /// The weapon of a request, its definition data and level set, with no owner. `wrote` is set once the weapon exists.
-fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmError> {
+fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -> Result<ObjRef, VmError> {
     let weapon = make_t(vm, WEAPON)?;
     *wrote = true;
     let weapon_type = find_object_t(vm, &r.weapon_type)?;
@@ -787,6 +836,9 @@ fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, V
         let o = find_object_t(vm, part)?;
         set_field(vm, &mut data, field, Value::Object(Some(o))).map_err(script)?;
     }
+    if vm.parity == ow_core::ParityMode::Off && route.manufacturer_inputs() {
+        manufacturer_inputs(vm, &mut data, balance, r.level)?;
+    }
     write_t(vm, weapon, "DefinitionData", data)?;
     write_t(vm, weapon, "ExpLevel", Value::Int(r.level))?;
     Ok(weapon)
@@ -795,6 +847,135 @@ fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review r1 of #577: the manufacturer inputs are link 8's and `--equip-run`'s only; the pickup links' weapons (link
+    /// 6's and 7's held weapon, link 7's decoy) keep their definition data as it was.
+    #[test]
+    fn only_link_8_and_the_equip_run_set_the_manufacturer_inputs() {
+        assert!(WeaponRoute::EquipRun.manufacturer_inputs());
+        assert!(WeaponRoute::Link8.manufacturer_inputs());
+        assert!(!WeaponRoute::Pickup.manufacturer_inputs());
+        assert!(!WeaponRoute::PickupDecoy.manufacturer_inputs());
+    }
+
+    /// Invented packages for the weapon preparation paths (AGENTS.md rule 9): `WillowGame.upk` declares the weapon
+    /// (its `DefinitionData` with the five fields the paths write or keep), the owner classes and a balance class whose
+    /// `Manufacturers` lists structs with a `Manufacturer`; `GD_ToyGun.upk` holds a weapon type, a manufacturer and a
+    /// balance listing it.
+    fn toy_gun_vm(mode: ParityMode) -> (Vm, std::path::PathBuf) {
+        use ow_package::testkit::ints;
+        use ow_package::testkit::reflect::{toy_array_of, toy_struct};
+        use ow_package::testkit::script::ScriptToy;
+        let core = {
+            let mut t = ScriptToy::new(&[]);
+            t.class("Object", 0);
+            t.build()
+        };
+        let willow = {
+            let mut t = ScriptToy::with_imports(&[
+                "Class",
+                "ObjectProperty",
+                "IntProperty",
+                "StructProperty",
+                "ArrayProperty",
+                "ScriptStruct",
+            ]);
+            let core = t.p.add_import("Core", "Package", 0, "Core");
+            let object = t.p.add_import("Core", "Class", core, "Object");
+            let weapon = t.class("WillowWeapon", object);
+            let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
+            for name in ["WeaponTypeDefinition", "BalanceDefinition", "ManufacturerDefinition"] {
+                t.prop("Object", data, name, 0, object);
+            }
+            for name in ["GameStage", "ManufacturerGradeIndex"] {
+                t.prop("Int", data, name, 0, 0);
+            }
+            t.prop("Struct", weapon, "DefinitionData", 0, data);
+            t.prop("Int", weapon, "ExpLevel", 0, 0);
+            t.prop("Object", weapon, "Instigator", 0, object);
+            t.prop("Object", weapon, "Owner", 0, object);
+            let pawn = t.class("WillowPlayerPawn", object);
+            t.prop("Object", pawn, "Controller", 0, object);
+            t.prop("Object", pawn, "InvManager", 0, object);
+            let controller = t.class("WillowPlayerController", object);
+            t.prop("Object", controller, "Pawn", 0, object);
+            let manager = t.class("WillowInventoryManager", object);
+            t.prop("Object", manager, "Owner", 0, object);
+            t.class("WeaponTypeDefinition", object);
+            t.class("ManufacturerDefinition", object);
+            let balance = t.class("WeaponBalanceDefinition", object);
+            let entry = toy_struct(&mut t, balance, "ManufacturerEntry", None);
+            t.prop("Object", entry, "Manufacturer", 0, object);
+            toy_array_of(&mut t, balance, "Manufacturers", "Struct", entry);
+            t.build()
+        };
+        let gd = {
+            let mut t = ScriptToy::with_imports(&["Class"]);
+            let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+            let weapon_type = t.p.add_import("Core", "Class", willow, "WeaponTypeDefinition");
+            let maker = t.p.add_import("Core", "Class", willow, "ManufacturerDefinition");
+            let balance = t.p.add_import("Core", "Class", willow, "WeaponBalanceDefinition");
+            let mut empty = ints(&[0]);
+            empty.extend_from_slice(&t.none);
+            t.p.add_export(weapon_type, "Type_A", empty.clone());
+            let m = t.p.add_export(maker, "Maker_A", empty);
+            let mut element = t.p.object_tag("Manufacturer", m);
+            element.extend_from_slice(&t.none);
+            let mut payload = ints(&[0]);
+            payload.extend(t.p.array_tag("Manufacturers", 1, &element));
+            payload.extend_from_slice(&t.none);
+            t.p.add_export(balance, "Balance_A", payload);
+            t.build()
+        };
+        let dir = std::env::temp_dir().join(format!("ow-cli-toy-gun-{}-{mode:?}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files: Vec<(&str, &[u8])> =
+            vec![("Core.upk", core.as_slice()), ("WillowGame.upk", willow.as_slice()), ("GD_ToyGun.upk", gd.as_slice())];
+        let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
+        let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
+        (vm, dir)
+    }
+
+    const TOY_LINE: &str = "GD_ToyGun.Type_A 7 GD_ToyGun.Balance_A";
+
+    /// The definition data's manufacturer inputs of the newest toy weapon: (`ManufacturerDefinition` set,
+    /// `ManufacturerGradeIndex`).
+    fn manufacturer_fields(vm: &mut Vm) -> (bool, i32) {
+        let class = vm.find_class(WEAPON).unwrap();
+        let weapon = vm.space.heap.live(&vm.space.classes, class).last().expect("a toy weapon");
+        let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData").unwrap();
+        let maker = matches!(ow_combat::hit::access::field(vm, &data, "ManufacturerDefinition"), Some(Value::Object(Some(_))));
+        let index = match ow_combat::hit::access::field(vm, &data, "ManufacturerGradeIndex") {
+            Some(Value::Int(i)) => i,
+            other => panic!("{other:?}"),
+        };
+        (maker, index)
+    }
+
+    /// Review r2 of #577: the real preparation paths on invented data. The pickup links' held weapon
+    /// (`prepare_line_typed`) and link 7's decoy (`prepare_unowned_typed`) keep `ManufacturerDefinition` None and
+    /// `ManufacturerGradeIndex` 0; link 8's path (`prepare_line`) in Off sets them (the balance's manufacturer, the
+    /// level), so the fixture can see the writes. The held weapon's and link 8's paths go on to the owners' accuracy
+    /// pool, which the toy data does not hold, so they stop there, after the weapon's definition data is written.
+    #[test]
+    fn the_pickup_paths_keep_the_manufacturer_fields_and_link_8_sets_them() {
+        let (mut vm, dir) = toy_gun_vm(ParityMode::Off);
+        prepare_unowned_typed(&mut vm, TOY_LINE, &mut false).expect("the decoy needs no owner");
+        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "link 7's decoy");
+        let held = prepare_line_typed(&mut vm, TOY_LINE, &mut false);
+        assert!(held.is_err(), "the toy data holds no accuracy pool");
+        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "the pickup links' held weapon");
+        let _ = prepare_line(&mut vm, TOY_LINE);
+        assert_eq!(manufacturer_fields(&mut vm), (true, 7), "link 8 sets both in Off");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+        // Reference: no route sets them.
+        let (mut vm, dir) = toy_gun_vm(ParityMode::Reference);
+        let _ = prepare_line(&mut vm, TOY_LINE);
+        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "Reference leaves them");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_summary_counts_passes_and_groups_stops_per_phase() {

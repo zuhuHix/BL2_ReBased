@@ -311,6 +311,7 @@ impl NativePack for Pack {
         crate::damage::register(vm)?;
         crate::death::register(vm)?;
         crate::down::register(vm)?;
+        crate::loot::exp_level::register(vm)?;
         crate::xp::register(vm)?;
         // Off only (lane IMPL-GO-DOWN-NATIVES): last, so every binding above keeps its key.
         crate::go_down::register(vm)
