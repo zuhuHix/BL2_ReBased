@@ -101,6 +101,10 @@ build or test run. Installed Off `--slice-gate` strict on main dba540a, under th
 change", after `BuildCompositeMesh` answered the gestalt mesh. The slice gun's type has a `GestaltMesh`, so link 8
 does not reach the merge. No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/merge/`.
 
+**ANALYST-POSTINITBODYCOMP-SLOTNODE (2026-11-20, pc-hummer, on main dba540a3):** AI-assisted (Claude Code, Opus
+5.5). Analyst note NATIVE_POSTINIT_BODYCOMP_SLOTNODE.md, no code; slice gate not run (docs only). The six Maya links'
+stop after the hooks is the recorded AnimNodeSpecialMoveBlend owner test (NATIVE_BONE_TRANSFORM_LAYER.md section 5).
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
