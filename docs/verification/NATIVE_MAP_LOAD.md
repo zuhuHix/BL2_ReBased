@@ -176,7 +176,7 @@ start-up (section 6.1). The map load calls the local-player spawn directly for e
 
 ## 5. The navigation list at load (lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst only (decision 2026-11-19-NNN). Read from the packages (the level's
+AI-assisted (Claude Code, Opus 5.5), analyst only (decision 2026-11-19-147). Read from the packages (the level's
 untagged tail and the points' tags, through `ow-package` and the definition store), then from the executable
 (read-only Ghidra queries under the machine lock) for what the data does not settle. Raw output stays under ignored
 `local/analysis/navlist/`. **UNVERIFIED** in the running game.
