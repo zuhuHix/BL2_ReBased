@@ -1,6 +1,6 @@
 # The component skip flag and the check before it (2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKIP-FLAG (decision 2026-11-19-NNN, number pending), the analyst
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKIP-FLAG (decision 2026-11-19-262, number pending), the analyst
 half of the clean room: **another lane implements this note.** Raw output stays under ignored
 `local/analysis/skipflag/`. This note is in our own words: no decompiler output, pseudo-code, addresses, table byte
 offsets or listing structure. **Every rule here is UNVERIFIED in the running game.**
