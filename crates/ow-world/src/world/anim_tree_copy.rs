@@ -25,9 +25,9 @@
 //!    `NotYet { NotRead }` ([`TAG_COLLISION`]): the copies take their templates' tags, so the tick rule would take such
 //!    a node as listed (how the game avoids it was not read; hub ruling, review r1 of #561); then the initialisation's
 //!    unread steps (the note's section 2, steps 4 to 6), in order: the per-node initialisation ([`PER_NODE_INIT`],
-//!    every tree), the pass over the component and the per-bone control arrays (planned by
-//!    `crate::world::control_arrays`, lane IMPL-COPY-COMPONENT-PASS; [`COMPONENT_PASS`] and [`BONE_ARRAYS`] were
-//!    their refusals) and the owner's event ([`OWNER_EVENT`], still `NotYet { NotRead }`). On installed data the last
+//!    every tree), the init tag, the two per-node arrays, the pass over the component and the per-bone control arrays
+//!    (planned by `crate::world::control_arrays`, lane IMPL-COPY-COMPONENT-PASS) and the owner's event
+//!    ([`OWNER_EVENT`], still `NotYet { NotRead }`). On installed data the last
 //!    makes the write path unreachable; a test-only switch answers it with nothing to keep it covered (as #542 does).
 //!    With the flag set, the initialisation is skipped and none of these apply.
 //!
@@ -108,11 +108,10 @@ pub const PARENTS: &str = "the animation tree's parent node array build";
 pub const TAG_COLLISION: &str =
     "CopyAnimTree: a template node whose NodeTickTag equals the component's next tick tag (how the game keeps the \
      copies' tags apart was not read)";
-/// The initialisation's unread steps after the per-node initialisation (the note's section 5, rules 3 and 4), raised in
-/// this order. The per-node initialisation itself is planned by `crate::world::anim_node_init` (lane
-/// IMPL-ANIM-NODE-INIT); these three still refuse every tree, so a test-only switch answers them to cover the writes.
-pub const COMPONENT_PASS: &str = "the animation tree initialisation's pass over the component";
-pub const BONE_ARRAYS: &str = "CopyAnimTree: the component's per-bone control arrays";
+/// The initialisation's unread step after step 5 (the note's section 5, rule 4). The per-node initialisation is planned
+/// by `crate::world::anim_node_init` (lane IMPL-ANIM-NODE-INIT) and step 5 by `crate::world::control_arrays` (lane
+/// IMPL-COPY-COMPONENT-PASS, which removed their two refusals); this one still refuses every tree, so a test-only
+/// switch answers it to cover the writes.
 pub const OWNER_EVENT: &str = "the owner's event after the tree initialisation";
 
 /// `"CopyAnimTree: the link fix-up of <class>"` (the note's section 5, rule 2).
@@ -440,9 +439,11 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
         order = planned_order;
         steps = planned_steps;
         builds = planned_builds;
-        // Step 5, the component pass and the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS,
-        // NATIVE_COPY_COMPONENT_PASS.md): planned on the template, the copies' tags being their templates'.
-        arrays = crate::world::control_arrays::plan(vm, component, template, next)?;
+        // The init tag, the per-node arrays and step 5, the component pass and the per-bone control arrays (lane
+        // IMPL-COPY-COMPONENT-PASS, NATIVE_COPY_COMPONENT_PASS.md): planned on the template, the copies keeping their
+        // templates' values.
+        let tick_tag = int(&read(vm, component, "TickTag")?);
+        arrays = crate::world::control_arrays::plan(vm, component, template, tick_tag, order.len())?;
         // The owner's event (#551 rule 4) is still unread.
         if init_steps_answered() == 0 {
             return Err(not_read(OWNER_EVENT));
@@ -680,6 +681,8 @@ fn initialise(
     if planned != list {
         return Err(script("the built tick list differs from the planned one".into()));
     }
+    // The init tag and the two per-node arrays, before the per-node loop (lane IMPL-COPY-COMPONENT-PASS).
+    crate::world::control_arrays::write_init(vm, component, &plan.arrays)?;
     // Step 4, the planned steps replayed in order, iteratively (lane IMPL-ANIM-NODE-INIT).
     use crate::world::anim_node_init::{Step, write_head, write_tail};
     for step in &plan.steps {

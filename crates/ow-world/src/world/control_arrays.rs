@@ -1,39 +1,47 @@
-//! Owner: lane IMPL-COPY-COMPONENT-PASS. The tree initialisation's component pass and per-bone control arrays in
-//! `ParityMode::Off` (#551 section 2 step 5), from `docs/verification/NATIVE_COPY_COMPONENT_PASS.md` alone (#598, the
-//! analyst lane ANALYST-COPY-COMPONENT-PASS; this lane did not read the natives). AI-assisted (Claude Code). **Every
-//! rule is UNVERIFIED in the running game.**
+//! Owner: lane IMPL-COPY-COMPONENT-PASS. The tree initialisation's last writes in `ParityMode::Off`: the init tag and
+//! the two per-node arrays (before the per-node loop), and step 5's component pass and per-bone control arrays (#551
+//! section 2), from `docs/verification/NATIVE_COPY_COMPONENT_PASS.md` alone (#598 at 5196fcec, the analyst lane
+//! ANALYST-COPY-COMPONENT-PASS; this lane did not read the natives). AI-assisted (Claude Code). **Every rule is
+//! UNVERIFIED in the running game.**
 //!
 //! **Where it runs.** [`plan`] is called from the copy's preflight (`anim_tree_copy::plan`) after the per-node
-//! initialisation is planned, on the template tree, with nothing written or loaded; [`write_arrays`] is called from the
-//! initialisation's writes after the per-node steps, on the copies, before `bAnimTreeInitialised` is set.
+//! initialisation is planned. The copies exist only in the copy's write phase, so it reads the **template** tree and
+//! controls, which the copy maps one to one (a copy keeps its template's slots). It writes and loads nothing.
+//! [`write_init`] runs in the initialisation's writes after the tick list and before the per-node loop;
+//! [`write_arrays`] runs after the per-node loop, on the copies, before `bAnimTreeInitialised` is set.
 //!
-//! **The component pass** (the note's section 2): `MorphSets` must be declared a dynamic array of object references
-//! (else `VmError::Script`); any set entry is `NotYet { NotPorted }` ([`MORPH_SETS`]): the port keeps no value for the
+//! **The init tag and the per-node arrays** (the note's section 1 and section 6, writes 1): `InitTag` = the root's
+//! `NodeInitTag` + 1; `AnimTickRelevancyArray` = n zeros and `AnimTickWeightsArray` = n entries of 0.0 (a port
+//! convention: the engine does not set them there), n the tick list's length.
+//!
+//! **The component pass** (section 2): `MorphSets` must be declared a dynamic array of object references (else
+//! `VmError::Script`); any set entry is `NotYet { NotPorted }` ([`MORPH_SETS`]), as the port keeps no value for the
 //! native name map. An empty list writes nothing.
 //!
-//! **The per-bone control arrays** (section 4), planned by simulating the tags (the copies take their templates'
-//! `ControlTickTag`, so the template's tags are the copies' tags before the build):
+//! **The per-bone control arrays** (section 4), planned by simulating the tags from the template controls' saved
+//! `ControlTickTag`s. The new tag is the component's `TickTag` + 2: the tick list raises it once, the build once more.
 //! 1. `SkelControlIndex`, `PostPhysSkelControlIndex` and `SkelControlTickArray` are emptied, always;
-//! 2. the build runs only with a `SkeletalMesh`, the tree, and at least one `SkelControlLists` entry; then
-//!    `SkelControlIndex` is one 255 per bone of the mesh (#569's reference skeleton, its refusals passed through),
-//!    `TickTag` goes up by one, and each list in order, its `BoneName` found in the mesh and its bone not taken yet,
-//!    sets the bone's byte to its index and walks its controls from `ControlHead` along `NextControl`: a control whose
-//!    tag is not the new `TickTag` gets it and is appended to the tick array; a post-physics control first sizes
-//!    `PostPhysSkelControlIndex` to one 255 per bone (once), sets the bone's byte and ends the walk.
+//! 2. the build runs only with a `SkeletalMesh`, the tree and at least one `SkelControlLists` entry. Then
+//!    `SkelControlIndex` is one 255 per bone of the mesh (#569's reference skeleton, its refusals passed through), and
+//!    `TickTag` goes up by one;
+//! 3. each list in order, its `BoneName` found in the mesh and its bone not taken yet, sets the bone's byte to its
+//!    index and walks its controls from `ControlHead` along `NextControl`:
+//!    - a control whose tag is not the new tag gets it and is appended to the tick array;
+//!    - then, if it is a post-physics control, `PostPhysSkelControlIndex` is sized to one 255 per bone (once), the
+//!      bone's byte is set, and the walk ends, whether or not the control was newly listed.
 //!
 //! **Preflight refusals** (each before any write, so never marked "stopped after partial writes"):
 //! - a field missing or of another kind: `VmError::Script` naming it;
 //! - more than 255 lists: `NotYet { NotRead }` ([`TOO_MANY_LISTS`]);
-//! - a chain that reaches a control twice: `NotYet { NotRead }` ([`LOOP`]). The copy's own control gather (#557's
-//!   rule) refuses such a chain earlier, as a script error, so on the copy's path this is a second guard;
-//! - an unloaded control: #543's refusal, as the copy's.
+//! - a reached template control whose saved `ControlTickTag` already is the new tag: `NotYet { NotRead }`
+//!   ([`TAG_COLLISION`]), as #561's node rule.
 //!
-//! The note's texts, kinds and the order of the checks are kept in this file only, so a review of the note changes
-//! one place.
+//! A looping chain and an unloaded control are the copy's own gather's refusals (#557's rule, before this runs).
+//! The note's texts, kinds and the order of the checks are kept in this file only.
 
 use std::rc::Rc;
 
-use ow_core::{DetMap, DetSet, NotYet};
+use ow_core::{DetMap, NotYet};
 use ow_object::ids::ObjRef;
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -51,18 +59,23 @@ pub const MORPH_SETS: &str = "the tree initialisation's component pass: the morp
 /// More lists than a byte index can tell apart from 255 (section 6, rule 3).
 pub const TOO_MANY_LISTS: &str =
     "the per-bone control arrays: a tree with more than 255 control lists (the list index is a byte and 255 means none)";
-/// A `NextControl` chain that comes back to a control (section 6, rule 3).
-pub const LOOP: &str = "the per-bone control arrays: a NextControl chain that loops";
+/// A template control already carrying the next control tag (section 6, rule 3).
+pub const TAG_COLLISION: &str = "the per-bone control arrays: a template control whose ControlTickTag equals the \
+     component's next control tag (how the game keeps the copies' tags apart was not read)";
 /// The most lists the byte index can hold.
 pub const MAX_LISTS: usize = 255;
 /// "No list" in either byte array.
 pub const NO_LIST: u8 = 255;
 
-const UNIT: &str = "the tree initialisation's per-bone control arrays";
+const UNIT: &str = "the tree initialisation's last steps";
 
-/// What the build writes, planned on the template tree (module notes).
+/// What the writes set, planned on the template tree (module notes).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Arrays {
+    /// `InitTag`: the root's `NodeInitTag` + 1.
+    pub init_tag: i32,
+    /// The tick list's length (the two per-node arrays' length).
+    pub ticks: usize,
     /// The build runs (a mesh, the tree and at least one list); otherwise only the three arrays are emptied.
     pub build: bool,
     /// `SkelControlIndex`: one byte per bone.
@@ -71,7 +84,7 @@ pub struct Arrays {
     pub post: Vec<u8>,
     /// The template controls tagged and appended, in order (their copies are written).
     pub listed: Vec<ObjRef>,
-    /// The new `TickTag` (the component's tag after the build).
+    /// The new control tag (the component's `TickTag` after the build).
     pub tag: i32,
 }
 
@@ -79,7 +92,7 @@ fn script(message: String) -> VmError {
     VmError::Script { function: UNIT.to_string(), message }
 }
 
-/// The declared kind of `o`'s property `name` satisfies `want`, else a script error naming it.
+/// The declared kind of `o`'s property `name` satisfies `want` (one element), else a script error naming it.
 fn declared(vm: &Vm, o: ObjRef, name: &str, want: impl Fn(&PropKind) -> bool) -> Result<(), VmError> {
     let c = class_of(vm, o)?;
     let ok = vm.space.prop(c, name).and_then(|p| vm.space.classes.decl(p)).is_some_and(|d| d.array_dim == 1 && want(&d.kind));
@@ -102,6 +115,14 @@ fn is_byte(k: &PropKind) -> bool {
     matches!(k, PropKind::Byte { .. })
 }
 
+fn is_int(k: &PropKind) -> bool {
+    matches!(k, PropKind::Int)
+}
+
+fn is_float(k: &PropKind) -> bool {
+    matches!(k, PropKind::Float)
+}
+
 fn int_of(vm: &Vm, o: ObjRef, name: &str) -> Result<i32, VmError> {
     match read(vm, o, name)? {
         Value::Int(i) => Ok(i),
@@ -119,31 +140,40 @@ fn component_pass(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The preflight of step 5 (module notes) for `component`, whose tree is the template `tree` and whose tick counter
-/// after the tick list (#551 step 3) is `next_tag`. Reads only.
-pub fn plan(vm: &Vm, component: ObjRef, tree: ObjRef, next_tag: i32) -> Result<Arrays, VmError> {
+/// The preflight (module notes) for `component`, whose tree is the template `tree`, with `tick_tag` the component's
+/// `TickTag` before the initialisation and `ticks` the planned tick list's length. Reads only.
+pub fn plan(vm: &Vm, component: ObjRef, tree: ObjRef, tick_tag: i32, ticks: usize) -> Result<Arrays, VmError> {
+    // The init tag and the per-node arrays' fields.
+    declared(vm, component, "InitTag", is_int)?;
+    declared(vm, component, "AnimTickRelevancyArray", array_of(is_int))?;
+    declared(vm, component, "AnimTickWeightsArray", array_of(is_float))?;
+    let init_tag = int_of(vm, tree, "NodeInitTag")?.wrapping_add(1);
+    // Step 5.
     component_pass(vm, component)?;
     declared(vm, component, "SkelControlIndex", array_of(is_byte))?;
     declared(vm, component, "PostPhysSkelControlIndex", array_of(is_byte))?;
     declared(vm, component, "SkelControlTickArray", array_of(is_object))?;
-    declared(vm, component, "TickTag", |k| matches!(k, PropKind::Int))?;
+    declared(vm, component, "TickTag", is_int)?;
     declared(vm, component, "SkeletalMesh", is_object)?;
+    let tag = tick_tag.wrapping_add(2);
+    let base = Arrays { init_tag, ticks, tag: tick_tag.wrapping_add(1), ..Arrays::default() };
     let mesh = object_of(&read(vm, component, "SkeletalMesh")?);
     let lists = elements(&read(vm, tree, "SkelControlLists")?, "SkelControlLists")?;
     let (Some(mesh), false) = (mesh, lists.is_empty()) else {
-        return Ok(Arrays { tag: next_tag, ..Arrays::default() });
+        return Ok(base);
     };
     let skeleton = crate::world::per_bone_weights::skeleton(vm, mesh)?;
     if lists.len() > MAX_LISTS {
         return Err(NotYet::not_read(TOO_MANY_LISTS, RECORD).into());
     }
-    build(vm, &skeleton, &lists, next_tag.wrapping_add(1))
+    build(vm, &skeleton, &lists, Arrays { tag, build: true, ..base })
 }
 
 /// The walk of section 4 over the template's `lists`, simulating the controls' tags (module notes).
-fn build(vm: &Vm, skeleton: &Rc<ReferenceSkeleton>, lists: &[Value], tag: i32) -> Result<Arrays, VmError> {
+fn build(vm: &Vm, skeleton: &Rc<ReferenceSkeleton>, lists: &[Value], mut out: Arrays) -> Result<Arrays, VmError> {
     let bones = skeleton.len();
-    let mut out = Arrays { build: true, index: vec![NO_LIST; bones], tag, ..Arrays::default() };
+    let tag = out.tag;
+    out.index = vec![NO_LIST; bones];
     let mut tags: DetMap<ObjRef, i32> = DetMap::new();
     for (i, list) in lists.iter().enumerate() {
         let byte = u8::try_from(i).map_err(|_| NotYet::not_read(TOO_MANY_LISTS, RECORD))?;
@@ -164,16 +194,19 @@ fn build(vm: &Vm, skeleton: &Rc<ReferenceSkeleton>, lists: &[Value], tag: i32) -
             continue;
         }
         out.index[bone] = byte;
-        let mut chain = DetSet::new();
+        // The copy's gather refused a loop before this runs (#557's rule), so the chain ends.
         let mut next = head;
         while let Some(c) = next {
-            if !chain.insert(c) {
-                return Err(NotYet::not_read(LOOP, RECORD).into());
-            }
             control_fields(vm, c)?;
             let now = match tags.get(&c) {
                 Some(&t) => t,
-                None => int_of(vm, c, "ControlTickTag")?,
+                None => {
+                    let saved = int_of(vm, c, "ControlTickTag")?;
+                    if saved == tag {
+                        return Err(NotYet::not_read(TAG_COLLISION, RECORD).into());
+                    }
+                    saved
+                }
             };
             if now != tag {
                 tags.insert(c, tag);
@@ -192,19 +225,28 @@ fn build(vm: &Vm, skeleton: &Rc<ReferenceSkeleton>, lists: &[Value], tag: i32) -
     Ok(out)
 }
 
-/// A control reached must be resident and declare the three control fields with their kinds.
+/// A template control reached must declare the three control fields with their kinds (its residency is the copy's
+/// gather's check).
 fn control_fields(vm: &Vm, c: ObjRef) -> Result<(), VmError> {
-    if vm.defs.is_unloaded(&vm.space, c) || vm.defs.is_failed(&vm.space, c) {
-        return Err(crate::world::anim_node_lookup::refusal());
-    }
-    declared(vm, c, "ControlTickTag", |k| matches!(k, PropKind::Int))?;
+    declared(vm, c, "ControlTickTag", is_int)?;
     declared(vm, c, "NextControl", is_object)?;
     declared(vm, c, "bPostPhysicsController", |k| matches!(k, PropKind::Bool))?;
     Ok(())
 }
 
-/// The writes of step 5 (section 6, "Writes, in order") on `component`, with `copy_of` mapping a template control to
-/// its copy. Called only after the whole preflight passed.
+/// The writes before the per-node loop (section 6, writes 1): `InitTag` and the two per-node arrays, each emptied
+/// first. Called only after the whole preflight passed.
+pub fn write_init(vm: &mut Vm, component: ObjRef, arrays: &Arrays) -> Result<(), VmError> {
+    write(vm, component, "InitTag", Value::Int(arrays.init_tag))?;
+    for name in ["AnimTickRelevancyArray", "AnimTickWeightsArray"] {
+        write(vm, component, name, Value::array(Vec::new()))?;
+    }
+    write(vm, component, "AnimTickRelevancyArray", Value::array(vec![Value::Int(0); arrays.ticks]))?;
+    write(vm, component, "AnimTickWeightsArray", Value::array(vec![Value::Float(0.0); arrays.ticks]))
+}
+
+/// The writes of step 5 (section 6, writes 2 and 3) on `component`, with `copy_of` mapping a template control to its
+/// copy. Called only after the whole preflight passed.
 pub fn write_arrays(
     vm: &mut Vm,
     component: ObjRef,

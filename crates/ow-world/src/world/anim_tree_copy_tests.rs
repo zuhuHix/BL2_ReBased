@@ -94,6 +94,8 @@ impl Fx {
         let anim_object = class(&mut vm, "Engine.AnimObject", object, &[("SkelComponent", o.clone())]);
         let mut node_props = vec![
             ("NodeTickTag", PropKind::Int),
+            // The root's init tag source (lane IMPL-COPY-COMPONENT-PASS).
+            ("NodeInitTag", PropKind::Int),
             ("ParentNodes", arr(o.clone())),
             ("NodeName", PropKind::Name),
             // The per-node initialisation's fields (lane IMPL-ANIM-NODE-INIT).
@@ -213,6 +215,9 @@ impl Fx {
             ("SkelControlIndex", arr(PropKind::Byte { enum_: None })),
             ("PostPhysSkelControlIndex", arr(PropKind::Byte { enum_: None })),
             ("SkelControlTickArray", arr(o.clone())),
+            ("InitTag", PropKind::Int),
+            ("AnimTickRelevancyArray", arr(PropKind::Int)),
+            ("AnimTickWeightsArray", arr(PropKind::Float)),
         ];
         if shape != Shape::NoComposeFlag {
             component_props.push(("bUpdateComposeSkeletonPasses", PropKind::Bool));
@@ -1657,7 +1662,7 @@ fn a_static_array_target_member_is_refused() {
 
 // ---- Lane IMPL-COPY-COMPONENT-PASS: step 5, the component pass and the per-bone control arrays -------------------
 
-use crate::world::control_arrays::{LOOP, MORPH_SETS, TOO_MANY_LISTS};
+use crate::world::control_arrays::{MORPH_SETS, TAG_COLLISION as CONTROL_TAG_COLLISION, TOO_MANY_LISTS};
 
 /// The diamond with the owner's event answered, a component holding a mesh whose skeleton is `parents`, and the
 /// tree's lists set to `lists` (a bone name or None, and the head control).
@@ -1766,20 +1771,21 @@ fn lists_set_their_bones_first_list_wins_and_unknown_names_are_skipped() {
     }
 }
 
-/// Tests 5 and 6: a control shared by two chains is listed once; a control whose tag already is the new tag is walked
-/// (its successor is listed) but not listed.
+/// Tests 5 and 6 (the note at 5196fcec): a control shared by two chains is listed once; in the later chain its tag,
+/// set earlier in the same build, makes it walked but not listed again, and the walk goes on past it.
 #[test]
-fn a_shared_control_is_listed_once_and_a_pre_tagged_one_not_at_all() {
+fn a_shared_control_is_listed_once_and_walked_past_in_the_later_chain() {
     let mut x = Fx::new();
     let shared = chain(&mut x, 1)[0];
-    let (a, b) = (chain(&mut x, 1)[0], chain(&mut x, 2));
+    let (a, b, after) = (chain(&mut x, 1)[0], chain(&mut x, 1)[0], chain(&mut x, 1)[0]);
     x.set(a, "NextControl", Value::Object(Some(shared)));
-    x.set(b[0], "ControlTickTag", Value::Int(2));
-    x.set(b[1], "NextControl", Value::Object(Some(shared)));
-    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(a)), (Some("B2"), Some(b[0]))]);
+    x.set(b, "NextControl", Value::Object(Some(shared)));
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(a)), (Some("B2"), Some(b))]);
+    // Both chains reach `after` through the shared control: the later walk goes on past it.
+    x.set(shared, "NextControl", Value::Object(Some(after)));
     instance(&mut x.vm, comp, t.root).unwrap();
     skeleton_for_tests(None);
-    assert_eq!(listed(&x, comp, &[a, shared, b[0], b[1]]), vec![a, shared, b[1]]);
+    assert_eq!(listed(&x, comp, &[a, shared, b, after]), vec![a, shared, after, b], "shared and after listed once");
 }
 
 /// Test 7: a post-physics control in the middle of a chain sizes `PostPhysSkelControlIndex` and ends the walk; a
@@ -1799,8 +1805,25 @@ fn a_post_physics_control_sets_its_bone_and_ends_the_chain() {
     assert_eq!(listed(&x, comp, &[a[0], a[1], a[2], b[0]]), vec![a[0], a[1], b[0]], "a[2] after the post-physics one");
 }
 
-/// Tests 8 and 9: 256 lists, and a chain that loops: each refused before any write (counters unchanged). The copy's
-/// own control gather meets a loop first (#557's rule, a script error), so this lane's guard is checked on its plan.
+/// Test 7, the shared case (the note at 5196fcec): a post-physics control shared with an earlier chain is not listed
+/// again, the later list's bone still gets its `PostPhysSkelControlIndex` entry, and that chain's walk stops there.
+#[test]
+fn a_shared_post_physics_control_still_stops_the_later_chain() {
+    let mut x = Fx::new();
+    let p = chain(&mut x, 1)[0];
+    x.set(p, "bPostPhysicsController", Value::Bool(true));
+    let (head, tail) = (chain(&mut x, 1)[0], chain(&mut x, 1)[0]);
+    x.set(head, "NextControl", Value::Object(Some(p)));
+    x.set(p, "NextControl", Value::Object(Some(tail)));
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(p)), (Some("B3"), Some(head))]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    assert_eq!(bytes(&x.get(comp, "PostPhysSkelControlIndex")), vec![255, 0, 255, 1, 255]);
+    assert_eq!(listed(&x, comp, &[p, head, tail]), vec![p, head], "the shared one once; the tail after it never");
+}
+
+/// Tests 8 and 9: 256 lists (this lane's `NotRead`), and a chain that loops (the copy's own gather's `VmError::Script`,
+/// #557's rule; the note at 5196fcec adds no refusal of its own): each before any write, counters unchanged.
 #[test]
 fn too_many_lists_and_a_looping_chain_are_refused_before_any_write() {
     let mut x = Fx::new();
@@ -1814,13 +1837,42 @@ fn too_many_lists_and_a_looping_chain_are_refused_before_any_write() {
     let k = chain(&mut x, 2);
     let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
     x.set(k[1], "NextControl", Value::Object(Some(k[0])));
-    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
-    let before = counts(&x);
-    let r = crate::world::control_arrays::plan(&x.vm, comp, t.root, 1);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("loops back on itself"), "{message}"),
+        e => panic!("{e:?}"),
+    }
     skeleton_for_tests(None);
-    assert_eq!(counts(&x), before);
-    let n = not_yet(r.unwrap_err());
-    assert_eq!((&*n.what, n.missing), (LOOP, Missing::NotRead));
+}
+
+/// Test 14: a template control whose saved `ControlTickTag` equals the component's `TickTag` + 2 is the collision
+/// `NotRead`, before any write.
+#[test]
+fn a_template_control_with_the_next_control_tag_is_refused() {
+    let mut x = Fx::new();
+    let k = chain(&mut x, 2);
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
+    x.set(k[1], "ControlTickTag", Value::Int(2));
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    skeleton_for_tests(None);
+    assert_eq!((&*n.what, n.missing, n.record), (CONTROL_TAG_COLLISION, Missing::NotRead, crate::world::control_arrays::RECORD));
+}
+
+/// Test 15: `InitTag` is the root's `NodeInitTag` + 1, and the two per-node arrays hold the tick list's length of zeros
+/// and 0.0, stale entries removed.
+#[test]
+fn the_init_tag_and_the_per_node_arrays_are_written() {
+    let mut x = Fx::new();
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[]);
+    x.set(t.root, "NodeInitTag", Value::Int(41));
+    x.set(comp, "AnimTickRelevancyArray", Value::array(vec![Value::Int(9); 9]));
+    x.set(comp, "AnimTickWeightsArray", Value::array(vec![Value::Float(0.5)]));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    assert_eq!(x.get(comp, "InitTag"), Value::Int(42));
+    let n = x.get(comp, "AnimTickArray").elements().unwrap().len();
+    assert_eq!(n, 5, "the diamond's tick list");
+    assert_eq!(x.get(comp, "AnimTickRelevancyArray"), Value::array(vec![Value::Int(0); n]));
+    assert_eq!(x.get(comp, "AnimTickWeightsArray"), Value::array(vec![Value::Float(0.0); n]));
 }
 
 /// Test 10: a non-empty `MorphSets` is `NotPorted` before any write; an empty one (or one of None entries) passes.
