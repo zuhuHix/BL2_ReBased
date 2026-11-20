@@ -1,7 +1,7 @@
 # The spawn's component attach: how a spawned actor's components get their `Owner` (link 9, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-SPAWN-COMPONENT-OWNER, decision
-`docs/decisions/2026-11/2026-11-19-NNN-spawn-attaches-the-actor-s-components.md`. Read from the game executable with
+`docs/decisions/2026-11/2026-11-19-215-spawn-attaches-the-actor-s-components.md`. Read from the game executable with
 Ghidra (`tools/ghidra/run.ps1 -ReadOnly` and a local read-only table reader, under the machine lock). Field names come
 from the cooked packages (`tools/ghidra/class_layout.py`). It is written in our own words: no decompiler output,
 pseudo-code, addresses, offsets or listing structure is reproduced here, and raw output stays under ignored
