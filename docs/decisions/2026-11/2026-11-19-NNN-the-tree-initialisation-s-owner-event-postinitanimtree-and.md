@@ -67,3 +67,26 @@ Added beyond the 19: an undefined cast class, and the lookups' rules (no tree, a
 an empty tick list, a whole-name match, a None control name, a looping chain).
 
 **Verification:** `cargo test --workspace --locked` 3,038 passed / 0 failed / 51 ignored on 193ef94f plus this branch. The installed Off strict `--slice-gate`, run on a throwaway merge with #570, #592, #500 and #528 and against the same merge without this branch, moves links 1, 3, 4, 5, 13 and 14 from the owner's event to #557's body composition lookup refusal; the other eight links are unchanged (GATES row of 2026-11-20). No real-game run.
+
+**Review r1 of #631 (Sol xhigh), the fixes:**
+1. The initialisation's own gate comes first: a component whose `ParentAnimComponent` is set gets the copy and no
+   initialisation, so no owner event, on the instance and in the attach check (`ParentAnimComponent` must be declared
+   as an object reference).
+2. Neither lookup answers from a tree that is not the receiving component's own. `FindSkelControl` on such a tree is
+   `NotYet { NotRead }` (a new text), after its None answers (a None name, no tree, a root that is not an `AnimTree`).
+   `FindAnimNode` already refused one; a tick-list entry from another tree is now its gather refusal too.
+3. `Vm::check_call` runs the call's service-borrow check, so a held borrow is refused in the preflight with nothing
+   written.
+4. Both natives are bound under their package-qualified identity, `Engine` plus the key (new
+   `Vm::register_native_in` and `Vm::is_bound_in`). Keep-existing and rule 7 ask about that identity, so a same-key
+   binding in another package no longer stands for Engine's.
+5. A lookup literal not interned yet (`ArmBoneBlend`, `LeftHandGrip`) matches nothing, but the preflight still reads
+   every node or control the run's search reads. Before, an uninterned `ArmBoneBlend` also counted as the None name.
+6. The toy Engine package declares `SkeletalMeshComponent` with `bAnimTreeInitialised` and the two natives. The toy
+   `WillowPlayerPawn` event records the flag it sees, then fills `ArmBoneBlend` and `LeftHandIK` through the bound
+   natives in bytecode; the test asserts both caches and the flag. Its limits: the casts and the aim-offset find
+   through `BodyClass` are not in the toy bytecode (bytecode cannot name the hand-declared cast classes), and the
+   caches' "only while None" guard is not either. The refusal snapshot now also holds the name table's length; the
+   attach snapshot holds it and the RNG draws.
+
+`cargo test --workspace --locked` 3,043 passed / 0 failed / 51 ignored. Every rule is still UNVERIFIED.

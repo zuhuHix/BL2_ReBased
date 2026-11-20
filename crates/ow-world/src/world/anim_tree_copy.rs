@@ -20,8 +20,10 @@
 //!    `bRebuildAnimTickArray` set ([`REBUILD`]) or its `bParentNodeArrayBuilt` clear ([`PARENTS`]); all
 //!    `NotYet { NotRead }`;
 //! 5. the component must be a `SkeletalMeshComponent` (a `VmError::Script` otherwise, review r1 of #561);
-//! 6. the initialisation runs when the component's `bAnimTreeInitialised` is clear (the call does not force it; the
-//!    note's section 2). Then: a gathered node whose `NodeTickTag` already equals the component's next tick tag is
+//! 6. the initialisation runs when the component's `ParentAnimComponent` is None and its `bAnimTreeInitialised` is
+//!    clear (the call does not force it; the note's section 2, and NATIVE_TREE_INIT_OWNER_EVENT.md section 1: the
+//!    initialisation's own gate comes first; review r1 of #631, item 1). A component with a parent animation component
+//!    gets the copy and no initialisation, so no owner event. Then: a gathered node whose `NodeTickTag` already equals the component's next tick tag is
 //!    `NotYet { NotRead }` ([`TAG_COLLISION`]): the copies take their templates' tags, so the tick rule would take such
 //!    a node as listed (how the game avoids it was not read; hub ruling, review r1 of #561); then the initialisation's
 //!    unread steps (the note's section 2, steps 4 to 6), in order: the per-node initialisation ([`PER_NODE_INIT`],
@@ -389,6 +391,7 @@ pub fn plan_with(vm: &Vm, component: ObjRef, template: ObjRef, owner: EventOwner
     for name in ["AnimTreeTemplate", "Animations", "AnimTickArray", "TickTag", "bAnimTreeInitialised"] {
         read(vm, component, name)?;
     }
+    let parent = object_field(vm, component, "ParentAnimComponent")?;
     for name in [
         "AnimTreeTemplate",
         "bParentNodeArrayBuilt",
@@ -449,8 +452,9 @@ pub fn plan_with(vm: &Vm, component: ObjRef, template: ObjRef, owner: EventOwner
     if !truth(&read(vm, template, "bParentNodeArrayBuilt")?) {
         return Err(not_read(PARENTS));
     }
-    // The initialisation (when the flag is clear): the tag collision, then its unread steps in order.
-    let initialise = !truth(&read(vm, component, "bAnimTreeInitialised")?);
+    // The initialisation (no parent animation component, and the flag clear): the tag collision, then its unread
+    // steps in order.
+    let initialise = parent.is_none() && !truth(&read(vm, component, "bAnimTreeInitialised")?);
     let mut order = Vec::new();
     let mut steps = Vec::new();
     let mut builds = Vec::new();
@@ -565,11 +569,13 @@ fn owner_event(
         }
         aim_name = Some(name_of(vm, body, "AimOffsetNodeName")?);
     }
-    use crate::world::tree_lookup::{FIND_ANIM_NODE, FIND_SKEL_CONTROL};
-    if !vm.has_native(FIND_ANIM_NODE) {
+    // Engine's two natives by their package-qualified identity (review r1 of #631, item 4): a same-key binding in
+    // another package does not bind them.
+    use crate::world::tree_lookup::{FIND_ANIM_NODE, FIND_SKEL_CONTROL, PACKAGE};
+    if !vm.is_bound_in(PACKAGE, FIND_ANIM_NODE) {
         return Err(NotYet::not_ported(ANIM_NODE_UNBOUND, EVENT_RECORD).into());
     }
-    if !vm.has_native(FIND_SKEL_CONTROL) {
+    if !vm.is_bound_in(PACKAGE, FIND_SKEL_CONTROL) {
         return Err(NotYet::not_ported(SKEL_CONTROL_UNBOUND, EVENT_RECORD).into());
     }
     // The cast classes, read only: a defined layout, else the cast would define one.
@@ -583,9 +589,11 @@ fn owner_event(
                 .ok_or_else(|| event_not_read(cast_undefined(path)))
         })
         .collect::<Result<Vec<_>, VmError>>()?;
-    // Each find the script makes (a cache only while it is None), planned on the template, and its cast's answer.
-    let arm_name = vm.space.names.find("ArmBoneBlend").unwrap_or(ow_object::ids::NameId::NONE);
-    let grip_name = vm.space.names.find("LeftHandGrip").unwrap_or(ow_object::ids::NameId::NONE);
+    // Each find the script makes (a cache only while it is None), planned on the template, and its cast's answer. A
+    // literal not interned yet can match nothing (the run interns it, and no field holds it), but the run's search
+    // still reads every node or control it walks, so the walk is checked all the same (review r1 of #631, item 5).
+    let arm_name = vm.space.names.find("ArmBoneBlend");
+    let grip_name = vm.space.names.find("LeftHandGrip");
     let tree_is_tree = is_a(vm, class_of(vm, template)?, TREE);
     let mut finds: Vec<(Option<ObjRef>, ow_object::ids::ClassId)> = Vec::new();
     if arm.is_none() {
@@ -594,9 +602,9 @@ fn owner_event(
     if aim.is_none()
         && let Some(n) = aim_name
     {
-        finds.push((first_named(vm, order, "NodeName", n)?, casts[1]));
+        finds.push((first_named(vm, order, "NodeName", Some(n))?, casts[1]));
     }
-    if left.is_none() && tree_is_tree && grip_name != ow_object::ids::NameId::NONE {
+    if left.is_none() && tree_is_tree {
         finds.push((first_named(vm, controls, "ControlName", grip_name)?, casts[2]));
     }
     for (found, want) in finds {
@@ -616,10 +624,16 @@ fn name_of(vm: &Vm, o: ObjRef, prop: &str) -> Result<ow_object::ids::NameId, VmE
     }
 }
 
-/// The first of `objects` whose `prop` is `name` (a whole name), as the lookups answer.
-fn first_named(vm: &Vm, objects: &[ObjRef], prop: &str, name: ow_object::ids::NameId) -> Result<Option<ObjRef>, VmError> {
+/// The first of `objects` whose `prop` is `name` (a whole name), as the lookups answer. `None` (a literal not
+/// interned) matches nothing, and every object's `prop` is still read, as the run's search reads it.
+fn first_named(
+    vm: &Vm,
+    objects: &[ObjRef],
+    prop: &str,
+    name: Option<ow_object::ids::NameId>,
+) -> Result<Option<ObjRef>, VmError> {
     for &o in objects {
-        if name_of(vm, o, prop)? == name {
+        if Some(name_of(vm, o, prop)?) == name {
             return Ok(Some(o));
         }
     }
