@@ -1,6 +1,6 @@
 # Native rules of the spawn's trace filter on a controller's cylinder (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK9-TRACE-FILTER (decision 2026-11-19-NNN, a placeholder),
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK9-TRACE-FILTER (decision 2026-11-19-114, a placeholder),
 for slice link 9 (the Phaselock cast's spawn).
 
 **The question.** On `fix/rust-link9-extent` (#498, 40982583), link 9 of `ow-package --slice-gate` stops in `spawn`
