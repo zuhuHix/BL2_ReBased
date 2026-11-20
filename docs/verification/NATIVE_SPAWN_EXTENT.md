@@ -75,8 +75,11 @@ before the spawn's first write, so a refusal here is clean (no prefix).
 1. **A cylinder `CollisionComponent`:** as today.
 2. **The template's class is exactly one of the four pawn classes:** section 3.
 3. **The template's class is exactly `Actor`:** section 2.
+   **Superseded** in part by NATIVE_GET_BOUNDING_CYLINDER.md section 4, step 1: `WillowGame.WillowPickup` too
+   (lane PLACEMENT-WILLOWPICKUP-EXTENT).
 4. **Any other class:** `NotYet { NotRead }`, "the bounding-cylinder rule of <class>". The body was read for the five
-   classes of section 1 only, and an implementer may not assume that another class keeps its parent's body.
+   classes of section 1, and `WillowPickup`'s for NATIVE_GET_BOUNDING_CYLINDER.md. An implementer may not assume that
+   another class keeps its parent's body.
 5. **Section 2's inputs, in this order**, for each entry of the template's `Components`:
    1. **None:** skipped.
    2. **A primitive component:** decided from the entry's class, which a lazy handle already carries. A non-primitive

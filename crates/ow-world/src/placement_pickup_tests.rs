@@ -16,12 +16,14 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
+use ow_core::ObjectPath;
+use ow_package::testkit::ints;
 use ow_package::testkit::reflect::toy_array_of;
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::{BOUNDING_CYLINDER_OF, extent};
+use super::{BOUNDING_CYLINDER_OF, NoLevel, extent, install_collision, load_extent_components};
 use crate::actors::set_field;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -47,8 +49,17 @@ fn willow_game() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let actor = t.p.add_import("Core", "Class", engine, "Actor");
+    let primitive = t.p.add_import("Core", "Class", engine, "PrimitiveComponent");
     let pickup = t.class("WillowPickup", actor);
     t.class("ToyPickupSubclass", pickup);
+    // A pickup archetype whose one `Components` entry is a primitive export: loading the archetype leaves it lazy.
+    let mut empty = ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let part = t.p.add_export(primitive, "ToyPickupPart", empty);
+    let mut arch = ints(&[0]);
+    arch.extend(t.p.array_tag("Components", 1, &ints(&[part])));
+    arch.extend_from_slice(&t.none);
+    t.p.add_export(pickup, "ToyPickupArchetype", arch);
     t.build()
 }
 
@@ -143,4 +154,39 @@ fn a_willow_pickup_subclass_is_still_not_read() {
     let mut x = fx();
     let sub = x.template("WillowGame.ToyPickupSubclass");
     assert_eq!(not_read(extent(&x.vm, sub)), format!("{BOUNDING_CYLINDER_OF} WillowGame.ToyPickupSubclass"));
+}
+
+
+/// Review r1 of #606: the encroachment check calls `extent` on the live actor, after its step 3.2 refused any
+/// colliding primitive. A live pickup whose primitives all have `CollideActors` clear gets (0, 0, 0), even with
+/// `bAttached` set (the entries are skipped either way).
+#[test]
+fn a_live_pickup_with_no_colliding_primitive_gets_a_zero_extent() {
+    let mut x = fx();
+    let pickup = x.make("WillowGame.WillowPickup");
+    let entries: Vec<Value> = (0..2)
+        .map(|i| {
+            let e = x.make("Engine.PrimitiveComponent");
+            x.set(e, "bAttached", Value::Bool(i == 0));
+            Value::Object(Some(e))
+        })
+        .collect();
+    x.set(pickup, "Components", Value::array(entries));
+    assert_eq!(extent(&x.vm, pickup).unwrap(), [0.0; 3]);
+}
+
+/// Review r1 of #606: a pickup archetype's lazy primitive entry is loaded by `load_extent_components`, which reports
+/// the write; the extent then reads the loaded entry.
+#[test]
+fn a_pickup_archetypes_lazy_primitive_entry_is_loaded_and_reported() {
+    let mut x = fx();
+    install_collision(&mut x.vm, Rc::new(NoLevel)).unwrap();
+    let path = ObjectPath::parse("WillowGame.ToyPickupArchetype").unwrap();
+    let arch = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
+    let entries = crate::actors::objects(&x.vm.space, arch, "Components").unwrap();
+    let part = entries.into_iter().flatten().next().expect("the archetype's entry");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, part), "the entry starts lazy");
+    assert!(load_extent_components(&mut x.vm, arch).unwrap(), "a load is a write");
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, part), "the entry is loaded");
+    assert_eq!(extent(&x.vm, arch).unwrap(), [0.0; 3]);
 }
