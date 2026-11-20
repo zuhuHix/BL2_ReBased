@@ -218,6 +218,8 @@ fn env_with(reattach: bool) -> Env {
         toy_array_of(&mut t, tree, "RootMorphNodes", "Object", node);
         toy_array_of(&mut t, tree, "AnimTickArray", "Object", node);
         t.prop("Object", skeletal, "Animations", 0, node);
+        // The initialisation's own gate (review r1 of #631, item 1).
+        t.prop("Object", skeletal, "ParentAnimComponent", 0, skeletal);
         toy_array_of(&mut t, skeletal, "AnimTickArray", "Object", node);
         for name in ["TickTag", "InitTag"] {
             t.prop("Int", skeletal, name, 0, 0);
