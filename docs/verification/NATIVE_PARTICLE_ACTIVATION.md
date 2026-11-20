@@ -1,7 +1,7 @@
-# ParticleSystemComponent activation and initialisation, as SetTemplate runs them (draft, 2026-11-20)
+# ParticleSystemComponent activation and initialisation, as SetTemplate runs them (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-PARTICLE-ACTIVATION (decision 2026-11-19-NNN,
-number pending). Analyst only: a different lane implements it (clean room). This lane implemented #593
+AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-PARTICLE-ACTIVATION (decision
+`docs/decisions/2026-11/2026-11-19-NNN-particle-activation-note.md`, number pending). Analyst only: a different lane implements it (clean room). This lane implemented #593
 (`SpawnPickupParticles`' preflight) from NATIVE_SPAWN_PICKUP_PARTICLES.md before it read these natives. It does not
 implement this note.
 
@@ -12,6 +12,8 @@ implement this note.
   - the component and template virtuals, found by their vtable slots;
   - the script natives `IsGame`, `IsEditor`, `IsPlayInEditor` and `GetDetailMode`, to name the engine flags read here;
   - two flags' initial values, read from the image's data section;
+- the script, read with `research/script_disasm.py` (every function of the nine code packages searched for field
+  names; section 7, hub ruling 4);
 - the installed packages: `tools/ghidra/class_layout.py` for `ParticleSystemComponent`, `PrimitiveComponent`,
   `ActorComponent` and `ParticleSystem`;
 - two local probes of the installed slice gate (section 5), on a merge that is never pushed.
@@ -23,7 +25,7 @@ structure. **Every rule here is UNVERIFIED** in the running game.
 **Field names.** The code's offsets were matched to the layouts the tool computes:
 - `ActorComponent` fields need no adjustment;
 - `PrimitiveComponent` fields after its transform need a fixed shift;
-- `ParticleSystemComponent`'s own fields need a fixed shift of 16 bytes;
+- `ParticleSystemComponent`'s own fields need a fixed shift;
 - `ParticleSystem` fields need none.
 
 Each shift is the same for every field it covers, and every field named below fits it. The fits themselves stay under
@@ -65,7 +67,8 @@ In order, for a template T:
 5. `bWasCompleted` := false.
 6. **The reset** (not for a template object). Each emitter instance is reset. With "changed" (T differs from the old
    `Template`) in a game session, the instances, `SMComponents` and `SMMaterialInterfaces` are freed and emptied. Then
-   `bIsActive` := false, and the stop-audio step runs (section 3, step 4).
+   `bIsActive` := false, and the stop-audio step runs on the **old** template, since `Template` is not yet T
+   (section 7.2).
 7. `Template` := T, `WarmupTime` := T's `WarmupTime`.
 8. **The choice:** the activation (section 3) when it is not a template object and either `bAutoActivate` is set, or
    it is `bIsActive` and not `bWasDeactivated` (as read before step 6 cleared `bIsActive`). Otherwise the
@@ -89,9 +92,9 @@ In order, for a template T:
      `DelayLow + (Delay − DelayLow) × r`, with r **one draw of the C runtime's `rand()`, scaled by 1/32767**. That is
      the C runtime's own generator, not a seeded engine stream;
    - `AudioEventDelay` := T's `fAudioDelaySeconds`;
-   - the stop-audio step, when `AudioEnabled` is set and (a game session, or no `Owner`). It posts T's stop audio
-     events (their pairing to T's four audio fields was not settled), then `bStartEventPlayed` := false and
-     `LoopingAkPlayingInfo` := zero.
+   - the stop-audio step on T (section 7.2): when `AudioEnabled` is set and (a game session, or no `Owner`), it posts
+     T's `StopAudioEvent` and, for a recorded looping sound, its `StopLoopingAudioEvent`, then `bStartEventPlayed` :=
+     false and `LoopingAkPlayingInfo` := zero.
 5. W := the old `bWasDeactivated`. Then `bWasCompleted`, `bSuppressSpawning` and `bWasDeactivated` := false, and
    `bIsActive` := true.
 6. **No render proxy:** the deferred transform update:
@@ -170,7 +173,8 @@ So the initialisation can itself end in the activation.
 - the activation, since `bAutoActivate` is set (#581's refusal E);
 - level 0 for location, the same as `LODLevel`, so no change;
 - **no random draw**;
-- the stop-audio step with no events, so only its two field writes;
+- the stop-audio step twice (the reset on the old template, None; the activation on T), each with no events, so
+  only its two field writes each time;
 - **no warm-up**;
 - the instances made by the initialisation, then the activation;
 - the owner part runs part 1's conditional update, which in the port finds C not `bAttached`. In the game, part 1's
@@ -195,76 +199,190 @@ in the game on the slice.
 
 ## 7. A proposed Off answer, for the implementer
 
-It replaces #581's refusals E and F. **Port inputs** (a hub ruling, UNVERIFIED): `GIsGame` true, `GIsEditor` false,
-particles allowed, the game-thread LOD flag set, the force-lowest flag clear, LOD bias 0, and a system detail mode at
-least the slice component's `DetailMode` (0). These constants belong in the world's set-up, logged like the other
-harness inputs.
+It replaces #581's refusals E and F: **#593's E and F refusals are removed** once this answer is coded. Every new
+refusal below has the record `docs/verification/NATIVE_PARTICLE_ACTIVATION.md`; the refusals of other notes keep
+their own texts and records.
 
-**Preflight**, extending #593's at its step 5.2, write-free, load-free and draw-free, in this order:
-1. **The PhysX swap:** T's `PhysxParticleSystemRef` set with any `bLoadIfPhysXLevelN` set: `NotYet { NotRead }`, "the
-   PhysX-level template swap (the machine's PhysX level)". Otherwise T stays.
-2. **SetTemplate's owner update** (section 2, step 4): plan part 1's conditional update.
-   - Not `bAttached`: the conditional attach's component-side writes, `bNeedsReattach` and `bNeedsUpdateTransform`
-     := false and `Owner` := the owner, with the hub's empty scene. It does **not** append to the actor's
-     `Components`: only `Actor.AttachComponent` does that, so part 1's whole `attach_plan` must not be reused here. The
-     scene and transform writes are layer state, and `bAttached` stays as the scene layer leaves it. This keeps the
-     slice going where the game would take the transform branch: **UNVERIFIED**, a port answer the hub must rule on.
-   - `bAttached` with either flag: part 1's existing refusals.
-3. **The reset** (section 2, step 6) on a new or instance-free component: `bIsActive` := false, and the stop-audio
-   step's planned writes.
-   - With audio events set and `AudioEnabled`: `NotYet { LayerAbsent }`, "the template's audio events", layer "an
-     audio layer (the port has none)".
-   - Instances present: `NotYet { LayerAbsent }`, "the emitter instances' reset", layer "a particle simulation layer
-     (the port has none)".
-4. **The choice** as #593 has it. Then:
-   - **the initialisation:** `WarmupTime` and `bSkipSpawnCountCheck` from T, and the instance set-up as an empty
-     particle layer: no instances made, `EmitterInstances` left empty, `LODLevel` unchanged (UNVERIFIED: the game has
-     4 instances on the slice). `bWasCompleted` := false. Then, with `bAttached` set: `AccumTickTime` := 0 and the
-     auto-activation check;
-   - **the activation**, in section 3's order:
-     - T with more than one LOD distance: `NotYet { LayerAbsent }`, "the LOD for location (the local players' view
-       locations)", layer "a camera layer (the port has none)". With at most one, level 0;
-     - `bUseDelayRange` set: one draw, but which `GameRng` stream stands for the C runtime's `rand()` is a hub choice.
-       Until it is made, that case is `NotYet { NotPorted }`, "ParticleSystemComponent.ActivateSystem: the delay
-       range draw (the C runtime's rand)";
-     - audio events with `AudioEnabled`: the audio `LayerAbsent` above;
-     - `WarmupTime` not 0: `NotYet { LayerAbsent }`, "the warm-up ticks", layer "a particle simulation layer (the
-       port has none)";
-     - no instances: the initialisation, as above (once: it does not re-activate, since `bIsActive` is now set);
-     - the owner part: #581's refusals C2 and D (the owner and transform tests), and the conditional update of step 2;
+**The hub's rulings on #597** (recorded here; all UNVERIFIED):
+1. **Engine flags are harness inputs**, logged UNVERIFIED like the other harness inputs: `GIsGame` true, `GIsEditor`
+   false, particles allowed, the game-thread LOD flag set, the force-lowest flag clear, LOD bias 0, and a system
+   detail mode of at least the slice component's `DetailMode` (0).
+2. **`bUseDelayRange` set is `NotPorted`.** The port has no stream for the C runtime's `rand()`. The draw is single
+   precision (the stock `appFrand`, the port's `frand_f32`), and in the game it shares **one** C-runtime state with
+   script `FRand` and the loot draws. The port splits that state into `CrtRand` and the named `CrtStream`s of
+   `ow-core` `rand.rs`, so no existing stream can stand in for it. The slice makes no draw.
+3. **The conditional component update runs only as this note says, never a second time** (section 7.3, step 3).
+4. **`EmitterInstances` stays empty**, labelled UNVERIFIED (in the game its length on the slice is 4), because no
+   script reads it. The search: every script function of the nine code packages was disassembled with
+   `research/script_disasm.py` (12,968 of 12,978 decode; the 10 that do not decode were not searched) and searched for
+   the property names `EmitterInstances`, `LoopingAkPlayingInfo` and `bStartEventPlayed`. There were **zero readers**
+   of each. (Checks on the same search: `PickupParticles` gives 4 functions, `SetTemplate` 41, `bAutoActivate` 5.) If a
+   reader on links 6 and 7's path is found later, the answer becomes `NotYet { LayerAbsent("particle emitter
+   instances") }`, "ParticleSystemComponent.SetTemplate: the particle emitter instances", before any write.
+
+### 7.1 The declarations the preflight type-checks
+
+Beyond #593's three `ACTIVATION_FIELDS` (`bAutoActivate`, `bIsActive`, `bWasDeactivated`) and #581's preload list,
+each is checked on the component C (or the template T) before any value is read. A missing or wrongly typed one is a
+`VmError::Script` naming the field:
+- **C, the activation and the reset:** `bJustAttached`, `bWasCompleted`, `bSuppressSpawning`, `bHasBeenActivated`,
+  `bLODUpdatePending`, `bOverrideLODMethod`, `bWarmingUp`, `bSkipUpdateDynamicDataDuringTick`, `bRecacheViewRelevance`,
+  `bSkipSpawnCountCheck`, `bIsViewRelevanceDirty`, `AudioEnabled` and `bStartEventPlayed` (bools); `EmitterDelay`,
+  `AudioEventDelay`, `AccumTickTime` and `WarmupTime` (floats); `LODLevel` (an int); `LODMethod` (a byte);
+  `LoopingAkPlayingInfo`, a struct `AkPlayingInfo` of `SourceComponent` (an `AkComponent` reference) and `AkPlayingId`
+  (an int); `EmitterInstances` (an array of `Pointer` structs); `SMComponents` and `SMMaterialInterfaces` (arrays);
+  `Template` (a `ParticleSystem` reference);
+- **C, from `PrimitiveComponent` and `ActorComponent`:** `DetailMode` (a byte), `HiddenGame` and `bIgnoreOwnerHidden`
+  (bools), `LastRenderTime` (a float), `Owner` (an `Actor` reference), `bAttached`, `bNeedsReattach` and
+  `bNeedsUpdateTransform` (bools), and `Scene` (a `Pointer` struct);
+- **T:** `PhysxParticleSystemRef` (a `ParticleSystem` reference); `bLoadIfPhysXLevel0`, `1` and `2`, `bUseDelayRange`
+  and `bSkipSpawnCountCheck` (bools); `Delay`, `DelayLow`, `fAudioDelaySeconds` and `WarmupTime` (floats);
+  `LODMethod` (a byte); `LODDistances` (an array of floats); `LODSettings` (an array of `ParticleSystemLOD`, each
+  with a bool `bLit`); `Emitters` (an array); and the four audio fields `StartAudioEvent`, `StopAudioEvent`,
+  `StartLoopingAudioEvent` and `StopLoopingAudioEvent` (`AkEvent` references).
+
+**`LODMethod`.** The port compares the raw byte with 1 (the value names were not read; UNVERIFIED). This enum is
+**exempt** from the tests' rule that enum values be declared in an order unlike the game's.
+
+### 7.2 The audio steps (which template each reads)
+
+The **stop-audio step** runs only when `AudioEnabled` is set and (a game session, or no `Owner`), and the component
+is not being destroyed. It reads the component's `Template` **as it is at that moment**:
+- it posts that template's `StopAudioEvent`, when set;
+- when a looping sound is recorded in `LoopingAkPlayingInfo` (by its role; that test was not read), it posts that template's `StopLoopingAudioEvent` when
+  set, and otherwise stops the recorded sound directly;
+- then `bStartEventPlayed` := false and `LoopingAkPlayingInfo` := zero (both members).
+
+It runs twice in `SetTemplate`'s path:
+- **in the reset** (section 2, step 6), **before** `Template` := T, so it reads the **old** template. On a new
+  component that is None: nothing is posted, and with `LoopingAkPlayingInfo` already zero nothing is stopped;
+- **in the activation** (section 3, step 4), **after** `Template` := T, so it reads **T**.
+
+"Audio events set" below means: the template the step reads has `StopAudioEvent` or `StopLoopingAudioEvent` not None,
+or `LoopingAkPlayingInfo` holds a sound. (`StartAudioEvent` and `StartLoopingAudioEvent` are not posted by either
+step; where the start is posted was not read.)
+
+**On the slice:** `AudioEnabled` is set in the class default and the session is a game. So **the reset does write**
+`bStartEventPlayed` (false) and `LoopingAkPlayingInfo` (zero), both already at those values. The activation writes
+them again, with T's stop events None.
+
+### 7.3 The preflight
+
+It extends #593's at its step 5.2. It is write-free, load-free and draw-free and runs in this order; the first refusal
+or data error met is the answer:
+1. **Particles not allowed** (the port input, test switch only): the answer is the plan `Template` := None and nothing
+   else. No refusal.
+2. **The PhysX swap:** T's `PhysxParticleSystemRef` set and any `bLoadIfPhysXLevelN` set: `NotYet { NotRead }`,
+   "ParticleSystemComponent.SetTemplate: the PhysX-level template swap (the machine's PhysX level)".
+3. **SetTemplate's conditional update** (section 2, step 4), only for a component that is not a template object, with
+   T and an `Owner`. By hub ruling 3 it is planned once:
+   - **C attached by part 1 in this run** (C is in its `Owner`'s `Components`, where `Actor.AttachComponent` put it),
+     or `bAttached` set: C counts as attached.
+     - `bNeedsReattach` set: part 1's refusals by name: `REATTACH_OWNER` ("the deferred reattach: the owner's
+       component update") or `REATTACH_SCENE` ("the deferred reattach: the component's detach and reattach"),
+       record `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`.
+     - `bNeedsUpdateTransform` set: the transform update, planned as `bNeedsUpdateTransform` := false (the scene
+       layer's empty transform update; by its role, not read).
+     - Neither: nothing.
+   - **C never attached** (not in the `Owner`'s `Components` and not `bAttached`): the conditional attach's
+     component-side writes, `bNeedsReattach` and `bNeedsUpdateTransform` := false and `Owner` := the owner. It does
+     not append to `Components` (only `Actor.AttachComponent` does). Without a `SceneLayer` in the world: #520's
+     `ATTACH`, `NotYet { LayerAbsent(SCENE_LAYER) }`, "Actor.AttachComponent: the component's attach to the world's
+     scene", record `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`.
+4. **The reset** (section 2, step 6), not for a template object:
+   - existing emitter instances: `NotYet { LayerAbsent("a particle simulation layer (the port has none)") }`,
+     "ParticleSystemComponent.SetTemplate: the emitter instances' reset";
+   - the stop-audio step (section 7.2) on the **old** template, when its conditions hold: audio events set is
+     `NotYet { LayerAbsent("an audio layer (the port has none)") }`, "ParticleSystemComponent.SetTemplate: the old
+     template's stop audio events". Otherwise its two writes are planned;
+   - `bIsActive` := false.
+5. **The template-object case** (C is a class default or an archetype, through its outer chain): no conditional
+   update, no reset, no activation or initialisation. The plan is SetTemplate's own writes (`bIsViewRelevanceDirty`,
+   `bWasCompleted`, `Template`, `WarmupTime`, `bAcceptsLights`) and nothing else. No refusal. (A new component is
+   never one; a held one could be.)
+6. **The choice** (as #593 has it), then one of:
+   - **the initialisation** (section 4):
+     - `DetailMode` above the system detail mode: nothing in this branch;
+     - otherwise `WarmupTime` and `bSkipSpawnCountCheck` from T; the instance set-up as hub ruling 4 says
+       (`EmitterInstances` left empty, `LODLevel` unchanged); `bWasCompleted` := false; then, with `bAttached` or
+       attached by part 1 (step 3's test), `AccumTickTime` := 0 and the auto-activation check, which leads into the
+       activation below;
+   - **the activation** (section 3), in its order:
+     - **the DetailMode skip:** `DetailMode` above the system detail mode skips to the activation's step 15. Only
+       `LastRenderTime` is planned, and the engine particle list is not modelled. No refusal;
+     - **the LOD for location:** T with more than one LOD distance is `NotYet { LayerAbsent("a camera layer (the port
+       has none)") }`, "ParticleSystemComponent.ActivateSystem: the LOD for location (the local players' view
+       locations)". With at most one, level 0;
+     - **the delay range:** `bUseDelayRange` set is `NotYet { NotPorted }`, "ParticleSystemComponent.ActivateSystem:
+       the delay range draw (the C runtime's rand)" (hub ruling 2). Otherwise `EmitterDelay` := `Delay` and
+       `AudioEventDelay` := `fAudioDelaySeconds`;
+     - **the stop-audio step** on T (section 7.2): audio events set is `NotYet { LayerAbsent("an audio layer (the port
+       has none)") }`, "ParticleSystemComponent.ActivateSystem: the template's stop audio events". Otherwise its two
+       writes;
+     - the four flags (section 3, step 5);
+     - **step 6, no render proxy** (the port has none, so always): the deferred transform update.
+       `bNeedsUpdateTransform` := true is planned. Then #581's refusals:
+       - **C2:** with an `Owner` that is `bStatic` or `bTickIsDisabled` and not `bDeleteMe`: `NotYet { NotRead }`,
+         "the deferred transform update: the owner's component update", record
+         `docs/verification/NATIVE_SPAWN_PICKUP_PARTICLES.md`;
+       - **D:** with no `Owner` and C `bAttached`: `NotYet { NotRead }`, "the deferred transform update: the
+         component's own transform update", record `docs/verification/NATIVE_SPAWN_PICKUP_PARTICLES.md`;
+     - **the instances:** none yet, so the initialisation as above (once: it does not activate again, since
+       `bIsActive` is now set);
+     - `bHasBeenActivated` := true;
+     - **the owner part** (section 3, step 10): with an `Owner`, step 3's attached test again. On the slice C counts as
+       attached, and the `bNeedsUpdateTransform` set by step 6 takes the transform branch, planned as
+       `bNeedsUpdateTransform` := false. With no `Owner` and W, the own transform update is refusal D;
+     - **the warm-up:** `WarmupTime` not 0 is `NotYet { LayerAbsent("a particle simulation layer (the port has
+       none)") }`, "ParticleSystemComponent.ActivateSystem: the warm-up ticks";
+     - `AccumTickTime` := 0;
      - the LOD level (no change on the slice: one LOD, level 0);
-     - `LastRenderTime` := the world's time, from the world's clock (the same clock NATIVE_ATTR_RESOLVERS.md
-       names), else `NotYet { LayerAbsent }` when the world has none.
-5. Then #581's steps 5.3 to 10, as that note gives them.
+     - `LastRenderTime` := the world's time, from the world's clock (the clock NATIVE_ATTR_RESOLVERS.md names). A world
+       with no clock is `NotYet { LayerAbsent("a world clock (the port's world has none)") }`,
+       "ParticleSystemComponent.ActivateSystem: the world's time for LastRenderTime".
+7. Then #581's steps 5.3 to 10, as that note gives them.
 
 **Writes**, from the plan, with nothing that can refuse after the first, in the native's order:
-- SetTemplate: `bIsViewRelevanceDirty`, the owner update's writes, `bWasCompleted`, the reset's writes, `Template`,
-  `WarmupTime`;
+- SetTemplate: `bIsViewRelevanceDirty`, the conditional update's writes, `bWasCompleted`, the reset's writes,
+  `Template` and `WarmupTime`;
 - the activation: `EmitterDelay`, `AudioEventDelay`, `bStartEventPlayed`, `LoopingAkPlayingInfo`, the four flags,
-  `bNeedsUpdateTransform`, the initialisation's writes, `bHasBeenActivated`, the owner part's writes, `AccumTickTime`,
-  `LastRenderTime`;
+  `bNeedsUpdateTransform`, the initialisation's writes, `bHasBeenActivated`, the owner part's writes, `AccumTickTime`
+  and `LastRenderTime`;
 - then `bAcceptsLights` and the rest of #581's plan.
 
 A late `NotYet` is marked only by #518's counters.
 
-**On the slice** this preflight passes. The native's first refusal is gone. The next stop is the `touch` step's
-`Actor.GetBoundingCylinder`, as the probe shows, provided the hub rules that the port's repeated attach (step 2) is an
-answer.
+**On the slice** this preflight passes, and the native's first refusal is gone. The next stop is the `touch` step's
+`Actor.GetBoundingCylinder`, as the probe shows.
 
-**Tests, on invented classes** (rule 9; enum values in orders unlike the game's):
+**Choice 3's options and their consequences:**
+- **"Never twice"** (the hub's ruling, coded above): a component part 1 attached counts as attached. The port takes the
+  game's branches, and no write is repeated. On the slice it ends with `bNeedsUpdateTransform` false, the same as the
+  game, where the transform update clears the flag step 6 set.
+- **An empty scene that records `bAttached`** (not chosen): `Actor.AttachComponent` would set `bAttached`. That would
+  change three things: #520's `ATTACH_DETACH` would refuse a second `AttachComponent` on the same component; the
+  initialisation's step 2 would run its `AccumTickTime` and auto-activation check; and refusal D would apply to an
+  ownerless attached component. The slice's end state would be the same.
+
+**Tests, on invented classes** (rule 9; enum values declared in orders unlike the game's, except `LODMethod`, which is
+compared as the raw byte 1):
 1. the slice-shaped case:
-   - auto-activate, one LOD, no audio, no warm-up, no delay range;
-   - every write in order, `EmitterInstances` empty, no draw;
+   - auto-activate, one LOD, no audio events, no warm-up, no delay range, C attached by part 1;
+   - every write in order: the reset's two audio writes and the activation's, `EmitterInstances` empty,
+     `bNeedsUpdateTransform` ending false, no draw;
    - #518's three counters moved only by the writes;
-2. the initialisation branch (`bAutoActivate` clear): its two copies and `bWasCompleted`, and no activation without
-   `bAttached`;
-3. the initialisation's auto-activation when `bAttached` is set;
-4. each refusal before any write: the PhysX swap, the LOD for location, the delay-range draw, audio events, the
-   warm-up, existing instances;
-5. a template-object component: no activation writes;
-6. particles-allowed false (a test switch on the port input): `Template` := None only;
+2. the initialisation branch (`bAutoActivate` clear): its two copies and `bWasCompleted`, and no activation when C is
+   neither `bAttached` nor attached by part 1;
+3. the initialisation's auto-activation when C is attached;
+4. each refusal before any write, with its exact text and record: the PhysX swap, the LOD for location, the
+   delay-range draw (`NotPorted`), the old template's audio events (reset), T's audio events (activation), the warm-up,
+   existing instances, C2, D, #520's `ATTACH` for a never-attached C with no `SceneLayer`, and part 1's
+   `REATTACH_OWNER` and `REATTACH_SCENE` with `bNeedsReattach` set;
+5. a template-object component: SetTemplate's own writes only;
+6. particles-allowed false (the test switch): `Template` := None only;
 7. `DetailMode` above the system's: the activation's steps skipped, `LastRenderTime` still written;
-8. Reference binds nothing.
+8. a world with no clock: the `LastRenderTime` refusal;
+9. Reference binds nothing.
 
 ## Open questions
 
@@ -275,16 +393,13 @@ answer.
    - the instances' own work (reset, rewind, warm-up readiness, LOD);
    - the owner's component update;
    - the LOD method's value names;
-   - which audio fields the stop step posts.
+   - the looping-sound test inside the stop-audio step, and where the start events are posted.
 2. **UNVERIFIED:**
    - the flag names in section 1 and the game's values of the start-up flags;
    - the field fits, under the shifts named above;
    - that script reads none of what section 6 lists.
-3. **Hub choices:**
-   - the port inputs in section 7;
-   - the stream for the C runtime's `rand()` (the slice does not draw);
-   - whether the port's repeated attach in step 2 is an answer, or the empty scene layer should record `bAttached`
-     so the game's transform branch is taken.
+3. **Hub choices, ruled on #597** (section 7): the engine flags as harness inputs; `bUseDelayRange` as `NotPorted`;
+   the conditional update never a second time; `EmitterInstances` left empty while no script reads it.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

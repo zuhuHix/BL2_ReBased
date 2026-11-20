@@ -1,4 +1,4 @@
-## 2026-11-20: ParticleSystemComponent activation and initialisation, an own-words note and a proposed Off answer
+## 2026-11-19: ParticleSystemComponent activation and initialisation, an own-words note and a proposed Off answer
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane ANALYST-PARTICLE-ACTIVATION, analyst only. The file number is a
 placeholder until the maintainer gives one. Docs only: no code, no dependency, and no bounds check changed.
@@ -22,7 +22,21 @@ placeholder until the maintainer gives one. Docs only: no code, no dependency, a
 - **Proposed Off answer:** the slice's branch as a write plan, with UNVERIFIED port inputs for the engine flags and an
   empty particle layer for the instances. The PhysX swap, the LOD for location with more than one LOD, the delay-range
   draw, audio events, the warm-up and existing instances stay typed refusals.
-- **Hub choices:** the port inputs; the stream that stands for the C runtime's `rand()`; and the port's repeated
-  conditional attach (the empty scene never sets `bAttached`).
+- **Hub rulings on #597:** the engine flags are harness inputs; `bUseDelayRange` is `NotPorted`; the conditional
+  update runs never a second time; `EmitterInstances` stays empty while no script reads it (the script search found
+  none).
 - **Clean room:** this lane implemented #593 from NATIVE_SPAWN_PICKUP_PARTICLES.md before reading these natives. A
   different lane implements this note.
+
+## Edits: review r1 of #597
+
+- Dates: 2026-11-19 throughout; the note cites this file by name.
+- The audio fields are named, the template each stop-audio step reads is given (the reset reads the old template),
+  and `LoopingAkPlayingInfo`'s type is given. The reset writes `bStartEventPlayed` and `LoopingAkPlayingInfo` on the
+  slice.
+- The declarations the preflight type-checks are listed.
+- A script search found no reader of `EmitterInstances`. That is hub ruling 4.
+- Each step has its own preflight entry. Every new refusal has a full text and record; #593's E and F are removed.
+- The draw is single precision and shares one C-runtime state with script `FRand` and the loot draws.
+- Choice 3 has a consequence line per option.
+- The shift's size is dropped, and `LODMethod` is compared as a raw byte (exempt from the reordering rule).
