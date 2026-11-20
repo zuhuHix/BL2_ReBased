@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-ANIM-NODE-LOOKUP (decision 2026-11-19-NNN, number pending). The new `Mesh`'s animation-node and
+//! Owner: lane IMPL-ANIM-NODE-LOOKUP (decision 2026-11-19-168, number pending). The new `Mesh`'s animation-node and
 //! skeletal-control lookups and the slot-node scan of the pawn's `PostInitBodyComposition`, as a check of the body
 //! composition's write-free preflight (crate::world::body_composition), in `ParityMode::Off`. AI-assisted (Claude Code).
 //!

@@ -220,7 +220,7 @@ under the machine lock: 1 ok / 4 NotYet / 9 errors. Link 1 is 0 of its 2 driver 
 unbound `Engine.IsSplitScreen()`, as are links 3, 4, 5, 13 and 14. With `IsSplitScreen` also bound false, locally only
 as #542's row did: 1 ok / 10 NotYet / 3 errors, and those six links stop in `maya:8` at #529's unmarked `LayerAbsent`
 "the new Mesh's animation nodes", now raised by this check (its record names both notes). ctest and verify_packages not
-run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored
+run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-168; logs under ignored
 `local/p2/anl/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
