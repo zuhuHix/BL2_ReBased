@@ -37,7 +37,7 @@
 //! No `AnimTreeTemplate` answers None for the four lookups, false for `bUsingFootIK` and an empty `SlotNodes` (the
 //! note's rule 5).
 
-use ow_core::NotYet;
+use ow_core::{DetMap, NotYet};
 use ow_object::ids::{ClassId, NameId, ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -65,7 +65,10 @@ pub fn failed_body_class(path: &str) -> String {
     format!("InitializeBodyComposition: the body class {path}, whose load failed")
 }
 
-/// The lookups' answers, on template objects (the copy's sources): [`apply`] maps them to the copies.
+/// The lookups' answers, on template objects (the copy's sources): [`apply`] maps them to the copies. Not to be
+/// dropped (review r1 of #618, item 1): a caller that keeps one field and writes the rest as None would give the pawn
+/// a wrong answer, not a refusal.
+#[must_use = "the lookups' answers must be written (anim_node_lookup::apply), not dropped"]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Settled {
     pub arm_bone_blend: Option<ObjRef>,
@@ -229,23 +232,29 @@ pub fn lookups(vm: &Vm, plan: &Plan, body: Option<ObjRef>) -> Result<Settled, Vm
 /// The pawn fields the lookups write, in the hook's order (the note's section 1, then `SlotNodes`).
 pub const FIELDS: [&str; 6] = ["ArmBoneBlend", "AimOffset", "LeftHandIK", "HeadLookAt", "bUsingFootIK", "SlotNodes"];
 
-/// The lookups' writes on `owner` (the pawn), with `copy_of` mapping a template object to its copy: the four
-/// objects, `bUsingFootIK` and `SlotNodes`. Called after the attach made the copy.
-pub fn apply(
-    vm: &mut Vm,
-    owner: ObjRef,
-    s: &Settled,
-    copy_of: impl Fn(ObjRef) -> ObjRef,
-) -> Result<(), VmError> {
+/// The lookups' writes on `owner` (the pawn), with `map` the copy's map from each template object to its copy
+/// (`anim_tree_copy::instance_with_map`): the four objects, `bUsingFootIK` and `SlotNodes`. Called after the attach
+/// made the copy. An answer the map has no copy of is a `VmError::Script`, checked before the first write (review r1
+/// of #618, item 2): writing the template object instead would put a template node in a pawn field.
+pub fn apply(vm: &mut Vm, owner: ObjRef, s: &Settled, map: &DetMap<ObjRef, ObjRef>) -> Result<(), VmError> {
     use crate::world::anim_tree_copy::write;
-    let obj = |o: Option<ObjRef>| Value::Object(o.map(&copy_of));
-    write(vm, owner, FIELDS[0], obj(s.arm_bone_blend))?;
-    write(vm, owner, FIELDS[1], obj(s.aim_offset))?;
-    write(vm, owner, FIELDS[2], obj(s.left_hand_ik))?;
-    write(vm, owner, FIELDS[3], obj(s.head_look_at))?;
+    let copy = |o: ObjRef| -> Result<ObjRef, VmError> {
+        map.get(&o).copied().ok_or_else(|| {
+            script(format!("the copy's map has no copy of {} (the plan and the copy disagree)", class_text_of(vm, o)))
+        })
+    };
+    let obj = |o: Option<ObjRef>| -> Result<Value, VmError> { Ok(Value::Object(o.map(copy).transpose()?)) };
+    let values = [obj(s.arm_bone_blend)?, obj(s.aim_offset)?, obj(s.left_hand_ik)?, obj(s.head_look_at)?];
+    let slots: Vec<Value> = s.slots.iter().map(|&n| copy(n).map(|c| Value::Object(Some(c)))).collect::<Result<_, _>>()?;
+    for (name, v) in FIELDS[..4].iter().zip(values) {
+        write(vm, owner, name, v)?;
+    }
     write(vm, owner, FIELDS[4], Value::Bool(s.foot_ik))?;
-    let slots = s.slots.iter().map(|&n| Value::Object(Some(copy_of(n)))).collect();
     write(vm, owner, FIELDS[5], Value::array(slots))
+}
+
+fn class_text_of(vm: &Vm, o: ObjRef) -> String {
+    vm.space.heap.get(o).map_or_else(|_| format!("{o:?}"), |x| class_text(vm, x.class))
 }
 
 // Tested with the copy's fixture (anim_tree_copy_tests.rs, "the body composition's lookups over the copy") and the

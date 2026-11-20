@@ -2103,11 +2103,20 @@ fn apply_writes_the_copies_into_the_pawn() {
     class(&mut x.vm, "Test.ToyPawn", object, &fields);
     let pawn = x.obj("Test.ToyPawn");
     let (_, map) = crate::world::anim_tree_copy::instance_with_map(&mut x.vm, comp, t.root).unwrap();
-    apply(&mut x.vm, pawn, &s, |o| map.get(&o).copied().unwrap_or(o)).unwrap();
+    apply(&mut x.vm, pawn, &s, &map).unwrap();
     let Value::Object(Some(copy)) = x.get(pawn, "AimOffset") else { panic!("AimOffset set") };
     assert_ne!(copy, aim, "the copy, not the template node");
     assert_eq!(x.vm.space.heap.get(copy).unwrap().outer, Some(comp));
     assert_eq!(copy, copy_of(&x, comp, aim));
     assert_eq!(x.get(pawn, "SlotNodes"), Value::array(Vec::new()));
     assert_eq!(x.get(pawn, "bUsingFootIK"), Value::Bool(false));
+    // Review r1 of #618, item 2: an answer the map has no copy of is a script error, with nothing written.
+    let stranger = x.obj(AIM_OFFSET_CLASS);
+    let drifted = Settled { aim_offset: Some(stranger), ..Settled::default() };
+    let before = x.vm.space.heap.committed_writes();
+    match apply(&mut x.vm, pawn, &drifted, &map) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("has no copy"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.vm.space.heap.committed_writes(), before, "checked before the first write");
 }

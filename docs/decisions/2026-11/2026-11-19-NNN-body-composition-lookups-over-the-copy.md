@@ -65,3 +65,32 @@ template-era rules and one None-name test now on the copy's fixture were dropped
 - links 1, 3, 4, 5, 13 and 14 run 0 of their driver's 1 step (`maya:8`). Their first stop moved from the lookups'
   refusal to "InitializeBodyComposition: the body's rendering hooks" (`LayerAbsent`, a rendering layer: #542's
   ruling 4).
+
+**Review r1 of #618** (ACCEPT, with these fixes):
+1. **The #570 landing hazard.** The made `Mesh` branch now hands the lookups' answers to the `MESH_REST` refusal
+   (`mesh_rest_refusal`), and `Settled` is `#[must_use]`. When #570 lands, its write path must call
+   `anim_tree_copy::instance_with_map` and then `anim_node_lookup::apply` with those answers. Keeping only the fourth
+   `check` argument and writing None, empty and false, as #570's first version does, would give the pawn a wrong
+   answer, not a refusal.
+2. `apply` takes the copy's map (`&DetMap`) and refuses an answer the map has no copy of with `VmError::Script`,
+   checked before the first write, instead of falling back to the template object.
+3. A body-composition test drives the preflight with the copy's check on (the fixture now declares the copy's fields)
+   through `attach_plan` and the lookups to `MESH_REST`, counters unchanged. The older copy-check test now meets the
+   copy's first unread step instead of a missing field.
+4. **The refusal order changed:** a planned copy with no tick list (`NO_TICK_LIST`) is raised before the missing body
+   class (`NO_BODY_CLASS`). Before this lane, `NO_BODY_CLASS` came after the `ArmBoneBlend` lookup and there was no
+   tick-list refusal.
+
+**Review r2 of #618** (rebased onto origin/main 4c4522d7, which holds #570; #608's chain, #575, #585 and #608, replayed
+under it):
+- `MeshRest` carries the lookups' `Settled` from the preflight (it replaces `foot_ik`). #570's `write_mesh_rest` takes
+  the copy's map from `anim_tree_copy::instance_with_map` and writes the four animation fields, `bUsingFootIK` and
+  `SlotNodes` through `anim_node_lookup::apply`. That replaces #570's None and empty writes, so a found `AimOffset` or
+  slot node reaches the pawn as its copy. `mesh_rest_refusal` and `MESH_REST` are gone with #570's real path.
+- The body-composition tests that main's #557 r1 added now take the planned copy (the fixture declares the copy's
+  fields; `with_copy` turns the copy's check on). The copy-on test ends at the rendering hooks, the walk's next
+  refusal.
+- An end-to-end test on the merged path: a tree with a slot node and a node named `AimOffset` writes the copies into
+  `AimOffset` and `SlotNodes`, outered to the made `Mesh`; the same tree with the template component already
+  initialised is `NO_TICK_LIST` with nothing written.
+

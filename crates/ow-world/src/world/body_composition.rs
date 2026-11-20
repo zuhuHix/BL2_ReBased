@@ -380,12 +380,13 @@ struct PostInit {
 }
 
 /// The made `Mesh`'s writes, decided in the preflight (NATIVE_MESH_REST.md section 4).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct MeshRest {
     /// The attachment's index, kept as a byte (its low 8 bits).
     index: u8,
-    /// `bUsingFootIK` as #557 settled it.
-    foot_ik: bool,
+    /// The lookups' answers over the planned copy (lane FIX-BODY-COMPOSITION-LOOKUP-STALE, review r2 of #618): the four
+    /// animation fields, `bUsingFootIK` and `SlotNodes`, on template objects, written through the copy's map.
+    lookups: crate::world::anim_node_lookup::Settled,
     /// `CollisionComponent` = the mesh (`bUseMeshForCollision`).
     collision: bool,
     /// The template's tree, which the attach instances first (crate::world::anim_tree_copy).
@@ -468,7 +469,13 @@ fn require_kind(vm: &Vm, class: ClassId, name: &str, want: Want) -> Result<(), V
 }
 
 /// The rest of the made-`Mesh` step's preflight (module documentation; NATIVE_MESH_REST.md section 4). Reads only.
-fn mesh_rest(vm: &Vm, r: &Rest, index: usize, foot_ik: bool, template: ObjRef) -> Result<MeshRest, VmError> {
+fn mesh_rest(
+    vm: &Vm,
+    r: &Rest,
+    index: usize,
+    lookups: crate::world::anim_node_lookup::Settled,
+    template: ObjRef,
+) -> Result<MeshRest, VmError> {
     // 1. The flag.
     require_kind(vm, r.class, SKIP_FLAG, Want::Bool)?;
     // 2. The pawn's fields, each checked against the write it takes (review r1 of #570, item 3), so no write fails
@@ -512,22 +519,23 @@ fn mesh_rest(vm: &Vm, r: &Rest, index: usize, foot_ik: bool, template: ObjRef) -
         return Err(NotYet::not_read(HELD_WEAPON, RECORD_MESH_REST).into());
     }
     let tree = read_prop(vm, template, "AnimTreeTemplate")?.and_then(|v| object_of(&v));
-    Ok(MeshRest { index: index as u8, foot_ik, collision: r.mesh_for_collision, tree })
+    Ok(MeshRest { index: index as u8, lookups, collision: r.mesh_for_collision, tree })
 }
 
 /// The made `Mesh`'s writes (module documentation), after the attach: the tree instance, then section 3's order.
-fn write_mesh_rest(vm: &mut Vm, owner: ObjRef, made: ObjRef, m: MeshRest, authority: bool) -> Result<(), VmError> {
-    if let Some(tree) = m.tree {
-        crate::world::anim_tree_copy::instance(vm, made, tree)?;
-    }
+fn write_mesh_rest(vm: &mut Vm, owner: ObjRef, made: ObjRef, m: &MeshRest, authority: bool) -> Result<(), VmError> {
+    // The copy's map from each template object to its copy (review r2 of #618): the lookups' answers are template
+    // objects. With no tree the answers are all None and empty, and the map is empty.
+    let map = match m.tree {
+        Some(tree) => crate::world::anim_tree_copy::instance_with_map(vm, made, tree)?.1,
+        None => ow_core::DetMap::new(),
+    };
     write_prop(vm, owner, "Mesh", Value::Object(Some(made)))?;
     write_prop(vm, owner, "MeshBodyCompositionIndex", Value::Byte(m.index))?;
     write_prop(vm, made, SKIP_FLAG, Value::Bool(true))?;
-    for name in &ANIM_FIELDS[..4] {
-        write_prop(vm, owner, name, Value::Object(None))?;
-    }
-    write_prop(vm, owner, ANIM_FIELDS[4], Value::Bool(m.foot_ik))?;
-    write_prop(vm, owner, "SlotNodes", Value::array(Vec::new()))?;
+    // The four animation fields, `bUsingFootIK` and `SlotNodes` (NATIVE_ANIM_NODE_LOOKUP.md sections 1 and 2): the
+    // copies of the planned answers.
+    crate::world::anim_node_lookup::apply(vm, owner, &m.lookups, &map)?;
     if authority {
         let scale = read_prop(vm, made, "Scale")?.unwrap_or(Value::Float(0.0));
         write_prop(vm, owner, "RepMeshScale", scale)?;
@@ -728,7 +736,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     // FIX-BODY-COMPOSITION-LOOKUP-STALE), with nothing loaded.
                     let settled = crate::world::anim_node_lookup::check(vm, template, body_class, copy.as_ref())?;
                     let rest = Rest { owner, owner_class, class, authority, mesh_for_collision };
-                    post.mesh = Some(mesh_rest(vm, &rest, idx, settled.foot_ik, template)?);
+                    post.mesh = Some(mesh_rest(vm, &rest, idx, settled, template)?);
                     assigned_mesh = true;
                 }
                 if name_is(vm, &a.parent_id, CYLINDER_ID) {
@@ -757,6 +765,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
     }
     Ok(Some(Plan { attachments, made, authority, entry_struct }))
 }
+
 
 /// The build (module documentation): the preflight, then the writes in the note's order, under the write tracker.
 pub fn build(vm: &mut Vm, i: Inputs) -> Result<(), VmError> {
@@ -819,7 +828,7 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                     }
                 }
                 attach_to_actor(vm, owner, made)?;
-                if let Some(m) = post.mesh {
+                if let Some(m) = &post.mesh {
                     write_mesh_rest(vm, owner, made, m, plan.authority)?;
                 }
                 if let Some(collision_too) = post.cylinder {

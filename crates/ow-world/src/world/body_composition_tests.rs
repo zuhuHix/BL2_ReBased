@@ -99,6 +99,7 @@ fn env_with(reattach: bool) -> Env {
             "IntProperty",
             "ArrayProperty",
             "StructProperty",
+            "ByteProperty",
         ]);
         let core = t.p.add_import("Core", "Package", 0, "Core");
         let object = t.p.add_import("Core", "Class", core, "Object");
@@ -120,21 +121,69 @@ fn env_with(reattach: bool) -> Env {
         let node = t.class("AnimNode", object);
         t.prop("Name", node, "NodeName", 0, 0);
         t.prop("Int", node, "TickArrayIndex", 0, 0);
+        // The fields the attach's tree copy and initialisation read (review r1 of #618, item 3), so a test can run
+        // the copy's own check here.
+        toy_array_of(&mut t, node, "ParentNodes", "Object", node);
+        t.prop("Object", node, "SkelComponent", 0, skeletal);
+        for name in ["NodeTickTag", "NodeInitTag"] {
+            t.prop("Int", node, name, 0, 0);
+        }
+        for name in ["bRelevant", "bJustBecameRelevant", "bCallScriptEventOnInit"] {
+            t.prop("Bool", node, name, 0, 0);
+        }
+        t.prop("Float", node, "NodeTotalWeight", 0, 0);
         let blend = t.class("AnimNodeBlendBase", node);
         let child = toy_struct(&mut t, blend, "AnimBlendChild", None);
         t.prop("Object", child, "Anim", 0, node);
+        t.prop("Float", child, "Weight", 0, 0);
+        t.prop("Bool", child, "bIsAdditive", 0, 0);
+        t.prop("Float", child, "AdditiveWeightScale", 0, 0);
         toy_array_of(&mut t, blend, "Children", "Struct", child);
         t.class("AnimNodeBlendPerBone", blend);
-        t.class("AnimNodeSlot", blend);
+        let slot = t.class("AnimNodeSlot", blend);
+        // The slot's and the aim-offset node's fields the copy's per-node initialisation reads (review r2 of #618).
+        toy_array_of(&mut t, slot, "TargetWeight", "Float", 0);
+        t.prop("Object", slot, "SynchNode", 0, node);
+        let aim = t.class("AnimNodeAimOffset", blend);
+        t.prop("Object", aim, "TemplateNode", 0, aim);
+        toy_array_of(&mut t, aim, "Profiles", "Object", object);
         let control = t.class("SkelControlBase", object);
         t.prop("Name", control, "ControlName", 0, 0);
         t.prop("Object", control, "NextControl", 0, control);
+        t.prop("Int", control, "ControlTickTag", 0, 0);
+        t.prop("Bool", control, "bPostPhysicsController", 0, 0);
         t.class("SkelControlLeftHandGripWeapon", control);
         let tree = t.class("AnimTree", blend);
         let head = toy_struct(&mut t, tree, "SkelControlListHead", None);
         t.prop("Object", head, "ControlHead", 0, control);
         toy_array_of(&mut t, tree, "SkelControlLists", "Struct", head);
         t.prop("Object", skeletal, "AnimTreeTemplate", 0, tree);
+        // The copy's tree and component fields (review r1 of #618, item 3).
+        t.prop("Object", tree, "AnimTreeTemplate", 0, tree);
+        for name in ["bParentNodeArrayBuilt", "bRebuildAnimTickArray"] {
+            t.prop("Bool", tree, name, 0, 0);
+        }
+        let group = toy_struct(&mut t, tree, "AnimGroup", None);
+        toy_array_of(&mut t, group, "SeqNodes", "Object", node);
+        t.prop("Object", group, "SynchMaster", 0, node);
+        t.prop("Object", group, "NotifyMaster", 0, node);
+        toy_array_of(&mut t, tree, "AnimGroups", "Struct", group);
+        toy_array_of(&mut t, tree, "RootMorphNodes", "Object", node);
+        toy_array_of(&mut t, tree, "AnimTickArray", "Object", node);
+        t.prop("Object", skeletal, "Animations", 0, node);
+        toy_array_of(&mut t, skeletal, "AnimTickArray", "Object", node);
+        for name in ["TickTag", "InitTag"] {
+            t.prop("Int", skeletal, name, 0, 0);
+        }
+        for name in ["bAnimTreeInitialised", "bUpdateComposeSkeletonPasses"] {
+            t.prop("Bool", skeletal, name, 0, 0);
+        }
+        toy_array_of(&mut t, skeletal, "MorphSets", "Object", object);
+        toy_array_of(&mut t, skeletal, "SkelControlIndex", "Byte", 0);
+        toy_array_of(&mut t, skeletal, "PostPhysSkelControlIndex", "Byte", 0);
+        toy_array_of(&mut t, skeletal, "SkelControlTickArray", "Object", control);
+        toy_array_of(&mut t, skeletal, "AnimTickRelevancyArray", "Int", 0);
+        toy_array_of(&mut t, skeletal, "AnimTickWeightsArray", "Float", 0);
         let holder = t.class("ToyTemplateHolder", object);
         for name in ["Skel", "Cyl", "Cycle", "SkelTree"] {
             t.prop("Object", holder, name, 0, object);
@@ -991,7 +1040,7 @@ fn anim_class(e: &mut Env, short: &str) -> ClassId {
         return c;
     }
     let base = match short {
-        "WillowAnimNodeAimOffset" => "Engine.AnimNodeBlendBase",
+        "WillowAnimNodeAimOffset" => "Engine.AnimNodeAimOffset",
         "AnimNodeSpecialMoveBlend" => "Engine.AnimNodeSlot",
         "WillowSkelControl_LookAtActor" | "WillowSkelControl_FootPlacement" => "Engine.SkelControlBase",
         engine => return e.vm.find_class(&format!("Engine.{engine}")).unwrap(),
@@ -1075,9 +1124,10 @@ fn a_tree_with_no_planned_copy_is_the_refusal() {
     assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
 }
 
-/// Review r1 of #561, item 8: with the attach's tree-copy check on (lane IMPL-COPY-ANIM-TREE), the same settled tree
-/// stops at the copy's own check, before the lookups: this fixture's component declares none of the copy's fields, so
-/// it is the copy's `VmError::Script`, not the lookups' answer, and nothing is written.
+/// Review r1 of #561, item 8: with the attach's tree-copy check on (lane IMPL-COPY-ANIM-TREE), a tree the copy refuses
+/// stops at the copy's own check, before the lookups, and nothing is written. Since review r1 of #618 the fixture
+/// declares the copy's fields, so the refusal is the copy's first unread step (its parent node array not built), not a
+/// missing field.
 #[test]
 fn with_the_copy_check_on_the_copy_refuses_before_the_lookups() {
     let mut e = env();
@@ -1089,14 +1139,43 @@ fn with_the_copy_check_on_the_copy_refuses_before_the_lookups() {
     let p = mesh_pawn(&mut e, skel);
     let before = Counters::read(&e.vm);
     match run(&mut e, p).unwrap_err() {
-        VmError::Script { function, message } => {
-            assert_eq!(function, "CopyAnimTree", "{message}");
-        }
-        other => panic!("expected the copy's script error, got {other:?}"),
+        VmError::NotYet(n) => assert_eq!(&*n.what, crate::world::anim_tree_copy::PARENTS, "{n}"),
+        other => panic!("expected the copy's refusal, got {other:?}"),
     }
     assert_eq!(Counters::read(&e.vm), before, "write-free");
     assert!(entries(&e, p).is_empty());
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
+}
+
+/// The copy's check on (its switches off) for the length of `f`: the fixture declares the copy's fields (review r1 of
+/// #618, item 3), so the attach's planned copy is the lookups' input, as in production.
+fn with_copy<T>(f: impl FnOnce() -> T) -> T {
+    crate::world::anim_tree_copy::skip_attach_check_for_tests(false);
+    crate::world::anim_tree_copy::answer_init_steps_for_tests(true);
+    let out = f();
+    crate::world::anim_tree_copy::answer_init_steps_for_tests(false);
+    crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
+    out
+}
+
+/// The attach's planned copy of `skel`'s tree, with the copy's check on.
+fn planned(e: &Env, skel: ObjRef) -> Option<crate::world::anim_tree_copy::Plan> {
+    with_copy(|| crate::world::anim_tree_copy::attach_plan(&e.vm, skel).unwrap())
+}
+
+/// Review r1 of #618, item 3: with the copy's check on, a tree the copy can plan (a root with no children, its parent
+/// array built) goes through `attach_plan` and the lookups over the planned copy, past the made `Mesh`'s rest (#570),
+/// to the next refusal of the walk, the rendering hooks, with every counter unchanged.
+#[test]
+fn with_the_copy_check_on_a_plannable_tree_passes_the_lookups() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let (missing, what) = with_copy(|| refused(&mut e, p));
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?} {what}");
+    assert_eq!(what, RENDER_HOOKS);
 }
 
 /// With no planned copy, a kept find and a slot node are #529's refusal too (as before this lane), write-free.
@@ -1174,6 +1253,7 @@ fn the_old_mesh_release_comes_before_the_lookups() {
 fn a_control_shared_by_two_lists_is_not_a_loop() {
     let mut e = env();
     let t = Anim::new(&mut e);
+    put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
     t.controls(&mut e, &[&[("WillowSkelControl_FootPlacement", "WillowFootIK")]]);
     let lists = prop(&e.vm, t.root, "SkelControlLists");
     let head = lists.elements().unwrap()[0].clone();
@@ -1181,16 +1261,18 @@ fn a_control_shared_by_two_lists_is_not_a_loop() {
     let skel = skel_with(&mut e, Some(t.root));
     let p = mesh_pawn(&mut e, skel);
     let body = body_of(&e, p);
-    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
-    let (missing, what) = refused(&mut e, p);
+    let copy = planned(&e, skel);
+    assert_eq!(check(&e.vm, skel, Some(body), copy.as_ref()).unwrap(), Settled { foot_ik: true, ..Settled::default() });
+    let (missing, what) = with_copy(|| refused(&mut e, p));
     assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
     assert_eq!(what, RENDER_HOOKS);
 }
 
 /// `check` on its own, with #518's counters read around it: a refusal moves none of them.
 fn check_refused(e: &Env, skel: ObjRef, body: Option<ObjRef>) -> (Missing, String) {
+    let copy = planned(e, skel);
     let before = Counters::read(&e.vm);
-    let err = check(&e.vm, skel, body).unwrap_err();
+    let err = check(&e.vm, skel, body, copy.as_ref()).unwrap_err();
     let VmError::NotYet(n) = err else { panic!("{err:?}") };
     assert_eq!(Counters::read(&e.vm), before, "write-free: {}", n.what);
     (n.missing, n.what.to_string())
@@ -1202,6 +1284,7 @@ fn check_refused(e: &Env, skel: ObjRef, body: Option<ObjRef>) -> (Missing, Strin
 fn no_body_class_is_not_read() {
     let mut e = env();
     let t = Anim::new(&mut e);
+    put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
     let skel = skel_with(&mut e, Some(t.root));
     let (missing, what) = check_refused(&e, skel, None);
     assert_eq!(missing, Missing::NotRead);
@@ -1214,6 +1297,7 @@ fn no_body_class_is_not_read() {
 fn an_unloaded_or_failed_body_class_is_refused_with_nothing_loaded() {
     let mut e = env();
     let t = Anim::new(&mut e);
+    put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
     let skel = skel_with(&mut e, Some(t.root));
     let (_, cyl, cycle) = store_templates(&mut e);
     let (missing, what) = check_refused(&e, skel, Some(cyl));
@@ -1297,6 +1381,54 @@ fn the_rest_of_the_mesh_step_sets_its_fields_on_authority() {
     assert_eq!(prop(&e.vm, p, "RepMeshScale"), Value::Float(1.25));
     assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(Some(cyl)));
     assert_eq!(prop(&e.vm, p, "CollisionComponent"), Value::Object(Some(mesh)), "the mesh is used for collision");
+}
+
+/// Review r2 of #618, on the merged path (#570's write path): a `Mesh` whose tree the attach copies (the root, a slot
+/// node, and under it a node named `AimOffset` of the kept class). The lookups over the planned copy and the copy's map
+/// write the copies: `AimOffset` is the copied aim-offset node (outered to the made `Mesh`) and `SlotNodes` holds the
+/// copied slot. A refusal of the same lookups (the template component already initialised, so the copy has no tick
+/// list) writes nothing.
+#[test]
+fn the_lookups_write_the_copies_of_aim_offset_and_the_slot_nodes() {
+    let build = |e: &mut Env| -> (ObjRef, ObjRef, ObjRef, ObjRef) {
+        let t = Anim::new(e);
+        put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
+        let slot = t.node(e, "AnimNodeSlot", "Slot", 1);
+        let aim = t.node(e, "WillowAnimNodeAimOffset", "AimOffset", 2);
+        t.children(e, t.root, &[slot]);
+        t.children(e, slot, &[aim]);
+        let s = e.vm.space.classes.struct_by_path("Engine.AnimNodeBlendBase.AnimBlendChild").unwrap();
+        let child = value(&e.vm, s, vec![("Anim", Value::Object(Some(aim))), ("Weight", Value::Float(1.0))]);
+        put(&mut e.vm, slot, "Children", Value::array(vec![child]));
+        put(&mut e.vm, slot, "ParentNodes", Value::array(vec![Value::Object(Some(t.root))]));
+        put(&mut e.vm, aim, "ParentNodes", Value::array(vec![Value::Object(Some(slot))]));
+        let (p, skel) = mesh_rest_pawn(e);
+        put(&mut e.vm, skel, "AnimTreeTemplate", Value::Object(Some(t.root)));
+        (p, skel, slot, aim)
+    };
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (p, _, slot, aim) = build(&mut e);
+    with_copy(|| run(&mut e, p)).unwrap();
+    let mesh = made_of(&e, &entries(&e, p)[1]);
+    let Value::Object(Some(copy)) = prop(&e.vm, p, "AimOffset") else { panic!("AimOffset set") };
+    assert_ne!(copy, aim, "the copy, not the template node");
+    assert_eq!(e.vm.space.heap.get(copy).unwrap().outer, Some(mesh), "outered to the made Mesh");
+    let Value::Object(Some(_)) = prop(&e.vm, p, "Mesh") else { panic!("Mesh set") };
+    let slots = prop(&e.vm, p, "SlotNodes");
+    let slots = slots.elements().unwrap();
+    assert_eq!(slots.len(), 1, "the one slot node");
+    let Value::Object(Some(slot_copy)) = slots[0] else { panic!() };
+    assert_ne!(slot_copy, slot);
+    assert_eq!(e.vm.space.heap.get(slot_copy).unwrap().outer, Some(mesh));
+    assert_eq!(prop(&e.vm, p, "ArmBoneBlend"), Value::Object(None), "no ArmBoneBlend node");
+
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (p, skel, _, _) = build(&mut e);
+    put(&mut e.vm, skel, "bAnimTreeInitialised", Value::Bool(true));
+    let (missing, what) = with_copy(|| refused(&mut e, p));
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, crate::world::anim_node_lookup::NO_TICK_LIST));
 }
 
 /// Off authority (the plan's authority, #529 section 7 step 3), `RepMeshScale` is neither required nor written.
