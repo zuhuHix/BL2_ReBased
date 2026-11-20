@@ -57,12 +57,15 @@ use std::rc::Rc;
 
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::{NameId, ObjRef};
-use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
 use crate::equip::{bad, object_of, required, write};
+// The setters' planning and apply sides live in ow-world (lane IMPL-BODYCOMP-RENDER-HOOKS, review r1 of #622, item 1),
+// so the body composition's rendering hooks share them; the bindings below stay here.
+pub use ow_world::world::component_setters::{REATTACH_OWNER, REATTACH_SCENE, set_flag, set_light_environment};
+use ow_world::world::component_setters::{REATTACH_FIELDS, Slots, Want, bool_of, declared, is_zero, reattach_check, schemas};
 
 pub mod particle_activation;
 pub mod pickup_particles;
@@ -79,8 +82,6 @@ pub const HIDE_BONE_BY_NAME: &str = "SkeletalMeshComponent.HideBoneByName(name,b
 pub const ATTACH_COMPONENT: &str = "Actor.AttachComponent(object)";
 
 /// The named `NotYet`s.
-pub const REATTACH_OWNER: &str = "the deferred reattach: the owner's component update";
-pub const REATTACH_SCENE: &str = "the deferred reattach: the component's detach and reattach";
 pub const HIDE_BONE: &str =
     "SkeletalMeshComponent.HideBoneByName on a component with a skeletal mesh: the bone lookup and the visibility rebuild";
 pub const ATTACH: &str = ow_world::actors::component_attach::ATTACH;
@@ -107,87 +108,9 @@ pub const SKELETAL_MESH: &str = "SkeletalMesh";
 /// same layer; re-exported here unchanged. The standard Off world (`ow_world::world::World::new`) installs it.
 pub use ow_world::actors::{SceneLayer, add_empty_scene};
 
-fn declared(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<PropKind, VmError> {
-    let class = vm.space.heap.get(o)?.class;
-    let p = vm
-        .space
-        .prop(class, name)
-        .ok_or_else(|| bad(what, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
-    vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| bad(what, format!("{name} has no declaration")))
-}
-
-#[derive(Clone, Copy)]
-enum Want {
-    Object,
-    Bool,
-    Int,
-    Float,
-    Struct,
-    Array,
-}
-
-/// Each `(name, kind)` declared on `o` with that kind, else a data error naming the field.
-fn schemas(vm: &Vm, o: ObjRef, fields: &[(&str, Want)], what: &str) -> Result<(), VmError> {
-    for &(name, want) in fields {
-        let kind = declared(vm, o, name, what)?;
-        let ok = match want {
-            Want::Object => matches!(kind, PropKind::Object { .. }),
-            Want::Bool => matches!(kind, PropKind::Bool),
-            Want::Int => matches!(kind, PropKind::Int),
-            Want::Float => matches!(kind, PropKind::Float),
-            Want::Struct => matches!(kind, PropKind::Struct(_)),
-            Want::Array => matches!(kind, PropKind::Array(_)),
-        };
-        if !ok {
-            return Err(bad(what, format!("{name} is declared as {kind:?}, not the kind the note reads")));
-        }
-    }
-    Ok(())
-}
-
-/// The component fields the deferred reattach reads and writes.
-const REATTACH_FIELDS: [(&str, Want); 3] = [("Owner", Want::Object), ("Scene", Want::Struct), ("bNeedsReattach", Want::Bool)];
-
-fn bool_of(v: &Value, name: &str, what: &str) -> Result<bool, VmError> {
-    match v {
-        Value::Bool(b) => Ok(*b),
-        other => Err(bad(what, format!("{name} holds {}, not a bool", other.kind_name()))),
-    }
-}
-
-/// Whether `v`, the `Scene` pointer struct, is zero: every field an int 0, at any depth.
-fn is_zero(v: &Value, what: &str) -> Result<bool, VmError> {
-    match v {
-        Value::Int(i) => Ok(*i == 0),
-        Value::Struct(s) => {
-            for f in &s.fields {
-                if !is_zero(f, what)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
-        other => Err(bad(what, format!("Scene holds {}, not a pointer struct of ints", other.kind_name()))),
-    }
-}
-
-/// The deferred reattach's preflight (module documentation): nothing is written.
-fn reattach_preflight(vm: &Vm, component: ObjRef, what: &str) -> Result<(), VmError> {
-    if object_of(&required(vm, component, "Owner", what)?, what)?.is_some() {
-        return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
-    }
-    if !is_zero(&required(vm, component, "Scene", what)?, what)? {
-        return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
-    }
-    Ok(())
-}
-
 /// `e` after a native's first write: a `NotYet` marked once, its kind and record kept; any other error unchanged.
 fn after_writes(e: VmError) -> VmError {
-    match e {
-        VmError::NotYet(n) => n.after_partial_writes().into(),
-        other => other,
-    }
+    ow_world::world::component_setters::after_writes(e)
 }
 
 /// `SetForceRefPose(bNewForceRefPose)` on `component` in Off (module documentation).
@@ -195,21 +118,9 @@ pub fn set_force_ref_pose(vm: &mut Vm, component: ObjRef, value: bool) -> Result
     const WHAT: &str = "SkeletalMeshComponent.SetForceRefPose";
     schemas(vm, component, &REATTACH_FIELDS, WHAT)?;
     schemas(vm, component, &[(FORCE_REF_POSE, Want::Int)], WHAT)?;
-    reattach_preflight(vm, component, WHAT)?;
+    reattach_check(vm, Slots::of(component), WHAT)?;
     write(vm, component, FORCE_REF_POSE, Value::Int(i32::from(value)), WHAT)?;
     write(vm, component, "bNeedsReattach", Value::Bool(true), WHAT).map_err(after_writes)
-}
-
-/// `SetHidden` or `SetOwnerNoSee` on `component` in Off: `flag` set to `value` (module documentation).
-pub fn set_flag(vm: &mut Vm, component: ObjRef, flag: &str, value: bool, what: &str) -> Result<(), VmError> {
-    schemas(vm, component, &REATTACH_FIELDS, what)?;
-    schemas(vm, component, &[(flag, Want::Bool)], what)?;
-    if bool_of(&required(vm, component, flag, what)?, flag, what)? == value {
-        return Ok(());
-    }
-    reattach_preflight(vm, component, what)?;
-    write(vm, component, flag, Value::Bool(value), what)?;
-    write(vm, component, "bNeedsReattach", Value::Bool(true), what).map_err(after_writes)
 }
 
 /// `HideBoneByName(BoneName, PhysBodyOption)` on `component` in Off (module documentation). Writes nothing.
@@ -297,56 +208,6 @@ pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -
     }
     // The attach record, published only after every write succeeded (lane IMPL-COMPONENT-BOUNDS).
     ow_world::actors::publish_attach(vm, component, actor).map_err(after_writes)
-}
-
-/// `SetLightEnvironment(NewLightEnvironment)` on `component` in Off (module documentation, part 2).
-pub fn set_light_environment(vm: &mut Vm, component: ObjRef, new: Option<ObjRef>) -> Result<(), VmError> {
-    const WHAT: &str = "PrimitiveComponent.SetLightEnvironment";
-    // Each check only on the path that reaches it (review r1 of #520): the equal value first, then `bAttached`; on
-    // the attached path the deferred reattach's refusals (owner, then scene), and only then the write targets.
-    schemas(vm, component, &[("LightEnvironment", Want::Object)], WHAT)?;
-    let current = object_of(&required(vm, component, "LightEnvironment", WHAT)?, WHAT)?;
-    if current == new {
-        return Ok(());
-    }
-    schemas(vm, component, &[("bAttached", Want::Bool)], WHAT)?;
-    let attached = bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)?;
-    let value = Value::Object(new);
-    if !attached {
-        fits(vm, component, "LightEnvironment", &value, WHAT)?;
-        return write(vm, component, "LightEnvironment", value, WHAT);
-    }
-    schemas(vm, component, &[("Owner", Want::Object)], WHAT)?;
-    if object_of(&required(vm, component, "Owner", WHAT)?, WHAT)?.is_some() {
-        return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
-    }
-    schemas(vm, component, &[("Scene", Want::Struct)], WHAT)?;
-    if !is_zero(&required(vm, component, "Scene", WHAT)?, WHAT)? {
-        return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
-    }
-    schemas(vm, component, &[("PreviousLightEnvironment", Want::Object), ("bNeedsReattach", Want::Bool)], WHAT)?;
-    fits(vm, component, "PreviousLightEnvironment", &Value::Object(current), WHAT)?;
-    fits(vm, component, "LightEnvironment", &value, WHAT)?;
-    // Each destination's slot read, immutably, before the first write (review r2 of #520): an object whose slot vector
-    // is short of a declared field is refused here, not after two writes.
-    for name in ["PreviousLightEnvironment", "LightEnvironment", "bNeedsReattach"] {
-        required(vm, component, name, WHAT)?;
-    }
-    write(vm, component, "PreviousLightEnvironment", Value::Object(current), WHAT)?;
-    let rest = (|| {
-        write(vm, component, "LightEnvironment", value, WHAT)?;
-        write(vm, component, "bNeedsReattach", Value::Bool(true), WHAT)
-    })();
-    rest.map_err(after_writes)
-}
-
-/// `v` against `name`'s declaration on `o` by the heap's own write rules, else a data error naming the field.
-fn fits(vm: &Vm, o: ObjRef, name: &str, v: &Value, what: &str) -> Result<(), VmError> {
-    let kind = declared(vm, o, name, what)?;
-    vm.space
-        .heap
-        .check_value(&vm.space.classes, &kind, v)
-        .map_err(|e| bad(what, format!("{name} cannot take the value: {e}")))
 }
 
 fn light_environment_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
