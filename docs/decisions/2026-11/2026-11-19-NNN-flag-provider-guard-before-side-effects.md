@@ -51,6 +51,17 @@ decision number is pending from the hub (three digits); NNN is a placeholder.
   lookup is `ow-vm`'s `implements_read_only_leaves_a_cold_target_cold` (through `implements_checked`).
 - **Item 4:** that test's snapshot also holds the generator's draws and the name table's size.
 
+**Review r2 of #630 (Sol), two more changes:**
+- **Item 1, an unbound first resolver.** The mutable-path refusal now looks at the first resolver the context chain
+  reaches, decoded as the evaluator decodes it (None entries skipped). A resident resolver whose class the attribute
+  system does not bind is left to the evaluator, whose registry refusal ("context resolver class <path>") comes with
+  nothing run or written. The provider guard stays for a bound resolver and for one not loaded yet.
+- **Item 2, a cold receiver waits for the rule engine search.** Before a receiver handle is loaded, the rule engine
+  search (reads only) must be able to answer, as both interface classes must be loaded. So its refusal (an
+  interface-table entry not resolved, say) comes before the receiver's load, and no load transition happens. The
+  receiver's chain is unknown until it is loaded, so this is required even of a receiver whose chain turns out not to
+  need it (an empty chain, say).
+
 3. **The store path before the guard.** A loaded definition that takes the store path (a known `R`, and no context chain
    or no value resolver, such as a computed definition) reports "a rule engine's own flag store" before the provider
    guard.
@@ -66,6 +77,10 @@ decision number is pending from the hub (three digits); NNN is a placeholder.
   definition as `IsFalse` gives the loop's own refusal (item 1); an Or chain whose first conditional runs a context
   resolver is refused with the mutable-path `NotRead` before the resolver runs, and answers false with
   `IFlagProvider` loaded (item 2);
+- review r2 of #630: a resident unbound first resolver gives the registry's refusal, and a bound one the mutable-path
+  refusal, both write-free (item 1); a cold receiver with an unresolved interface-table entry on its context refuses
+  with no load transition, and the receiver and the entry stay cold (item 2; the interface classes are decoded class
+  exports of an invented `GearboxFramework.upk`);
 - #586's existing tests pass, with one expectation changed by item 2 (the lone definition with a pass-through
   resolver, `IFlagProvider` missing: false before, the mutable-path `NotRead` now).
 

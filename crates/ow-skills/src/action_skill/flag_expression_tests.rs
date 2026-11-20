@@ -16,6 +16,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropAddr, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
+use ow_package::testkit::reflect::{ClassBodySpec, class_body};
 use ow_package::testkit::script::ScriptToy;
 use ow_package::testkit::{Export, ints};
 use ow_vm::api::{FunctionDecl, Vm};
@@ -128,14 +129,43 @@ fn toy_package() -> Vec<u8> {
 
 /// `GearboxFramework.upk`: the class `FlagExpressionEvaluator` (no fields of its own) and `Evaluator_0`, an export of
 /// it with no tagged fields, which `ToyFlag`'s holder names (review r1 of #586: a receiver handle).
-fn gearbox_package() -> Vec<u8> {
+/// With `interfaces` (review r2 of #630, item 2), `Object` is a decoded class export, and so are the interface
+/// `IRuleEngineOwner` and `ToyOwnerContext`, a class whose interface table names it: an entry not resolved until a
+/// caching lookup resolves it.
+fn gearbox_package(interfaces: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
-    let object = t.class("Object", 0);
+    let object = if interfaces {
+        let object = real_class(&mut t, "Object", 0, 1, 2, &[]);
+        let owner = real_class(&mut t, "IRuleEngineOwner", object, object, 2 | 0x4000, &[]);
+        real_class(&mut t, "ToyOwnerContext", object, object, 2, &[owner]);
+        object
+    } else {
+        t.class("Object", 0)
+    };
     let evaluator = t.class("FlagExpressionEvaluator", object);
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(evaluator, "Evaluator_0", payload));
     t.build()
+}
+
+/// A class export with a decodable body naming `table`'s interfaces, and its default object (as ow-combat's
+/// `pawn_interface` tests write them).
+fn real_class(t: &mut ScriptToy, name: &str, super_ref: i32, within: i32, flags: u32, table: &[i32]) -> i32 {
+    let at = t.p.next_export();
+    let spec = ClassBodySpec {
+        flags,
+        interfaces: table.iter().map(|&c| (c, 0)).collect(),
+        ..ClassBodySpec::new(super_ref, within, at + 1)
+    };
+    let body = class_body(&mut t.p, &spec);
+    let mut export = Export::new(0, name, body);
+    export.super_ = super_ref;
+    assert_eq!(t.p.add_export_with(export), at);
+    let mut default = ints(&[0]);
+    default.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(at, &format!("Default__{name}"), default));
+    at
 }
 
 fn fx() -> Fx {
@@ -154,6 +184,11 @@ fn fx_full(world_info: bool, missing: Option<&str>) -> Fx {
 /// out of the loaded classes (its subclasses then derive from `Core.Object`); `package_evaluator`: the evaluator class
 /// is left to `GearboxFramework.upk` (a cold receiver's class) instead of defined here.
 fn fx_all(world_info: bool, missing: Option<&str>, package_evaluator: bool) -> Fx {
+    fx_impl(world_info, missing, package_evaluator, false)
+}
+
+/// [`fx_all`]; `package_interfaces`: `GearboxFramework.upk` also holds the decoded classes of [`gearbox_package`].
+fn fx_impl(world_info: bool, missing: Option<&str>, package_evaluator: bool, package_interfaces: bool) -> Fx {
     let mut s = ObjectSpace::new();
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
@@ -215,6 +250,8 @@ fn fx_all(world_info: bool, missing: Option<&str>, package_evaluator: bool) -> F
     s.classes.define("Toy.PassContextResolver", Some(object), vec![]).unwrap();
     s.classes.define("Toy.FixedContextResolver", Some(object), vec![]).unwrap();
     s.classes.define("Toy.NoneContextResolver", Some(object), vec![]).unwrap();
+    // A context resolver class the attribute system does not bind (review r2 of #630, item 1).
+    s.classes.define("Toy.UnboundContextResolver", Some(object), vec![]).unwrap();
     let expression = s.classes.define("Engine.ExpressionEvaluator", Some(object), vec![]).unwrap();
     let decls = vec![
         d(&mut s, "FlagChain", PropKind::Array(Box::new(PropKind::Struct(conditional)))),
@@ -225,7 +262,7 @@ fn fx_all(world_info: bool, missing: Option<&str>, package_evaluator: bool) -> F
     }
     let dir = std::env::temp_dir().join(format!("ow-skills-flag-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (package, gearbox) = (toy_package(), gearbox_package());
+    let (package, gearbox) = (toy_package(), gearbox_package(package_interfaces));
     let defs = DefStore::from_synthetic(
         &dir,
         &[("ToyFlag.upk", package.as_slice()), ("GearboxFramework.upk", gearbox.as_slice())],
@@ -870,6 +907,58 @@ fn a_reached_context_resolver_needs_the_provider_before_it_runs() {
     let second = x.obj("GearboxFramework.FlagDefinition", "Second");
     let e = x.evaluator(&[(0, Some(first)), (0, Some(second))], 0);
     assert!(!x.eval(e, Some(pawn)).unwrap(), "IFlagProvider loaded: the chain runs, false");
+}
+
+/// Review r2 of #630, item 1: with `IFlagProvider` not loaded, a loaded definition whose first resolver is resident and
+/// of a class the attribute system does not bind gets the registry's own refusal (met with nothing run), not the
+/// mutable-path one; the same chain with a bound resolver first is the mutable-path refusal. Both write-free.
+#[test]
+fn an_unbound_first_resolver_is_the_registrys_refusal() {
+    let mut x = fx_full(true, Some("GearboxFramework.IFlagProvider"));
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let unbound = x.obj("Toy.UnboundContextResolver", "Unbound");
+    let pass = x.obj("Toy.PassContextResolver", "Pass");
+    let f = x.obj("GearboxFramework.FlagDefinition", "Def");
+    let chain = vec![Value::Object(None), Value::Object(Some(unbound)), Value::Object(Some(pass))];
+    x.set(f, "ContextResolverChain", Value::array(chain));
+    let second = x.store_flag(vec![]);
+    let e = x.evaluator(&[(0, Some(f)), (0, Some(second))], 0);
+    let start = WriteCounters::of(&x.vm);
+    let text = not_read(x.eval(e, Some(pawn)), "context resolver class Toy.UnboundContextResolver");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(!start.moved(&x.vm), "write-free");
+    let g = x.obj("GearboxFramework.FlagDefinition", "Bound");
+    x.set(g, "ContextResolverChain", Value::array(vec![Value::Object(Some(pass)), Value::Object(Some(unbound))]));
+    let e = x.evaluator(&[(0, Some(g)), (0, Some(second))], 0);
+    let start = WriteCounters::of(&x.vm);
+    not_read(x.eval(e, Some(pawn)), MUTABLE_PATH);
+    assert!(!start.moved(&x.vm), "write-free");
+}
+
+/// Review r2 of #630, item 2: both interface classes loaded, a cold receiver, and a context whose interface table has
+/// an entry not resolved. The rule engine search cannot answer by reads, so its `NotRead` comes before the receiver's
+/// load: no load transition, and the receiver and the entry stay cold. Once the entry is resolved (a caching lookup),
+/// the receiver is loaded as before.
+#[test]
+fn a_cold_receiver_waits_for_the_rule_engine_search() {
+    let mut x = fx_impl(true, Some("GearboxFramework.IRuleEngineOwner"), true, true);
+    let owner = x.vm.find_class("GearboxFramework.IRuleEngineOwner").unwrap();
+    let context_class = x.vm.find_class("GearboxFramework.ToyOwnerContext").unwrap();
+    assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry starts unresolved");
+    let context = x.vm.space.alloc(context_class, "Context", None, Origin::Runtime).unwrap();
+    let cold = x.cold_evaluator();
+    let loads = x.vm.defs.load_transitions();
+    let start = WriteCounters::of(&x.vm);
+    let text = not_read(x.eval(cold, Some(context)), "has an entry not resolved (resolving it is a load)");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(!start.moved(&x.vm), "write-free");
+    assert_eq!(x.vm.defs.load_transitions(), loads, "no load transition");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the receiver was not loaded");
+    assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry stays cold");
+    assert!(x.vm.implements_checked(context_class, owner).unwrap(), "the caching lookup resolves it");
+    // Now the search answers (an owner that is not a mind: the port's own refusal), still before the receiver's load.
+    not_read(x.eval(cold, Some(context)), "only GearboxMind's is read");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "still not loaded");
 }
 
 /// Finding 3: a loaded computed definition with a known rule engine and no value resolver reports the rule engine's own

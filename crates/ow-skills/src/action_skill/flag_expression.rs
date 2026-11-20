@@ -277,7 +277,9 @@ struct Conditional {
 }
 
 /// The receiver's chain and operator: the note's eager checks (section 6), the receiver loaded when it is a handle.
-/// With a context, a receiver handle's load needs both interface classes first (module documentation).
+/// With a context, a receiver handle's load needs both interface classes first (module documentation), and the rule
+/// engine search must be able to answer by reads alone (review r2 of #630, item 2): its refusal, an interface-table
+/// entry not resolved for instance, comes before the load, since the receiver's chain is unknown until then.
 fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
     let me = me.ok_or_else(|| script("called with no evaluator".to_string()))?;
     if !is_a(vm, me, EVALUATOR)? {
@@ -287,6 +289,7 @@ fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<
         for path in [RULE_ENGINE_OWNER, FLAG_PROVIDER] {
             interface(vm, path)?;
         }
+        rule_engine(vm, context)?;
     }
     load(vm, me)?;
     let chain = field(vm, me, "FlagChain")?;
@@ -422,7 +425,9 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
 ///   field and no context resolver) is left to the loop. Otherwise it is certainly reached and it writes before it
 ///   answers (a load, a store lookup, a nested evaluation or a context resolver), so `IFlagProvider` is required now:
 ///   - when it may still need a store itself ([`may_need_store`]);
-///   - when it runs a context resolver (review r1 of #630, item 2): a resolver may set any definition's
+///   - when it runs a context resolver, one bound by the attribute system or not loaded yet (a resident unbound one
+///     is the loop's own refusal, with nothing run: review r2 of #630, item 1), (review r1 of #630, item 2): a
+///     resolver may set any definition's
 ///     `ValueResolver` or `EvaluationExpression`, its own or a later one's, so which stores the rest of the chain asks
 ///     for is not known before that write. With `IFlagProvider` not loaded this is `NotYet { NotRead }` before the
 ///     first write ([`MUTABLE_PATH`]), not a guarantee made at set-up.
@@ -462,10 +467,16 @@ fn provider_first(
                     return Ok(());
                 }
                 // Loaded, with neither field: its context resolvers decide whether anything runs first.
-                let Ok(live) = has_context_resolver(vm, definition) else {
+                let Ok(first) = first_resolver(vm, definition) else {
                     return Ok(());
                 };
-                if live {
+                if let Some(resolver) = first {
+                    // A resident resolver whose class the attribute system does not bind is the loop's own refusal,
+                    // met with nothing run or written (review r2 of #630, item 1).
+                    let resident = !vm.defs.is_unloaded(&vm.space, resolver) && !vm.defs.is_failed(&vm.space, resolver);
+                    if resident && vm.attrs.context_resolver(&vm.space, resolver).is_err() {
+                        return Ok(());
+                    }
                     if vm.space.classes.by_path(FLAG_PROVIDER).is_none() {
                         return Err(not_read(MUTABLE_PATH.to_string()));
                     }
@@ -500,11 +511,17 @@ pub const MUTABLE_PATH: &str = "a context resolver runs before the chain's store
      ValueResolver or EvaluationExpression), and the interface class GearboxFramework.IFlagProvider is not loaded (a \
      load is a write)";
 
-/// Whether a definition's `ContextResolverChain` holds a resolver (a non-None entry), by reads only.
-fn has_context_resolver(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+/// The first resolver [`resolve`] reaches in a definition's `ContextResolverChain` (its first non-None entry, decoded
+/// as `resolve` decodes it), by reads only. A malformed chain or entry is `resolve`'s own error.
+fn first_resolver(vm: &Vm, definition: ObjRef) -> Result<Option<ObjRef>, VmError> {
     let chain = field(vm, definition, "ContextResolverChain")?;
     let entries = chain.elements().ok_or_else(|| script("ContextResolverChain is not an array".to_string()))?;
-    Ok(entries.iter().any(|v| !matches!(v, Value::Object(None))))
+    for entry in entries {
+        if let Some(resolver) = object_of(entry, "ContextResolverChain entry")? {
+            return Ok(Some(resolver));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether a reached definition may still ask for `IFlagProvider` (module documentation), by reads only: a handle not
