@@ -1,6 +1,6 @@
 # Native rules of WillowWeapon.AttachMeshToPickup, part 1 (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-ATTACH-MESH-TO-PICKUP (decision 2026-11-19-NNN, number to be
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-ATTACH-MESH-TO-PICKUP (decision 2026-11-19-117, number to be
 given by the hub).
 
 **Sources:**
