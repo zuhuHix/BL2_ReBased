@@ -10,7 +10,8 @@ Stacked on fix/rust-is-staggered @ 11097cef (#619), because both bind in `ow-com
 - **The rule, in the note's order.** It is write-free, load-free and RNG-free:
   1. The receiver must be a `WillowAIPawn` or a child (`by_path` and `is_child_of` only). Otherwise a
      `VmError::Script`.
-  2. **D1**, `NotYet { NotRead }`, with two texts: an unloaded handle, and a slotless stand-in.
+  2. **D1**, `NotYet { NotRead }`, with two texts: an unloaded handle, and a slotless stand-in. Both name the object
+     (its class path and name), and the stand-in test is `ow-attr`'s condition, as in #619 after its review r1.
   3. **D2**, `NotYet { NotRead }`: a native descendant (the `NATIVE_AI_PAWN_DESCENDANTS` list shared with
      `IsStaggered`, `WillowAICranePawn` today) or a child of one. Script-only children take the rule.
   4. The declarations, by name: `Role` a byte, `PerchProjectile` an object, `bPerchAttached` a bool. Otherwise a

@@ -235,11 +235,11 @@ fn an_unresident_pawn_is_d1() {
         panic!("the holder names its peer")
     };
     assert!(x.vm.defs.is_unloaded(&x.vm.space, peer));
-    x.refuses(peer, "is an unloaded handle (a load is a write)");
+    x.refuses(peer, "the pawn WillowGame.WillowAIPawn Peer is an unloaded handle (a load is a write)");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, peer), "still unloaded");
     let ai = x.vm.find_class("WillowGame.WillowAIPawn").unwrap();
     let stand_in = x.vm.space.alloc_stand_in(ai, "ToyStandIn", Origin::Resource { package: 0, index: -1 }).unwrap();
-    x.refuses(stand_in, "is a stand-in with no properties (an object the store cannot load)");
+    x.refuses(stand_in, "the pawn WillowGame.WillowAIPawn ToyStandIn is a stand-in with no properties (an object the store cannot load)");
 }
 
 /// Test 7: a missing `PerchProjectile` and a non-bool `bPerchAttached` are a `VmError::Script` each.

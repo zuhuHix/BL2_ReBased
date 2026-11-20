@@ -779,12 +779,16 @@ pub fn drop_combat_perch_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<
     let Some(ai) = space.classes.by_path("WillowGame.WillowAIPawn").filter(|&a| space.classes.is_child_of(class, a)) else {
         return Err(super::access::error(format!("{WHAT}: {path} is not a WillowAIPawn")));
     };
+    // D1 names the object (class path and name) and uses ow-attr's stand-in condition, as IsStaggered's S1 does (review
+    // r1 of #619).
+    let object = format!("{path} {}", space.names.text(obj.name));
     if vm.defs.is_unloaded(space, pawn) {
-        return Err(NotYet::not_read(format!("{WHAT}: the pawn {path} is an unloaded handle (a load is a write)"), RECORD_PERCH).into());
+        return Err(NotYet::not_read(format!("{WHAT}: the pawn {object} is an unloaded handle (a load is a write)"), RECORD_PERCH).into());
     }
-    if u32::try_from(obj.slots.len()).ok() != space.classes.get_layout(class).map(|l| l.slot_count()) {
+    let fields = space.classes.get_layout(class).map_or(0, |l| l.slot_count());
+    if obj.slots.is_empty() && fields > 0 {
         return Err(NotYet::not_read(
-            format!("{WHAT}: the pawn {path} is a stand-in with no properties (an object the store cannot load)"),
+            format!("{WHAT}: the pawn {object} is a stand-in with no properties (an object the store cannot load)"),
             RECORD_PERCH,
         )
         .into());
