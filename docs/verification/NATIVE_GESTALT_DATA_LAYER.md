@@ -1,7 +1,7 @@
 # The gestalt component data layer: what fills and copies `GestaltData` (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-GESTALT-DATA-LAYER (decision
-`docs/decisions/2026-11/2026-11-19-NNN-gestalt-data-layer-note.md`, number pending). Analyst only: a different lane
+`docs/decisions/2026-11/2026-11-19-209-gestalt-data-layer-note.md`, number pending). Analyst only: a different lane
 implements it (clean room).
 
 **A new note, not an extension.** NATIVE_BUILD_COMPOSITE_MESH.md (#588) and NATIVE_INIT_GESTALT_MESH_DATA.md (#591)
