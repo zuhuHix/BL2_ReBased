@@ -600,7 +600,8 @@ impl Fx {
                 space.names.intern("InstantHitDamage"),
                 PropKind::FloatAttribute,
             )
-            .with_flags(PropertyDecl::STACK_ATTRIBUTE),
+            // Notifies, so the add's notification can be seen (review r1 of #616, item 5).
+            .with_flags(PropertyDecl::STACK_ATTRIBUTE | PropertyDecl::NOTIFY),
             plain(
                 &mut space,
                 "InstantHitDamageBaseValue",

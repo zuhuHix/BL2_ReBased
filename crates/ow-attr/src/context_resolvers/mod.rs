@@ -274,6 +274,8 @@ pub(crate) fn ensure_loaded(cx: &mut EvalCx<'_>, o: ObjRef) -> Result<(), AttrEr
     match parts.defs {
         Some(defs) => {
             if defs.is_unloaded(space, o) {
+                // A load-free scope refuses the load (review r1 of #616; `crate::eval::load_free`).
+                crate::eval::load_free_refusal(space, defs, o, "a context resolver's handle")?;
                 defs.ensure_loaded(space, o)?;
             }
             Ok(())

@@ -694,7 +694,8 @@ impl NativePack for Pack {
         register_cast_get_value(vm)?;
         register_cast_resolve_context(vm)?;
         register_attach_component(vm)?;
-        register_cast_trace(vm)
+        register_cast_trace(vm)?;
+        register_cast_add_modifier(vm)
     }
 }
 
@@ -740,6 +741,18 @@ fn register_cast_resolve_context(vm: &mut Vm) -> Result<(), VmError> {
     }
     use ow_inventory::equip::natives::{RESOLVE_CONTEXT_FUNCTION, resolve_context_native};
     ow_combat::hit::bind_fn(vm, RESOLVE_CONTEXT_FUNCTION, resolve_context_native)
+}
+
+/// `AttributeDefinitionBase.AddAttributeModifier` for the cast's worlds (lane IMPL-ADD-ATTRIBUTE-MODIFIER,
+/// NATIVE_ADD_ATTRIBUTE_MODIFIER.md section 3): `ApplyAttributeEffects` adds the resolved context's modifier with it.
+/// The same keep-existing bind of the equip pack's one wrapper, next to `ResolveContext`. Off only; Reference binds
+/// nothing. `RemoveAttributeModifier` stays unbound here (the note's open question 4).
+fn register_cast_add_modifier(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    use ow_inventory::equip::natives::{ADD_MODIFIER_FUNCTION, add_modifier_native};
+    ow_combat::hit::bind_fn(vm, ADD_MODIFIER_FUNCTION, add_modifier_native)
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -1019,3 +1019,256 @@ fn off_the_chain_check_refuses_a_replicated_slot_it_would_rewrite() {
 
 #[path = "noun_replication_tests.rs"]
 mod replication;
+
+// ----- The shared add of the script native (lane IMPL-ADD-ATTRIBUTE-MODIFIER, NATIVE_ADD_ATTRIBUTE_MODIFIER.md
+// section 3): the rule's own cases on this hand world. The unloaded-handle cases (A0 to A2, an unloaded default) need
+// a store with packages and are `ow-inventory`'s tests of the wrapper. -----
+
+impl Noun {
+    fn add_native(&mut self, attr: ObjRef, ctx: ObjRef, m: ObjRef) -> Result<bool, crate::add_native::AddError> {
+        self.add_native_with(attr, ctx, m, false)
+    }
+    /// [`Noun::add_native`] with `bSuppressNotify` given.
+    fn add_native_with(&mut self, attr: ObjRef, ctx: ObjRef, m: ObjRef, suppress: bool) -> Result<bool, crate::add_native::AddError> {
+        system().add_modifier_native(attr, ctx, m, suppress, &mut EvalCx::new(&mut self.fx.w))
+    }
+    /// The world generator's draws (#518's generator-draw count; review r1 of #616, item 6).
+    fn draws(&self) -> u64 {
+        self.fx.w.rng.as_ref().map_or(0, ow_core::rand::CrtRand::draws)
+    }
+    fn writes(&self) -> u64 {
+        self.fx.w.space.heap.committed_writes()
+    }
+    /// `attr`'s value chain set to `chain`.
+    fn set_chain(&mut self, attr: ObjRef, chain: Vec<Option<ObjRef>>) {
+        let p = self.fx.w.space.prop(self.fx.c.attribute, "ValueResolverChain").unwrap();
+        let v = Value::array(chain.into_iter().map(Value::Object).collect());
+        self.fx.w.space.write(attr, PropAddr::scalar(p), v).unwrap();
+    }
+}
+
+/// A value resolver class whose probe passes and whose storage lookup refuses `LayerAbsent` (review r1 of #616, item
+/// 3): the write path refuses something the probe cannot see.
+struct LateRefusal;
+
+const LATE_LAYER: &str = "a toy layer";
+
+impl crate::api::ValueResolver for LateRefusal {
+    fn value(&self, _: &crate::AttributeSystem, _: ObjRef, _: ObjRef, _: f32, _: &mut EvalCx<'_>) -> Result<f32, AttrError> {
+        Ok(0.0)
+    }
+    fn storage(&self, _: &crate::AttributeSystem, _: ObjRef, _: ObjRef, _: &mut EvalCx<'_>) -> Result<Option<crate::api::Storage>, AttrError> {
+        Err(ow_core::NotYet::layer_absent("the toy resolver's write", LATE_LAYER, "test").into())
+    }
+    fn probe_storage(&self, _: &crate::AttributeSystem, _: ObjRef, _: ObjRef, _: ProbeOp, _: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        Ok(())
+    }
+}
+
+/// Review r1 of #616, item 3: a `NotYet` inside the write is terminal. The chain is a noun resolver (which makes its
+/// entry and adds the modifier) then [`LateRefusal`], whose probe passes: the second entry's storage refuses after the
+/// first wrote. The answer carries the partial-writes prefix exactly once and keeps its kind, and nothing is put back.
+#[test]
+fn a_not_yet_inside_the_write_is_terminal() {
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let noun = n.resolver_of(attr);
+    let object = n.fx.c.object;
+    let class = n.fx.w.space.classes.define("Test.ToyLateRefusal", Some(object), vec![]).unwrap();
+    let late = n.fx.obj(class, "ToyLateRefusal_0", vec![]);
+    n.set_chain(attr, vec![Some(noun), Some(late)]);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(POST, 1.0);
+    let sys = system().with_value_resolver("Test.ToyLateRefusal", LateRefusal).unwrap();
+    let before = n.writes();
+    let (missing, text) = refused(sys.add_modifier_native(attr, mind, m, false, &mut EvalCx::new(&mut n.fx.w)));
+    assert_eq!(missing, Missing::LayerAbsent(LATE_LAYER), "the kind is kept");
+    assert!(text.starts_with("stopped after partial writes: "), "{text}");
+    assert_eq!(text.matches("stopped after partial writes").count(), 1, "{text}");
+    assert!(n.writes() > before, "the first entry wrote");
+    assert_eq!(n.entries(mind)[0].stack, vec![Some(m)], "nothing put back");
+}
+
+fn refused(r: Result<bool, crate::add_native::AddError>) -> (Missing, String) {
+    match r {
+        Err(crate::add_native::AddError::Attr(AttrError::NotYet(n))) => (n.missing, n.to_string()),
+        other => panic!("expected a NotYet, got {other:?}"),
+    }
+}
+
+/// Tests 2a and 3: a strategy-0 noun on a mind gets its entry made and the modifier on its stack (true); the same
+/// modifier again answers false and changes nothing.
+#[test]
+fn the_shared_add_puts_a_noun_modifier_on_a_fresh_entry_once() {
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(POST, 1.0);
+    assert!(n.add_native(attr, mind, m).unwrap());
+    let e = n.entries(mind);
+    assert_eq!(e.len(), 1);
+    assert_eq!((e[0].base, e[0].stack.clone()), (10.0, vec![Some(m)]));
+    let before = n.writes();
+    assert!(!n.add_native(attr, mind, m).unwrap(), "the same modifier twice");
+    assert_eq!(n.writes(), before, "nothing changed");
+}
+
+/// Test 4: a constant-resolver attribute answers false and changes nothing.
+#[test]
+fn the_shared_add_on_a_constant_attribute_is_false() {
+    let mut n = off();
+    let attr = n.fx.constant_attr("Attribute_K", 3.0);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    let before = n.writes();
+    assert!(!n.add_native(attr, mind, m).unwrap());
+    assert_eq!(n.writes(), before);
+}
+
+/// Test 5: an empty chain, and a None first entry, answer false with nothing written.
+#[test]
+fn the_shared_add_on_an_empty_chain_or_a_none_first_entry_is_false() {
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    let r = n.resolver_of(attr);
+    for chain in [vec![], vec![None, Some(r)]] {
+        n.set_chain(attr, chain);
+        let before = n.writes();
+        assert!(!n.add_native(attr, mind, m).unwrap());
+        assert_eq!(n.writes(), before);
+        assert!(n.entries(mind).is_empty(), "no entry made");
+    }
+}
+
+/// A3: a value resolver class the registry does not register refuses before anything is written.
+#[test]
+fn the_shared_add_refuses_an_unregistered_resolver_class_before_writing() {
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    let noun = n.resolver_of(attr);
+    let unknown = n.fx.obj(n.plain, "NotAResolver", vec![]);
+    n.set_chain(attr, vec![Some(noun), Some(unknown)]);
+    let before = n.writes();
+    let (missing, text) = refused(n.add_native(attr, mind, m));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.contains("value resolver class") && !text.contains("partial writes"), "{text}");
+    assert_eq!(n.writes(), before);
+    assert!(n.entries(mind).is_empty(), "the first entry did not write");
+}
+
+/// Test 9: a two-entry chain whose second entry refuses in its storage probe (a replicated strategy, which main's noun
+/// resolver does not port) is refused before the first entry writes.
+#[test]
+fn the_shared_add_refuses_a_probe_refusal_before_the_first_entry_writes() {
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let first = n.attr("Attribute_A", default.clone());
+    let second = n.attr("Attribute_B", default);
+    n.set_resolver(second, "ReplicationStrategy", Value::Byte(1));
+    let (r1, r2) = (n.resolver_of(first), n.resolver_of(second));
+    n.set_chain(first, vec![Some(r1), Some(r2)]);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    let before = (n.writes(), n.draws());
+    let (_, text) = refused(n.add_native(first, mind, m));
+    assert!(text.contains("ReplicationStrategy 1") && !text.contains("partial writes"), "{text}");
+    assert_eq!((n.writes(), n.draws()), before);
+    assert!(n.entries(mind).is_empty(), "the first entry did not write");
+}
+
+/// Test 8: a missing noun entry whose default has variance: the add succeeds, and the draw happens in the write. The
+/// load-free probe alone draws nothing.
+#[test]
+fn a_default_with_variance_draws_in_the_write_not_in_the_probe() {
+    let mut n = off();
+    let v = n.fx.variance(2.0, 4.0, true);
+    let def = n.fx.definition(vec![("RandomVariance", v)]);
+    let default = n.fx.of_def(def);
+    let attr = n.attr("Attribute_V", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    let before = (n.writes(), n.draws());
+    let probe = crate::eval::load_free(crate::add_native::UNIT, || {
+        system().check_modifier_chain(attr, mind, ProbeOp::Add, &mut EvalCx::new(&mut n.fx.w))
+    });
+    probe.unwrap();
+    assert_eq!((n.writes(), n.draws()), before, "the probe writes and draws nothing");
+    assert!(n.add_native(attr, mind, m).unwrap());
+    assert!(n.draws() > before.1, "the write drew");
+}
+
+/// Test 2b: a replicated strategy mirrors the value into the replicated slot and sets `bNetDirty` (review r1 of #616,
+/// item 7: the slot, the count and the flag are asserted). It needs #523's mirror (noun replication), which this
+/// branch's base does not have; it was run against a local merge of main, which has it.
+#[test]
+#[ignore = "needs #523 (noun replication): on main a replicated strategy is NotYet { NotPorted } in the probe"]
+fn the_shared_add_on_a_replicated_noun_mirrors_it() {
+    let mut n = off();
+    // A pawn provider with #523's replicated arrays (section 10.2's shape, invented values).
+    let (object, state) = (n.fx.c.object, n.state);
+    let space = &mut n.fx.w.space;
+    let d = |space: &mut ow_object::heap::ObjectSpace, name: &str, k: PropKind| PropertyDecl::new(space.names.intern(name), k);
+    let fields = vec![d(space, "NounName", PropKind::Name), d(space, "Value", PropKind::Float), d(space, "bOnlyRelevantToOwner", PropKind::Bool)];
+    let rep = space.classes.define_struct("GearboxFramework.INounAttributeProvider.ReplicatedNounAttributeState", None, fields).unwrap();
+    let decls = vec![
+        d(space, "Role", PropKind::Byte { enum_: None }),
+        d(space, "bNetDirty", PropKind::Bool),
+        d(space, "NounState", PropKind::Array(Box::new(PropKind::Struct(state)))),
+        d(space, "ReplicatedNouns", PropKind::Struct(rep)).with_array_dim(20),
+        d(space, "NumReplicatedNouns", PropKind::Int),
+    ];
+    let pawn = space.classes.define("WillowGame.WillowPawn", Some(object), decls).unwrap();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_R", default);
+    n.set_resolver(attr, "ReplicationStrategy", Value::Byte(1));
+    let ctx = n.fx.obj(pawn, "Provider", vec![("Role", Value::Byte(3)), ("NounState", Value::array(vec![]))]);
+    let m = n.modifier(PRE, 1.0);
+    assert!(n.add_native(attr, ctx, m).unwrap());
+    let read = |n: &Noun, name: &str, i: u32| {
+        let space = &n.fx.w.space;
+        let p = space.prop(pawn, name).unwrap();
+        space.read(ctx, PropAddr::element(p, i)).unwrap().clone()
+    };
+    let e = n.entries(ctx);
+    assert_eq!((e.len(), e[0].slot, e[0].stack.clone()), (1, 0, vec![Some(m)]), "one entry, slot 0, the modifier on it");
+    assert_eq!(read(&n, "NumReplicatedNouns", 0), Value::Int(1));
+    let slot = read(&n, "ReplicatedNouns", 0);
+    let space = &n.fx.w.space;
+    assert_eq!(crate::eval::field(space, &slot, "NounName").unwrap(), &Value::Name(space.names.find("Attribute_R").unwrap()));
+    assert_eq!(crate::eval::number("Value", crate::eval::field(space, &slot, "Value").unwrap()).unwrap(), e[0].value, "the slot mirrors the entry");
+    assert_eq!(read(&n, "bNetDirty", 0), Value::Bool(true));
+}
+
+/// Test 1: a property (stack) attribute: the modifier joins the property's stack and the value is recomputed. The
+/// change notification is the existing storage rule (`storage::notify`), not changed by this lane.
+#[test]
+fn the_shared_add_puts_a_property_modifier_on_its_stack() {
+    let mut n = off();
+    let weapon = n.fx.weapon(None, None);
+    let space = &mut n.fx.w.space;
+    let class = space.heap.get(weapon).unwrap().class;
+    let base = space.prop(class, "InstantHitDamageBaseValue").unwrap();
+    space.write(weapon, PropAddr::scalar(base), Value::Float(5.0)).unwrap();
+    let attr = n.fx.property_attr("Attribute_D", weapon, "InstantHitDamage");
+    let m = n.modifier(PRE, 2.0);
+    assert!(n.add_native(attr, weapon, m).unwrap());
+    let space = &n.fx.w.space;
+    let stack = space.prop(class, "InstantHitDamageModifierStack").unwrap();
+    assert_eq!(space.read(weapon, PropAddr::scalar(stack)).unwrap().elements().unwrap(), &[Value::Object(Some(m))]);
+    let value = space.prop(class, "InstantHitDamage").unwrap();
+    assert_eq!(space.read(weapon, PropAddr::scalar(value)).unwrap(), &Value::Float(7.0));
+    // The change notification fires once (review r1 of #616, item 5) ...
+    assert_eq!(n.fx.w.notified, 1, "notified");
+    // ... and not with bSuppressNotify.
+    let m2 = n.modifier(PRE, 1.0);
+    assert!(n.add_native_with(attr, weapon, m2, true).unwrap());
+    assert_eq!(n.fx.w.notified, 1, "suppressed");
+}

@@ -462,6 +462,8 @@ enum Entry {
         class: ClassId,
     },
     Failed {
+        /// The path the handle was made for, kept for messages (review r2 of #616).
+        path: String,
         error: DefError,
     },
     Stays {
@@ -982,7 +984,7 @@ impl Loader<'_, '_> {
         self.cx.space.heap.get(o)?;
         match self.entry(o) {
             Some(Entry::Loaded { .. }) => Ok(o),
-            Some(Entry::Failed { error }) => Err(error),
+            Some(Entry::Failed { error, .. }) => Err(error),
             Some(Entry::Unloaded { path, target }) => match self.load_unloaded(o, &path, target) {
                 Ok(()) => Ok(o),
                 Err(error) => {
@@ -993,6 +995,7 @@ impl Loader<'_, '_> {
                         handles.entries.insert(
                             o,
                             Entry::Failed {
+                                path: path.clone(),
                                 error: error.clone(),
                             },
                         );
@@ -1835,12 +1838,15 @@ impl DefStore {
             )
     }
 
-    /// The object path an unloaded handle (or a stand-in that stays one) was made for, read from the store's own record
+    /// The object path an unloaded handle (one whose load failed included; review r2 of #616), or a stand-in that stays
+    /// one, was made for, read from the store's own record
     /// without loading anything; None for any other object. For messages (review r1 of #615: refusal texts name the
     /// full path, and an unloaded handle has no outer in the object space yet).
     pub fn handle_path(&self, obj: ObjRef) -> Option<String> {
         match self.handles.borrow().entries.get(&obj) {
-            Some(Entry::Unloaded { path, .. } | Entry::Stays { path, .. }) => Some(path.clone()),
+            Some(Entry::Unloaded { path, .. } | Entry::Failed { path, .. } | Entry::Stays { path, .. }) => {
+                Some(path.clone())
+            }
             _ => None,
         }
     }

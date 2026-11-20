@@ -311,6 +311,19 @@ Opus 5.5).
   ReplicationStrategy 2 on a provider". The same merge without this branch gives byte-identical output.
 - **Not run:** ctest and verify_packages (no C++ change), and no real-game run. Every rule is `UNVERIFIED` in game.
 
+**IMPL-ADD-ATTRIBUTE-MODIFIER (2026-11-19, pc-hummer, on fix/rust-resolve-context over main c687c135):** AI-assisted
+(Claude Code, Opus 5.5). `AttributeDefinitionBase.AddAttributeModifier` as one shared Off rule: A1, A0, A2, A3, the
+load-free storage probes (`eval::load_free`), then a terminal write. It is bound by the action-skill and equip packs in
+either order. Results:
+- `cargo test --workspace -j 2`: 2,762 passed / 0 failed / 50 ignored (12 new; the replicated test is ignored, needs
+  #523); `crate_edges_test.py` OK;
+- the installed equip run (50 weapons, Off): identical to main;
+- the installed Off `--slice-gate` strict, under the machine lock: 3 ok / 10 NotYet / 1 error, identical to main. Link 8
+  is at the unbound `RecomputeAttributeBaseValues`, and link 9 at the noun strategy-2 refusal (#523).
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN (add attribute modifier).
+
 **IMPL-RESOLVE-CONTEXT (2026-11-19, pc-hummer, on main c687c135):** AI-assisted (Claude Code, Opus 5.5).
 `AttributeDefinitionBase.ResolveContext` as one shared Off rule (R1, R2, R3, then a terminal walk), bound by the
 action-skill and equip packs in either order. Results:

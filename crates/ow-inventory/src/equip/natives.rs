@@ -155,18 +155,6 @@ fn suppress(call: &NativeCall<'_>) -> Result<bool, VmError> {
     Ok(call.has(2) && matches!(call.arg(2)?, Value::Bool(true)))
 }
 
-fn add_modifier(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let attr = this_of(call, ADD_MODIFIER)?;
-    let context = arg_object(call, 0, ADD_MODIFIER)?;
-    let Some(modifier) = arg_object(call, 1, ADD_MODIFIER)? else {
-        return Ok(Value::Bool(false));
-    };
-    let s = suppress(call)?;
-    let attrs = call.vm.attrs.clone();
-    let r = attrs.add_modifier(attr, context, modifier, s, &mut EvalCx::new(call.vm))?;
-    Ok(Value::Bool(r.succeeded()))
-}
-
 fn remove_modifier(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let attr = this_of(call, REMOVE_MODIFIER)?;
     let context = arg_object(call, 0, REMOVE_MODIFIER)?;
@@ -374,18 +362,7 @@ pub const ATTRIBUTE_DEFINITION_BASE: &str = "Engine.AttributeDefinitionBase";
 pub fn resolve_context_native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
     use ow_attr::resolve_native::{ResolveError, UNIT};
     let script = |message: String| VmError::Script { function: UNIT.to_string(), message };
-    let Some(attr) = call.this else {
-        return Err(script(format!("{UNIT} called without a definition")));
-    };
-    let space = &call.vm.space;
-    let class = space.heap.get(attr)?.class;
-    if !space.classes.by_path(ATTRIBUTE_DEFINITION_BASE).is_some_and(|b| space.classes.is_child_of(class, b)) {
-        let name = space.names.text(space.heap.get(attr)?.name).into_owned();
-        return Err(script(format!(
-            "{UNIT}: the receiver {name} is a {}, not an {ATTRIBUTE_DEFINITION_BASE}",
-            space.classes.layout(class).path()
-        )));
-    }
+    let attr = definition_receiver(call, UNIT)?;
     let source = match call.arg(0)? {
         Value::Object(o) => *o,
         other => return Err(script(format!("{UNIT}: ContextSource holds {}, not an object reference", other.kind_name()))),
@@ -407,6 +384,69 @@ pub fn bind_resolve_context(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(RESOLVE_CONTEXT, Rc::new(resolve_context_native))
 }
 
+/// The script function whose native key is [`ADD_MODIFIER`], for the keep-existing binds (`ow_combat::hit::bind_fn`).
+pub const ADD_MODIFIER_FUNCTION: &str = "Engine.AttributeDefinitionBase.AddAttributeModifier";
+
+/// The receiver check both wrappers share: `this` set and its class [`ATTRIBUTE_DEFINITION_BASE`] or a child, by the
+/// class table's `by_path` only (no load). Otherwise a `VmError::Script` naming `unit`.
+fn definition_receiver(call: &NativeCall<'_>, unit: &str) -> Result<ObjRef, VmError> {
+    let script = |message: String| VmError::Script { function: unit.to_string(), message };
+    let Some(attr) = call.this else {
+        return Err(script(format!("{unit} called without a definition")));
+    };
+    let space = &call.vm.space;
+    let class = space.heap.get(attr)?.class;
+    if !space.classes.by_path(ATTRIBUTE_DEFINITION_BASE).is_some_and(|b| space.classes.is_child_of(class, b)) {
+        let name = space.names.text(space.heap.get(attr)?.name).into_owned();
+        return Err(script(format!(
+            "{unit}: the receiver {name} is a {}, not an {ATTRIBUTE_DEFINITION_BASE}",
+            space.classes.layout(class).path()
+        )));
+    }
+    Ok(attr)
+}
+
+/// `AttributeDefinitionBase.AddAttributeModifier(Context, Modifier, bSuppressNotify)` in Off (lane
+/// IMPL-ADD-ATTRIBUTE-MODIFIER, NATIVE_ADD_ATTRIBUTE_MODIFIER.md section 3, **UNVERIFIED**): the one wrapper the equip
+/// pack and the action-skill pack bind. In order, the first failure is the answer, and nothing before the write loads,
+/// writes or draws:
+/// 1. the receiver ([`definition_receiver`]): else `VmError::Script`;
+/// 2. `Context` and `Modifier` each an object reference or None, else `VmError::Script`; then either None answers
+///    false at once, with the definition not read. A `bSuppressNotify` that is not a bool is false, not an error;
+/// 3. `ow-attr`'s [`ow_attr::AttributeSystem::add_modifier_native`]: A1, A0, the chain's shape (`VmError::Script`), A2,
+///    A3, the load-free storage probes, then the write, whose `NotYet`s are terminal.
+pub fn add_modifier_native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    use ow_attr::add_native::{AddError, UNIT};
+    let script = |message: String| VmError::Script { function: UNIT.to_string(), message };
+    let attr = definition_receiver(call, UNIT)?;
+    let mut objects = [None, None];
+    for (i, name) in ["Context", "Modifier"].iter().enumerate() {
+        objects[i] = match call.arg(i)? {
+            Value::Object(o) => *o,
+            other => return Err(script(format!("{UNIT}: {name} holds {}, not an object reference", other.kind_name()))),
+        };
+    }
+    let [Some(context), Some(modifier)] = objects else {
+        return Ok(Value::Bool(false));
+    };
+    let s = suppress(call)?;
+    let attrs = call.vm.attrs.clone();
+    match attrs.add_modifier_native(attr, context, modifier, s, &mut EvalCx::new(call.vm)) {
+        Ok(added) => Ok(Value::Bool(added)),
+        Err(AddError::Malformed(message)) => Err(script(message)),
+        Err(AddError::Attr(e)) => Err(e.into()),
+    }
+}
+
+/// Binds [`add_modifier_native`] at [`ADD_MODIFIER`] in `ParityMode::Off` unless a pack bound the key first (the
+/// keep-existing rule of `ow_combat::hit::bind_fn`, decision 2026-11-19-127, which this crate cannot call).
+pub fn bind_add_modifier(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off || vm.has_native(ADD_MODIFIER) {
+        return Ok(());
+    }
+    vm.register_native(ADD_MODIFIER, Rc::new(add_modifier_native))
+}
+
 /// Binds the module's natives in `ParityMode::Off`; Reference binds nothing (module documentation).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
@@ -414,8 +454,9 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     // ResolveContext: the shared rule with its preflight (lane IMPL-RESOLVE-CONTEXT), keeping a binding made first.
     bind_resolve_context(vm)?;
-    let natives: [(&str, NativeFn); 4] = [
-        (ADD_MODIFIER, Rc::new(add_modifier)),
+    // AddAttributeModifier: the shared rule with its preflight (lane IMPL-ADD-ATTRIBUTE-MODIFIER), keep-existing too.
+    bind_add_modifier(vm)?;
+    let natives: [(&str, NativeFn); 3] = [
         (REMOVE_MODIFIER, Rc::new(remove_modifier)),
         (SLOT_MAX, Rc::new(slot_max)),
         (EXTERNAL_SLOTS, Rc::new(external_slots)),
@@ -446,3 +487,7 @@ mod script_tests;
 #[cfg(test)]
 #[path = "resolve_context_tests.rs"]
 mod resolve_context_tests;
+
+#[cfg(test)]
+#[path = "add_modifier_tests.rs"]
+mod add_modifier_tests;

@@ -168,6 +168,60 @@ impl Drop for Guard {
 // Reading objects and values
 // ---------------------------------------------------------------------------------------------------------------
 
+thread_local! {
+    /// The unit of the innermost [`load_free`] scope, or None outside one.
+    static LOAD_FREE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with definition loads refused (lane IMPL-ADD-ATTRIBUTE-MODIFIER, NATIVE_ADD_ATTRIBUTE_MODIFIER.md section
+/// 3, step 8). Inside, an unloaded definition handle answers `NotYet { NotRead }` naming `unit` and loads nothing, on
+/// the two load paths that check the scope ([`load_free_refusal`]): this module's [`ensure_loaded`] and the context
+/// resolvers' own `ensure_loaded` (review r1 of #616). The scope ends when `f` returns, also on an error; scopes nest,
+/// and the outer scope is back when an inner one ends.
+///
+/// **What it does not cover** (review r1 of #616): the black-market upgrade's `load_for_write` (a write path, which
+/// loads on purpose) and the interface class lookups (`find_class`) of the balanced and inventory context resolvers,
+/// which can load a class package. A probe that reaches either is not made load-free by this scope. The add's probe
+/// (`effects::check_modifier_chain` with `ProbeOp::Add`) reaches neither: it resolves no context and writes nothing.
+pub fn load_free<T>(unit: &'static str, f: impl FnOnce() -> T) -> T {
+    let before = LOAD_FREE.with(|l| l.replace(Some(unit)));
+    struct Restore(Option<&'static str>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LOAD_FREE.with(|l| l.set(self.0));
+        }
+    }
+    let _restore = Restore(before);
+    f()
+}
+
+/// The load-free scope's check, shared by every load path that honours it ([`load_free`]): inside a scope, an unloaded
+/// handle `obj` is `NotYet { NotRead }`, "<unit>: <role> <name> is an unloaded handle (a load is a write)"; otherwise,
+/// or for any other object, nothing.
+pub(crate) fn load_free_refusal(
+    space: &ObjectSpace,
+    defs: &ow_defs::DefStore,
+    obj: ObjRef,
+    role: &str,
+) -> Result<(), AttrError> {
+    if let Some(unit) = LOAD_FREE.with(|l| l.get())
+        && defs.is_unloaded(space, obj)
+    {
+        let name = space.names.text(space.heap.get(obj)?.name).into_owned();
+        return Err(NotYet::not_read(
+            format!("{unit}: {role} {name} is an unloaded handle (a load is a write)"),
+            "NATIVE_ADD_ATTRIBUTE_MODIFIER.md",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Whether a [`load_free`] scope is open, and its unit (for tests of the scope).
+pub fn load_free_unit() -> Option<&'static str> {
+    LOAD_FREE.with(|l| l.get())
+}
+
 /// Makes sure `obj` can be read (module documentation). Only an object with `Origin::Resource` can be an unloaded
 /// definition handle (a load gives it `Origin::Export`), so only such an object goes to the world's store, whose
 /// [`DefStore::ensure_loaded`](ow_defs::DefStore::ensure_loaded) loads it, or leaves it as it is when it is a
@@ -187,6 +241,8 @@ pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> 
     }
     match defs {
         Some(defs) => {
+            // Inside a load-free scope ([`load_free`]) an unloaded handle refuses instead of loading (a load is a write).
+            load_free_refusal(space, defs, obj, "a default value's handle")?;
             defs.ensure_loaded(space, obj)?;
             slotless_refusal(space, true, obj)
         }
@@ -1264,4 +1320,28 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
         check_init(sys, p, depth + 1, cx)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod load_free_tests {
+    use super::{load_free, load_free_unit};
+
+    /// Review r1 of #616, item 4: the scope is closed again after an `Err`, and after a nested scope ends the outer one
+    /// is back.
+    #[test]
+    fn the_scope_is_restored_after_an_error_and_after_nesting() {
+        assert_eq!(load_free_unit(), None);
+        let outer: Result<(), &str> = load_free("outer", || {
+            assert_eq!(load_free_unit(), Some("outer"));
+            let inner: Result<(), &str> = load_free("inner", || {
+                assert_eq!(load_free_unit(), Some("inner"));
+                Err("inner refused")
+            });
+            assert!(inner.is_err());
+            assert_eq!(load_free_unit(), Some("outer"), "the outer scope is back");
+            Err("outer refused")
+        });
+        assert!(outer.is_err());
+        assert_eq!(load_free_unit(), None, "closed after an error");
+    }
 }
