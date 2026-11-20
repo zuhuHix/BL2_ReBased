@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK8-NEWMESH-PRELOAD (2026-11-20, pc-hummer, on #645 44992baa):** AI-assisted (Claude Code, Opus 5.5). Link 8's
+set-up preloads the gestalt definition's `GestaltSkeletalMesh` (an UNVERIFIED stand-in, Off only). `cargo test
+--workspace` 3,211 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 4 ok /
+9 NotYet / 1 error; only row 8 differs from #645: link 8 passes `make` and first stops in `init` at SetSkeletalMesh's
+LOD row (`LayerAbsent`, the skeletal mesh data layer's LOD models) instead of the unloaded new mesh.
+
 **IMPL-SKELMESH-MESH-CHANGE (2026-11-20, pc-hummer, on main 241a6c47):** AI-assisted (Claude Code, Opus 5.5).
 SetSkeletalMesh's mesh change in Off from NATIVE_SKELMESH_MESH_CHANGE.md. `cargo test --workspace -j 2` 3,209 passed / 0
 failed / 51 ignored (10 new in `skeletal_mesh_change_tests.rs`); `crate_edges_test.py` OK. Installed Off strict

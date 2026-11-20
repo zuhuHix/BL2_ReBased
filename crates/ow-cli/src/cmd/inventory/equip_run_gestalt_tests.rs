@@ -18,7 +18,7 @@ use ow_package::testkit::reflect::toy_struct;
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 
-use super::{GESTALT_INPUT, preload_gestalt_mesh};
+use super::{GESTALT_INPUT, NEW_MESH_INPUT, preload_gestalt_mesh, preload_gestalt_skeletal_mesh};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -26,6 +26,8 @@ fn package() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "StructProperty", "ScriptStruct"]);
     let object = t.class("Object", 0);
     let gestalt = t.class("ToyGestaltDefinition", object);
+    let mesh = t.class("ToySkeletalMesh", object);
+    t.prop("Object", gestalt, "GestaltSkeletalMesh", 0, mesh);
     let weapon_type = t.class("ToyWeaponTypeDefinition", object);
     t.prop("Object", weapon_type, "GestaltMesh", 0, gestalt);
     let weapon = t.class("ToyWeapon", object);
@@ -41,9 +43,15 @@ fn package() -> Vec<u8> {
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export(weapon_type, "ToyType_Plain", payload);
+    // `ToyGestalt_0` names `ToyMesh_0` (the export after it) as its `GestaltSkeletalMesh`.
+    let next = t.p.next_export();
     let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("GestaltSkeletalMesh", next + 1));
     payload.extend_from_slice(&t.none);
     t.p.add_export(gestalt, "ToyGestalt_0", payload);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(mesh, "ToyMesh_0", payload);
     t.p.build()
 }
 
@@ -156,4 +164,67 @@ fn reference_preloads_nothing() {
     assert_eq!(x.counts(), before, "Reference writes and loads nothing (review r1 of #632, item 2)");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, gestalt), "still cold");
     assert!(x.harness().is_empty());
+}
+
+impl Fx {
+    fn new_mesh_lines(&self) -> Vec<String> {
+        self.vm.log.iter().filter(|l| l.starts_with(NEW_MESH_INPUT)).cloned().collect()
+    }
+
+    fn mesh_of(&self, gestalt: ObjRef) -> ObjRef {
+        match ow_inventory::equip::read_prop(&self.vm, gestalt, "GestaltSkeletalMesh") {
+            Some(Value::Object(Some(m))) => m,
+            other => panic!("GestaltSkeletalMesh: {other:?}"),
+        }
+    }
+}
+
+/// Lane LINK8-NEWMESH-PRELOAD, in the set-up order `prepare_equip` runs before `init`: the gestalt preload, then the
+/// new-mesh preload. The cold `GestaltSkeletalMesh` is loaded and logged before ("UNVERIFIED stand-in") and after
+/// ("loaded"); a second call finds it loaded and adds, writes and loads nothing.
+#[test]
+fn off_loads_the_gestalt_definitions_cold_mesh_after_the_gestalt_preload() {
+    let mut x = fx(ParityMode::Off);
+    let weapon_type = x.find("WillowGame.ToyType_Gestalt");
+    let gestalt = x.gestalt_of(weapon_type);
+    let weapon = x.weapon(Some(weapon_type));
+    // Before the gestalt preload the definition is cold: the new-mesh preload does nothing.
+    let before = x.counts();
+    preload_gestalt_skeletal_mesh(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.counts(), before, "a cold definition: nothing");
+    assert!(x.new_mesh_lines().is_empty());
+    preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
+    let mesh = x.mesh_of(gestalt);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, mesh), "cold before the preload");
+    preload_gestalt_skeletal_mesh(&mut x.vm, weapon).unwrap();
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, mesh), "loaded before init");
+    let lines = x.new_mesh_lines();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("ToyMesh_0") && lines[0].ends_with("UNVERIFIED stand-in)"), "{lines:?}");
+    assert!(lines[1].ends_with("ToyMesh_0: loaded"), "{lines:?}");
+    let before = x.counts();
+    preload_gestalt_skeletal_mesh(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.new_mesh_lines().len(), 2, "already loaded: nothing more");
+    assert_eq!(x.counts(), before, "the warm handle writes and loads nothing");
+}
+
+/// No weapon type, a type without a gestalt definition, and Reference: nothing loaded or logged.
+#[test]
+fn the_new_mesh_preload_is_nothing_without_a_gestalt_and_under_reference() {
+    let mut x = fx(ParityMode::Off);
+    let plain = x.find("WillowGame.ToyType_Plain");
+    for weapon_type in [Some(plain), None] {
+        let weapon = x.weapon(weapon_type);
+        let before = x.counts();
+        preload_gestalt_skeletal_mesh(&mut x.vm, weapon).unwrap();
+        assert_eq!(x.counts(), before);
+    }
+    assert!(x.new_mesh_lines().is_empty());
+    let mut r = fx(ParityMode::Reference);
+    let weapon_type = r.find("WillowGame.ToyType_Gestalt");
+    let weapon = r.weapon(Some(weapon_type));
+    let before = r.counts();
+    preload_gestalt_skeletal_mesh(&mut r.vm, weapon).unwrap();
+    assert_eq!(r.counts(), before, "Reference writes and loads nothing");
+    assert!(r.new_mesh_lines().is_empty());
 }

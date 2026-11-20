@@ -796,6 +796,7 @@ fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
     preload_gestalt_mesh(vm, weapon)?;
+    preload_gestalt_skeletal_mesh(vm, weapon)?;
     Ok(weapon)
 }
 
@@ -834,6 +835,53 @@ pub(crate) fn preload_gestalt_mesh(vm: &mut Vm, weapon: ObjRef) -> Result<(), Vm
     match &loaded {
         Ok(()) => vm.log.push(format!("{GESTALT_INPUT} {name}: loaded")),
         Err(e) => vm.log.push(format!("{GESTALT_INPUT} {name}: failed ({e})")),
+    }
+    loaded.map_err(VmError::from)
+}
+
+/// The text of [`preload_gestalt_skeletal_mesh`]'s harness lines.
+pub(crate) const NEW_MESH_INPUT: &str = "harness input: preload the gestalt definition's GestaltSkeletalMesh";
+
+/// The Off harness preload of lane LINK8-NEWMESH-PRELOAD, run right after [`preload_gestalt_mesh`]: the weapon type's
+/// gestalt definition's `GestaltSkeletalMesh`, when the definition is resident and the mesh is one of the store's
+/// unloaded handles, is loaded through the store. `BuildCompositeMesh`'s gestalt path answers that shared mesh
+/// (NATIVE_BUILD_COMPOSITE_MESH.md section 2), and `InitMeshes` hands it to `SetSkeletalMesh`, whose rule refuses an
+/// unloaded new mesh because a lazy load is a write (NATIVE_SKELMESH_MESH_CHANGE.md row 6). In the game the mesh is
+/// resident with the definition that references it, which this load stands in for (**UNVERIFIED stand-in**). It is
+/// logged before it runs (rule 7) and its outcome after; a failed load keeps its error. No type, no gestalt
+/// definition, a cold definition, no mesh, or a mesh already loaded: nothing. Outside Off, nothing.
+pub(crate) fn preload_gestalt_skeletal_mesh(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    let Ok(Value::Object(Some(weapon_type))) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition").cloned()
+    else {
+        return Ok(());
+    };
+    let Some(Value::Object(Some(gestalt))) = ow_inventory::equip::read_prop(vm, weapon_type, "GestaltMesh") else {
+        return Ok(());
+    };
+    if vm.defs.is_unloaded(&vm.space, gestalt) {
+        return Ok(());
+    }
+    let Some(Value::Object(Some(mesh))) = ow_inventory::equip::read_prop(vm, gestalt, "GestaltSkeletalMesh") else {
+        return Ok(());
+    };
+    if !vm.defs.is_unloaded(&vm.space, mesh) {
+        return Ok(());
+    }
+    let name = ow_vm::path_name::path_name(vm, mesh).unwrap_or_else(|_| format!("{mesh:?}"));
+    vm.log.push(format!(
+        "{NEW_MESH_INPUT} {name} (SetSkeletalMesh loads nothing; the game has it resident with the gestalt definition: \
+         UNVERIFIED stand-in)"
+    ));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, mesh);
+    vm.log.extend(vm.defs.take_log());
+    match &loaded {
+        Ok(()) => vm.log.push(format!("{NEW_MESH_INPUT} {name}: loaded")),
+        Err(e) => vm.log.push(format!("{NEW_MESH_INPUT} {name}: failed ({e})")),
     }
     loaded.map_err(VmError::from)
 }
