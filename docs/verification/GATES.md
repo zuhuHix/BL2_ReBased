@@ -122,6 +122,22 @@ run; `UNVERIFIED` in game. Decision 2026-11-19-218; logs under the throwaway wor
 Rebased onto main c687c13 (98f22f6, desktop): `cargo test -p ow-world -p ow-cli` 461 passed / 0 failed / 9 ignored;
 `cargo test --workspace -j 2` 2,742 passed / 0 failed / 49 ignored; clippy flags nothing in the changed files.
 
+**IMPL-WILLOWAICOMPONENT-QUERYINTERFACE (2026-11-20, zuhu desktop, from main c687c13):** AI-assisted (Claude Code,
+Opus 5.5).
+- **The change** (from NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, #600 at e7dcdde): `AIComponent` and
+  `WillowAIComponent` take the component `QueryInterface` rule. Owner None with `bAttached` false is NotRead. Also
+  `WillowAIComponent.PhaseLockOnHold` in Off.
+- **Gates:**
+  - `cargo test -p ow-combat -j 2`: 220 passed / 0 failed / 2 ignored, 6 of them new;
+  - `cargo build --workspace -j 2`: clean;
+  - `cargo test --workspace -j 2`: 2,745 passed / 0 failed / 49 ignored;
+  - clippy flags nothing in the changed files.
+- **Slice probe** (installed Off `--slice-gate`, strict, under the machine lock, on a throwaway merge with #601
+  e1c9f0e4 and #602 3e7c1294; one test patched there for #602): 3 ok / 10 NotYet / 1 error. Link 9 runs both of its
+  driver's 2 steps: `spawn` passes, and `cast` stops at "stopped after partial writes: NounAttributeValueResolver with
+  ReplicationStrategy 2 on a provider". The same merge without this branch gives byte-identical output.
+- **Not run:** ctest and verify_packages (no C++ change), and no real-game run. Every rule is `UNVERIFIED` in game.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace
