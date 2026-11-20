@@ -16,7 +16,7 @@ Off until a fresh implementer codes them from this note alone (decision 2026-11-
 | `AIComponent.HoldDemigod` / `ReleaseDemigod` / `DemigodOnHold` | the same shape | `Behavior_AIHold` Type 3: the Fire dummy's `Behavior_AIHold_59` | high | UNVERIFIED |
 | `AIComponent.HoldGod` / `ReleaseGod` / `GodOnHold` | the same shape | `Behavior_AIHold` Type 4 | high | UNVERIFIED |
 | `AIComponent.HoldDialog` / `ReleaseDialog` / `DialogOnHold` | the same shape | `Behavior_AIHold` Type 5 | high | UNVERIFIED |
-| `GearboxMind.GetAIComponent` | `native function AIComponent GetAIComponent()` (`IAIInterface`) | every `Behavior_AIHold` call | low | not resolved |
+| `GearboxMind.GetAIComponent` | `native function AIComponent GetAIComponent()` (`IAIInterface`) | every `Behavior_AIHold` call | high | read 2026-11-19: the mind's own `AIComponent` ([NATIVE_GEARBOXMIND_GETAICOMPONENT.md](NATIVE_GEARBOXMIND_GETAICOMPONENT.md)), UNVERIFIED |
 | How a pawn context reaches `IAIInterface` | (the `QueryInterface` of a pawn) | `Behavior_AIHold` on a pawn's provider | high | read 2026-11-19: [NATIVE_PAWN_AI_INTERFACE.md](NATIVE_PAWN_AI_INTERFACE.md) (the pawn's `Controller` answers); implemented in Off (decision 2026-11-19-62), the controller's own answer still `NotYet`; UNVERIFIED |
 
 The base kinds (`Hold` / `Release` / `OnHold`, `HoldTarget` / `ReleaseTarget` / `TargetOnHold`) are in
@@ -80,7 +80,7 @@ The script native returns what a virtual function of an object held inside the m
 a `MapProperty`). Reading it as "the mind's `AIComponent` property", as `ow-combat` binds it, is plausible and
 unproven.
 
-**Read 2026-11-20** in [NATIVE_GEARBOXMIND_GETAICOMPONENT.md](NATIVE_GEARBOXMIND_GETAICOMPONENT.md): it is the mind's
+**Read 2026-11-19** in [NATIVE_GEARBOXMIND_GETAICOMPONENT.md](NATIVE_GEARBOXMIND_GETAICOMPONENT.md): it is the mind's
 own `AIComponent` property, as it is (placed by structural checks on the layout). Still UNVERIFIED in game.
 
 - **Live confirmation:** call `GetAIComponent()` on a bullymong's mind and compare with its `AIComponent` property.

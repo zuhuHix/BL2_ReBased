@@ -13,9 +13,11 @@ changed, and the lane implements none of it (clean room). **Every rule is UNVERI
     registered class size. With that size, the interface table lands on `VfTable_IIAIInterface` and the read lands on
     `AIComponent`.
 - **Proposed Off answer for a separate implementer:** replace `ow_combat::holds`' NotYet binding with a plain read of
-  the receiver's `AIComponent`, returned as it is. Malformed calls are `VmError::Script`. A field that names the class
-  default's template is `NotYet { NotRead }` (the port's choice). Reference's `hit.rs` stand-in is unchanged. The
-  tests are in the note's section 3.
+  the receiver's `AIComponent`, returned as it is. The read does not call `loaded`. Malformed calls are
+  `VmError::Script`. Two cases are `NotYet { NotRead }`: an unloaded receiver handle (not loaded first), and a field
+  that names a class default's template. The template test reads only the heap (the outer's `Origin::Default`, or a
+  `Default__` name) and decodes nothing, and it also runs in the hold preflight. Reference's `hit.rs` stand-in is
+  unchanged. The tests are in the note's section 3 (review r1 of #594).
 - **Local probe (never pushed):** a merge of #535, #579, #564, #548, #555, #560, #523 and the link 9 spawn branches.
   Two probe-only patches: #589's answer for `IAIInterface`, and this answer bound in link 9's set-up. Installed Off
   strict `--slice-gate`:
