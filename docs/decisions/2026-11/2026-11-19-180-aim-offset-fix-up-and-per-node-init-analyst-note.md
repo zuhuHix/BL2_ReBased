@@ -1,4 +1,4 @@
-# The aim-offset link fix-up and the per-node initialisation: analyst note
+## 2026-11-19: The aim-offset link fix-up and the per-node initialisation: analyst note
 
 AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-AIMOFFSET-REFRESH-AND-NODE-INIT, 2026-11-19. Number pending (NNN).
 

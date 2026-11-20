@@ -1,6 +1,6 @@
 # The aim-offset link fix-up and the per-node initialisation (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-AIMOFFSET-REFRESH-AND-NODE-INIT (decision 2026-11-19-NNN,
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-AIMOFFSET-REFRESH-AND-NODE-INIT (decision 2026-11-19-180,
 number pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
