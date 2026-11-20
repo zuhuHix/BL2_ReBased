@@ -89,4 +89,12 @@ an empty tick list, a whole-name match, a None control name, a looping chain).
    caches' "only while None" guard is not either. The refusal snapshot now also holds the name table's length; the
    attach snapshot holds it and the RNG draws.
 
-`cargo test --workspace --locked` 3,043 passed / 0 failed / 51 ignored. Every rule is still UNVERIFIED.
+**Restacked onto #618 (3630cd59, the hub's call).** #618 changed `attach_check` to `attach_plan`, which returns the
+plan so the body composition's lookups search the planned copy. The two are merged: `attach_plan(vm, template,
+owner)` plans the copy with the owner's event for the given owner, and `attach_check` is that plan's check. The body
+composition calls `attach_plan(.., Some(owner))` and hands the plan to #618's lookups. #618's test switch for the
+owner-event refusal is gone with the refusal, and its fixture declares `ParentAnimComponent`.
+
+`cargo test --workspace --locked` 3,047 passed / 0 failed / 51 ignored. The strict slice gate on #618 plus #592 moves
+links 1, 3, 4, 5, 13 and 14 from the owner's event to the body's rendering hooks; the other eight are unchanged.
+Every rule is still UNVERIFIED.
