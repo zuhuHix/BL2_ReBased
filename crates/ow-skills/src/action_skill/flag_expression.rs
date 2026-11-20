@@ -295,10 +295,6 @@ fn chain_of(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<
             interface(vm, path)?;
         }
         rule_engine(vm, context)?;
-        // The chain is unknown until the load: any definition may reach the AI component resolver.
-        if let Some(c) = context {
-            ai_question(vm, c)?;
-        }
     }
     load(vm, me)?;
     let chain = field(vm, me, "FlagChain")?;
@@ -558,44 +554,35 @@ fn may_need_store(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
     Ok(false)
 }
 
-/// Whether a reached definition may ask its context for [`AI_INTERFACE`] before anything changes that context (lane
-/// PREFLIGHT-ORDER-LINK9-CAST), by reads only: a handle not loaded yet (its fields are unknown), or a chain whose first
-/// set entry is an [`AI_COMPONENT_RESOLVER`] (its script asks its source, the context, first). A later entry asks a
-/// context the chain's earlier resolvers have changed, which cannot be known before they run, and a nested evaluator
-/// checks its own definitions: the dispatch decides there.
+/// Whether a reached definition asks its context for [`AI_INTERFACE`] before anything changes that context (lane
+/// PREFLIGHT-ORDER-LINK9-CAST), by reads only: a resident definition whose chain's first set entry
+/// ([`first_resolver`], None entries skipped) is an [`AI_COMPONENT_RESOLVER`] (its script asks its source, the
+/// context, first). A definition not loaded yet, a later entry (it asks a context the earlier resolvers have changed),
+/// a chain that does not read, and a nested evaluator are left to the dispatch, so a refusal there stays marked
+/// (review r1 of #648, items 1 and 3).
 fn may_ask_ai_first(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
     if vm.defs.is_unloaded(&vm.space, definition) {
-        return Ok(true);
-    }
-    let class = vm.space.heap.get(definition)?.class;
-    let Some(p) = vm.space.prop(class, "ContextResolverChain") else {
-        // Undeclared: the reads after the load report it.
         return Ok(false);
-    };
-    let first = vm.space.read(definition, PropAddr::scalar(p))?.elements().and_then(|entries| {
-        entries.iter().find_map(|v| match v {
-            Value::Object(Some(o)) => Some(*o),
-            _ => None,
-        })
-    });
-    match first {
-        Some(resolver) => is_a(vm, resolver, AI_COMPONENT_RESOLVER),
-        None => Ok(false),
+    }
+    match first_resolver(vm, definition) {
+        Ok(Some(resolver)) => is_a(vm, resolver, AI_COMPONENT_RESOLVER),
+        Ok(None) | Err(_) => Ok(false),
     }
 }
 
 /// The preflight of the AI component resolver's first question (lane PREFLIGHT-ORDER-LINK9-CAST): the context's
 /// `QueryInterface(IAIInterface)` through the read-only dispatch ([`Vm::query_interface_read_only`]), before the next
-/// load, so a question with no bound answer refuses before the evaluator's first write rather than after it. Its
-/// `NotYet` is returned as it is, text and kind kept. Left to the dispatch: an answer (the question is asked again
-/// when the resolver runs), a rule with no read-only form (`NotPorted`: the ordinary rule may answer), any other
-/// error, and an interface class that is not loaded.
+/// load, so a question with no bound answer refuses before the evaluator's first write rather than after it. Only a
+/// rule's own `NotYet` is returned, text and kind kept: one whose record is not the read-only dispatch's
+/// ([`ow_vm::api::READ_ONLY_RECORD`]). The dispatch's own refusals (an entry not resolved yet, an unloaded stand-in,
+/// no code layer, a rule with no read-only form) are where the ordinary path may load and answer, so they are left to
+/// it (review r1 of #648, item 2), as are an answer, any other error, and an interface class that is not loaded.
 fn ai_question(vm: &Vm, context: ObjRef) -> Result<(), VmError> {
     let Some(iface) = vm.space.classes.by_path(AI_INTERFACE) else {
         return Ok(());
     };
     match vm.query_interface_read_only(&mut ow_vm::api::InterfaceAsking::default(), context, iface) {
-        Err(VmError::NotYet(n)) if n.missing != ow_core::Missing::NotPorted => Err(n.into()),
+        Err(VmError::NotYet(n)) if n.record != ow_vm::api::READ_ONLY_RECORD => Err(n.into()),
         _ => Ok(()),
     }
 }

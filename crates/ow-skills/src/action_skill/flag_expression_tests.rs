@@ -79,6 +79,28 @@ impl ow_attr::api::ContextResolver for NoneAnswer {
     }
 }
 
+thread_local! {
+    /// How often `Counted` ran on this test's thread.
+    static AI_RUNS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// The AI component resolver's stand-in (lane PREFLIGHT-ORDER-LINK9-CAST): hands its source on and counts its runs.
+struct Counted;
+
+impl ow_attr::api::ContextResolver for Counted {
+    fn resolve(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _attr: ObjRef,
+        source: Option<ObjRef>,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+        AI_RUNS.with(|c| c.set(c.get() + 1));
+        Ok(source)
+    }
+}
+
 struct Fx {
     vm: Vm,
     conditional: StructId,
@@ -282,7 +304,7 @@ fn fx_impl(world_info: bool, missing: Option<&str>, package_evaluator: bool, pac
         .unwrap()
         .with_context_resolver("Toy.NoneContextResolver", NoneAnswer)
         .unwrap()
-        .with_context_resolver("GearboxFramework.AIComponentAttributeContextResolver", Pass)
+        .with_context_resolver("GearboxFramework.AIComponentAttributeContextResolver", Counted)
         .unwrap();
     let mut vm = Vm::new(s, defs, Rc::new(attrs), ParityMode::Off);
     let actors = vm.add_service(ow_world::actors::Actors::new(actor)).unwrap();
@@ -989,18 +1011,31 @@ fn the_store_path_is_reported_before_the_provider_guard() {
 // Lane PREFLIGHT-ORDER-LINK9-CAST: the AI component resolver's question, asked read-only before the first write
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The invented open answer's text.
+/// The invented open answer's text and record.
 const OPEN: &str = "Toy.AIPawn's invented open QueryInterface answer is not read";
+const OPEN_RECORD: &str = "an invented record";
 
-/// A `Toy.AIPawn` whose class answers `QueryInterface` read-only by `answer`: `Some(true)` itself, `Some(false)`
-/// none, `None` the invented open refusal. `ordinary_only` binds the answer without a read-only form (a rule the
-/// read-only dispatch calls not ported).
-fn ai_pawn(x: &mut Fx, answer: Option<bool>, ordinary_only: bool) -> ObjRef {
+/// How a `Toy.AIPawn`'s read-only rule answers.
+#[derive(Clone, Copy)]
+enum Answer {
+    Yes,
+    No,
+    /// The invented open answer: a rule's own `NotYet`.
+    Open,
+    /// A refusal carrying the read-only dispatch's record (as its unresolved-entry refusal does).
+    DispatchOwn,
+}
+
+/// A `Toy.AIPawn` whose class answers `QueryInterface` read-only by `answer`. `ordinary_only` binds the answer
+/// without a read-only form (a rule the read-only dispatch calls not ported).
+fn ai_pawn(x: &mut Fx, answer: Answer, ordinary_only: bool) -> ObjRef {
     let class = x.class("Toy.AIPawn");
     let answer_of = move |this: ObjRef| -> Result<Option<ObjRef>, VmError> {
         match answer {
-            Some(yes) => Ok(yes.then_some(this)),
-            None => Err(ow_core::NotYet::not_read(OPEN, "an invented record").into()),
+            Answer::Yes => Ok(Some(this)),
+            Answer::No => Ok(None),
+            Answer::Open => Err(ow_core::NotYet::not_read(OPEN, OPEN_RECORD).into()),
+            Answer::DispatchOwn => Err(ow_core::NotYet::not_read("an invented entry not resolved", ow_vm::api::READ_ONLY_RECORD).into()),
         }
     };
     if ordinary_only {
@@ -1012,10 +1047,11 @@ fn ai_pawn(x: &mut Fx, answer: Option<bool>, ordinary_only: bool) -> ObjRef {
     x.obj("Toy.AIPawn", "AIPawn")
 }
 
-/// A flag definition whose context chain is `chain` (resolver classes, in order), no value resolver.
-fn chained(x: &mut Fx, chain: &[&str]) -> ObjRef {
+/// A flag definition whose context chain is `chain` (resolver classes in order, `None` an empty entry), no value
+/// resolver.
+fn chained(x: &mut Fx, chain: &[Option<&str>]) -> ObjRef {
     let f = x.obj("GearboxFramework.FlagDefinition", "Chained");
-    let entries = chain.iter().map(|c| Value::Object(Some(x.obj(c, "Resolver")))).collect();
+    let entries = chain.iter().map(|c| Value::Object(c.map(|c| x.obj(c, "Resolver")))).collect();
     x.set(f, "ContextResolverChain", Value::array(entries));
     f
 }
@@ -1024,48 +1060,65 @@ fn counters(x: &Fx) -> (WriteCounters, usize) {
     (WriteCounters::of(&x.vm), x.vm.space.names.len())
 }
 
-/// The question with no bound read-only answer refuses before the evaluator's first write, its text kept and not
-/// marked: on a definition whose first resolver is the AI component resolver, and on a cold receiver (its chain is
-/// unknown until its load), which stays unloaded.
-#[test]
-fn an_open_ai_question_refuses_before_any_write() {
-    let mut x = fx();
-    let pawn = ai_pawn(&mut x, None, false);
-    let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
-    let e = x.evaluator(&[(0, Some(f))], 0);
-    let before = counters(&x);
-    let text = not_read(x.eval(e, Some(pawn)), OPEN);
-    assert_eq!(text, OPEN, "the dispatch's text, not marked");
-    assert_eq!(counters(&x), before, "write-free, RNG-free, load-free, no name interned");
-    // A cold receiver.
-    let mut x = fx_all(true, None, true);
-    let pawn = ai_pawn(&mut x, None, false);
-    let cold = x.cold_evaluator();
-    let before = counters(&x);
-    assert_eq!(not_read(x.eval(cold, Some(pawn)), OPEN), OPEN);
-    assert_eq!(counters(&x), before);
-    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the receiver was not loaded");
+fn ai_runs() -> u32 {
+    AI_RUNS.with(Cell::get)
 }
 
-/// A receiver with a bound read-only answer goes through, yes or no; so does a rule with no read-only form (the
-/// ordinary dispatch decides), and a chain whose AI component resolver comes after another resolver.
+const AI: Option<&str> = Some(AI_COMPONENT_RESOLVER);
+
+/// A rule's open answer refuses before the evaluator's first write, its text kept and not marked, when the
+/// definition's first set entry is the AI component resolver (also after a leading None entry); the resolver never
+/// runs.
 #[test]
-fn a_bound_ai_answer_goes_through() {
-    for answer in [true, false] {
+fn an_open_ai_question_refuses_before_any_write() {
+    for chain in [&[AI][..], &[None, AI][..]] {
         let mut x = fx();
-        let pawn = ai_pawn(&mut x, Some(answer), false);
-        let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
+        let pawn = ai_pawn(&mut x, Answer::Open, false);
+        let f = chained(&mut x, chain);
         let e = x.evaluator(&[(0, Some(f))], 0);
-        assert!(!x.eval(e, Some(pawn)).unwrap(), "IsTrue with neither field is false");
+        let (before, runs) = (counters(&x), ai_runs());
+        let text = not_read(x.eval(e, Some(pawn)), OPEN);
+        assert_eq!(text, OPEN, "the rule's text, not marked");
+        assert_eq!(counters(&x), before, "write-free, RNG-free, load-free, no name interned");
+        assert_eq!(ai_runs(), runs, "the resolver did not run");
     }
+}
+
+/// A bound read-only answer, yes or no, goes through and the resolver runs; so do a rule with no read-only form and a
+/// refusal of the read-only dispatch's own (the ordinary path may load and answer: review r1 of #648, item 2).
+#[test]
+fn a_bound_or_dispatch_only_ai_answer_goes_through() {
+    for (answer, ordinary_only) in [(Answer::Yes, false), (Answer::No, false), (Answer::Open, true), (Answer::DispatchOwn, false)] {
+        let mut x = fx();
+        let pawn = ai_pawn(&mut x, answer, ordinary_only);
+        let f = chained(&mut x, &[AI]);
+        let e = x.evaluator(&[(0, Some(f))], 0);
+        let runs = ai_runs();
+        assert!(!x.eval(e, Some(pawn)).unwrap(), "IsTrue with neither field is false");
+        assert_eq!(ai_runs(), runs + 1, "the resolver ran");
+    }
+}
+
+/// No false refusal (review r1 of #648, items 1 and 4): on a context whose answer is open, a chain without the AI
+/// resolver (a pawn-style resolver only) answers as before; an AI resolver after another resolver is left to the
+/// dispatch; and a cold definition the chain never reaches stays unloaded, with no refusal.
+#[test]
+fn an_open_context_does_not_refuse_other_chains() {
     let mut x = fx();
-    let pawn = ai_pawn(&mut x, None, true);
-    let f = chained(&mut x, &[AI_COMPONENT_RESOLVER]);
+    let pawn = ai_pawn(&mut x, Answer::Open, false);
+    let f = chained(&mut x, &[Some("Toy.PassContextResolver")]);
     let e = x.evaluator(&[(0, Some(f))], 0);
-    assert!(!x.eval(e, Some(pawn)).unwrap(), "no read-only form: left to the dispatch");
-    let mut x = fx();
-    let pawn = ai_pawn(&mut x, None, false);
-    let f = chained(&mut x, &["Toy.PassContextResolver", AI_COMPONENT_RESOLVER]);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "a pawn-style chain answers normally");
+    let f = chained(&mut x, &[Some("Toy.PassContextResolver"), AI]);
     let e = x.evaluator(&[(0, Some(f))], 0);
-    assert!(!x.eval(e, Some(pawn)).unwrap(), "a later entry asks a changed context: not preflighted");
+    let runs = ai_runs();
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "a later AI resolver: the dispatch decides (the toy asks nothing)");
+    assert_eq!(ai_runs(), runs + 1);
+    // A resident receiver whose second conditional names a cold definition, short-circuited by `CEOP_And`.
+    let first = chained(&mut x, &[Some("Toy.PassContextResolver")]);
+    let cold = x.held("Held");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold));
+    let e = x.evaluator(&[(0, Some(first)), (0, Some(cold))], 1);
+    assert!(!x.eval(e, Some(pawn)).unwrap());
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the cold definition stays unloaded");
 }
