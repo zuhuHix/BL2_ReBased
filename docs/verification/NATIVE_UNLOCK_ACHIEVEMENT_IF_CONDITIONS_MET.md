@@ -1,6 +1,6 @@
 # Native rules of WillowPlayerController.UnlockAchievementIfConditionsMet (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK12-UNLOCK-ACHIEVEMENT (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK12-UNLOCK-ACHIEVEMENT (decision 2026-11-19-152, number
 pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
