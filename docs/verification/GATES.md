@@ -83,6 +83,11 @@ error; with local stand-ins (never pushed) for #612, #622, the socket attach and
 six Maya links next at AnimNodeSpecialMoveBlend, and the parent's `bAttached` clear at all eight socket attaches: no
 slice link reaches the layer today.
 
+**ANALYST-SPECIALMOVE-OWNER (2026-11-20, pc-hummer, docs only, on docs/native-specialmove-owner from main 241a6c47):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIALMOVE_OWNER.md: what `AnimNodeSpecialMoveBlend` asks its owner
+during and after the tree initialisation. No code changed, so no measured number moved; the slice gate was not run
+for this lane. UNVERIFIED in game.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
