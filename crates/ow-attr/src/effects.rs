@@ -64,7 +64,8 @@ fn storage_at(
 /// an unknown class, a lookup `NotYet`, or a refusal the operation's write itself would give (a noun entry's replicated
 /// slot, when the operation changes the entry) comes back here. A None entry ends the check (the
 /// operation stops there in any order); a "not writable" lookup does not. It predicts no outcome. A resolver handle
-/// that is not loaded is loaded by the probe (a definition load, which the note rules is not a write).
+/// that is not loaded is loaded by the probe; by #518's rule that load counts as a write, and the caller tracks it
+/// with `DefStore::load_transitions`.
 pub(crate) fn check_modifier_chain(
     sys: &AttributeSystem,
     attr: ObjRef,

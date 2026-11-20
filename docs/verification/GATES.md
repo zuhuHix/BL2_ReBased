@@ -10,6 +10,10 @@ passed / 0 failed / 46 ignored; `crate_edges_test.py` OK. Installed Off `--slice
 the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and stops in `cast` at the unbound
 `FlagExpressionEvaluator.Evaluate(object)` (1 of 2 steps). ctest and verify_packages not run (no C++ change). No
 real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/nounrep-impl/`.
+Rebased onto #518's counters (squash cf9cfd31 on main 3ad58b0, desktop): `cargo test -p ow-attr -p ow-inventory` 537
+passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 failed / 48 ignored; clippy clean on both
+crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
+`FlagExpressionEvaluator.Evaluate(object)`.
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
