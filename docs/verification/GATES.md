@@ -376,7 +376,7 @@ write-free, load-free preflight of review r1 and the hub's harness preload of th
   for `GetParticleEffect` and `GetExpLevelFromManufacturerData`: 1 ok / 4 notyet / 9 error. The harness preloads 3
   definitions (the threshold attribute and its two resolvers), logged as UNVERIFIED harness inputs. Link 8 is 1 of 5
   at `init`: past `SetBaseValue`, stopped at the unbound `WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)`.
-- No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+- No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-187.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

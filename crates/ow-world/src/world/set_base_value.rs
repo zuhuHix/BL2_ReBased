@@ -1,7 +1,7 @@
 //! Owner: lane IMPL-SET-BASE-VALUE. AI-assisted (Claude Code). `AttributeInitializationDefinition.SetBaseValue
 //! (DestAttribute, out BaseValue, ValueContextSource, AttributeContextSource)`, implemented from NATIVE_ATTRIBUTES.md
 //! section 1 ("AttributeInitializationDefinition.EvaluateInitializationData and SetBaseValue") alone (this lane's
-//! decision 2026-11-19-NNN). Every rule is the record's reading, **UNVERIFIED** in the running game.
+//! decision 2026-11-19-187). Every rule is the record's reading, **UNVERIFIED** in the running game.
 //!
 //! **What it does** (the record): it evaluates `BaseValue` with `ValueContextSource` (no override source), then calls
 //! `DestAttribute.SetAttributeBaseValue(AttributeContextSource, result)` and returns its bool; with `DestAttribute`

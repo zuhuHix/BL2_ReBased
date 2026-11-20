@@ -1,4 +1,4 @@
-//! `SetBaseValue` on an invented class set (AGENTS.md rule 9; this lane's decision 2026-11-19-NNN). Expected values are
+//! `SetBaseValue` on an invented class set (AGENTS.md rule 9; this lane's decision 2026-11-19-187). Expected values are
 //! written by hand from NATIVE_ATTRIBUTES.md section 1 (the evaluator and SetAttributeBaseValue) and section 3 (set
 //! base on a stack attribute writes the base companion and recomputes the value from the stack).
 
