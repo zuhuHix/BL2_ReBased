@@ -1,6 +1,6 @@
 # The pawn's PostInitBodyComposition: what is left, and the slot nodes (2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-POSTINITBODYCOMP-SLOTNODE (decision 2026-11-19-NNN,
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-POSTINITBODYCOMP-SLOTNODE (decision 2026-11-19-263,
 number pending). Analyst only: a different lane implements it (clean room).
 
 **Why.** NATIVE_INITIALIZE_BODY_COMPOSITION.md (#529) section 4.5 and its open question 7 left the pawn's
