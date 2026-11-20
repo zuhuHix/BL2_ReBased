@@ -262,7 +262,7 @@ fn parameter_items<'a>(local: &super::Local, a: &'a Arg, path: &str) -> Result<O
 /// script function, the refusals of the function's entry before its body runs (no bytecode, a function that cannot
 /// run, an argument [`bind_parameter`] refuses); a native takes its arguments as they are (lane FIX-RUN-BEHAVIORS,
 /// review r2 of #439, so a caller can check every call of a walk before it makes the first).
-pub(crate) fn check_entry(vm: &mut Vm, f: FuncId, args: &[Arg]) -> Result<(), VmError> {
+pub(crate) fn check_entry(vm: &Vm, f: FuncId, args: &[Arg]) -> Result<(), VmError> {
     if let Some(d) = vm.function(f).filter(|d| d.is_native()) {
         // An unbound native in Off is refused here, as the call would refuse it (review r3 of #439, item 2); Reference
         // leaves it to the stub policy, as the call does.

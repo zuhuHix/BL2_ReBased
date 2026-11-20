@@ -731,7 +731,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         return Err(not_read(MESH_NOT_SKELETAL));
                     }
                     // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
-                    let copy = crate::world::anim_tree_copy::attach_plan(vm, template)?;
+                    // The plan's owner event goes to the pawn the component is attached to (lane
+                    // IMPL-TREE-INIT-OWNER-EVENT).
+                    let copy = crate::world::anim_tree_copy::attach_plan(vm, template, Some(owner))?;
                     // NATIVE_ANIM_NODE_LOOKUP.md sections 1 and 2, over the planned copy (lane
                     // FIX-BODY-COMPOSITION-LOOKUP-STALE), with nothing loaded.
                     let settled = crate::world::anim_node_lookup::check(vm, template, body_class, copy.as_ref())?;

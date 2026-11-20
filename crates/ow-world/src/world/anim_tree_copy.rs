@@ -27,8 +27,7 @@
 //!    unread steps (the note's section 2, steps 4 to 6), in order: the per-node initialisation ([`PER_NODE_INIT`],
 //!    every tree), the init tag, the two per-node arrays, the pass over the component and the per-bone control arrays
 //!    (planned by `crate::world::control_arrays`, lane IMPL-COPY-COMPONENT-PASS) and the owner's event
-//!    ([`OWNER_EVENT`], still `NotYet { NotRead }`). On installed data the last
-//!    makes the write path unreachable; a test-only switch answers it with nothing to keep it covered (as #542 does).
+//!    (`PostInitAnimTree`, lane IMPL-TREE-INIT-OWNER-EVENT, NATIVE_TREE_INIT_OWNER_EVENT.md: [`owner_event`]).
 //!    With the flag set, the initialisation is skipped and none of these apply.
 //!
 //! **The writes** ([`instance`]), in the note's order, all in the VM heap, under #518's counters (a `NotYet` after a
@@ -43,7 +42,8 @@
 //!    initialisation (the hub's port answer). The #495 integration must not write `Animations` a second time;
 //! 3. the initialisation (section 2): the tick counter (`TickTag`) up by one, the tick list built by the note's rule
 //!    (always built: the hub's port answer; the unidentified gate field counts as clear), stored on the component and
-//!    in the tree's cache, each node's `SkelComponent`, `TickArrayIndex` and `NodeTickTag`; the component's
+//!    in the tree's cache, each node's `SkelComponent`, `TickArrayIndex` and `NodeTickTag`; the owner's
+//!    `PostInitAnimTree(component)` run through the VM when the preflight planned it; the component's
 //!    `bAnimTreeInitialised` set. Skipped when that flag was already set.
 //!
 //! **Left out, port answers, UNVERIFIED:** the post-construction call each new copy gets (the note's open question 5;
@@ -108,40 +108,53 @@ pub const PARENTS: &str = "the animation tree's parent node array build";
 pub const TAG_COLLISION: &str =
     "CopyAnimTree: a template node whose NodeTickTag equals the component's next tick tag (how the game keeps the \
      copies' tags apart was not read)";
-/// The initialisation's unread step after step 5 (the note's section 5, rule 4). The per-node initialisation is planned
-/// by `crate::world::anim_node_init` (lane IMPL-ANIM-NODE-INIT) and step 5 by `crate::world::control_arrays` (lane
-/// IMPL-COPY-COMPONENT-PASS, which removed their two refusals); this one still refuses every tree, so a test-only
-/// switch answers it to cover the writes.
-pub const OWNER_EVENT: &str = "the owner's event after the tree initialisation";
+/// The owner event's note (lane IMPL-TREE-INIT-OWNER-EVENT; #612).
+pub const EVENT_RECORD: &str = "docs/verification/NATIVE_TREE_INIT_OWNER_EVENT.md";
+/// The event the initialisation sends to the component's owner, with the component as its argument.
+pub const EVENT: &str = "PostInitAnimTree";
+pub const ACTOR_EVENT: &str = "Engine.Actor.PostInitAnimTree";
+pub const PAWN_EVENT: &str = "Engine.Pawn.PostInitAnimTree";
+pub const PLAYER_EVENT: &str = "WillowGame.WillowPlayerPawn.PostInitAnimTree";
+/// The three versions the note read (compared by path).
+pub const READ_EVENTS: [&str; 3] = [ACTOR_EVENT, PAWN_EVENT, PLAYER_EVENT];
+/// A chain class of the owner whose code is not loaded (finding the event would be a load).
+pub const EVENT_NOT_LOADED: &str = "the owner's PostInitAnimTree on a class whose code is not loaded";
+/// `Pawn`'s branch on the owner's own `Mesh`.
+pub const OWN_MESH: &str = "the owner's PostInitAnimTree on its own Mesh: Pawn.CacheAnimNodes (native) is not read";
+/// An owner in a state (rule 3): `find_loaded_method` reads the state's own table only, the game's lookup the state
+/// chain (by fit).
+pub const IN_STATE: &str =
+    "the owner's PostInitAnimTree while the owner is in a state (the state chain lookup is not planned read-only)";
+/// The two lookups `WillowPlayerPawn`'s version calls, each unbound in Off (rule 7).
+pub const ANIM_NODE_UNBOUND: &str = "SkeletalMeshComponent.FindAnimNode in Off";
+pub const SKEL_CONTROL_UNBOUND: &str = "SkeletalMeshComponent.FindSkelControl in Off";
+/// The three classes `WillowPlayerPawn`'s version casts its finds to, with the field each find fills and the name it
+/// looks up (`None`: the body class's `AimOffsetNodeName`).
+pub const PER_BONE_CLASS: &str = "Engine.AnimNodeBlendPerBone";
+pub const LEFT_HAND_CLASS: &str = "WillowGame.SkelControlLeftHandGripWeapon";
+pub const CAST_CLASSES: [&str; 3] = [PER_BONE_CLASS, AIM_OFFSET_CLASS, LEFT_HAND_CLASS];
+
+/// `"the cast class <path> is not defined at set-up"` (rule 7).
+pub fn cast_undefined(path: &str) -> String {
+    format!("the cast class {path} is not defined at set-up")
+}
+
+/// `"an override of PostInitAnimTree that was not read (<path>)"`.
+pub fn event_override(path: &str) -> String {
+    format!("an override of PostInitAnimTree that was not read ({path})")
+}
+
+/// Whose event the preflight plans: the component's own `Owner` (the instance), or the actor the attach attaches the
+/// template to (`attach_check`; the template's own `Owner` is not it).
+#[derive(Debug, Clone, Copy)]
+pub enum EventOwner {
+    Component,
+    Given(Option<ObjRef>),
+}
 
 /// `"CopyAnimTree: the link fix-up of <class>"` (the note's section 5, rule 2).
 pub fn fix_up(class: &str) -> String {
     format!("CopyAnimTree: the link fix-up of {class}")
-}
-
-thread_local! {
-    static INIT_STEPS_ANSWERED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-}
-
-/// The initialisation's unread steps: the owner's event only, since lane IMPL-COPY-COMPONENT-PASS read step 5.
-#[cfg(test)]
-const INIT_STEPS: u8 = 1;
-
-/// For the tests only: answer the initialisation's unread steps with nothing on this thread, to keep the write path
-/// covered while production refuses it.
-#[cfg(test)]
-pub(crate) fn answer_init_steps_for_tests(on: bool) {
-    INIT_STEPS_ANSWERED.with(|c| c.set(if on { INIT_STEPS } else { 0 }));
-}
-
-/// For the tests only: answer the first `n` of the unread steps (one now), so the next one's refusal shows.
-#[cfg(test)]
-pub(crate) fn answer_init_steps_up_to_for_tests(n: u8) {
-    INIT_STEPS_ANSWERED.with(|c| c.set(n.min(INIT_STEPS)));
-}
-
-fn init_steps_answered() -> u8 {
-    INIT_STEPS_ANSWERED.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -225,13 +238,17 @@ fn unloaded(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
 /// component template standing for the new component (it does not exist before the writes). An unloaded template is
 /// the lookup's refusal; no `AnimTreeTemplate` has nothing to copy. Reads only. The instance's writes join the made
 /// `Mesh`'s writes when the body composition's `Mesh` step has an Off answer past the lookups.
-pub fn attach_check(vm: &Vm, template: ObjRef) -> Result<(), VmError> {
-    attach_plan(vm, template).map(|_| ())
+///
+/// `owner` is the actor the component is attached to, whose `PostInitAnimTree` the initialisation will send
+/// (NATIVE_TREE_INIT_OWNER_EVENT.md section 3, step 1).
+pub fn attach_check(vm: &Vm, template: ObjRef, owner: Option<ObjRef>) -> Result<(), VmError> {
+    attach_plan(vm, template, owner).map(|_| ())
 }
 
 /// [`attach_check`] with its plan: `None` when there is no tree to copy (or the check is switched off in tests). The
-/// body composition's lookups search the planned copy (lane FIX-BODY-COMPOSITION-LOOKUP-STALE).
-pub fn attach_plan(vm: &Vm, template: ObjRef) -> Result<Option<Plan>, VmError> {
+/// body composition's lookups search the planned copy (lane FIX-BODY-COMPOSITION-LOOKUP-STALE); the plan's owner
+/// event is planned for `owner` (lane IMPL-TREE-INIT-OWNER-EVENT).
+pub fn attach_plan(vm: &Vm, template: ObjRef, owner: Option<ObjRef>) -> Result<Option<Plan>, VmError> {
     if ATTACH_CHECK_SKIPPED.with(std::cell::Cell::get) {
         return Ok(None);
     }
@@ -239,7 +256,7 @@ pub fn attach_plan(vm: &Vm, template: ObjRef) -> Result<Option<Plan>, VmError> {
     let Some(tree) = object_of(&read(vm, template, "AnimTreeTemplate")?) else {
         return Ok(None);
     };
-    plan(vm, template, tree).map(Some)
+    plan_with(vm, template, tree, EventOwner::Given(owner)).map(Some)
 }
 
 /// The `Anim` of each set child slot of node `o` (none when its class is not a blend node), in slot order.
@@ -284,6 +301,8 @@ pub struct Plan {
     pub builds: Vec<crate::world::per_bone_weights::Build>,
     /// Step 5's planned arrays, on template controls (lane IMPL-COPY-COMPONENT-PASS).
     pub arrays: crate::world::control_arrays::Arrays,
+    /// The owner's `PostInitAnimTree` to run after step 5 (lane IMPL-TREE-INIT-OWNER-EVENT): the owner and the event.
+    pub event: Option<(ObjRef, ow_object::ids::FuncId)>,
 }
 
 /// The gather order (section 1.3): depth first from the root, a node taken the first time it is reached, then its
@@ -345,8 +364,14 @@ fn node_fields(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The preflight (module documentation) for copying `template` onto `component` and initialising it.
+/// The preflight (module documentation) for copying `template` onto `component` and initialising it; the event goes to
+/// the component's own `Owner`.
 pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmError> {
+    plan_with(vm, component, template, EventOwner::Component)
+}
+
+/// [`plan`] with the event's owner chosen by `owner`.
+pub fn plan_with(vm: &Vm, component: ObjRef, template: ObjRef, owner: EventOwner) -> Result<Plan, VmError> {
     // 1. The template must be loaded (#543's refusal), and an AnimTree.
     unloaded(vm, template)?;
     let tree_class = class_of(vm, template)?;
@@ -430,6 +455,7 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
     let mut steps = Vec::new();
     let mut builds = Vec::new();
     let mut arrays = crate::world::control_arrays::Arrays::default();
+    let mut event = None;
     if initialise {
         let next = int(&read(vm, component, "TickTag")?).wrapping_add(1);
         for &n in &nodes {
@@ -450,12 +476,154 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
         // templates' values.
         let tick_tag = int(&read(vm, component, "TickTag")?);
         arrays = crate::world::control_arrays::plan(vm, component, template, tick_tag, order.len())?;
-        // The owner's event (#551 rule 4) is still unread.
-        if init_steps_answered() == 0 {
-            return Err(not_read(OWNER_EVENT));
+        // The owner's event (#551 rule 4; NATIVE_TREE_INIT_OWNER_EVENT.md section 3).
+        event = owner_event(vm, component, template, &order, &controls, owner)?;
+    }
+    Ok(Plan { template, nodes, controls, initialise, steps, order, builds, arrays, event })
+}
+
+fn event_not_read(what: impl Into<String>) -> VmError {
+    NotYet::not_read(what.into(), EVENT_RECORD).into()
+}
+
+/// `name` declared on `o` as an object reference, else a `VmError::Script` naming it.
+fn object_field(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    let class = class_of(vm, o)?;
+    let declared = vm.space.prop(class, name).and_then(|p| vm.space.classes.decl(p)).map(|d| d.kind.clone());
+    match declared {
+        Some(ow_object::layout::PropKind::Object { .. }) => Ok(object_of(&read(vm, o, name)?)),
+        other => Err(script(format!("{} declares {name} as {other:?}, not an object reference", class_path(vm, class)))),
+    }
+}
+
+/// The owner event's preflight (NATIVE_TREE_INIT_OWNER_EVENT.md section 3, rules 1 to 8), write-free and load-free:
+/// the owner and the event to send, `None` when nothing is sent. `order` is the planned tick list and `controls` the
+/// planned control order, on template objects: the copies keep each one's class and name (#543 rule 3), so a find on
+/// the copy answers the copy of what it answers here.
+fn owner_event(
+    vm: &Vm,
+    component: ObjRef,
+    template: ObjRef,
+    order: &[ObjRef],
+    controls: &[ObjRef],
+    owner: EventOwner,
+) -> Result<Option<(ObjRef, ow_object::ids::FuncId)>, VmError> {
+    // 1. The owner: `Owner` declared as an object reference on the component (or its template).
+    let own = object_field(vm, component, "Owner")?;
+    let (owner, instance) = match owner {
+        EventOwner::Component => (own, true),
+        EventOwner::Given(o) => (o, false),
+    };
+    let Some(owner) = owner else {
+        return Ok(None);
+    };
+    // 2. Resident.
+    unloaded(vm, owner)?;
+    // 3. The owner's state: only an owner in no state is looked up.
+    let (class, state) = {
+        let o = vm.space.heap.get(owner)?;
+        (o.class, o.state)
+    };
+    if state.is_some_and(|s| s != ow_object::ids::NameId::NONE) {
+        return Err(event_not_read(IN_STATE));
+    }
+    // 4. The event, found without loading, compared by path.
+    let Some(found) = vm.find_loaded_method(class, EVENT, None) else {
+        return Err(event_not_read(EVENT_NOT_LOADED));
+    };
+    let Some(f) = found else {
+        return Ok(None);
+    };
+    let path = vm.function(f).map(|d| d.path.as_str().to_string()).unwrap_or_default();
+    let Some(read_path) = READ_EVENTS.iter().find(|p| p.eq_ignore_ascii_case(&path)) else {
+        return Err(event_not_read(event_override(&path)));
+    };
+    // 5. The call's entry: the same binding and entry checks as `Vm::call`, without the call.
+    vm.check_call(f, vec![Value::Object(Some(component))])?;
+    if *read_path == ACTOR_EVENT {
+        return Ok(Some((owner, f)));
+    }
+    // 6. Pawn's branch: on its own Mesh it would run ClearAnimNodes and the native CacheAnimNodes.
+    let mesh = object_field(vm, owner, "Mesh")?;
+    if instance && mesh == Some(component) {
+        return Err(event_not_read(OWN_MESH));
+    }
+    if *read_path == PAWN_EVENT {
+        return Ok(Some((owner, f)));
+    }
+    // 7. WillowPlayerPawn's lookups.
+    let arm = object_field(vm, owner, "ArmBoneBlend")?;
+    let aim = object_field(vm, owner, "AimOffset")?;
+    let left = object_field(vm, owner, "LeftHandIK")?;
+    let mut aim_name = None;
+    if let Some(body) = object_field(vm, owner, "BodyClass")? {
+        unloaded(vm, body)?;
+        let class = class_of(vm, body)?;
+        let declared = vm.space.prop(class, "AimOffsetNodeName").and_then(|p| vm.space.classes.decl(p)).map(|d| d.kind.clone());
+        if !matches!(declared, Some(ow_object::layout::PropKind::Name)) {
+            return Err(script(format!("{} declares AimOffsetNodeName as {declared:?}, not a name", class_path(vm, class))));
+        }
+        aim_name = Some(name_of(vm, body, "AimOffsetNodeName")?);
+    }
+    use crate::world::tree_lookup::{FIND_ANIM_NODE, FIND_SKEL_CONTROL};
+    if !vm.has_native(FIND_ANIM_NODE) {
+        return Err(NotYet::not_ported(ANIM_NODE_UNBOUND, EVENT_RECORD).into());
+    }
+    if !vm.has_native(FIND_SKEL_CONTROL) {
+        return Err(NotYet::not_ported(SKEL_CONTROL_UNBOUND, EVENT_RECORD).into());
+    }
+    // The cast classes, read only: a defined layout, else the cast would define one.
+    let casts = CAST_CLASSES
+        .iter()
+        .map(|path| {
+            vm.space
+                .classes
+                .by_path(path)
+                .filter(|&c| vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()))
+                .ok_or_else(|| event_not_read(cast_undefined(path)))
+        })
+        .collect::<Result<Vec<_>, VmError>>()?;
+    // Each find the script makes (a cache only while it is None), planned on the template, and its cast's answer.
+    let arm_name = vm.space.names.find("ArmBoneBlend").unwrap_or(ow_object::ids::NameId::NONE);
+    let grip_name = vm.space.names.find("LeftHandGrip").unwrap_or(ow_object::ids::NameId::NONE);
+    let tree_is_tree = is_a(vm, class_of(vm, template)?, TREE);
+    let mut finds: Vec<(Option<ObjRef>, ow_object::ids::ClassId)> = Vec::new();
+    if arm.is_none() {
+        finds.push((first_named(vm, order, "NodeName", arm_name)?, casts[0]));
+    }
+    if aim.is_none()
+        && let Some(n) = aim_name
+    {
+        finds.push((first_named(vm, order, "NodeName", n)?, casts[1]));
+    }
+    if left.is_none() && tree_is_tree && grip_name != ow_object::ids::NameId::NONE {
+        finds.push((first_named(vm, controls, "ControlName", grip_name)?, casts[2]));
+    }
+    for (found, want) in finds {
+        if let Some(t) = found {
+            vm.is_child_checked(class_of(vm, t)?, want)?;
         }
     }
-    Ok(Plan { template, nodes, controls, initialise, steps, order, builds, arrays })
+    // 8. No random number on these paths.
+    Ok(Some((owner, f)))
+}
+
+/// The name `prop` of `o`, else a `VmError::Script`.
+fn name_of(vm: &Vm, o: ObjRef, prop: &str) -> Result<ow_object::ids::NameId, VmError> {
+    match read(vm, o, prop)? {
+        Value::Name(n) => Ok(n),
+        other => Err(script(format!("{}'s {prop} holds {}, not a name", class_path(vm, class_of(vm, o)?), other.kind_name()))),
+    }
+}
+
+/// The first of `objects` whose `prop` is `name` (a whole name), as the lookups answer.
+fn first_named(vm: &Vm, objects: &[ObjRef], prop: &str, name: ow_object::ids::NameId) -> Result<Option<ObjRef>, VmError> {
+    for &o in objects {
+        if name_of(vm, o, prop)? == name {
+            return Ok(Some(o));
+        }
+    }
+    Ok(None)
 }
 
 /// A copy of `t` with outer `outer`: its class and name, and its values (the port's archetype, module documentation).
@@ -705,7 +873,11 @@ fn initialise(
     }
     // Step 5 (lane IMPL-COPY-COMPONENT-PASS): the component pass writes nothing for its empty list; the control arrays.
     crate::world::control_arrays::write_arrays(vm, component, &plan.arrays, |t| copy_of(&t))?;
-    // Step 6, the owner's event, is unread: refused in the preflight unless the test switch answers it.
+    // Step 6, the owner's event, as planned: an ordinary event call, the owner the receiver, the component the
+    // argument (NATIVE_TREE_INIT_OWNER_EVENT.md section 1). Its script writes on the owner only.
+    if let Some((owner, f)) = plan.event {
+        vm.call(f, Some(owner), vec![Value::Object(Some(component))])?;
+    }
     write(vm, component, "bAnimTreeInitialised", Value::Bool(true))
 }
 

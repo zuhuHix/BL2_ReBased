@@ -512,6 +512,9 @@ impl NativePack for Pack {
             // InstanceDataHelper.InitializeBodyComposition (lane IMPL-BODY-COMPOSITION,
             // NATIVE_INITIALIZE_BODY_COMPOSITION.md), UNVERIFIED in game.
             body_composition::register(vm)?;
+            // SkeletalMeshComponent.FindAnimNode / FindSkelControl (lane IMPL-TREE-INIT-OWNER-EVENT, #543's rules),
+            // read-only on the component's own tree; a key bound first keeps its binding. UNVERIFIED in game.
+            tree_lookup::register(vm)?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
             // The engine's data store client, its global stores and the online game settings route
             // (NATIVE_ONLINE_GAME_SETTINGS.md; lane IMPL-ONLINE-GAME-SETTINGS, decision 2026-11-19-65).
@@ -641,6 +644,7 @@ pub mod anim_node_lookup;
 pub mod body_composition;
 // Lane IMPL-COPY-ANIM-TREE: the animation tree's copy and initialisation (NATIVE_COPY_ANIM_TREE.md).
 pub mod anim_tree_copy;
+pub mod tree_lookup;
 // Lane IMPL-ANIM-NODE-INIT: the per-node initialisation (NATIVE_ANIM_NODE_INIT.md).
 pub mod anim_node_init;
 // Lane IMPL-PER-BONE-WEIGHTS: the per-bone weight builders (NATIVE_PER_BONE_WEIGHTS.md).
