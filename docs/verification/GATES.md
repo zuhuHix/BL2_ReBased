@@ -149,6 +149,15 @@ action-skill and equip packs in either order. Results:
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-226 (resolve context).
 
+**IMPL-IS-STAGGERED (2026-11-20, pc-hummer, on main c687c135):** AI-assisted (Claude Code, Opus 5.5).
+`WillowPawn`/`WillowAIPawn.IsStaggered` in Off from NATIVE_IS_STAGGERED.md as final at b8b22422 (`ow-combat`
+`hit/pools.rs`): S1 (two texts), S2 for native descendants and other pawn classes, `StaggerState.bIsStaggered` read by
+name; Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,745 passed / 0 failed / 49
+ignored (7 new tests); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 3 ok / 10 NotYet / 1 error, all
+14 rows byte-identical to main's. Link 9 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun
+`ReplicationStrategy` 2 refusal, before the lift asks this native. No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN; logs under ignored `local/p2/is/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace
