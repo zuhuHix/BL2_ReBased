@@ -97,6 +97,11 @@ impl Fx {
         }
     }
 
+    /// #518's heap-write and load-transition counts.
+    fn counts(&self) -> (u64, u64) {
+        (self.vm.space.heap.committed_writes(), self.vm.defs.load_transitions())
+    }
+
     fn harness(&self) -> Vec<String> {
         self.vm.log.iter().filter(|l| l.starts_with(GESTALT_INPUT)).cloned().collect()
     }
@@ -118,8 +123,11 @@ fn off_loads_the_weapon_types_cold_gestalt_definition_and_logs_it() {
     assert!(lines[0].starts_with(GESTALT_INPUT) && lines[0].contains("ToyGestalt_0"), "{lines:?}");
     assert!(lines[0].ends_with("UNVERIFIED stand-in)"), "{lines:?}");
     assert!(lines[1].ends_with("ToyGestalt_0: loaded"), "{lines:?}");
+    // The warm handle: nothing logged, written or loaded (review r1 of #632, item 2).
+    let before = x.counts();
     preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
     assert_eq!(x.harness().len(), 2, "already loaded: nothing more");
+    assert_eq!(x.counts(), before, "the warm handle writes and loads nothing");
 }
 
 /// No `GestaltMesh`, or no weapon type: nothing is loaded or logged.
@@ -129,10 +137,9 @@ fn no_gestalt_mesh_or_no_weapon_type_is_nothing() {
     let plain = x.find("WillowGame.ToyType_Plain");
     for weapon_type in [Some(plain), None] {
         let weapon = x.weapon(weapon_type);
-        let writes = x.vm.space.heap.committed_writes();
-        let loads = x.vm.defs.load_transitions();
+        let before = x.counts();
         preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
-        assert_eq!((x.vm.space.heap.committed_writes(), x.vm.defs.load_transitions()), (writes, loads));
+        assert_eq!(x.counts(), before);
     }
     assert!(x.harness().is_empty(), "{:?}", x.harness());
 }
@@ -144,7 +151,9 @@ fn reference_preloads_nothing() {
     let weapon_type = x.find("WillowGame.ToyType_Gestalt");
     let gestalt = x.gestalt_of(weapon_type);
     let weapon = x.weapon(Some(weapon_type));
+    let before = x.counts();
     preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.counts(), before, "Reference writes and loads nothing (review r1 of #632, item 2)");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, gestalt), "still cold");
     assert!(x.harness().is_empty());
 }

@@ -99,13 +99,39 @@ pub(super) fn equip_run(args: &[String], mode: ParityMode, out: &mut String) -> 
     let mut passed = [0usize; PHASES.len()];
     let mut stops: [BTreeMap<String, usize>; PHASES.len()] = Default::default();
     let mut lines = String::new();
+    let mut harness: Vec<String> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         weapons += 1;
         let request = diff_request(line).map_err(|e| format!("line {}: {e}", n + 1))?;
-        let run = run_weapon(&mut world.vm, &request).map_err(|e| format!("line {}: {e}", n + 1))?;
+        // The weapon's harness lines (review r1 of #632): its set-up's preloads change what `init` sees, so each
+        // weapon's line and the summary carry them, also when the set-up fails.
+        let log_before = world.vm.log.len();
+        let result = run_weapon(&mut world.vm, &request);
+        let own = harness_lines(&world.vm, log_before);
+        for h in &own {
+            if !harness.contains(h) {
+                harness.push(h.clone());
+            }
+        }
+        let listed = own.iter().map(|h| quote(h)).collect::<Vec<_>>().join(",");
+        let run = match result {
+            Ok(run) => run,
+            Err(e) => {
+                // The original error stays the command's answer. The lines so far, then this weapon's line with its
+                // set-up error and harness lines, are written first.
+                lines.push_str(&format!(
+                    "{{\"line\":{},\"weapon_type\":{},\"make\":{},\"harness\":[{listed}]}}\n",
+                    n + 1,
+                    quote(&request.weapon_type),
+                    quote(&e),
+                ));
+                std::fs::write(&output, &lines).map_err(|w| format!("{output}: {w}"))?;
+                return Err(format!("line {}: {e}", n + 1));
+            }
+        };
         let mut fields = Vec::new();
         for (k, phase) in PHASES.iter().enumerate() {
             match &run.errors[k] {
@@ -119,7 +145,7 @@ pub(super) fn equip_run(args: &[String], mode: ParityMode, out: &mut String) -> 
             ));
         }
         lines.push_str(&format!(
-            "{{\"line\":{},\"weapon_type\":{},{},\"records_after_equip\":{},\"records_after_unequip\":{}}}\n",
+            "{{\"line\":{},\"weapon_type\":{},{},\"records_after_equip\":{},\"records_after_unequip\":{},\"harness\":[{listed}]}}\n",
             n + 1,
             quote(&request.weapon_type),
             fields.join(","),
@@ -128,13 +154,19 @@ pub(super) fn equip_run(args: &[String], mode: ParityMode, out: &mut String) -> 
         ));
     }
     std::fs::write(&output, lines).map_err(|e| format!("{output}: {e}"))?;
-    out.push_str(&summary(weapons, &passed, &stops));
+    out.push_str(&summary(weapons, &passed, &stops, &harness));
     let all = passed.iter().all(|p| *p == weapons);
     Ok(if all { 0 } else { 1 })
 }
 
-/// The summary line: weapons, passes per phase, and each phase's stops with their weapon counts.
-fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>]) -> String {
+/// The `harness input:` lines `vm` logged since `from`, in order.
+fn harness_lines(vm: &Vm, from: usize) -> Vec<String> {
+    vm.log[from.min(vm.log.len())..].iter().filter(|l| l.starts_with("harness input:")).cloned().collect()
+}
+
+/// The summary line: weapons, passes per phase, each phase's stops with their weapon counts, and the distinct harness
+/// lines the weapons' set-ups logged, in first-seen order (review r1 of #632).
+fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>], harness: &[String]) -> String {
     let mut phases = Vec::new();
     for (k, phase) in PHASES.iter().enumerate() {
         let listed: Vec<String> = stops[k]
@@ -148,7 +180,8 @@ fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>]) 
             listed.join(",")
         ));
     }
-    format!("{{\"weapons\":{weapons},{}}}\n", phases.join(","))
+    let harness: Vec<String> = harness.iter().map(|h| quote(h)).collect();
+    format!("{{\"weapons\":{weapons},{},\"harness\":[{}]}}\n", phases.join(","), harness.join(","))
 }
 
 /// The run's world (module documentation).
@@ -1129,12 +1162,12 @@ mod tests {
         let mut stops: [BTreeMap<String, usize>; PHASES.len()] = Default::default();
         stops[0].insert("unbound native X".into(), 2);
         stops[2].insert("NotYet Y".into(), 1);
-        let s = summary(2, &[0, 2, 1, 2], &stops);
+        let s = summary(2, &[0, 2, 1, 2], &stops, &["harness input: H".to_string()]);
         assert_eq!(
             s,
             "{\"weapons\":2,\"init\":{\"passed\":0,\"stops\":[{\"stop\":\"unbound native X\",\"weapons\":2}]},\
              \"bases\":{\"passed\":2,\"stops\":[]},\"equip\":{\"passed\":1,\"stops\":[{\"stop\":\"NotYet Y\",\
-             \"weapons\":1}]},\"unequip\":{\"passed\":2,\"stops\":[]}}\n"
+             \"weapons\":1}]},\"unequip\":{\"passed\":2,\"stops\":[]},\"harness\":[\"harness input: H\"]}\n"
         );
     }
 }

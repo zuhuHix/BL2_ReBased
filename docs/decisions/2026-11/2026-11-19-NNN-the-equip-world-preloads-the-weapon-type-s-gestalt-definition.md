@@ -37,3 +37,17 @@ no hits in the touched files. ctest and verify_packages were not run (no C++ cha
   That stop stays NotYet until the layer exists, per the hub's ruling; an analyst lane reads what the layer needs.
 
 This is what the host did, not parity.
+
+### Review r1 of #632 (FIX)
+
+AI-assisted (Claude Code, Claude Opus 5.5).
+1. **`--equip-run` reports its harness lines.** A successful cold preload changes what `init` sees, so each weapon's
+   line in the output file now carries a `harness` array: the `harness input:` lines its set-up logged. The summary
+   carries the distinct lines in the order they were first seen. When a weapon's set-up fails, the command still returns
+   its original error, but it first writes the lines so far and that weapon's line, with the set-up error under `make`
+   and its `harness` array. Link 8 already captured both lines.
+2. **The counter checks cover every no-op path.** The tests now snapshot #518's heap-write and load-transition counts
+   around the warm-handle call and the Reference call too, and assert that they do not move.
+
+An installed `--equip-run` (50 weapons, under the machine lock) shows the GestaltMesh harness lines in the per-weapon
+output. This is what the host did, not parity.
