@@ -811,6 +811,44 @@ pub fn find_event(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, 
     vm.find_method(class, name, None)
 }
 
+/// [`find_event`] without loading or writing anything, for a write-free preflight (lane IMPL-MESH-REST, review r1 of
+/// #570): the active state's own functions, then its parents', then the class chain, as [`find_event`] walks them,
+/// through the states and class code already read. `None` where the answer would need a load or a write: a state
+/// not read yet, a class of a chain whose code is not loaded ([`Vm::find_loaded_method`]), or an object with no
+/// state frame whose heap names a state (making the frame resolves that name).
+pub fn find_loaded_event(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<Option<FuncId>>, VmError> {
+    let object = vm.space.heap.get(o)?;
+    let class = object.class;
+    let machine = vm.service::<StateMachine>();
+    let framed = machine.as_ref().and_then(|m| m.borrow().frames.get(&o).map(|fr| fr.node));
+    let node = match (framed, object.state) {
+        (Some(node), _) => node,
+        (None, None) => None,
+        (None, Some(_)) => return Ok(None),
+    };
+    let lower = name.to_ascii_lowercase();
+    let mut seen: Vec<StateKey> = Vec::new();
+    let mut cursor = node;
+    while let Some(key) = cursor {
+        if seen.contains(&key) || seen.len() >= MAX_STATE_DEPTH as usize {
+            break;
+        }
+        seen.push(key);
+        let Some(s) = machine.as_ref().and_then(|m| m.borrow().states.get(&key).cloned()) else {
+            return Ok(None);
+        };
+        if s.functions.contains(&lower) {
+            match vm.find_loaded_method(s.owner, name, Some(s.name)) {
+                None => return Ok(None),
+                Some(Some(f)) => return Ok(Some(Some(f))),
+                Some(None) => {}
+            }
+        }
+        cursor = s.parent;
+    }
+    Ok(vm.find_loaded_method(class, name, None))
+}
+
 /// Sends event `name` to `o` with `args` for the world (the destroy sequence, the actor tick); whether it was sent.
 /// Outside `ParityMode::Reference` it goes through [`find_event`] and, for a probe event, the frame's mask (a probe
 /// id the record does not name is `NotYet`). Under Reference it is the C++ lookup by the heap's state name, with no
@@ -2762,6 +2800,30 @@ mod tests {
         let n = not_yet(process_action_sequence(&mut r.vm, m, DT));
         assert_eq!(n.missing, Missing::NotRead);
         assert!(n.what.contains("bInitialized cleared inside a foreach"), "{n}");
+    }
+
+    /// `find_loaded_event` (review r1 of #570): in state B (extends A), `EndState` is A's, found through the parent
+    /// state, as `find_event` finds it; a lookup by B's name alone on the class chain would give Object's. Nothing is
+    /// read or written by asking, and an object with no frame whose heap names a state is `None`.
+    #[test]
+    fn find_loaded_event_follows_the_parent_states_and_writes_nothing() {
+        let mut r = start(ParityMode::Off);
+        let m = r.mach();
+        assert_eq!(find_loaded_event(&r.vm, m, "EndState").unwrap(), Some(r.vm.find_method(r.vm.space.heap.get(m).unwrap().class, "EndState", None).unwrap()), "no state: the class chain");
+        r.goto(m, &["B"]);
+        let writes = r.vm.space.heap.committed_writes();
+        let found = find_loaded_event(&r.vm, m, "EndState").unwrap();
+        assert_eq!(r.vm.space.heap.committed_writes(), writes, "write-free");
+        let event = find_event(&mut r.vm, m, "EndState").unwrap();
+        assert_eq!(found, Some(event));
+        assert_eq!(r.vm.function(event.unwrap()).unwrap().path.as_str(), "Core.Mach.A.EndState", "the parent state's");
+        let class = r.vm.space.heap.get(m).unwrap().class;
+        let b = r.vm.space.names.intern("B");
+        let by_name = r.vm.find_loaded_method(class, "EndState", Some(b)).unwrap();
+        assert_ne!(by_name, event, "the state name alone misses the parent state");
+        let fresh = r.mach();
+        r.vm.space.heap.get_mut(fresh).unwrap().state = Some(b);
+        assert_eq!(find_loaded_event(&r.vm, fresh, "EndState").unwrap(), None, "the frame would resolve the name");
     }
 
     #[test]

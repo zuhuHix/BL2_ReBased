@@ -113,10 +113,13 @@ fn off_preloads_then_selects_the_class_and_logs_both() {
     let mut x = fx(ParityMode::Off, "WillowGame.ToyPawnArchetype");
     apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)).unwrap();
     let lines = harness_lines(&x.vm);
-    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     assert!(lines[0].starts_with("harness input: preload WillowGame.ToyPawnArchetype (UNVERIFIED"), "{lines:?}");
     assert_eq!(lines[1], "harness input: preload WillowGame.ToyPawnArchetype: loaded", "{lines:?}");
-    assert!(lines[2].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
+    // Maya's tree (lane IMPL-MESH-REST): this toy package set has none, so the attempt is logged and finds nothing.
+    assert!(lines[2].starts_with("harness input: preload GD_PlayerShared.Character.AnimTree_Player (UNVERIFIED"), "{lines:?}");
+    assert_eq!(lines[3], "harness input: preload GD_PlayerShared.Character.AnimTree_Player: found nothing", "{lines:?}");
+    assert!(lines[4].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
     let seen = x.seen.borrow();
     assert_eq!(seen.len(), 1, "the class select ran once");
     let (log_then, loaded_then) = &seen[0];

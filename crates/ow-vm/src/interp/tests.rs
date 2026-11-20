@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use ow_attr::AttributeSystem;
-use ow_core::{Missing, NotYet, ParityMode};
+use ow_core::{Missing, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
@@ -30,7 +30,7 @@ use ow_package::testkit::script::{
 };
 use ow_package::testkit::{Export, ints};
 
-use crate::api::{CallCensus, StubPolicy, Vm};
+use crate::api::{CallCensus, FunctionDecl, StubPolicy, Vm};
 use crate::error::VmError;
 use crate::natives_core;
 
@@ -2033,6 +2033,107 @@ fn finding_functions_and_classes() {
     let mach = r.vm.find_class("Core.Mach").unwrap();
     let begin = r.vm.find_function("Core.Mach.A.BeginState").unwrap();
     assert_eq!(r.vm.function(begin).unwrap().owner, Some(mach));
+}
+
+/// `find_loaded_method` (lane IMPL-MESH-REST): `None` before the class's code is loaded, and nothing is loaded by
+/// asking; once loaded, `find_method`'s answers, state first.
+#[test]
+fn find_loaded_method_reads_only_and_follows_find_method() {
+    // Mach's layout is defined straight through the code index, so its functions and states are not loaded.
+    let mut r = start(ParityMode::Off);
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    let a = r.vm.space.names.intern("A");
+    assert_eq!(r.vm.find_loaded_method(mach, "Where", Some(a)), None, "the code is not loaded yet");
+    assert!(!r.vm.code.classes.contains_key(&mach), "asking loaded nothing");
+    // `Where` is declared by both state A and the class: the state's wins in A, the class's without a state.
+    let in_state = r.vm.find_method(mach, "Where", Some(a)).unwrap();
+    let plain = r.vm.find_method(mach, "Where", None).unwrap();
+    assert!(in_state.is_some() && plain.is_some());
+    assert_ne!(in_state, plain, "two functions");
+    assert_eq!(r.vm.function(in_state.unwrap()).unwrap().path.as_str(), "Core.Mach.A.Where");
+    assert_eq!(r.vm.find_loaded_method(mach, "WHERE", Some(a)), Some(in_state), "the state's function first");
+    assert_eq!(r.vm.find_loaded_method(mach, "Where", None), Some(plain));
+    assert_eq!(r.vm.find_loaded_method(mach, "NoSuchFunction", None), Some(None));
+}
+
+/// `declare_method` (reviews r1 and r2 of #570): a hand-declared class gets a method `find_method` and
+/// `find_loaded_method` see, in the class or in a state. Refused: a class with package code, and any name a lookup
+/// from the class already answers (the class's own, in another of its states, a hand parent's, a package
+/// ancestor's), so no existing answer changes.
+#[test]
+fn declare_method_gives_a_hand_declared_class_a_method() {
+    let mut r = start(ParityMode::Off);
+    let object = r.vm.find_class("Core.Object").unwrap();
+    let hand = r.vm.space.classes.define("Toy.Hand", Some(object), vec![]).unwrap();
+    let sub = r.vm.space.classes.define("Toy.HandSub", Some(hand), vec![]).unwrap();
+    let declare = |r: &mut Run, path: &str| {
+        let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), path).with_owner(hand);
+        r.vm.declare_function(d).unwrap()
+    };
+    let f = declare(&mut r, "Toy.Hand.Ping");
+    let g = declare(&mut r, "Toy.Hand.S.Pong");
+    r.vm.declare_method(hand, "Ping", None, f).unwrap();
+    r.vm.declare_method(hand, "Pong", Some("S"), g).unwrap();
+    let s = r.vm.space.names.intern("s");
+    assert_eq!(r.vm.find_loaded_method(sub, "ping", None), Some(Some(f)), "inherited");
+    assert_eq!(r.vm.find_loaded_method(sub, "pong", Some(s)), Some(Some(g)), "in the state");
+    assert_eq!(r.vm.find_loaded_method(sub, "pong", None), Some(None), "only in the state");
+    assert_eq!(r.vm.find_method(sub, "PING", None).unwrap(), Some(f));
+    let refused = |r: &mut Run, class, name: &str, state: Option<&str>| {
+        matches!(r.vm.declare_method(class, name, state, g), Err(VmError::Registration { .. }))
+    };
+    assert!(refused(&mut r, hand, "PING", None), "the class's own");
+    assert!(refused(&mut r, hand, "Ping", Some("S")), "a state would shadow the class's");
+    assert!(refused(&mut r, hand, "Pong", None), "already in a state");
+    assert!(refused(&mut r, sub, "Ping", None), "a child would hide the parent's");
+    let foo = r.vm.find_class("Core.Foo").unwrap();
+    assert!(refused(&mut r, foo, "Ping", None), "package code");
+    assert_eq!(r.vm.find_method(sub, "Ping", None).unwrap(), Some(f), "unchanged by the refusals");
+}
+
+/// Review r2 of #570, item 1: a hand-declared child with a method of its own does not stand for its package
+/// parent's code. The parent's methods load on the first `find_method` through the child; before that,
+/// `find_loaded_method` says the answer needs a load, and a name the parent declares cannot be registered on the
+/// child.
+#[test]
+fn a_hand_declared_child_does_not_hide_its_package_parent() {
+    let mut r = start(ParityMode::Off);
+    // Mach's layout is defined straight through the code index, so its functions and states are not loaded.
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    let child = r.vm.space.classes.define("Toy.MachChild", Some(mach), vec![]).unwrap();
+    let d = FunctionDecl::native(ObjectPath::parse("Toy.MachChild.Ping").unwrap(), "Toy.MachChild.Ping").with_owner(child);
+    let ping = r.vm.declare_function(d).unwrap();
+    // Registering loads the chain's package code first (it checks the names a lookup from the child answers).
+    r.vm.declare_method(child, "Ping", None, ping).unwrap();
+    let parent_where = r.vm.find_method(mach, "Where", None).unwrap();
+    assert!(parent_where.is_some());
+    assert_eq!(r.vm.find_method(child, "Where", None).unwrap(), parent_where, "the parent's method through the child");
+    assert_eq!(r.vm.find_loaded_method(child, "Where", None), Some(parent_where));
+    assert_eq!(r.vm.find_method(child, "Ping", None).unwrap(), Some(ping));
+    assert!(matches!(r.vm.declare_method(child, "Where", None, ping), Err(VmError::Registration { .. })));
+
+    // Without a registration first: a hand child of an unloaded parent is a load for the read-only lookup, and the
+    // loading one walks past the child to the parent.
+    let mut r = start(ParityMode::Off);
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    let child = r.vm.space.classes.define("Toy.MachChild", Some(mach), vec![]).unwrap();
+    assert_eq!(r.vm.find_loaded_method(child, "Where", None), None, "needs the parent's load");
+    assert!(r.vm.find_method(child, "Where", None).unwrap().is_some());
 }
 
 #[test]

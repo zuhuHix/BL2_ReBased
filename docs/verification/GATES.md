@@ -64,6 +64,16 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-MESH-REST (2026-11-19, zuhu desktop, on #561 at 07d53556 with d83f2fee merged):** AI-assisted (Claude Code,
+Opus 5.5). The rest of the made-Mesh step in Off from NATIVE_MESH_REST.md (#563 at 9ebde2bb), replacing #557's
+`MESH_REST` refusal, and Maya's animation tree as a harness input in `apply_class_inputs`. `cargo test --workspace
+--locked -j 2` 2,505 passed / 0 failed / 48 ignored after review r1 of #570 (9 new in `body_composition`, 3 in ow-vm); `cargo clippy -p
+ow-world -p ow-vm -p ow-cli --all-targets` adds no warning in the touched files; `crate_edges_test.py` OK. Installed
+Off `--slice-gate` (strict, under the lock) on a throwaway merge with #500 and #528: ok 1 / NotYet 10 / error 3 of 14;
+the tree preload loads 71 objects, and link 1 runs 0 of 1 step, stopped unmarked at the aim-offset refusal (links 3, 4,
+5, 13 and 14 blocked behind it). ctest and verify_packages not run (no C++ change). No real-game run; every rule
+UNVERIFIED.
+
 **IMPL-COPY-ANIM-TREE (2026-11-19, pc-hummer, on #542 at b2b4de8a, with #557 at 9694cc30 merged):** AI-assisted
 (Claude Code, Opus 5.5). The animation tree's copy and initialisation in Off from NATIVE_COPY_ANIM_TREE.md (#551 at
 4a363c0c), wired before #557's lookups. `cargo test -p ow-world` 298 passed / 0 failed / 5 ignored after review r1 of #561 (18 in

@@ -240,7 +240,7 @@ struct Local {
 }
 
 /// The functions and states one class declares (not its super classes'), by lower-cased name.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ClassCode {
     functions: BTreeMap<String, FuncId>,
     states: BTreeMap<String, BTreeMap<String, FuncId>>,

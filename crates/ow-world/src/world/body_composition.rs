@@ -27,9 +27,32 @@
 //! `Parent` link, and the pawn's `PostInitBodyComposition` in section 4.5's order (the release of an old `Mesh` or
 //! `CylinderComponent` the pawn already holds, or one an earlier attachment assigned, is `NotRead`, [`releasing_old`];
 //! then the new `Mesh`'s animation nodes, read from its template with nothing loaded
-//! (crate::world::anim_node_lookup, NATIVE_ANIM_NODE_LOOKUP.md): `LayerAbsent` unless the template settles every field,
-//! and when it does, the rest of the made-`Mesh` step is `NotRead` ([`MESH_REST`]); then the rendering hooks,
+//! (crate::world::anim_node_lookup, NATIVE_ANIM_NODE_LOOKUP.md): `LayerAbsent` unless the template settles every field;
+//! then the rest of the made-`Mesh` step ([`mesh_rest`], NATIVE_MESH_REST.md); then the rendering hooks,
 //! `LayerAbsent`).
+//!
+//! **The rest of the made-`Mesh` step** (lane IMPL-MESH-REST, implemented from NATIVE_MESH_REST.md section 4 alone,
+//! as accepted at 9ebde2bb; clean room: this lane did not analyse the executable; **UNVERIFIED**). The preflight
+//! decides it, writing and loading nothing:
+//! 1. the made component's class declares `bSkipAllUpdateWhenPhysicsAsleep` as a bool (the flag's name and its bit, a
+//!    fit by declaration order, are UNVERIFIED);
+//! 2. the pawn's class declares `Mesh` and `MeshBodyCompositionIndex` (and, for this port's writes, the five animation
+//!    fields and `SlotNodes`); on authority (the plan's own authority, #529 section 7 step 3) `RepMeshScale` as a float
+//!    (its name a fit, UNVERIFIED) and the component's class `Scale`; `CollisionComponent` when the body class's
+//!    `bUseMeshForCollision` is set. Otherwise `VmError::Script`;
+//!    Each field is checked against the write it takes (kind, and for an object the made component's class), so no
+//!    write fails after the mesh is made;
+//! 3. the `ReattachWeapons` event, in the note's order: first its resolution as Off event dispatch makes it (the
+//!    active state, its parent states, then the class chain; `ow_vm::states::find_loaded_event`), with nothing loaded.
+//!    Anything but `WillowPawn.ReattachWeapons`, a state function or no function at all included, is
+//!    [`REATTACH_OVERRIDE`]; an answer that would need a load is this port's [`REATTACH_UNREAD`]. Then a held `Weapon`
+//!    or `OffHandWeapon` is [`HELD_WEAPON`]. Each is `NotYet { NotRead }`. With both None the event writes nothing,
+//!    and it is not called.
+//!
+//! The writes, after the attach (which instances the template's tree, crate::world::anim_tree_copy): `Pawn.Mesh`,
+//! `MeshBodyCompositionIndex` (the attachment's index as a byte), the flag true, the five fields as #557 settled them,
+//! `SlotNodes` empty, on authority `RepMeshScale` = the made component's `Scale`, and `CollisionComponent` = the mesh
+//! when `bUseMeshForCollision`.
 //!
 //! **The writes** ([`build`]), in the note's order: per made attachment, in list order: a component is made from its
 //! template, its entry appended, its collision set, attached (the parent's attach, else the owner retry), then the
@@ -88,11 +111,20 @@ pub const RENDER_LAYER: &str =
 pub const MESH_LAYER: &str = "a skeletal mesh data reader (sockets and the reference skeleton)";
 pub const ANIM_LAYER: &str = "an animation-tree instance for the skeletal mesh";
 
-/// The made `Mesh`'s steps after the animation nodes that neither note gives an Off answer for: the mesh flag section
-/// 4.5 does not identify, and the `ReattachWeapons` script event (lane IMPL-ANIM-NODE-LOOKUP; reached only when the
-/// template settles every animation field).
-pub const MESH_REST: &str =
-    "InitializeBodyComposition: the new Mesh's unidentified flag and its ReattachWeapons event";
+/// The note of the made `Mesh`'s last steps (lane IMPL-MESH-REST).
+pub const RECORD_MESH_REST: &str = "docs/verification/NATIVE_MESH_REST.md";
+/// The flag the hook sets on the made `Mesh` (a layout fit, UNVERIFIED; NATIVE_MESH_REST.md section 1).
+pub const SKIP_FLAG: &str = "bSkipAllUpdateWhenPhysicsAsleep";
+/// The one definition of the event in the packages.
+pub const REATTACH_WEAPONS: &str = "WillowGame.WillowPawn.ReattachWeapons";
+/// The pawn's five animation fields, in #543's order.
+pub const ANIM_FIELDS: [&str; 5] = ["ArmBoneBlend", "AimOffset", "LeftHandIK", "HeadLookAt", "bUsingFootIK"];
+/// The note's refusals (section 4, the event).
+pub const HELD_WEAPON: &str = "InitializeBodyComposition: ReattachWeapons with a held weapon (AttachThirdPersonMeshToComponent)";
+pub const REATTACH_OVERRIDE: &str = "InitializeBodyComposition: an override of ReattachWeapons";
+/// This lane's addition: the pawn's class code is not loaded, so the event's resolution would need a load.
+pub const REATTACH_UNREAD: &str =
+    "InitializeBodyComposition: ReattachWeapons, whose dispatch needs class code or a state not read yet";
 
 /// This lane's additions, for cases the note's scope does not reach.
 pub const MENU_MODES: &str = "InitializeBodyComposition: the menu modes' visibility toggles";
@@ -343,6 +375,21 @@ struct PostInit {
     cylinder: Option<bool>,
     /// `Data.Name` `CustomHead`: `HeadMesh` = the component as a `SkeletalMeshComponent`.
     head: bool,
+    /// Identifier `Mesh` with a skeletal component: the rest of the made-`Mesh` step ([`mesh_rest`]).
+    mesh: Option<MeshRest>,
+}
+
+/// The made `Mesh`'s writes, decided in the preflight (NATIVE_MESH_REST.md section 4).
+#[derive(Debug, Clone, Copy)]
+struct MeshRest {
+    /// The attachment's index, kept as a byte (its low 8 bits).
+    index: u8,
+    /// `bUsingFootIK` as #557 settled it.
+    foot_ik: bool,
+    /// `CollisionComponent` = the mesh (`bUseMeshForCollision`).
+    collision: bool,
+    /// The template's tree, which the attach instances first (crate::world::anim_tree_copy).
+    tree: Option<ObjRef>,
 }
 
 /// What the walk makes for one attachment (its record).
@@ -377,6 +424,119 @@ pub struct Inputs {
 /// The two destinations (the pawn's own properties).
 pub const SET: &str = "InstanceDataState";
 pub const REPLICATED: &str = "ReplicatedInstanceDataState";
+
+/// What [`mesh_rest`] reads.
+struct Rest {
+    owner: ObjRef,
+    owner_class: ClassId,
+    /// The made component's class (the template's).
+    class: ClassId,
+    authority: bool,
+    mesh_for_collision: bool,
+}
+
+/// What one of the made-`Mesh` step's writes needs of its destination (review r1 of #570, item 3).
+#[derive(Debug, Clone, Copy)]
+enum Want {
+    Bool,
+    Float,
+    Byte,
+    /// An object property that takes an object of this class (or a subclass).
+    Takes(ClassId),
+    /// An object property (only None is written).
+    AnyObject,
+    Array,
+}
+
+/// `name` is declared on `class` as a property `want` can be written to, else `VmError::Script` naming both.
+fn require_kind(vm: &Vm, class: ClassId, name: &str, want: Want) -> Result<(), VmError> {
+    let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} has no {name}", class_path(vm, class))))?;
+    let ok = match (vm.space.classes.decl(p).map(|d| &d.kind), want) {
+        (Some(PropKind::Bool), Want::Bool)
+        | (Some(PropKind::Float), Want::Float)
+        | (Some(PropKind::Byte { .. }), Want::Byte)
+        | (Some(PropKind::Object { .. }), Want::AnyObject)
+        | (Some(PropKind::Array(_)), Want::Array) => true,
+        (Some(PropKind::Object { class: base }), Want::Takes(c)) => vm.space.classes.is_child_of(c, *base),
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(script(format!("{}.{name} cannot take the made-Mesh step's write ({want:?})", class_path(vm, class))))
+    }
+}
+
+/// The rest of the made-`Mesh` step's preflight (module documentation; NATIVE_MESH_REST.md section 4). Reads only.
+fn mesh_rest(vm: &Vm, r: &Rest, index: usize, foot_ik: bool, template: ObjRef) -> Result<MeshRest, VmError> {
+    // 1. The flag.
+    require_kind(vm, r.class, SKIP_FLAG, Want::Bool)?;
+    // 2. The pawn's fields, each checked against the write it takes (review r1 of #570, item 3), so no write fails
+    // after the mesh is made.
+    let owner_fields = [
+        ("Mesh", Want::Takes(r.class)),
+        ("MeshBodyCompositionIndex", Want::Byte),
+        (ANIM_FIELDS[0], Want::AnyObject),
+        (ANIM_FIELDS[1], Want::AnyObject),
+        (ANIM_FIELDS[2], Want::AnyObject),
+        (ANIM_FIELDS[3], Want::AnyObject),
+        (ANIM_FIELDS[4], Want::Bool),
+        ("SlotNodes", Want::Array),
+    ];
+    for (name, want) in owner_fields {
+        require_kind(vm, r.owner_class, name, want)?;
+    }
+    if r.authority {
+        require_kind(vm, r.owner_class, "RepMeshScale", Want::Float)?;
+        require_kind(vm, r.class, "Scale", Want::Float)?;
+    }
+    if r.mesh_for_collision {
+        require_kind(vm, r.owner_class, "CollisionComponent", Want::Takes(r.class))?;
+    }
+    // 3. The event (note section 4, preflight 4, in its order). First its resolution as Off event dispatch makes it
+    // (the active state, its parent states, then the class chain), with nothing loaded: anything but
+    // `WillowPawn.ReattachWeapons`, no function at all included, is refused before a held weapon.
+    match ow_vm::states::find_loaded_event(vm, r.owner, "ReattachWeapons")? {
+        None => return Err(NotYet::not_read(REATTACH_UNREAD, RECORD_MESH_REST).into()),
+        Some(Some(f)) if vm.function(f).is_some_and(|d| d.path.as_str().eq_ignore_ascii_case(REATTACH_WEAPONS)) => {}
+        Some(_) => return Err(NotYet::not_read(REATTACH_OVERRIDE, RECORD_MESH_REST).into()),
+    }
+    // Then a held weapon (the weapon attach is not read).
+    let held = |name: &str| -> Result<bool, VmError> {
+        match read_prop(vm, r.owner, name)? {
+            Some(v) => Ok(object_of(&v).is_some()),
+            None => Err(script(format!("{} has no {name}", class_path(vm, r.owner_class)))),
+        }
+    };
+    if held("Weapon")? || held("OffHandWeapon")? {
+        return Err(NotYet::not_read(HELD_WEAPON, RECORD_MESH_REST).into());
+    }
+    let tree = read_prop(vm, template, "AnimTreeTemplate")?.and_then(|v| object_of(&v));
+    Ok(MeshRest { index: index as u8, foot_ik, collision: r.mesh_for_collision, tree })
+}
+
+/// The made `Mesh`'s writes (module documentation), after the attach: the tree instance, then section 3's order.
+fn write_mesh_rest(vm: &mut Vm, owner: ObjRef, made: ObjRef, m: MeshRest, authority: bool) -> Result<(), VmError> {
+    if let Some(tree) = m.tree {
+        crate::world::anim_tree_copy::instance(vm, made, tree)?;
+    }
+    write_prop(vm, owner, "Mesh", Value::Object(Some(made)))?;
+    write_prop(vm, owner, "MeshBodyCompositionIndex", Value::Byte(m.index))?;
+    write_prop(vm, made, SKIP_FLAG, Value::Bool(true))?;
+    for name in &ANIM_FIELDS[..4] {
+        write_prop(vm, owner, name, Value::Object(None))?;
+    }
+    write_prop(vm, owner, ANIM_FIELDS[4], Value::Bool(m.foot_ik))?;
+    write_prop(vm, owner, "SlotNodes", Value::array(Vec::new()))?;
+    if authority {
+        let scale = read_prop(vm, made, "Scale")?.unwrap_or(Value::Float(0.0));
+        write_prop(vm, owner, "RepMeshScale", scale)?;
+    }
+    if m.collision {
+        write_prop(vm, owner, "CollisionComponent", Value::Object(Some(made)))?;
+    }
+    Ok(())
+}
 
 /// The preflight (module documentation): reads only, writes and loads nothing.
 pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
@@ -430,8 +590,8 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
         _ => false,
     };
     // The pawn fields an earlier attachment's PostInitBodyComposition assigned in this walk (review r1 of #542, item 4).
-    // (A `Mesh` attachment always refuses below, so only the cylinder is tracked.)
     let mut assigned_cylinder = false;
+    let mut assigned_mesh = false;
     let type_enum = vm
         .space
         .classes
@@ -556,17 +716,19 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 };
                 // Section 4.5.1: the old Pawn.Mesh is released before the new one is set (review r1 of #542, item 2).
                 if name_is(vm, &a.parent_id, MESH_ID) {
-                    if old_set("Mesh")? {
+                    if assigned_mesh || old_set("Mesh")? {
                         return Err(not_read(releasing_old("Mesh")));
                     }
-                    if skeletal {
-                        // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
-                        crate::world::anim_tree_copy::attach_check(vm, template)?;
-                        // NATIVE_ANIM_NODE_LOOKUP.md section 5: the template's answers, with nothing loaded.
-                        crate::world::anim_node_lookup::check(vm, template, body_class)?;
-                        return Err(not_read(MESH_REST));
+                    if !skeletal {
+                        return Err(not_read(MESH_NOT_SKELETAL));
                     }
-                    return Err(not_read(MESH_NOT_SKELETAL));
+                    // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
+                    crate::world::anim_tree_copy::attach_check(vm, template)?;
+                    // NATIVE_ANIM_NODE_LOOKUP.md section 5: the template's answers, with nothing loaded.
+                    let settled = crate::world::anim_node_lookup::check(vm, template, body_class)?;
+                    let rest = Rest { owner, owner_class, class, authority, mesh_for_collision };
+                    post.mesh = Some(mesh_rest(vm, &rest, idx, settled.foot_ik, template)?);
+                    assigned_mesh = true;
                 }
                 if name_is(vm, &a.parent_id, CYLINDER_ID) {
                     require_prop(vm, owner_class, "CylinderComponent")?;
@@ -656,6 +818,9 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                     }
                 }
                 attach_to_actor(vm, owner, made)?;
+                if let Some(m) = post.mesh {
+                    write_mesh_rest(vm, owner, made, m, plan.authority)?;
+                }
                 if let Some(collision_too) = post.cylinder {
                     let as_cylinder = is_a(vm, *class, CYLINDER).then_some(made);
                     write_prop(vm, owner, "CylinderComponent", Value::Object(as_cylinder))?;

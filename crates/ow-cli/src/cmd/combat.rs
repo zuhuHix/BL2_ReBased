@@ -290,6 +290,66 @@ fn has_player_class(vm: &Vm, controller: ObjRef) -> Result<bool, VmError> {
         .unwrap_or(false))
 }
 
+/// The player's animation tree template, which the made `Mesh`'s tree copy reads (NATIVE_COPY_ANIM_TREE.md).
+pub(crate) const PLAYER_TREE_PATH: &str = "GD_PlayerShared.Character.AnimTree_Player";
+
+/// A harness input (the hub's ruling for lane IMPL-MESH-REST): loads [`PLAYER_TREE_PATH`] and the nodes and controls
+/// it reaches (`Children[].Anim`, `SkelControlLists[].ControlHead`, `NextControl`), as [`apply_class_inputs`] loads
+/// the pawn archetype. In the game the tree arrives with the streamed player package; this stands in for that load
+/// (UNVERIFIED). The natives load nothing: the tree copy's preflight refuses an unloaded node.
+fn preload_player_tree(vm: &mut Vm) -> Result<(), VmError> {
+    let path = ObjectPath::parse(PLAYER_TREE_PATH).expect("a valid path");
+    vm.log.push(format!("harness input: preload {PLAYER_TREE_PATH} (UNVERIFIED stand-in for the streaming load)"));
+    let found = vm.defs.find(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    let tree = match found {
+        Ok(Some(tree)) => tree,
+        Ok(None) => {
+            vm.log.push(format!("harness input: preload {PLAYER_TREE_PATH}: found nothing"));
+            return Ok(());
+        }
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {PLAYER_TREE_PATH}: failed ({e})"));
+            return Err(VmError::Def(e));
+        }
+    };
+    let mut seen = vec![tree];
+    let mut next = 0;
+    while next < seen.len() {
+        let o = seen[next];
+        next += 1;
+        if let Err(e) = vm.defs.ensure_loaded(&mut vm.space, o) {
+            vm.log.extend(vm.defs.take_log());
+            vm.log.push(format!("harness input: preload {PLAYER_TREE_PATH}: failed ({e})"));
+            return Err(VmError::Def(e));
+        }
+        let class = vm.space.heap.get(o)?.class;
+        for name in ["Children", "SkelControlLists", "NextControl"] {
+            let Some(p) = vm.space.prop(class, name) else { continue };
+            let mut found = Vec::new();
+            objects_in(vm.space.read(o, ow_object::ids::PropAddr::scalar(p))?, &mut found);
+            for r in found {
+                if !seen.contains(&r) {
+                    seen.push(r);
+                }
+            }
+        }
+    }
+    vm.log.extend(vm.defs.take_log());
+    vm.log.push(format!("harness input: preload {PLAYER_TREE_PATH}: loaded {} objects", seen.len()));
+    Ok(())
+}
+
+/// Every object a value holds, through structs and arrays.
+fn objects_in(v: &Value, out: &mut Vec<ObjRef>) {
+    match v {
+        Value::Object(Some(o)) => out.push(*o),
+        Value::Struct(s) => s.fields.iter().for_each(|f| objects_in(f, out)),
+        Value::Array(a) => a.iter().for_each(|e| objects_in(e, out)),
+        _ => {}
+    }
+}
+
 /// The rest of the streaming load's stand-in (hub ruling, lane SPAWN-COMPLETE, option (a)): the preloaded archetype's
 /// object references that live in the archetype's own package file are loaded too, one level deep, through the store,
 /// so the loads are the store's tracked ones. The game's reason: the whole streaming package is resident, so Maya's
@@ -338,12 +398,14 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     Ok(done)
 }
 
-/// The two Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
-/// 2026-11-19-41 and 2026-11-19-46). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
+/// The three Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
+/// 2026-11-19-41 and 2026-11-19-46, and lane IMPL-MESH-REST for the tree). Outside Off, or for a controller that
+/// already has a `PlayerClass`, nothing.
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
 ///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
 ///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
-/// 2. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
+/// 2. **Tree preload:** Maya's animation tree and the nodes and controls it reaches ([`preload_player_tree`]).
+/// 3. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
         return Ok(());
@@ -400,6 +462,7 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
             }
         }
     }
+    preload_player_tree(vm)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
     let Some(f) = vm.find_method(own, "ServerPlayerSelectClass", state)? else {

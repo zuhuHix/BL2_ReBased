@@ -189,14 +189,16 @@ pub(crate) fn class_at(
 /// Loads the functions and states of `class` and of its super classes, once (a class the table defined by hand, not
 /// from a package, has none to load).
 pub(crate) fn ensure_class_code(vm: &mut Vm, class: ClassId) -> Result<(), VmError> {
-    if vm.code.classes.contains_key(&class) {
+    if package_code_loaded(vm, class) {
         return Ok(());
     }
-    // The chain from `class` up to the first class already loaded; loaded root first.
+    // The chain from `class` up to the first package class already loaded; loaded root first. A hand-declared class
+    // with methods ([`Vm::declare_method`]) is not a load marker: the walk goes on past it to its package ancestors
+    // (review r2 of #570, item 1).
     let mut chain = Vec::new();
     let mut cursor = Some(class);
     while let Some(c) = cursor {
-        if vm.code.classes.contains_key(&c) || chain.contains(&c) {
+        if package_code_loaded(vm, c) || chain.contains(&c) {
             break;
         }
         chain.push(c);
@@ -206,6 +208,12 @@ pub(crate) fn ensure_class_code(vm: &mut Vm, class: ClassId) -> Result<(), VmErr
         load_class_code(vm, c)?;
     }
     Ok(())
+}
+
+/// Whether `class`'s package code is loaded: an entry in the class code that does not come from
+/// [`Vm::declare_method`] (a class with no package code has nothing to load, so it never counts as loaded here).
+fn package_code_loaded(vm: &Vm, class: ClassId) -> bool {
+    vm.code.classes.contains_key(&class) && vm.defs.code().key_of(class).is_some()
 }
 
 fn load_class_code(vm: &mut Vm, class: ClassId) -> Result<(), VmError> {
@@ -647,6 +655,63 @@ impl Vm {
             }
         }
         Ok(None)
+    }
+
+    /// [`Vm::find_method`] without loading anything, for a write-free preflight (lane IMPL-MESH-REST): the same answer,
+    /// state first, or `None` when a class of the chain has package code that is not loaded yet (the answer would need
+    /// a load). A class with no package code (one the VM declared) adds nothing, as `find_method` finds nothing there.
+    pub fn find_loaded_method(&self, class: ClassId, name: &str, state: Option<NameId>) -> Option<Option<FuncId>> {
+        let key = name.to_ascii_lowercase();
+        let state_key = state.map(|s| self.space.names.text(s).to_ascii_lowercase());
+        for c in self.class_chain(class) {
+            let Some(code) = self.code.classes.get(&c) else {
+                if self.defs.code().key_of(c).is_some() {
+                    return None;
+                }
+                continue;
+            };
+            if let Some(sk) = &state_key
+                && let Some(f) = code.states.get(sk).and_then(|s| s.get(&key))
+            {
+                return Some(Some(*f));
+            }
+            if let Some(f) = code.functions.get(&key) {
+                return Some(Some(*f));
+            }
+        }
+        Some(None)
+    }
+
+    /// Gives `class`, a class declared by hand (no package code behind it), the method `name` (any case): `f`, as
+    /// [`Vm::find_method`] then finds it, in `state` when one is given (lane IMPL-MESH-REST, reviews r1 and r2 of
+    /// #570). It only adds a name no lookup from `class` already answers: the package code of the class chain is
+    /// loaded first, and a name any class of the chain declares, as a function or in any state, is refused, so a
+    /// registration never changes what an existing lookup returns. A class with package code gets its methods from
+    /// its package. Both refusals are `VmError::Registration`. A state given here is a class-code entry only: Off
+    /// event dispatch goes through the state frames, which only package states have (crate::states).
+    pub fn declare_method(&mut self, class: ClassId, name: &str, state: Option<&str>, f: FuncId) -> Result<(), VmError> {
+        let refuse = |reason| VmError::Registration { key: name.to_string(), reason };
+        if self.defs.code().key_of(class).is_some() {
+            return Err(refuse("the class has package code"));
+        }
+        ensure_class_code(self, class)?;
+        let key = name.to_ascii_lowercase();
+        let taken = self.class_chain(class).iter().any(|c| {
+            self.code
+                .classes
+                .get(c)
+                .is_some_and(|code| code.functions.contains_key(&key) || code.states.values().any(|s| s.contains_key(&key)))
+        });
+        if taken {
+            return Err(refuse("a lookup from the class already answers this name"));
+        }
+        let code = Rc::make_mut(self.code.classes.entry(class).or_default());
+        let list = match state {
+            Some(s) => code.states.entry(s.to_ascii_lowercase()).or_default(),
+            None => &mut code.functions,
+        };
+        list.insert(key, f);
+        Ok(())
     }
 
     /// Whether `class` or a super class declares the state `state` (any case; C++ `Class::states` along the chain).

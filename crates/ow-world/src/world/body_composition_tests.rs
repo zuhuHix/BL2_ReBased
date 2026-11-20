@@ -72,6 +72,12 @@ const ACTOR_TEMPLATE: u8 = 7;
 const FLAGS: [&str; 5] = ["CollideActors", "BlockActors", "BlockRigidBody", "BlockNonZeroExtent", "BlockZeroExtent"];
 
 fn env() -> Env {
+    env_with(true)
+}
+
+/// The fixture; with `reattach`, the pawn class has the canonical `WillowPawn.ReattachWeapons` (a hand-declared class
+/// gets it through `Vm::declare_method`).
+fn env_with(reattach: bool) -> Env {
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -103,11 +109,13 @@ fn env() -> Env {
             t.prop("Bool", primitive, flag, 0, 0);
         }
         t.prop("Object", primitive, "LightEnvironment", 0, object);
+        t.prop("Float", primitive, "Scale", 0, 0);
         let cylinder = t.class("CylinderComponent", primitive);
         t.prop("Float", cylinder, "CollisionRadius", 0, 0);
         let mesh = t.class("MeshComponent", primitive);
         let skeletal = t.class("SkeletalMeshComponent", mesh);
         t.prop("Object", skeletal, "SkeletalMesh", 0, object);
+        t.prop("Bool", skeletal, "bSkipAllUpdateWhenPhysicsAsleep", 0, 0);
         // The animation classes the lookups read (NATIVE_ANIM_NODE_LOOKUP.md), with only the fields they read.
         let node = t.class("AnimNode", object);
         t.prop("Name", node, "NodeName", 0, 0);
@@ -243,12 +251,33 @@ fn env() -> Env {
         ("Mesh", o.clone()),
         ("HeadMesh", o.clone()),
         ("LightEnvironment", o.clone()),
+        // The rest of the made-Mesh step (NATIVE_MESH_REST.md).
+        ("MeshBodyCompositionIndex", PropKind::Byte { enum_: None }),
+        ("ArmBoneBlend", o.clone()),
+        ("AimOffset", o.clone()),
+        ("LeftHandIK", o.clone()),
+        ("HeadLookAt", o.clone()),
+        ("bUsingFootIK", PropKind::Bool),
+        ("SlotNodes", PropKind::Array(Box::new(o.clone()))),
+        ("RepMeshScale", PropKind::Float),
+        ("Weapon", o.clone()),
+        ("OffHandWeapon", o.clone()),
     ]);
     let path = "WillowGame.WillowPawn.InitializePawnMeshes";
     let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), "WillowPawn.InitializePawnMeshes()").with_owner(pawn);
     let wrapper = vm.declare_function(d).unwrap();
+    if reattach {
+        declare_reattach(&mut vm, pawn, REATTACH_WEAPONS);
+    }
     crate::world::pawn_meshes::register(&mut vm).unwrap();
     Env { vm, dir, object, pawn, body, cylinder, skeletal, union, body_union, component_data, composition, wrapper }
+}
+
+/// `ReattachWeapons` at `path`, a method of the hand-declared `class`.
+fn declare_reattach(vm: &mut Vm, class: ClassId, path: &str) {
+    let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), path).with_owner(class);
+    let f = vm.declare_function(d).unwrap();
+    vm.declare_method(class, "ReattachWeapons", None, f).unwrap();
 }
 
 fn make(vm: &mut Vm, c: ClassId, name: &str) -> ObjRef {
@@ -351,10 +380,16 @@ fn attachment(e: &mut Env, a: A<'_>) -> Value {
 
 /// A pawn (Role 3) whose body class holds `attachments`.
 fn pawn_with(e: &mut Env, attachments: Vec<Value>) -> ObjRef {
+    let pawn = e.pawn;
+    pawn_of(e, pawn, attachments)
+}
+
+/// [`pawn_with`] for a pawn of `class` (the pawn class or a subclass).
+fn pawn_of(e: &mut Env, class: ClassId, attachments: Vec<Value>) -> ObjRef {
     let body = make(&mut e.vm, e.body, "BodyClass_Test");
     let comp = value(&e.vm, e.composition, vec![("Attachments", Value::array(attachments))]);
     put(&mut e.vm, body, "BodyComposition", comp);
-    let p = make(&mut e.vm, e.pawn, "Pawn_Test");
+    let p = make(&mut e.vm, class, "Pawn_Test");
     put(&mut e.vm, p, "Role", Value::Byte(3));
     put(&mut e.vm, p, "BodyClass", Value::Object(Some(body)));
     p
@@ -996,18 +1031,19 @@ fn is_anim_refusal(missing: &Missing, what: &str) -> bool {
     matches!(missing, Missing::LayerAbsent(l) if *l == ANIM_LAYER) && what == ANIM_NODES
 }
 
-/// Rule 5: a template with no tree settles all four lookups as None, `bUsingFootIK` false and `SlotNodes` empty; the
-/// rest of the made-`Mesh` step (the unidentified flag, `ReattachWeapons`) is then `NotRead`, write-free.
+/// Rule 5: a template with no tree settles all four lookups as None, `bUsingFootIK` false and `SlotNodes` empty. The
+/// rest of the made-`Mesh` step (NATIVE_MESH_REST.md) then passes its preflight, and production stops at the rendering
+/// hooks' `LayerAbsent`, write-free.
 #[test]
-fn no_tree_settles_everything_and_the_rest_of_the_mesh_step_is_not_read() {
+fn no_tree_settles_everything_and_the_mesh_step_reaches_the_rendering_hooks() {
     let mut e = env();
     let skel = skel_with(&mut e, None);
     let p = mesh_pawn(&mut e, skel);
     let body = body_of(&e, p);
     assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: false });
     let (missing, what) = refused(&mut e, p);
-    assert_eq!(missing, Missing::NotRead);
-    assert_eq!(what, MESH_REST);
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
+    assert_eq!(what, RENDER_HOOKS);
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None), "untouched");
 }
 
@@ -1032,7 +1068,8 @@ fn a_tree_with_nothing_kept_settles_and_finds_the_foot_ik() {
     assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
     assert_eq!(Counters::read(&e.vm), before, "the check writes nothing");
     let (missing, what) = refused(&mut e, p);
-    assert_eq!((missing, what.as_str()), (Missing::NotRead, MESH_REST));
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
+    assert_eq!(what, RENDER_HOOKS);
 }
 
 /// Review r1 of #561, item 8: with the attach's tree-copy check on (lane IMPL-COPY-ANIM-TREE), the same settled tree
@@ -1253,4 +1290,197 @@ fn an_unloaded_node_in_a_loaded_tree_is_the_refusal() {
     let (missing, what) = refused(&mut e, p);
     assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
     assert!(e.vm.defs.is_unloaded(&e.vm.space, handle), "nothing loaded");
+}
+
+// The rest of the made-Mesh step (NATIVE_MESH_REST.md, lane IMPL-MESH-REST)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A cylinder at attachment 0 and the `Mesh` (no tree) at attachment 1, on a body that uses the mesh for collision.
+/// The pawn's animation fields and `SlotNodes` start set, so the writes are seen to clear them.
+fn mesh_rest_pawn(e: &mut Env) -> (ObjRef, ObjRef) {
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let skel = skel_with(e, None);
+    put(&mut e.vm, skel, "Scale", Value::Float(1.25));
+    let a0 = attachment(e, A { template: Some(cyl), parent: CYLINDER_ID, ..A::default() });
+    let a1 = attachment(e, A { template: Some(skel), parent: MESH_ID, index: 2, ..A::default() });
+    let p = pawn_with(e, vec![a0, a1]);
+    aim_offset_named(e, p, "AimOffset");
+    let body = body_of(e, p);
+    put(&mut e.vm, body, "bUseMeshForCollision", Value::Bool(true));
+    let object = e.object;
+    let stale = make(&mut e.vm, object, "Stale");
+    for name in &ANIM_FIELDS[..4] {
+        put(&mut e.vm, p, name, Value::Object(Some(stale)));
+    }
+    put(&mut e.vm, p, "bUsingFootIK", Value::Bool(true));
+    put(&mut e.vm, p, "SlotNodes", Value::array(vec![Value::Object(Some(stale))]));
+    (p, skel)
+}
+
+/// Section 3's writes on authority, checked by their final values: `Mesh`, the index as a byte, the flag on the new component (a layout fit,
+/// UNVERIFIED), the four animation fields None, `bUsingFootIK` as settled, `SlotNodes` empty, `RepMeshScale` from the
+/// component's `Scale`, and `CollisionComponent` = the mesh. `ReattachWeapons` with no weapon held and no override
+/// (the canonical `WillowPawn.ReattachWeapons`) runs nothing.
+#[test]
+fn the_rest_of_the_mesh_step_sets_its_fields_on_authority() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (p, skel) = mesh_rest_pawn(&mut e);
+    run(&mut e, p).unwrap();
+    let list = entries(&e, p);
+    assert_eq!(list.len(), 2);
+    let cyl = made_of(&e, &list[0]);
+    let mesh = made_of(&e, &list[1]);
+    assert_ne!(mesh, skel, "a new component");
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(Some(mesh)));
+    assert_eq!(prop(&e.vm, p, "MeshBodyCompositionIndex"), Value::Byte(1), "the attachment's index");
+    assert_eq!(prop(&e.vm, mesh, SKIP_FLAG), Value::Bool(true));
+    assert_eq!(prop(&e.vm, skel, SKIP_FLAG), Value::Bool(false), "the template is untouched");
+    for name in &ANIM_FIELDS[..4] {
+        assert_eq!(prop(&e.vm, p, name), Value::Object(None), "{name}");
+    }
+    assert_eq!(prop(&e.vm, p, "bUsingFootIK"), Value::Bool(false), "no tree: no foot IK");
+    assert_eq!(prop(&e.vm, p, "SlotNodes"), Value::array(Vec::new()));
+    assert_eq!(prop(&e.vm, p, "RepMeshScale"), Value::Float(1.25));
+    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(Some(cyl)));
+    assert_eq!(prop(&e.vm, p, "CollisionComponent"), Value::Object(Some(mesh)), "the mesh is used for collision");
+}
+
+/// Off authority (the plan's authority, #529 section 7 step 3), `RepMeshScale` is neither required nor written.
+#[test]
+fn off_authority_the_mesh_scale_is_not_replicated() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (p, _) = mesh_rest_pawn(&mut e);
+    put(&mut e.vm, p, "Role", Value::Byte(2));
+    put(&mut e.vm, p, "RepMeshScale", Value::Float(9.0));
+    run(&mut e, p).unwrap();
+    let mesh = made_of(&e, &entries(&e, p)[1]);
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(Some(mesh)));
+    assert_eq!(prop(&e.vm, p, "RepMeshScale"), Value::Float(9.0), "untouched");
+}
+
+/// `ReattachWeapons` with a held weapon (either hand) needs the attach to the third-person mesh, which is not read:
+/// `NotRead`, before any write.
+#[test]
+fn a_held_weapon_is_not_read_and_write_free() {
+    for hand in ["Weapon", "OffHandWeapon"] {
+        let mut e = env();
+        answer_render_hooks_for_tests(true);
+        let (p, _) = mesh_rest_pawn(&mut e);
+        let object = e.object;
+        let gun = make(&mut e.vm, object, "Gun");
+        put(&mut e.vm, p, hand, Value::Object(Some(gun)));
+        let (missing, what) = refused(&mut e, p);
+        assert_eq!((missing, what.as_str()), (Missing::NotRead, HELD_WEAPON), "{hand}");
+        assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
+    }
+}
+
+/// Two `Mesh` attachments: the second would release the first one's component, so it is the release `NotRead`,
+/// before any write.
+#[test]
+fn a_second_mesh_attachment_is_a_release() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let s1 = skel_with(&mut e, None);
+    let s2 = skel_with(&mut e, None);
+    let a0 = attachment(&mut e, A { template: Some(s1), parent: MESH_ID, ..A::default() });
+    let a1 = attachment(&mut e, A { template: Some(s2), parent: MESH_ID, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, releasing_old("Mesh"));
+}
+
+/// The kind checks: each destination must take its write; a missing field or another kind is `VmError::Script`.
+#[test]
+fn the_flag_and_the_mesh_scale_are_kind_checked() {
+    let e = env();
+    let skeletal = e.skeletal;
+    let pawn = e.pawn;
+    let cylinder = e.cylinder;
+    assert!(require_kind(&e.vm, skeletal, SKIP_FLAG, Want::Bool).is_ok());
+    assert!(require_kind(&e.vm, pawn, "RepMeshScale", Want::Float).is_ok());
+    assert!(require_kind(&e.vm, pawn, "Mesh", Want::Takes(skeletal)).is_ok());
+    let cases = [
+        (pawn, "Role", Want::Float),
+        (skeletal, "Scale", Want::Bool),
+        (pawn, "NoSuchField", Want::Float),
+        (pawn, "BodyClass", Want::Takes(cylinder)),
+        (pawn, "SlotNodes", Want::Byte),
+    ];
+    for (class, name, want) in cases {
+        let err = require_kind(&e.vm, class, name, want).unwrap_err();
+        assert!(matches!(err, VmError::Script { .. }), "{name}: {err:?}");
+    }
+}
+
+/// Section 4, preflight 4.1: a pawn class with no `ReattachWeapons` at all is refused like an override (review r1 of
+/// #570, item 2), write-free.
+#[test]
+fn no_reattach_weapons_is_refused_like_an_override() {
+    let mut e = env_with(false);
+    answer_render_hooks_for_tests(true);
+    let (p, _) = mesh_rest_pawn(&mut e);
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, REATTACH_OVERRIDE));
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
+}
+
+/// A `ReattachWeapons` that is not `WillowPawn`'s (here the only one, a subclass's own) is raised before a held
+/// weapon, write-free (review r1 of #570, item 4). The fixture's base pawn has none, as `Vm::declare_method` refuses
+/// a registration that would hide an inherited method (review r2). A state-scoped override goes through Off's state
+/// frames, which only package states have; that walk is `ow_vm::states::find_loaded_event`'s test.
+#[test]
+fn an_override_is_refused_before_a_held_weapon() {
+    let mut e = env_with(false);
+    answer_render_hooks_for_tests(true);
+    let pawn = e.pawn;
+    let sub = class(&mut e.vm, "WillowGame.ToyPawnSub", pawn, &[]);
+    declare_reattach(&mut e.vm, sub, "WillowGame.ToyPawnSub.ReattachWeapons");
+    let skel = skel_with(&mut e, None);
+    let a = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
+    let p = pawn_of(&mut e, sub, vec![a]);
+    aim_offset_named(&mut e, p, "AimOffset");
+    let object = e.object;
+    let gun = make(&mut e.vm, object, "Gun");
+    put(&mut e.vm, p, "Weapon", Value::Object(Some(gun)));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, REATTACH_OVERRIDE));
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
+}
+
+/// A pawn whose heap names a state but which has no state frame yet: the dispatch would make the frame (a write and
+/// a state read), so the preflight refuses with this port's `NotRead`, before the held weapon and write-free.
+#[test]
+fn a_dispatch_that_needs_a_read_is_refused_before_a_held_weapon() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (p, _) = mesh_rest_pawn(&mut e);
+    let state = e.vm.space.names.intern("Aiming");
+    e.vm.space.heap.get_mut(p).unwrap().state = Some(state);
+    let object = e.object;
+    let gun = make(&mut e.vm, object, "Gun");
+    put(&mut e.vm, p, "OffHandWeapon", Value::Object(Some(gun)));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, REATTACH_UNREAD));
+}
+
+/// Review r1 of #570, item 3: on authority a component class whose `Scale` is not a float is `VmError::Script` in the
+/// preflight, before the mesh is made or any pawn field written.
+#[test]
+fn a_scale_that_is_not_a_float_fails_before_any_write() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let skeletal = e.skeletal;
+    let odd = class(&mut e.vm, "Engine.ToyIntScaleMeshComponent", skeletal, &[("Scale", PropKind::Int)]);
+    let skel = make(&mut e.vm, odd, "Odd_Template");
+    let p = mesh_pawn(&mut e, skel);
+    let before = Counters::read(&e.vm);
+    let err = run(&mut e, p).unwrap_err();
+    assert!(matches!(err, VmError::Script { .. }), "{err:?}");
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert!(entries(&e, p).is_empty());
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
 }
