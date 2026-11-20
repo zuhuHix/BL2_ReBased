@@ -3,8 +3,8 @@
 AI-assisted (Claude Code). Lane ANALYST-RESOLVE-CONTEXT, analyst only, for slice link 9. The decision number is pending
 (the landing run numbers it); NNN is a placeholder.
 
-- **What:** a new own-words note, `docs/verification/NATIVE_RESOLVE_CONTEXT.md`, and one `NATIVE_INDEX.md` row. No
-  code changes.
+- **What:** a new own-words note, `docs/verification/NATIVE_RESOLVE_CONTEXT.md`; in `NATIVE_INDEX.md`, one row
+  changed and one added; a correction line in `NATIVE_ATTRIBUTES.md` section 1. No code changes.
 - **Sources:** the script (`research/script_disasm.py`), the installed packages (`ow-package --def-dump`, names and
   counts only), `Borderlands2.exe` read locally with the project's Ghidra tooling (read-only, under the machine lock),
   and a local, never-pushed slice-gate probe. Raw output stays under ignored `local/analysis/rc/`. No bl-sdk session
@@ -26,3 +26,9 @@ AI-assisted (Claude Code). Lane ANALYST-RESOLVE-CONTEXT, analyst only, for slice
     then `ow-attr`'s walk. Reference is unchanged.
   - **The probe:** with a stand-in, link 9's next stop is the unbound
     `AttributeDefinitionBase.AddAttributeModifier(object,object,bool)`.
+  - **Review r1 of #604 (the hub's final rulings):** one shared function (R1 to R3 and the walk), bound by the action
+    skill pack and the equip pack through keep-existing binds in either order. In Off the equip run gets R1 to R3, so a
+    handle it used to load is refused `NotRead`, and its gates are named. The preflight order is R1, then R2 for every
+    entry, then R3 for every entry ("registered"). Once the walk starts, any `NotYet` is terminal and prefixed (the
+    GetValue precedent, decision 2026-11-19-58). The tests list grows to 16, and the `GetAttributeContexts` consumers
+    are corrected to native callers.

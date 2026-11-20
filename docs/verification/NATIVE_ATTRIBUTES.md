@@ -83,6 +83,9 @@ and `GearboxFramework` classes; counts are of float / int / byte attribute prope
   None; an **empty chain returns None** (it does not pass the source through). The result is the last resolver's answer.
 - **Calls other natives:** each resolver's `GetAttributeContext` (section 5). Script callers: `AttributeEffect.ApplyAttributeEffects`
   and every `GetAttributeContexts` consumer.
+- **Correction (2026-11-19, NATIVE_RESOLVE_CONTEXT.md section 1):** the only script caller is
+  `AttributeEffect.ApplyAttributeEffects`. `Skill.GetAttributeContexts` is itself a native, so its consumers reach
+  the chain walk from native code.
 - **Edge cases:** None source: most resolvers return None; `NoContextNeededAttributeContextResolver` returns the engine
   globals object instead (it is how constant attributes always resolve).
 - **Implementer checklist:** chain of functions object -> object; first None ends it; empty chain = None.

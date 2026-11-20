@@ -32,6 +32,10 @@ for a world that runs skill scripts.
 `AttributeDefinitionBase`'s native. So `FlagDefinition`'s own `ResolveContext` native (section 3) is never reached
 from script.
 
+**Native callers.** NATIVE_ATTRIBUTES.md section 1 also listed "every `GetAttributeContexts` consumer" as a script
+caller. `Skill.GetAttributeContexts` is itself a native (NATIVE_ATTRIBUTES.md section 10), so those consumers reach the
+chain walk from native code, not through this script native. A correction line was added there.
+
 `ApplyAttributeEffects(ContextSource, InAttributeEffects, out OutModifiers, OptionalOverrideContextSource)` does, for
 each effect in order:
 1. makes a new `AttributeModifier`, outered to `ContextSource` (**a write**). It sets the modifier's `Type` from the
@@ -97,50 +101,89 @@ body was not re-read here. So the answer on link 9 is **the target pawn**, as th
 
 ## 5. Proposed Off answer (for a separate implementer)
 
-**Every rule below is UNVERIFIED.** Bind `AttributeDefinitionBase.ResolveContext(object)` in Off in the worlds that
-run skill scripts, link 9's included. Use the same native the equip pack binds, and let a key bound first keep its
-binding. Reference keeps the stub policy (or the C++ stand-in where one exists) and is unchanged.
+**Every rule below is UNVERIFIED.** The hub's rulings on review r1 of #604 are folded in and final.
 
-**Preflight (write-free, load-free, RNG-free), in this order.** The first failure is the answer:
+**One shared function, two bindings.**
+- **The function.** One public function holds the preflight (R1, R2, R3) and the walk. Its logic goes in `ow-attr`, as
+  an `AttributeSystem` method on an `EvalCx` (the store is reachable there for R1). The native wrapper is a public
+  function in `ow_inventory::equip::natives`, which both packs can reach.
+- **Bound twice, either order.** `ow_skills::action_skill::Pack::register` binds it next to `register_cast_get_value`,
+  through the keep-existing bind (`ow_combat::hit::bind_fn`, decision 2026-11-19-127). The equip pack binds it
+  through the same keep-existing rule: `ow-inventory` sits below `ow-combat`, so it checks `vm.is_bound` itself, as
+  that bind does. Whichever pack registers first binds it, and the other does not fail.
+- **Reference** keeps today's equip native and is unchanged.
+
+**The equip run changes in Off.** It now gets R1 to R3 as well. A definition or resolver handle that the equip run's
+`ResolveContext` used to load on the way (through `eval::ensure_loaded`) is now refused `NotYet` with missing kind
+`NotRead`. The implementer runs the equip-run gates and reports what moved:
+- `cargo test -p ow-inventory` (the equip natives' tests) and `cargo test -p ow-cli` (the equip run);
+- the installed equip run (`ow-package --inventory-move ... --equip-run`);
+- the installed Off strict `--slice-gate` row of link 8 (`equip_gun`).
+
+**The preflight (write-free, load-free, RNG-free), in this order.** The first failure is the answer:
 1. **The receiver** `this`: set, and its class `AttributeDefinitionBase` or a child, looked up with the class table's
    `by_path` only. Otherwise a `VmError::Script`.
-2. **R1, an unloaded definition.** `this` is an unloaded definition handle (`vm.defs.is_unloaded`): `NotYet` with
+2. **The argument** `ContextSource`: an object or None. Any other shape is a `VmError::Script`.
+3. **R1, an unloaded definition.** `this` is an unloaded definition handle (`vm.defs.is_unloaded`): `NotYet` with
    missing kind `NotRead`, "AttributeDefinitionBase.ResolveContext: the definition <path> is an unloaded handle (a
-   load is a write)". `ow-attr`'s read path loads such a handle (`eval::ensure_loaded` through `property`), so it must
-   not be reached with one.
-3. **The argument** `ContextSource`: an object or None. Any other shape is a `VmError::Script`.
+   load is a write)". `ow-attr`'s read path loads such a handle (`eval::ensure_loaded` through `property`), so the
+   walk must not be reached with one.
 4. **The chain.** `ContextResolverChain` must be declared as an array of objects. Otherwise a `VmError::Script` naming
    the field.
-5. **R2, an unloaded resolver.** Each non-None entry must be resident: an unloaded handle refuses `NotYet` with missing
-   kind `NotRead`, "AttributeDefinitionBase.ResolveContext: the context resolver <path> is an unloaded handle (a load
-   is a write)".
-6. **R3, a resolver class not implemented.** Each non-None entry's class must be one `ow-attr` implements. Otherwise it
-   is the registry's existing `NotYet { NotRead }`, "context resolver class <path>" (NATIVE_ATTRIBUTES.md section 5).
-   The same check is `preflight_read`'s context half.
+5. **R2, an unloaded resolver, for every entry first.** Every non-None entry, in order, must be resident. The first
+   unloaded handle refuses `NotYet` with missing kind `NotRead`, "AttributeDefinitionBase.ResolveContext: the context
+   resolver <path> is an unloaded handle (a load is a write)".
+6. **R3, an unregistered resolver class, for every entry after that.** Every non-None entry's class must be one
+   **registered** with `ow-attr`'s context resolver registry. Otherwise it is the registry's existing
+   `NotYet { NotRead }`, "context resolver class <path>" (NATIVE_ATTRIBUTES.md section 5). So in a chain of an
+   unregistered loaded resolver followed by an unloaded one, the answer is R2.
 
-**The answer:** `ow-attr`'s `resolve_context` (section 2's walk), returned as the object or None. Once the preflight
-has passed, nothing it touches needs a load.
+**The walk:** `ow-attr`'s `resolve_context` (section 2), returned as the object or None.
 
-**The counters.** The native's refusals come before anything it could write, so none carries the "stopped after
-partial writes: " prefix from inside it. On link 9 the script made the new modifier first (section 1, step 1), so a
-refusal there is marked by the caller's counters, as every NotYet of the cast is.
+**Refusals once the walk starts are terminal** (the hub's ruling, the GetValue precedent: `ow-combat`'s
+`hit/attribute.rs`, decision 2026-11-19-58). The preflight cannot see everything a resolver does:
+- `SkillAttributeContextResolver`, `DesignerAttributeContextResolver`(`ByName`) and `InventoryAttributeContextResolver`
+  run installed script;
+- `BalancedActor` and `EquippedInventory` call `find_class` (a class-code load);
+- `ResourcePool` loads;
+- a resolver can answer an unloaded handle, which the next resolver then reads;
+- the unread resolver, `CurrentProficiencySkill` and `StatusEffectChanceModifier` answer `NotYet` from their own
+  bodies.
+
+So once the walk starts, **any `NotYet` is terminal**: it goes through `after_partial_writes` (its text prefixed
+"stopped after partial writes: " once, its kind kept), and nothing is put back. Any other error is returned unchanged.
+The preflight's own refusals (R1 to R3, and the `VmError::Script` cases) come before the walk and are never prefixed
+inside this native. On link 9 the script made the new modifier first (section 1, step 1), so the caller's counters
+mark those refusals anyway.
 
 **Not in scope here:** `AttributeDefinitionBase.AddAttributeModifier`, the next stop on link 9 (section 6). It is bound
 by the same equip pack, from NATIVE_ATTRIBUTES.md section 1. The same world-level binding question applies to it and
-to `RemoveAttributeModifier`, so an implementer may bind the three together; their rules are not changed here.
+to `RemoveAttributeModifier`; their rules are not changed here.
 
 **Tests for the implementer** (synthetic, the existing `package()` / `tag()` helpers; every value invented). Each
-refusal case also checks #518's counters unchanged (heap committed writes, store load transitions, generator draws):
+refusal before the walk also checks #518's counters unchanged (heap committed writes, store load transitions,
+generator draws):
 1. a definition with one Pawn resolver and a pawn source: the pawn;
 2. a controller source through the same chain: the controller's `Pawn` (the resolver's rule, unchanged);
-3. a two-resolver chain where the second answers None: None;
-4. an empty chain and a chain of None entries: None, even with a source;
-5. a None entry after an answering resolver: that answer;
-6. an unloaded definition handle: R1, still unloaded afterwards;
-7. an unloaded resolver entry: R2, still unloaded afterwards;
-8. a resolver class `ow-attr` does not implement: R3;
-9. no receiver, a receiver outside `AttributeDefinitionBase`, and a non-object argument: `VmError::Script` each;
-10. under `ParityMode::Reference`: nothing new bound.
+3. **a None source:** through a Pawn resolver, None; through `NoContextNeededAttributeContextResolver`, the engine
+   globals object;
+4. a two-resolver chain where the second answers None: None;
+5. an empty chain and a chain of None entries: None, even with a source;
+6. a None entry after an answering resolver: that answer;
+7. an unloaded definition handle: R1, still unloaded afterwards;
+8. an unloaded resolver entry: R2, still unloaded afterwards;
+9. a resolver class not registered: R3;
+10. **a mixed chain**, an unregistered loaded resolver and then an unloaded one: R2;
+11. **a refusal after the walk started:** a scripted resolver step (an invented script resolver), then a Pawn step
+    that refuses: the refusal prefixed "stopped after partial writes: ", its kind kept;
+12. **both registration orders:** the action-skill pack before and after the equip pack (the precedent is `ow-skills`'
+    `action_skill/events_tests.rs`, the both-orders registration test): either order binds once, and neither fails;
+13. **a `FlagDefinition` receiver** through this base native: the base walk (section 2), not `FlagDefinition`'s;
+14. **an `AttributeDefinitionMultiContext` receiver:** the intended behaviour is the same base walk on its
+    `ContextResolverChain`, since `ResolveContext` is final on the base class (UNVERIFIED that the multi-context class
+    keeps the base's chain field; `ResolveContexts` is a separate native and unchanged);
+15. no receiver, a receiver outside `AttributeDefinitionBase`, and a non-object argument: `VmError::Script` each;
+16. under `ParityMode::Reference`: nothing new bound, the equip native as today.
 
 ## 6. The probe (local, never pushed)
 
