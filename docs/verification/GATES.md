@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK9-RESOLVER-PRELOAD (2026-11-20, pc-hummer, on fix/rust-link9-resolver-preload from #644 905f3ece):** AI-assisted
+(Claude Code, Opus 5.5). Link 9's set-up preloads the phaselock attribute's context resolver, a labelled UNVERIFIED
+stand-in. `cargo test --workspace`: 3201 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off
+`--slice-gate` strict (release build, under the machine lock): ok 4, notyet 9, error 1 of 14. Link 9 passes 1 of 2
+steps; `cast` gets past the resolver and stops with an error at the unbound
+`AttributeDefinitionBase.AddAttributeModifier(object,object,bool)` (IMPL-ADD-ATTRIBUTE-MODIFIER, not on main).
+UNVERIFIED in game.
+
 **LINK9-GETAICOMPONENT-BINDING (2026-11-20, pc-hummer, on fix/rust-link9-holds-binding from main 241a6c47):**
 AI-assisted (Claude Code, Opus 5.5). Link 9's set-up registers the AI holds' natives (`ow_combat::holds::register`),
 `GearboxMind.GetAIComponent` among them. `cargo test --workspace`: 3200 passed / 0 failed / 51 ignored;

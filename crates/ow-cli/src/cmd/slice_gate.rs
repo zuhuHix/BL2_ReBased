@@ -1615,8 +1615,50 @@ pub fn preload_class(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<(),
     }
 }
 
+/// The definition subobjects link 9's cast reads, loaded at its set-up (lane LINK9-RESOLVER-PRELOAD, a **harness
+/// input, UNVERIFIED stand-in**): in the game the skill's packages are loaded whole, so a definition's subobjects are
+/// resident with it; the port's store leaves them as handles, and the cast's preflight refuses an unloaded one (a
+/// load is a write). The phaselock attribute's context resolver: `ResolveContext`'s chain entry (its R2).
+pub const PHASELOCK_SETUP_OBJECTS: [&str; 1] = ["GD_Siren_Skills.Attributes.IsPhaselocked.PawnAttributeContextResolver_0"];
+
+/// The text that starts each of link 9's set-up object lines ([`preload_object`]).
+pub const SETUP_OBJECT_INPUT: &str = "harness input: set-up object";
+
+/// One object loaded at link 9's set-up, with its harness line (lane LINK9-RESOLVER-PRELOAD). The store's lookup
+/// loads what it finds; the line says whether that was a load ("loaded at set-up", a write, an UNVERIFIED stand-in for
+/// the package's load with its definition) or the object was resident already ("ready, nothing loaded"), by the
+/// store's load counter. A path no package holds loads nothing; a failed load keeps its error. The line is made
+/// whatever the outcome.
+pub fn preload_object(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<(), ow_vm::error::VmError>) {
+    let parsed = match ow_core::ObjectPath::parse(path) {
+        Ok(p) => p,
+        Err(e) => return (format!("{SETUP_OBJECT_INPUT} {path}: not a path ({e})"), Err(script_error(e.to_string()))),
+    };
+    let loads = vm.defs.load_transitions();
+    let found = vm.defs.find(&mut vm.space, &parsed);
+    vm.log.extend(vm.defs.take_log());
+    let object = match found {
+        Ok(Some(o)) => o,
+        Ok(None) => return (format!("{SETUP_OBJECT_INPUT} {path}: not in the packages, nothing loaded"), Ok(())),
+        Err(e) => {
+            return (format!("{SETUP_OBJECT_INPUT} {path}: the load failed ({e})"), Err(ow_vm::error::VmError::Def(e)));
+        }
+    };
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, object);
+    vm.log.extend(vm.defs.take_log());
+    match loaded {
+        Err(e) => (format!("{SETUP_OBJECT_INPUT} {path}: the load failed ({e})"), Err(ow_vm::error::VmError::Def(e))),
+        Ok(()) if vm.defs.load_transitions() != loads => (
+            format!("{SETUP_OBJECT_INPUT} {path}: loaded at set-up (a write; UNVERIFIED stand-in for the package's load with its definition)"),
+            Ok(()),
+        ),
+        Ok(()) => (format!("{SETUP_OBJECT_INPUT} {path}: ready, nothing loaded"), Ok(())),
+    }
+}
+
 /// Link 9's set-up (review r1 of #579): each of [`phaselock_setup_classes`] is resolved and its line pushed onto
-/// `harness`, a failure included (the first failure stops the set-up). Then `Pawn`'s `QueryInterface` rules are
+/// `harness`, a failure included (the first failure stops the set-up); then each of [`PHASELOCK_SETUP_OBJECTS`]
+/// ([`preload_object`], lane LINK9-RESOLVER-PRELOAD), the same way. Then `Pawn`'s `QueryInterface` rules are
 /// registered (decision 2026-11-19-62), which find those classes loaded already: the target's flags reach its mind
 /// through them; without them a pawn takes the plain answer. They come through `ow_combat::holds::register`, which
 /// registers them first and then the AI holds' natives, `GearboxMind.GetAIComponent` among them (lane
@@ -1625,6 +1667,11 @@ pub fn preload_class(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<(),
 pub fn phaselock_setup(vm: &mut ow_vm::api::Vm, harness: &mut Vec<String>) -> Result<(), ow_vm::error::VmError> {
     for path in phaselock_setup_classes() {
         let (line, outcome) = preload_class(vm, path);
+        harness.push(line);
+        outcome?;
+    }
+    for path in PHASELOCK_SETUP_OBJECTS {
+        let (line, outcome) = preload_object(vm, path);
         harness.push(line);
         outcome?;
     }

@@ -138,6 +138,11 @@ fn gearbox() -> Vec<u8> {
     let object = t.p.add_import("Core", "Class", core, "Object");
     t.class("IFlagProvider", object);
     let mind = t.class("GearboxMind", object);
+    // Lane LINK9-RESOLVER-PRELOAD: an object export for the set-up object preload's test.
+    let mut empty = ow_package::testkit::ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let toy_object = t.p.add_import("Core", "Class", core, "Object");
+    t.p.add_export(toy_object, "ToyResolver", empty);
     let spec = ow_package::testkit::script::FunctionSpec::new(0x400 | 0x20000, "GetAIComponent");
     t.function(mind, "GetAIComponent", &[], None, &[], &spec, |_| None);
     t.p.build()
@@ -724,7 +729,11 @@ fn link_9_s_set_up_reports_every_class_it_resolves() {
     let mut harness = Vec::new();
     phaselock_setup(&mut t.world.vm, &mut harness).unwrap();
     let classes = phaselock_setup_classes();
-    assert_eq!(harness.len(), classes.len(), "{harness:?}");
+    // The class lines, then the object lines (lane LINK9-RESOLVER-PRELOAD); the toy packages hold no such object.
+    assert_eq!(harness.len(), classes.len() + PHASELOCK_SETUP_OBJECTS.len(), "{harness:?}");
+    for (line, path) in harness[classes.len()..].iter().zip(PHASELOCK_SETUP_OBJECTS) {
+        assert_eq!(line, &format!("{SETUP_OBJECT_INPUT} {path}: not in the packages, nothing loaded"));
+    }
     for (line, path) in harness.iter().zip(&classes) {
         assert!(line.starts_with(&format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: ")), "{line}");
     }
@@ -763,4 +772,25 @@ fn link_9_s_set_up_binds_get_ai_component() {
     phaselock_setup(&mut t.world.vm, &mut harness).unwrap();
     assert!(t.world.vm.is_bound(f), "bound by the set-up");
     assert!(t.world.vm.prepare_call(f).is_ok());
+}
+
+/// Lane LINK9-RESOLVER-PRELOAD: an object the store holds is loaded at set-up and its line says so (a write, an
+/// UNVERIFIED stand-in); a second preload finds it resident and loads nothing; a path no package holds loads nothing.
+#[test]
+fn a_set_up_object_is_loaded_once_and_reported() {
+    let mut t = toy();
+    let loads = t.world.vm.defs.load_transitions();
+    let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
+    outcome.unwrap();
+    assert!(line.ends_with(": loaded at set-up (a write; UNVERIFIED stand-in for the package's load with its definition)"), "{line}");
+    assert!(t.world.vm.defs.load_transitions() > loads, "a load happened");
+    let loads = t.world.vm.defs.load_transitions();
+    let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
+    outcome.unwrap();
+    assert_eq!(line, format!("{SETUP_OBJECT_INPUT} GearboxFramework.ToyResolver: ready, nothing loaded"));
+    assert_eq!(t.world.vm.defs.load_transitions(), loads);
+    let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.NoSuchResolver");
+    outcome.unwrap();
+    assert!(line.ends_with(": not in the packages, nothing loaded"), "{line}");
+    assert_eq!(t.world.vm.defs.load_transitions(), loads, "nothing loaded for a missing path");
 }
