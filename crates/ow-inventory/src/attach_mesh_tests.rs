@@ -379,6 +379,8 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(attached))]));
     unmarked(&n, Missing::NotRead, "Actor.AttachComponent on an attached component: the detach before the attach");
     assert_eq!(x.written(attached), held, "no clear ahead of the preflight");
+    let recorded = |x: &Fx, c: ObjRef| x.vm.service::<SceneLayer>().unwrap().borrow().recorded_owner(c);
+    assert_eq!(recorded(&x, attached), None, "a refused attach records nothing (lane IMPL-COMPONENT-BOUNDS)");
     assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 
     let plan = attach_plan(&x.vm, actor, Some(mesh)).unwrap().expect("the attach writes");
@@ -388,7 +390,10 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
         vec![(mesh, "bNeedsReattach"), (mesh, "bNeedsUpdateTransform"), (mesh, "Owner"), (actor, "Components")],
         "the note's order: the flag clears, Owner, then the append"
     );
+    assert_eq!(recorded(&x, mesh), None, "the guards record nothing");
     assert_eq!(x.call(ATTACH_FN, actor, vec![Value::Object(Some(mesh))]).unwrap(), Value::None);
+    assert_eq!(recorded(&x, mesh), Some(actor), "the successful attach publishes the record");
+    assert!(ow_world::actors::attached_to(&x.vm, mesh, actor).unwrap());
     assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(false));
     assert_eq!(x.get(mesh, "bNeedsUpdateTransform"), Value::Bool(false));
     assert_eq!(x.get(mesh, "Owner"), Value::Object(Some(actor)));
@@ -449,6 +454,8 @@ fn a_components_array_of_ints_refuses_before_any_write() {
     assert!(matches!(&e, VmError::Script { message, .. } if message.contains("Components")), "{e:?}");
     let after: Vec<Value> = fields.iter().map(|f| x.get(loose, f)).collect();
     assert_eq!(after, before, "both flags and Owner unchanged");
+    let layer = x.vm.service::<SceneLayer>().unwrap();
+    assert_eq!(layer.borrow().recorded_owner(loose), None, "a failed attach records nothing");
     assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 }
 

@@ -28,6 +28,16 @@
 //!    reached while S refuses, and is refusal L when it is. No entry left gives 0 and 0, through main's
 //!    `placement::box_cylinder` of no boxes.
 //!
+//! **Lane IMPL-COMPONENT-BOUNDS** (coded from NATIVE_COMPONENT_BOUNDS.md alone, analyst lane ANALYST-COMPONENT-BOUNDS,
+//! PR #639, and the hub's rulings on its review; clean room). On a **live** receiver the actor default now runs, per
+//! entry: None and a non-primitive skipped; a lazy handle refusal N; **`CollideActors` clear skipped** (before
+//! attachment is asked about); **not attached by the attach record** ([`crate::actors::attached_to`]: recorded with
+//! this receiver as owner, still owned by it, neither destroyed) refusal L; then **refusal S, unconditionally**: the
+//! hub kept it, and the skip bit is not read. The component virtual the box routine asks first (not read) is taken as
+//! passing, before `CollideActors` (UNVERIFIED, as #595). Past S, an entry's box comes from [`entry_box`], at query time from
+//! stored fields (nothing is written to `Bounds`). [`entry_box`] is not reached while S refuses, and is tested on its
+//! own. Template receivers keep #595's path unchanged.
+//!
 //! **Nothing is loaded.** Classes are looked up only through the class table's `by_path`; a class not in the table
 //! counts as "not this class". The cylinder components and the walked primitive entries that the store holds as lazy
 //! handles (or as stand-ins with no slots) are refusal N. A receiver that is itself a lazy handle is refusal N too: the
@@ -49,7 +59,7 @@ use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
-use crate::actors::{flag, float, object, objects};
+use crate::actors::{attached_to, field, flag, float, object, objects};
 use crate::placement::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, PAWN_RULE_CLASSES, box_cylinder};
 use crate::trace_filter::SKIP_FLAG;
 
@@ -186,27 +196,120 @@ fn cylinder_of(vm: &Vm, c: ObjRef) -> Result<(f32, f32), VmError> {
     Ok((float(&vm.space, c, "CollisionRadius")?, float(&vm.space, c, "CollisionHeight")?))
 }
 
-/// Step 5, the actor default.
+/// Step 5, the actor default (module documentation).
 fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
     let space = &vm.space;
     let primitive = space.classes.by_path("Engine.PrimitiveComponent");
+    let mut boxes = Vec::new();
     for c in objects(space, this, "Components")?.into_iter().flatten() {
         let class = space.heap.get(c)?.class;
         if !primitive.is_some_and(|p| space.classes.is_child_of(class, p)) {
             continue;
         }
         resident(vm, c)?;
-        if !template(space, this)? {
-            // A live receiver: the port does not track attachment (`AttachComponent` leaves `bAttached` as it was).
-            return Err(bounds_refusal());
+        if template(space, this)? {
+            // #595's template path, unchanged.
+            if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? {
+                continue;
+            }
+            return Err(NotYet::not_read(SKIP_FLAG, RECORD).into());
         }
-        if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? {
+        // A live receiver (lane IMPL-COMPONENT-BOUNDS, note section 7 B). The component virtual the box routine asks
+        // first is not read: every component is taken as passing it (UNVERIFIED, as #595). Then a non-colliding entry
+        // is never counted, attached or not.
+        if !flag(space, c, "CollideActors")? {
             continue;
         }
-        return Err(NotYet::not_read(SKIP_FLAG, RECORD).into());
+        if !attached_to(vm, c, this)? {
+            return Err(bounds_refusal());
+        }
+        // The skip flag: refusal S whenever an entry reaches it (the hub's ruling on #639; the bit is not read).
+        if !READ_SKIP_FLAG {
+            return Err(NotYet::not_read(SKIP_FLAG, RECORD).into());
+        }
+        // Future cases (note section 7 B.7), unreachable while S refuses.
+        boxes.push(entry_box(vm, this, c)?);
     }
-    let [radius, _, height] = box_cylinder(&[]);
+    let [radius, _, height] = box_cylinder(&boxes);
     Ok((radius, height))
+}
+
+/// Whether the skip flag is read on a live receiver: no, by the hub's ruling on #639 (refusal S stands).
+const READ_SKIP_FLAG: bool = false;
+
+/// The cylinder entry's refusal when its world position is not the owner's `Location` by the note's rule.
+pub const WORLD_TRANSFORM: &str = "Actor.GetBoundingCylinder: the component's world transform";
+/// A skeletal mesh entry: the bounds update's early returns and source choice were not read.
+pub const SKELETAL_SOURCE: &str = "Actor.GetBoundingCylinder: a skeletal mesh component's bounds source";
+/// A skeletal mesh entry on the branch that uses the current bone transforms, and its layer (#599's).
+pub const SKELETAL_BOUNDS: &str = "Actor.GetBoundingCylinder: a skeletal mesh component's bounds";
+pub const BONES_LAYER: &str = "a skeletal mesh component's bone transforms";
+/// A static mesh entry with a mesh, and its layer.
+pub const STATIC_BOUNDS: &str = "Actor.GetBoundingCylinder: a static mesh component's bounds";
+pub const STATIC_LAYER: &str = "a static mesh's stored bounds";
+/// The record of the entry rules.
+pub const BOUNDS_RECORD: &str = "docs/verification/NATIVE_COMPONENT_BOUNDS.md";
+
+/// One counted entry's box (origin, box extent), by its exact class, at query time from stored fields; writes, loads
+/// and draws nothing (NATIVE_COMPONENT_BOUNDS.md section 7 B, step 6; UNVERIFIED):
+/// - `Engine.CylinderComponent`: extent (R, R, H) from `CollisionRadius` and `CollisionHeight` (floats), origin the
+///   owner's `Location`, only when the component's `Translation` is zero, none of `AbsoluteTranslation`,
+///   `AbsoluteRotation` and `AbsoluteScale` is set, and its `Owner` is `owner`. Else `NotYet { NotRead }`
+///   ([`WORLD_TRANSFORM`]);
+/// - `Engine.SkeletalMeshComponent`: `NotYet { NotRead }` ([`SKELETAL_SOURCE`]). The two early returns and the choice
+///   between the physics-asset branch (which uses the current bone transforms: `LayerAbsent`, [`BONES_LAYER`]) and
+///   the mesh's stored bounds were not read, so no branch can be picked;
+/// - `Engine.StaticMeshComponent`: `NotYet { LayerAbsent }` ([`STATIC_LAYER`]);
+/// - any other primitive class: `NotYet { NotRead }`, "the bounds update of <class>".
+pub fn entry_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32; 3]), VmError> {
+    let space = &vm.space;
+    let class = space.heap.get(c)?.class;
+    let exactly = |p: &str| space.classes.by_path(p) == Some(class);
+    if exactly("Engine.CylinderComponent") {
+        let r = float(space, c, "CollisionRadius")?;
+        let h = float(space, c, "CollisionHeight")?;
+        let translation = vector(space, c, &field(space, c, "Translation")?, "Translation")?;
+        let mut absolute = false;
+        for name in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+            absolute |= flag(space, c, name)?;
+        }
+        if translation != [0.0; 3] || absolute || object(space, c, "Owner")? != Some(owner) {
+            return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
+        }
+        let origin = vector(space, owner, &field(space, owner, "Location")?, "Location")?;
+        return Ok((origin, [r, r, h]));
+    }
+    if exactly("Engine.SkeletalMeshComponent") {
+        return Err(NotYet::not_read(SKELETAL_SOURCE, BOUNDS_RECORD).into());
+    }
+    if exactly("Engine.StaticMeshComponent") {
+        return Err(NotYet::layer_absent(STATIC_BOUNDS, STATIC_LAYER, BOUNDS_RECORD).into());
+    }
+    Err(NotYet::not_read(format!("Actor.GetBoundingCylinder: the bounds update of {}", class_path(space, c)), BOUNDS_RECORD)
+        .into())
+}
+
+/// The (X, Y, Z) floats of vector field `name` of `o`, read by name lookup only (no interning). Another shape is a
+/// `VmError::Script` naming the field.
+fn vector(space: &ObjectSpace, o: ObjRef, v: &Value, name: &str) -> Result<[f32; 3], VmError> {
+    let bad = |why: String| VmError::Script {
+        function: NATIVE.to_string(),
+        message: format!("{}.{name} {why}", class_path(space, o)),
+    };
+    let s = v.as_struct().ok_or_else(|| bad(format!("is a {}, not a vector", v.kind_name())))?;
+    let layout = space.classes.struct_layout(s.ty).ok_or_else(|| bad("has no struct layout".to_string()))?;
+    let mut out = [0.0; 3];
+    for (k, n) in ["X", "Y", "Z"].iter().enumerate() {
+        let id = space.names.find(n).ok_or_else(|| bad(format!("has no field {n}")))?;
+        let (entry, _) = layout.field(id).ok_or_else(|| bad(format!("has no field {n}")))?;
+        let i = usize::try_from(entry).map_err(|_| bad(format!("field {n} is out of range")))?;
+        out[k] = match s.fields.get(i) {
+            Some(Value::Float(f)) => *f,
+            Some(other) => return Err(bad(format!("{n} holds a {}", other.kind_name()))),
+            None => return Err(bad(format!("lacks {n}"))),
+        };
+    }
+    Ok(out)
 }
 
 /// Refusal L: the colliding components' bounds, which the port does not compute. The one place the bounds step

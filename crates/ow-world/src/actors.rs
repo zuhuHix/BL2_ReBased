@@ -34,7 +34,7 @@ use ow_vm::natives_core::ActorWalk;
 mod instancing;
 /// The spawn's component update and the world's scene layer (lane IMPL-SPAWN-COMPONENT-ATTACH).
 pub mod component_attach;
-pub use component_attach::{SceneLayer, add_empty_scene};
+pub use component_attach::{SceneLayer, add_empty_scene, attached_to};
 pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components, plan_components_tracked};
 
 /// The record these rules come from.
@@ -1137,6 +1137,10 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         .remove(actor);
     set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
     vm.space.heap.destroy(actor)?;
+    // The attach record drops the destroyed actor's entries, as owner and as component (lane IMPL-COMPONENT-BOUNDS).
+    if let Some(layer) = vm.service::<SceneLayer>() {
+        layer.borrow_mut().forget(actor);
+    }
     // The destroyed actor's timer entries go with it (its update pass never runs again).
     if let Some(timers) = vm.service::<crate::timers::Timers>() {
         timers

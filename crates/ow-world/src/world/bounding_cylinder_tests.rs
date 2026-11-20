@@ -38,6 +38,8 @@ fn engine() -> Vec<u8> {
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Bool", primitive, "bAttached", 0, 0);
     t.prop("Bool", primitive, "CollideActors", 0, 0);
+    t.prop("Bool", primitive, "BulletListener", 0, 0);
+    t.prop("Object", primitive, "Owner", 0, object);
     let cylinder = t.class("CylinderComponent", primitive);
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
@@ -258,6 +260,7 @@ impl Fx {
     /// they were.
     fn refuses(&self, o: ObjRef, missing: Missing, what: &str, record: &str) {
         let before = self.snapshot();
+        let totals = counts(&self.vm);
         match answer(&self.vm, o) {
             Err(VmError::NotYet(n)) => {
                 assert_eq!((n.missing, n.what.as_ref(), n.record), (missing, what, record));
@@ -265,6 +268,19 @@ impl Fx {
             other => panic!("expected the NotYet {what:?}, got {other:?}"),
         }
         assert!(self.snapshot() == before, "a refusal writes, makes, loads, draws and interns nothing");
+        assert_eq!(counts(&self.vm), totals, "#518's three counters and the name table");
+    }
+
+    /// A scene layer on the world (the attach record's home), once.
+    fn scene(&mut self) {
+        crate::actors::add_empty_scene(&mut self.vm).unwrap();
+    }
+
+    /// `c` attached to `owner` as the port's attach paths leave it: `Owner` set, and the record published.
+    fn attach(&mut self, owner: ObjRef, c: ObjRef) {
+        self.scene();
+        self.set(c, "Owner", Value::Object(Some(owner)));
+        self.vm.service::<crate::actors::SceneLayer>().unwrap().borrow_mut().record_attach(c, owner);
     }
 
     /// The answer for `o` must be `want`, with #518's counters unchanged (the answer itself writes nothing).
@@ -273,6 +289,11 @@ impl Fx {
         assert_eq!(answer(&self.vm, o).unwrap(), want, "{label}");
         assert!(self.snapshot() == before, "{label}: the heap, the RNG, #518's counters and the name table unchanged");
     }
+}
+
+/// #518's three counters (heap writes, draws, load transitions) and the name table's length.
+fn counts(vm: &Vm) -> (u64, u64, u64, usize) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
 }
 
 fn l() -> Missing {
@@ -355,7 +376,11 @@ fn the_pawn_rule_by_origin() {
         x.set(live, "CylinderComponent", Value::Object(Some(c)));
         x.answers(live, (0.0, 0.0), "{class}: the actor default, no components");
         x.components(live, vec![Some(c)]);
+        // Lane IMPL-COMPONENT-BOUNDS: on a live receiver a non-colliding entry is skipped before attachment is asked.
+        assert_eq!(answer(&x.vm, live).unwrap(), (0.0, 0.0), "{class}: the cylinder does not collide");
+        x.set(c, "CollideActors", Value::Bool(true));
         x.refuses(live, l(), REFUSAL_L, RECORD);
+        x.set(c, "CollideActors", Value::Bool(false));
 
         let t = x.template(class);
         x.set(t, "CylinderComponent", Value::Object(Some(c)));
@@ -538,3 +563,113 @@ fn a_lazy_outer_is_t_and_never_loaded_or_tried() {
     assert!(x.vm.defs.is_unloaded(&x.vm.space, outer), "still unloaded");
     assert!(!x.vm.defs.is_failed(&x.vm.space, outer), "no load was tried");
 }
+
+// ---- Lane IMPL-COMPONENT-BOUNDS (NATIVE_COMPONENT_BOUNDS.md section 7 tests, #639 r1) ----------------------------
+
+/// Tests 1 and 2: a recorded colliding cylinder is refusal S (main's `SKIP_FLAG` text), whatever its stored bounds and
+/// the fitted skip bit, which is not read.
+#[test]
+fn a_recorded_colliding_entry_is_s_and_the_skip_bit_is_not_read() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.attach(pickup, cyl);
+    x.components(pickup, vec![Some(cyl)]);
+    for bit in [false, true] {
+        x.set(cyl, "BulletListener", Value::Bool(bit));
+        x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    }
+}
+
+/// Tests 3 and 4: a colliding entry not in the record is L; non-colliding entries, recorded or not, are skipped, and
+/// an actor with only those (and non-primitives) answers 0 and 0.
+#[test]
+fn an_unrecorded_colliding_entry_is_l_and_non_colliding_ones_are_skipped() {
+    let mut x = fx();
+    x.scene();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let quiet = x.cylinder(10.0, 10.0);
+    let recorded_quiet = x.cylinder(11.0, 11.0);
+    x.attach(pickup, recorded_quiet);
+    let light = x.live("Engine.DynamicLightEnvironmentComponent");
+    x.components(pickup, vec![Some(quiet), Some(recorded_quiet), Some(light)]);
+    assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0));
+    let colliding = x.primitive(false, true);
+    x.components(pickup, vec![Some(quiet), Some(colliding)]);
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+}
+
+/// Test 5, order: a non-colliding recorded entry, then an unrecorded colliding one, is L; a recorded colliding entry
+/// first is S, before the later (lazy) entry is read.
+#[test]
+fn the_first_reached_entry_decides() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let quiet = x.cylinder(10.0, 10.0);
+    x.attach(pickup, quiet);
+    let colliding = x.primitive(false, true);
+    x.components(pickup, vec![Some(quiet), Some(colliding)]);
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    let first = x.cylinder(12.0, 12.0);
+    x.set(first, "CollideActors", Value::Bool(true));
+    x.attach(pickup, first);
+    let lazy = x.lazy("HolderCyl");
+    x.components(pickup, vec![Some(first), Some(lazy)]);
+    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the later entry was never read");
+}
+
+/// Tests 6 and 7: the record's lifecycle and the scoped lookup. A record naming another owner, a component whose
+/// `Owner` changed, a destroyed component and a destroyed owner each count as "attachment unknown" (L); destroying
+/// the owner through the world drops its entries.
+#[test]
+fn stale_or_foreign_records_are_attachment_unknown() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let other = x.live("WillowGame.WillowPickup");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.components(pickup, vec![Some(cyl)]);
+    // Recorded with another owner.
+    x.attach(other, cyl);
+    x.set(cyl, "Owner", Value::Object(Some(pickup)));
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    // Recorded with this owner, then its Owner changed.
+    x.attach(pickup, cyl);
+    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.set(cyl, "Owner", Value::Object(Some(other)));
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    // A destroyed component.
+    x.attach(pickup, cyl);
+    x.vm.space.heap.destroy(cyl).unwrap();
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    // A destroyed owner's entries are dropped by the world's destroy path.
+    let layer = x.vm.service::<crate::actors::SceneLayer>().unwrap();
+    let fresh = x.cylinder(1.0, 1.0);
+    layer.borrow_mut().record_attach(fresh, other);
+    layer.borrow_mut().forget(other);
+    assert_eq!(layer.borrow().recorded_owner(fresh), None, "the owner's entries are gone");
+    // No scene layer: no record at all.
+    let mut y = fx();
+    let p = y.live("WillowGame.WillowPickup");
+    let c = y.cylinder(5.0, 5.0);
+    y.set(c, "CollideActors", Value::Bool(true));
+    y.set(c, "Owner", Value::Object(Some(p)));
+    y.components(p, vec![Some(c)]);
+    assert!(!crate::actors::attached_to(&y.vm, c, p).unwrap());
+    y.refuses(p, l(), REFUSAL_L, RECORD);
+}
+
+/// Test 8: the record leaves `bAttached` as it was (the attach paths' own tests check their writes).
+#[test]
+fn the_record_does_not_write_b_attached() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.attach(pickup, cyl);
+    let class = x.vm.space.heap.get(cyl).unwrap().class;
+    let p = x.vm.space.prop(class, "bAttached").unwrap();
+    assert_eq!(x.vm.space.read(cyl, PropAddr::scalar(p)).unwrap(), &Value::Bool(false));
+}
+

@@ -288,9 +288,15 @@ pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -
     let Some(plan) = attach_plan(vm, actor, component)? else {
         return Ok(());
     };
+    let component = component.expect("a plan has a component");
     for (i, (o, field, v)) in plan.into_iter().enumerate() {
         let r = write(vm, o, field, v, WHAT);
         if i == 0 { r? } else { r.map_err(after_writes)? }
+    }
+    // The attach record, published only after every write succeeded (lane IMPL-COMPONENT-BOUNDS); the plan refused
+    // a world with no scene layer, so it is there.
+    if let Some(layer) = vm.service::<SceneLayer>() {
+        layer.borrow_mut().record_attach(component, actor);
     }
     Ok(())
 }

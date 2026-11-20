@@ -174,6 +174,12 @@ fn every_copy_gets_its_owner_and_the_ai_copies_attach() {
         "the AI copies, in Components order, once each"
     );
     assert_eq!(x.get(source, "AllComponents"), Value::array(vec![]), "the source keeps its own");
+    // Lane IMPL-COMPONENT-BOUNDS: every copy is recorded attached to the actor, and no template is.
+    for o in [ai, prim, willow] {
+        assert!(crate::actors::attached_to(&x.vm, copy(o), actor).unwrap(), "the copy is recorded");
+        let layer = x.vm.service::<SceneLayer>().unwrap();
+        assert_eq!(layer.borrow().recorded_owner(o), None, "the template is not");
+    }
     let after = x.counters();
     assert!(after.0 > before.0, "the step writes");
     assert_eq!((after.1, after.2), (before.1, before.2), "nothing is loaded or drawn");

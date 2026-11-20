@@ -44,7 +44,7 @@
 //!   Nothing is loaded or drawn. The actor is in the level list by then, so a failure there is marked "stopped after
 //!   partial writes" by the spawn's post-insertion boundary.
 
-use ow_core::NotYet;
+use ow_core::{DetMap, NotYet};
 use ow_object::ids::{ObjRef, PropAddr, PropId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -85,9 +85,56 @@ pub const HARNESS_LINE: &str = "harness input: an empty scene layer (the port ha
 /// (NATIVE_ATTACH_MESH_TO_PICKUP.md section 3.4): a world that holds it, empty, gets the attach's script-visible writes
 /// and no registration (a port Off answer, UNVERIFIED in game). A world without it is `NotYet { LayerAbsent }`.
 ///
-/// **A lane that adds a real scene feeds this layer**; the attach then registers there. It holds nothing today.
+/// **A lane that adds a real scene feeds this layer**; the attach then registers there. It holds no scene today.
+///
+/// **The attach record** (lane IMPL-COMPONENT-BOUNDS, NATIVE_COMPONENT_BOUNDS.md section 7 A, UNVERIFIED): which
+/// component the port's own attach paths attached, and to which owner. The spawn's component update ([`apply`]) and
+/// `Actor.AttachComponent` (`ow_inventory::attach_mesh`) publish an entry only after their writes all succeeded. It
+/// stands in for the game's attached state without writing `bAttached` (the #605 ruling keeps that field as it was).
+/// It is read through [`attached_to`] only, which checks the entry against the current owner and the heap.
 #[derive(Debug, Default)]
-pub struct SceneLayer {}
+pub struct SceneLayer {
+    attached: DetMap<ObjRef, ObjRef>,
+}
+
+impl SceneLayer {
+    /// Publishes `component` as attached to `owner` (after a successful attach), replacing an older entry.
+    pub fn record_attach(&mut self, component: ObjRef, owner: ObjRef) {
+        self.attached.insert(component, owner);
+    }
+
+    /// Drops every entry naming `o`, as the component or as the owner (`crate::actors::destroy`).
+    pub fn forget(&mut self, o: ObjRef) {
+        self.attached.retain(|&c, &mut owner| c != o && owner != o);
+    }
+
+    /// The owner `component` was last recorded attached to, if any (not checked: [`attached_to`] checks it).
+    pub fn recorded_owner(&self, component: ObjRef) -> Option<ObjRef> {
+        self.attached.get(&component).copied()
+    }
+}
+
+/// Whether `component` is attached to `owner` by the attach record, in this VM's world (its scene layer), by reads
+/// only. An entry counts only while it is current:
+/// - it was recorded with `owner` (another owner's entry does not count);
+/// - the component's `Owner` still names `owner` (an ownership change since makes it stale);
+/// - neither the component nor the owner is destroyed on the heap (destruction makes it stale).
+///
+/// The port's lifecycle paths: it has no detach path; `crate::actors::destroy` drops the destroyed actor's entries
+/// ([`SceneLayer::forget`]); an `Owner` changed by another path is caught here. The world is this VM's (one scene
+/// layer per world). No scene layer means no record: `false`. A component whose class does not declare `Owner` as an object is a `VmError::Script`.
+pub fn attached_to(vm: &Vm, component: ObjRef, owner: ObjRef) -> Result<bool, VmError> {
+    let Some(layer) = vm.service::<SceneLayer>() else {
+        return Ok(false);
+    };
+    if layer.borrow().recorded_owner(component) != Some(owner) {
+        return Ok(false);
+    }
+    if vm.space.heap.get(component)?.destroyed || vm.space.heap.get(owner)?.destroyed {
+        return Ok(false);
+    }
+    Ok(crate::actors::object(&vm.space, component, "Owner")? == Some(owner))
+}
 
 /// Adds an empty [`SceneLayer`] to `vm`'s world unless one is there (world set-up). Answers whether it added one.
 pub fn add_empty_scene(vm: &mut Vm) -> Result<bool, VmError> {
@@ -258,6 +305,15 @@ pub fn apply(vm: &mut Vm, actor: ObjRef, plan: &Plan, pairs: &[(ObjRef, ObjRef)]
             vm.space.write(actor, PropAddr::scalar(plan.all_components), Value::array(appended.clone()))?;
         }
         vm.space.write(copy, PropAddr::scalar(skip), Value::Bool(false))?;
+    }
+    // The attach record, published only once every write succeeded (lane IMPL-COMPONENT-BOUNDS).
+    if let Some(layer) = vm.service::<SceneLayer>() {
+        let mut layer = layer.borrow_mut();
+        for w in &plan.components {
+            if let Some(&(_, copy)) = pairs.iter().find(|(o, _)| *o == w.original) {
+                layer.record_attach(copy, actor);
+            }
+        }
     }
     Ok(())
 }
