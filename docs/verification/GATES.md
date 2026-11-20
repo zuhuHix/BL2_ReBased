@@ -147,7 +147,7 @@ action-skill and equip packs in either order. Results:
   is at the unbound `RecomputeAttributeBaseValues`, and link 9 at the noun strategy-2 refusal (#523).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN (resolve context).
+2026-11-19-226 (resolve context).
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
