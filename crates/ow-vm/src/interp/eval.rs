@@ -110,6 +110,39 @@ pub(crate) fn write_alias(vm: &mut Vm, alias: &Alias, value: Value) -> Result<()
     store(vm, &alias.0, value)
 }
 
+/// Whether [`write_alias`] of `value` would be accepted, writing nothing (`NativeCall::check_out`, lane
+/// IMPL-ACTOR-TRACE): the frame a slot names is still live and the slot exists; a property write passes the heap's
+/// own checks ([`ow_object::heap::Heap::check_write_in`]) on the value as [`store`] would fit it.
+pub(crate) fn check_alias_write(vm: &Vm, alias: &Alias, value: &Value) -> Result<(), VmError> {
+    match &alias.0 {
+        Place::Slot(at, i) => frame_store(vm, *at)?
+            .slots
+            .get(*i)
+            .map(|_| ())
+            .ok_or_else(|| script_error("", "a frame slot outside its frame's storage")),
+        Place::Extra(at, _) | Place::Typed(at, ..) => frame_store(vm, *at).map(|_| ()),
+        Place::Prop(o, a) => {
+            let kind = vm
+                .space
+                .classes
+                .decl(a.prop)
+                .map(|d| d.kind.clone())
+                .ok_or_else(|| HeapError::from(ow_object::layout::LayoutError::NotAProperty(a.prop)))?;
+            let value = fit_for_heap(vm, &kind, value.clone());
+            vm.space.heap.check_write_in(&vm.space.classes, *o, *a, &[], &value).map_err(|e| match e {
+                HeapError::WrongClass { found, .. } if through_native(vm, found) => NotYet::not_read(
+                    "whether an object of an engine-native stand-in class fits a typed object property",
+                    "decision 2026-11-15-08 (engine-native stand-in classes)",
+                )
+                .into(),
+                other => other.into(),
+            })
+        }
+        Place::Temp(_) => Ok(()),
+        Place::In(base, path) => aggregate::check_store_in(vm, base, path, value),
+    }
+}
+
 /// `NativeCall::arg`'s read through an alias: the caller's storage as it is now (the C++ read through
 /// `Arg::alias`).
 pub(crate) fn alias_value<'a>(vm: &'a Vm, alias: &'a Alias) -> Result<&'a Value, VmError> {
@@ -684,7 +717,7 @@ fn stale_frame(at: FrameRef) -> VmError {
 }
 
 /// The value at `p`, in place.
-fn place_ref<'a>(vm: &'a Vm, p: &'a Place) -> Result<&'a Value, VmError> {
+pub(crate) fn place_ref<'a>(vm: &'a Vm, p: &'a Place) -> Result<&'a Value, VmError> {
     let missing = || script_error("", "a frame slot outside its frame's storage");
     match p {
         Place::Slot(at, i) => frame_store(vm, *at)?.slots.get(*i).ok_or_else(missing),

@@ -11,8 +11,8 @@
 //! is a typed refusal (note section 3), in this order, the first failure being the answer:
 //! 1. **T1:** no receiver is a `VmError::Script`; a receiver the store has not loaded, or a stand-in with no slots, is
 //!    `NotRead`, "Actor.Trace: the actor <name> is not loaded (a load is a write)".
-//! 2. **The arguments:** `TraceEnd`, a supplied `TraceStart` and a supplied `Extent` are `Vector` structs,
-//!    `bTraceActors` a bool, `ExtraTraceFlags` an int or a byte, `bTraceBulletListeners` a bool and
+//! 2. **The arguments:** `TraceEnd`, a supplied `TraceStart` and a supplied `Extent` are structs of the reflected type
+//!    `Core.Object.Vector` ([`VECTOR`]; another struct type is refused even with float X, Y and Z), `bTraceActors` a bool, `ExtraTraceFlags` an int or a byte, `bTraceBulletListeners` a bool and
 //!    `BulletListenerSource` an object. Another shape is a `VmError::Script`. Omitted ones take the note's defaults:
 //!    the receiver's `Location`, its `bCollideActors`, and a zero extent.
 //! 3. **T2, an unread option** ([`option_refusal`]): a `HitInfo` argument, `bTraceBulletListeners` set, a set
@@ -22,9 +22,13 @@
 //!    `NotRead`, "Actor.Trace: the trace source of <class> (its virtual was not read)". Classes are looked up with the
 //!    class table's `by_path` and `is_child_of` only; a class absent from the table is "not this class".
 //! 5. **T4:** no collision service is `LayerAbsent`, "Actor.Trace: the world's collision" (go_down's text and layer).
-//! 6. **The out destinations:** the function declares `HitLocation` and `HitNormal` as `out`, and both hold a
-//!    `Vector`, checked and the zero answers prepared before the first `set_out`, so nothing can fail between the two
-//!    writes.
+//!    **Then the query's values** ([`BAD_QUERY`], `NotRead`): an endpoint or an extent that is not finite, or a
+//!    negative extent, is refused before the service is asked. The game's handling was not read; this is the port's
+//!    policy, UNVERIFIED.
+//! 6. **The out destinations:** the function declares `HitLocation` and `HitNormal` as `out`, both hold a
+//!    `Core.Object.Vector`, and the zero answers are prepared; then each **actual** argument is checked with
+//!    `NativeCall::check_out`, which confirms it is `out` and that the write through its alias would be accepted,
+//!    writing nothing. Both pass before the first `set_out`, so nothing can fail between the two writes.
 //! 7. **The level part** (the service covers the level's BSP only): `point_sweep` for a zero extent, else
 //!    `box_sweep`. `Unsupported` is `NotRead`, "Actor.Trace: the level sweep"; a `Hit` is **T6**, `NotRead`, "Actor.Trace:
 //!    the actor answered for a level hit (not read)"; `Clear` goes on.
@@ -32,7 +36,8 @@
 //!    `bTraceActors` do. Every live actor's primitive components (its `CollisionComponent`, then its `Components`), in
 //!    the actor list's order, except the source actor's own. For each primitive: it and its owner
 //!    ([`trace_filter::owner_of`]) must be resident (else the T1 refusal naming the object); missing bounds
-//!    (`actor_bounds` None) is **T5**, `LayerAbsent`; bounds disjoint from the swept box leave the walk without any
+//!    (`actor_bounds` None) is **T5**, `LayerAbsent`; bounds that are not finite and ordered are `NotRead`
+//!    ([`BAD_BOUNDS`]; they cannot prove a miss, the port's policy, UNVERIFIED); bounds disjoint from the swept box leave the walk without any
 //!    filter field read; bounds that meet it are **T7**, `NotRead`, naming the first unread rule: the terrain handling
 //!    for a terrain actor, otherwise the owner filters with a source actor ([`SOURCE_FILTERS`]). The note puts the hash
 //!    admission third; it is never reached, since no non-terrain owner gets past the unread source-aware filter.
@@ -73,6 +78,14 @@ pub const SOURCE_FILTERS: &str = "the owner filters with a source actor";
 /// The class whose source virtual was read (T3), and its recorded native descendants, which refuse.
 pub const SOURCE_CLASS: &str = "WillowGame.WillowAIPawn";
 pub const NATIVE_DESCENDANTS: [&str; 2] = ["WillowGame.WillowAICranePawn", "WillowGame.DeployableTurretActor"];
+/// The reflected type every vector argument must have (review r1 of #633, item 3).
+pub const VECTOR: &str = "Core.Object.Vector";
+/// The refusal for a query whose endpoints or extent are not finite, or whose extent is negative (review r1 of #633,
+/// item 2). The game's handling of such a query was not read; refusing it is the port's policy, UNVERIFIED.
+pub const BAD_QUERY: &str = "Actor.Trace: a query with a non-finite endpoint or extent, or a negative extent (its handling was not read)";
+/// The refusal for primitive bounds that are not finite and ordered (review r1 of #633, item 2): they cannot prove
+/// that the primitive is clear of the swept box.
+pub const BAD_BOUNDS: &str = "Actor.Trace: a primitive's bounds that are not finite and ordered (they cannot prove a miss)";
 /// The one `ExtraTraceFlags` bit whose effect was read: the blocking bit.
 pub const EXTRA_BLOCKING: i64 = 8;
 
@@ -121,9 +134,13 @@ fn resident(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The X, Y and Z of a `Vector` struct value, by field name (lookup only).
+/// The X, Y and Z of a `Core.Object.Vector` struct value, by field name (lookup only). A struct of any other
+/// reflected type is a `VmError::Script`, even one with float X, Y and Z (review r1 of #633, item 3).
 fn vector(space: &ObjectSpace, v: &Value, what: &str) -> Result<[f32; 3], VmError> {
     let s = v.as_struct().ok_or_else(|| script(format!("{what} is a {}, not a vector", v.kind_name())))?;
+    if space.classes.struct_by_path(VECTOR) != Some(s.ty) {
+        return Err(script(format!("{what} is a struct of another type, not a {VECTOR}")));
+    }
     let layout = space.classes.struct_layout(s.ty).ok_or_else(|| script(format!("{what} has no struct layout")))?;
     let mut out = [0.0; 3];
     for (k, n) in ["X", "Y", "Z"].iter().enumerate() {
@@ -265,6 +282,11 @@ fn preflight(c: &NativeCall<'_>, this: ObjRef) -> Result<(Query, [Value; 2]), Vm
             other => return Err(script(format!("bCollideActors is a {}, not a bool", other.kind_name()))),
         },
     };
+    // A query the port cannot reason about (review r1 of #633, item 2): a NaN or an infinity would make the box
+    // arithmetic below unreliable, and a negative extent inverts the swept box. Refused before the service is asked.
+    if !start.iter().chain(&end).chain(&extent).all(|v| v.is_finite()) || extent.iter().any(|&e| e < 0.0) {
+        return Err(NotYet::not_read(BAD_QUERY, RECORD).into());
+    }
     // Step 6, the out destinations, before any write.
     let outs = vm.function(c.function).map(|f| [HIT_LOCATION, HIT_NORMAL].iter().all(|&i| f.params.get(i).is_some_and(|p| p.is_out())));
     if c.arg_count() <= HIT_NORMAL || outs != Some(true) {
@@ -272,6 +294,11 @@ fn preflight(c: &NativeCall<'_>, this: ObjRef) -> Result<(Query, [Value; 2]), Vm
     }
     let location = zeroed(space, c.arg(HIT_LOCATION)?, "HitLocation")?;
     let normal = zeroed(space, c.arg(HIT_NORMAL)?, "HitNormal")?;
+    // The actual arguments, not only the declaration (review r1 of #633, item 1): each is out, and the write through
+    // its alias would be accepted. Both are checked before either is written, so the two `set_out` calls cannot fail
+    // between them.
+    c.check_out(HIT_LOCATION, &location)?;
+    c.check_out(HIT_NORMAL, &normal)?;
     Ok((Query { start, end, extent, flags: trace_flags(trace_actors, extra) }, [location, normal]))
 }
 
@@ -344,6 +371,12 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
             let Some(bounds) = model.actor_bounds(space, part)? else {
                 return Err(NotYet::layer_absent(NO_BOUNDS, BOUNDS_LAYER, RECORD).into());
             };
+            // Only finite, ordered bounds can prove a primitive clear (review r1 of #633, item 2): a NaN makes every
+            // comparison false, and an inverted box would miss everything.
+            let sound = (0..3).all(|k| bounds.min[k].is_finite() && bounds.max[k].is_finite() && bounds.min[k] <= bounds.max[k]);
+            if !sound {
+                return Err(NotYet::not_read(BAD_BOUNDS, RECORD).into());
+            }
             if !bounds.meets(&region) {
                 continue;
             }

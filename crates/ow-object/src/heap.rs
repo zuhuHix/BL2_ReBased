@@ -474,6 +474,25 @@ impl Heap {
         }
     }
 
+    /// Whether [`Heap::write_in`] of `v` at `path` inside element `a` of `o` would be accepted: the same address, step
+    /// and value checks, and no write (lane IMPL-ACTOR-TRACE, a native's dry run of an out write before it commits
+    /// any). An empty path checks what [`Heap::write`] checks.
+    pub fn check_write_in(
+        &self,
+        classes: &ClassTable,
+        o: ObjRef,
+        a: PropAddr,
+        path: &[Step],
+        v: &Value,
+    ) -> Result<(), HeapError> {
+        let mut kind = Self::decl_kind(classes, a)?;
+        let mut current = self.read(classes, o, a)?;
+        for (at, &s) in path.iter().enumerate() {
+            (kind, current) = Self::step(classes, kind, current, at, s)?;
+        }
+        self.check_value(classes, kind, v)
+    }
+
     /// Writes `v` at `path` inside element `a` of object `o` (`Arr[i] = x`, `Location.X = 1`,
     /// `Arr[i].Field = x`), checking the address, each step, and the new value against the kind it lands in; the
     /// rest of the aggregate is not rechecked. A shared aggregate on the path is copied first (copy on write). An
@@ -486,12 +505,7 @@ impl Heap {
         path: &[Step],
         v: Value,
     ) -> Result<(), HeapError> {
-        let mut kind = Self::decl_kind(classes, a)?;
-        let mut current = self.read(classes, o, a)?;
-        for (at, &s) in path.iter().enumerate() {
-            (kind, current) = Self::step(classes, kind, current, at, s)?;
-        }
-        self.check_value(classes, kind, &v)?;
+        self.check_write_in(classes, o, a, path, &v)?;
         let mut target = self.slot_mut(classes, o, a)?;
         for &s in path {
             // Every step was checked above on the same value.

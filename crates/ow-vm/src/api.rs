@@ -457,6 +457,22 @@ impl<'a> NativeCall<'a> {
         }
     }
 
+    /// Whether [`NativeCall::set_out`] of `v` into argument `i` would succeed, writing nothing (lane
+    /// IMPL-ACTOR-TRACE): the argument exists and is `out`, and, for an out argument from script, the write through
+    /// its alias passes the same checks the write makes (a live frame and slot; the heap's address, step and value
+    /// checks for a property). A native that writes several outs checks each one first, so no failure can come between
+    /// its writes.
+    pub fn check_out(&self, i: usize, v: &Value) -> Result<(), VmError> {
+        match self.args.get(i) {
+            Some(a) if a.out => match &a.alias {
+                Some(alias) => crate::interp::check_alias_write(self.vm, alias, v),
+                None => Ok(()),
+            },
+            Some(_) => Err(self.bad_arg(i, "not an out parameter")),
+            None => Err(self.bad_arg(i, "no such argument")),
+        }
+    }
+
     /// Whether argument `i` exists and was supplied (C++ `NativeCall::has`).
     pub fn has(&self, i: usize) -> bool {
         self.args.get(i).is_some_and(|a| a.supplied)

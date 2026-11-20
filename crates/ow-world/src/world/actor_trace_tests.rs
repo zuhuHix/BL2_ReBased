@@ -27,28 +27,44 @@ use crate::placement::{Bounds, Mode, SpawnCollision, Sweep, Test, install_collis
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
 
-/// `Engine.upk` (invented): `Vector`, a toy `TraceHitInfo`, `Actor` (`Location`, `bCollideActors`, `bDeleteMe`,
-/// `CollisionComponent`, `Components`, and the native `Trace` with the game's ten parameters), `Pawn`, `Terrain` and
-/// `PrimitiveComponent` (with its `Owner`).
-fn engine() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&[
-        "Class",
-        "Function",
-        "ScriptStruct",
-        "ObjectProperty",
-        "BoolProperty",
-        "FloatProperty",
-        "IntProperty",
-        "ArrayProperty",
-        "StructProperty",
-    ]);
+const KINDS: [&str; 9] = [
+    "Class",
+    "Function",
+    "ScriptStruct",
+    "ObjectProperty",
+    "BoolProperty",
+    "FloatProperty",
+    "IntProperty",
+    "ArrayProperty",
+    "StructProperty",
+];
+
+/// `Core.upk` (invented): `Object` with `Vector`, a toy `TraceHitInfo`, and `ToyLookalike`, a struct that is not a
+/// vector but has float X, Y and Z (review r1 of #633, item 3).
+fn core() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&KINDS);
     let object = t.class("Object", 0);
-    let vector = toy_struct(&mut t, object, "Vector", None);
-    for f in ["X", "Y", "Z"] {
-        t.prop("Float", vector, f, 0, 0);
+    for name in ["Vector", "ToyLookalike"] {
+        let s = toy_struct(&mut t, object, name, None);
+        for f in ["X", "Y", "Z"] {
+            t.prop("Float", s, f, 0, 0);
+        }
     }
     let info = toy_struct(&mut t, object, "TraceHitInfo", None);
     t.prop("Float", info, "ToyField", 0, 0);
+    t.p.build()
+}
+
+/// `Engine.upk` (invented): `Actor` (`Location`, `bCollideActors`, `bDeleteMe`, `CollisionComponent`, `Components`,
+/// and the native `Trace` with the game's ten parameters), `Pawn`, `Terrain` and `PrimitiveComponent` (with its
+/// `Owner`), over `Core.upk`'s `Object` and structs.
+fn engine() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&KINDS);
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let object = t.p.add_import("Core", "Class", core, "Object");
+    let vector = t.p.add_import("Core", "ScriptStruct", object, "Vector");
+    let info = t.p.add_import("Core", "ScriptStruct", object, "TraceHitInfo");
+    let lookalike = t.p.add_import("Core", "ScriptStruct", object, "ToyLookalike");
     let actor = t.class("Actor", object);
     t.prop("Struct", actor, "Location", 0, vector);
     t.prop("Bool", actor, "bCollideActors", 0, 0);
@@ -73,7 +89,9 @@ fn engine() -> Vec<u8> {
     t.class("Terrain", actor);
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Object", primitive, "Owner", 0, actor);
-    t.class("ToyLightComponent", object);
+    let light = t.class("ToyLightComponent", object);
+    // A field of the look-alike's type, so the fixture knows the struct.
+    t.prop("Struct", light, "ToyShape", 0, lookalike);
     t.p.build()
 }
 
@@ -154,12 +172,14 @@ impl Drop for Fx {
 fn fx(service: Option<Toy>) -> (Fx, Option<Rc<Toy>>) {
     let dir = std::env::temp_dir().join(format!("ow-world-trace-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, w, d) = (engine(), willow(), definitions());
-    let files: [(&str, &[u8]); 3] = [("Engine.upk", &e), ("WillowGame.upk", &w), ("GD_ToyTrace.upk", &d)];
+    let (c, e, w, d) = (core(), engine(), willow(), definitions());
+    let files: [(&str, &[u8]); 4] =
+        [("Core.upk", &c), ("Engine.upk", &e), ("WillowGame.upk", &w), ("GD_ToyTrace.upk", &d)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     // The class code is loaded by the fixture, so no answer below is the first to load a class.
     for class in [
+        "Core.Object",
         "Engine.Actor",
         "Engine.Pawn",
         "Engine.Terrain",
@@ -216,7 +236,12 @@ impl Fx {
     }
 
     fn vector(&self, v: [f32; 3]) -> Value {
-        let ty = self.vm.space.classes.struct_by_path("Engine.Object.Vector").expect("the toy Vector");
+        self.xyz("Core.Object.Vector", v)
+    }
+
+    /// A struct of `path` with X, Y and Z set (the vector, or the look-alike).
+    fn xyz(&self, path: &str, v: [f32; 3]) -> Value {
+        let ty = self.vm.space.classes.struct_by_path(path).expect("a toy struct");
         let layout = self.vm.space.classes.struct_layout(ty).unwrap();
         let mut fields = vec![Value::Float(0.0); 3];
         for (k, n) in ["X", "Y", "Z"].iter().enumerate() {
@@ -227,7 +252,7 @@ impl Fx {
     }
 
     fn hit_info(&self) -> Value {
-        let ty = self.vm.space.classes.struct_by_path("Engine.Object.TraceHitInfo").expect("the toy TraceHitInfo");
+        let ty = self.vm.space.classes.struct_by_path("Core.Object.TraceHitInfo").expect("the toy TraceHitInfo");
         Value::structure(ty, vec![Value::Float(0.0)])
     }
 
@@ -545,3 +570,104 @@ fn unresident_candidates_and_owners_refuse_without_a_load() {
     x.refuses(t, args, not_read(), "Actor.Trace: the actor ToyGhost is not loaded (a load is a write)");
 }
 
+
+impl Fx {
+    /// Runs the native directly with the given arguments (an alias or a wrong `out` mark the host call cannot build).
+    fn direct_args(&mut self, this: ObjRef, args: Vec<Arg>) -> Result<Value, VmError> {
+        let f = self.vm.find_function(PATH).unwrap();
+        let mut c = NativeCall::new(&mut self.vm, f, Some(this), args);
+        trace(&mut c)
+    }
+
+    fn location_of(&self, o: ObjRef) -> (PropAddr, Value) {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let at = PropAddr::scalar(self.vm.space.prop(class, "Location").unwrap());
+        (at, self.vm.space.read(o, at).unwrap().clone())
+    }
+}
+
+/// Review r1 of #633, item 1: both outs and their alias writes are checked before either is written. A HitLocation
+/// aliasing a property with a HitNormal not marked out refuses with the property and the counters unchanged; with
+/// both outs aliasing properties, both properties are zeroed.
+#[test]
+fn an_out_alias_is_not_written_when_the_other_out_is_refused() {
+    let (mut x, _toy) = fx(Some(Toy::default()));
+    let t = x.target();
+    let witness = x.live("Engine.Actor", "ToyWitness");
+    let seven = x.vector([7.0; 3]);
+    x.set(witness, "Location", seven.clone());
+    let (at, _) = x.location_of(witness);
+    let mut args = x.link9([0.0; 3]);
+    let normal = args.remove(1);
+    let location = args.remove(0);
+    let mut given = vec![Arg::aliasing_property(witness, at, location.clone()), Arg::new(normal.clone(), false, true)];
+    given.extend(args.iter().cloned().map(|v| Arg::new(v, false, true)));
+    let before = x.counters();
+    match x.direct_args(t, given) {
+        Err(VmError::BadArgument { index, .. }) => assert_eq!(index, 1),
+        other => panic!("expected the HitNormal refusal, got {other:?}"),
+    }
+    assert_eq!(x.location_of(witness).1, seven, "the HitLocation alias was not written");
+    assert_eq!(x.counters(), before, "write-free, RNG-free, load-free, no name interned");
+    // Both outs alias properties: the clear sweep zeroes both.
+    let other = x.live("Engine.Actor", "ToyOtherWitness");
+    x.set(other, "Location", seven.clone());
+    let (other_at, _) = x.location_of(other);
+    let mut given = vec![Arg::aliasing_property(witness, at, location), Arg::aliasing_property(other, other_at, normal)];
+    given.extend(args.into_iter().map(|v| Arg::new(v, false, true)));
+    assert_eq!(x.direct_args(t, given).unwrap(), Value::Object(None));
+    let zero = x.vector([0.0; 3]);
+    assert_eq!((x.location_of(witness).1, x.location_of(other).1), (zero.clone(), zero));
+}
+
+/// Review r1 of #633, item 2: a non-finite endpoint or extent, or a negative extent, refuses before the service is
+/// asked; a primitive's non-finite or inverted bounds refuse instead of proving a miss.
+#[test]
+fn bad_query_values_and_unsound_bounds_refuse() {
+    let (mut x, toy) = fx(Some(Toy::default()));
+    let toy = toy.unwrap();
+    let t = x.target();
+    let cases: [(usize, [f32; 3]); 5] = [
+        (3, [f32::NAN, 0.0, 0.0]),
+        (2, [0.0, f32::INFINITY, -200.0]),
+        (5, [1.0, f32::NAN, 1.0]),
+        (5, [1.0, 1.0, f32::NEG_INFINITY]),
+        (5, [1.0, -1.0, 1.0]),
+    ];
+    for (at, v) in cases {
+        let mut args = x.link9([0.0; 3]);
+        args[at] = x.vector(v);
+        x.refuses(t, args, not_read(), BAD_QUERY);
+    }
+    assert!(toy.asked.borrow().is_empty(), "no sweep was asked");
+    let (_, odd) = x.obstacle("Engine.Actor", "Odd");
+    for bounds in [
+        Bounds { min: [f32::NAN, -5.0, -150.0], max: [5.0, 5.0, -50.0] },
+        Bounds { min: [-5.0, -5.0, -150.0], max: [5.0, f32::INFINITY, -50.0] },
+        Bounds { min: [600.0, -5.0, -150.0], max: [500.0, 5.0, -50.0] },
+    ] {
+        toy.bounds.borrow_mut().insert(odd, bounds);
+        let args = x.link9([0.0; 3]);
+        x.refuses(t, args, not_read(), BAD_BOUNDS);
+    }
+}
+
+/// Review r1 of #633, item 3: a struct with float X, Y and Z that is not `Core.Object.Vector` is a script error at
+/// argument validation, for TraceEnd, TraceStart and both outs.
+#[test]
+fn a_vector_look_alike_is_a_script_error() {
+    let (mut x, toy) = fx(Some(Toy::default()));
+    let toy = toy.unwrap();
+    let t = x.target();
+    for at in [2, 3, 0, 1] {
+        let mut args = x.link9([0.0; 3]);
+        args[at] = x.xyz("Core.Object.ToyLookalike", [1.0; 3]);
+        let before = x.counters();
+        match x.call(Some(t), args) {
+            Err(VmError::Script { .. }) => {}
+            other => panic!("argument {at}: expected a script error, got {other:?}"),
+        }
+        assert_eq!(x.counters(), before, "argument {at}");
+    }
+    assert!(toy.asked.borrow().is_empty(), "refused at argument validation, before the service");
+}

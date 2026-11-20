@@ -252,6 +252,24 @@ fn heap_refusal(vm: &Vm, e: HeapError) -> VmError {
     }
 }
 
+/// Whether [`store_in`] of `value` would be accepted, writing nothing (lane IMPL-ACTOR-TRACE): the same depth check,
+/// the heap's own checks for a property base, and a path that leads somewhere for a frame base.
+pub(crate) fn check_store_in(vm: &Vm, base: &Place, path: &[Step], value: &Value) -> Result<(), VmError> {
+    check_depth(path.len(), value)?;
+    match base {
+        Place::Temp(_) => Ok(()),
+        Place::Prop(o, at) => {
+            let value = match kind_at(vm, *at, path) {
+                Some(kind) => fit_for_heap(vm, &kind, value.clone()),
+                None => value.clone(),
+            };
+            vm.space.heap.check_write_in(&vm.space.classes, *o, *at, path, &value).map_err(|e| heap_refusal(vm, e))
+        }
+        Place::In(..) => Err(script_error("", "a nested aggregate place (an interpreter bug)")),
+        frame => walk(super::eval::place_ref(vm, frame)?, path).map(|_| ()),
+    }
+}
+
 /// `Place::In`'s write: `value` stored at `path` below `base`, as it is (the C++ write through the pointer), with
 /// the heap's representation rules for a property element.
 pub(crate) fn store_in(
