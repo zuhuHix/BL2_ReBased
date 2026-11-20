@@ -9,6 +9,13 @@ stand-in. `cargo test --workspace`: 3201 passed / 0 failed / 51 ignored; `crate_
 steps; `cast` gets past the resolver and stops with an error at the unbound
 `AttributeDefinitionBase.AddAttributeModifier(object,object,bool)` (IMPL-ADD-ATTRIBUTE-MODIFIER, not on main).
 UNVERIFIED in game.
+**IMPL-TRACE-HASH-ADMISSION (2026-11-20, pc-hummer, on main b9dfca8b):** AI-assisted (Claude Code, Opus 5.5).
+`Actor.Trace` leaves out primitives the collision hash cannot admit (NATIVE_ACTOR_TRACE.md section 5, #659). `cargo
+test --workspace` 3,284 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict
+on a local merge (never pushed) of this branch with #650, #655 and #616 (landed as 43bbf3ac): 4 ok / 9 NotYet / 1 error;
+link 9 passes `spawn` and stops in `cast` with an error at the unbound
+`WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet(byte,int,bool,bool)`, past `Actor.Trace`.
+
 **LINK9-NEXT-STOP-2 (2026-11-20, pc-hummer, docs only, on docs/native-actor-trace-hash-admission from main
 b9dfca8b):** AI-assisted (Claude Code, Opus 5.5). No code changed, so no measured number moved. On a local throwaway
 (main + #650 + #655 + #616's own commits; installed Off `--slice-gate` strict): ok 4, notyet 10, error 0, link 9 1 of 2
