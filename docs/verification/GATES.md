@@ -74,6 +74,16 @@ the tree preload loads 71 objects, and link 1 runs 0 of 1 step, stopped unmarked
 5, 13 and 14 blocked behind it). ctest and verify_packages not run (no C++ change). No real-game run; every rule
 UNVERIFIED.
 
+**SLICE-HARNESS-MAYA-MESH (2026-11-20, pc-hummer, on #585 r1 at 9dfff984):** AI-assisted (Claude Code, Opus 5.5).
+Maya's skeletal mesh preload and ow-cli's skeleton source (UModel `.psk` exports under ignored `local/external/psk`) as
+UNVERIFIED Off harness inputs in the `maya` step; natives and Reference unchanged. `cargo test --workspace --locked -j
+2` 2,578 passed / 0 failed / 49 ignored (4 new in `combat/mesh_harness_tests`); `cargo clippy -p ow-cli --all-targets`
+adds no warning in the touched files; `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock)
+on a throwaway merge with #570, #500 and #528: ok 1 / NotYet 10 / error 3 of 14; the mesh preload logs "loaded", and
+link 1 runs 0 of 1 step, its first stop moved from #569's unloaded-mesh `LayerAbsent` to NATIVE_COPY_ANIM_TREE.md
+section 2 step 5 (the initialisation's pass over the component; links 3, 4, 5, 13 and 14 blocked behind it). ctest and
+verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
+
 **IMPL-PER-BONE-WEIGHTS (2026-11-19, pc-hummer, on #575 at e30b7fa9 with #569 at 10be0643 merged):** AI-assisted
 (Claude Code, Opus 5.5). The per-bone weight builders in Off from NATIVE_PER_BONE_WEIGHTS.md (#580 at 5b1a567). `cargo
 test -p ow-world` 337 passed / 0 failed / 5 ignored; `cargo test -p ow-object` 138 / 0; `cargo test --workspace --locked

@@ -145,6 +145,89 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     Ok(world)
 }
 
+/// Maya's skeletal mesh, which the slice harness preloads (lane SLICE-HARNESS-MAYA-MESH, hub ruling): in the game it is
+/// loaded with her pawn.
+pub(crate) const MAYA_MESH_PATH: &str = "Char_Siren.Mesh.Skel_SirenBody";
+/// The skeleton source's export roots (`;`-separated), else [`PSK_ROOTS_DEFAULT`].
+pub(crate) const PSK_ROOTS_VAR: &str = "OPENWILLOW_PSK_EXPORTS";
+/// The default export root, under ignored `local/` of the repository ow-cli was built from (review r1 of #592, item
+/// 1: not the folder it runs from): UModel `.psk` exports in the file-package layout
+/// (`<file package>/SkeletalMesh3/<mesh>.psk`, what `skeletal_source::PskExports` reads).
+pub(crate) const PSK_ROOTS_DEFAULT: &str = "local/external/psk";
+
+fn psk_roots() -> Vec<std::path::PathBuf> {
+    parse_psk_roots(std::env::var(PSK_ROOTS_VAR).ok().as_deref())
+}
+
+/// The repository root: two levels above this crate's manifest (`crates/ow-cli`).
+pub(crate) fn repo_root() -> std::path::PathBuf {
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    crate_dir.parent().and_then(std::path::Path::parent).unwrap_or(crate_dir).to_path_buf()
+}
+
+/// The roots named by `value` (`;`-separated, blanks dropped), else [`PSK_ROOTS_DEFAULT`] under [`repo_root`].
+pub(crate) fn parse_psk_roots(value: Option<&str>) -> Vec<std::path::PathBuf> {
+    let named: Vec<std::path::PathBuf> =
+        value.unwrap_or("").split(';').map(str::trim).filter(|p| !p.is_empty()).map(std::path::PathBuf::from).collect();
+    if named.is_empty() { vec![repo_root().join(PSK_ROOTS_DEFAULT)] } else { named }
+}
+
+/// Installs `skeletal_source::PskExports` over `roots` as the VM's skeleton source, logged as a harness input
+/// (UNVERIFIED: a stand-in for the engine's own mesh data). Each root is logged as an absolute path, with "(missing)"
+/// when it is not a folder (review r1 of #592, item 1), so a later "no reference skeleton" is not read as a data gap;
+/// the install itself goes ahead either way.
+pub(crate) fn install_skeleton_source(vm: &mut Vm, roots: &[std::path::PathBuf]) -> Result<(), VmError> {
+    let shown: Vec<String> = roots
+        .iter()
+        .map(|r| {
+            let full = std::path::absolute(r).unwrap_or_else(|_| r.clone());
+            let missing = if full.is_dir() { "" } else { " (missing)" };
+            format!("{}{missing}", full.display())
+        })
+        .collect();
+    vm.log.push(format!(
+        "harness input: the skeleton source over UModel .psk exports in {} (file-package layout; UNVERIFIED \
+         stand-in for the engine's mesh data)",
+        shown.join(";")
+    ));
+    let source = crate::cmd::skeletal_source::PskExports::new(roots.to_vec());
+    ow_world::world::skeletal::SkeletalMeshes::install(vm, Box::new(source))
+}
+
+/// Loads the skeletal mesh at `path` through the store, logged as a harness input (UNVERIFIED stand-in for the
+/// streaming load of the pawn's package). A path no package holds is logged and skipped; a load that fails is the
+/// step's error.
+pub(crate) fn preload_mesh(vm: &mut Vm, path: &str) -> Result<(), VmError> {
+    let parsed = ObjectPath::parse(path)
+        .map_err(|e| VmError::Script { function: "combat-run".into(), message: e.to_string() })?;
+    vm.log.push(format!("harness input: preload {path} (Maya's mesh; UNVERIFIED stand-in for the streaming load)"));
+    let found = vm.defs.find(&mut vm.space, &parsed);
+    vm.log.extend(vm.defs.take_log());
+    let mesh = match found {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            vm.log.push(format!("harness input: preload {path}: found nothing"));
+            return Ok(());
+        }
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+            return Err(VmError::Def(e));
+        }
+    };
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, mesh);
+    vm.log.extend(vm.defs.take_log());
+    match loaded {
+        Ok(()) => {
+            vm.log.push(format!("harness input: preload {path}: loaded"));
+            Ok(())
+        }
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+            Err(VmError::Def(e))
+        }
+    }
+}
+
 /// The mission bridge's player for the run (module documentation).
 pub struct MissionBridge {
     script: MissionScript,
@@ -398,14 +481,18 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     Ok(done)
 }
 
-/// The three Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
-/// 2026-11-19-41 and 2026-11-19-46, and lane IMPL-MESH-REST for the tree). Outside Off, or for a controller that
-/// already has a `PlayerClass`, nothing.
+/// The five Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
+/// 2026-11-19-41 and 2026-11-19-46, lane IMPL-MESH-REST for the tree, and lane SLICE-HARNESS-MAYA-MESH for steps 3
+/// and 4). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
 ///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
 ///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
 /// 2. **Tree preload:** Maya's animation tree and the nodes and controls it reaches ([`preload_player_tree`]).
-/// 3. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
+/// 3. **Skeleton source:** ow-cli's `.psk` source installed as the skeletal mesh data layer's source, once per VM
+///    ([`install_skeleton_source`]), an UNVERIFIED stand-in for the engine's own mesh data.
+/// 4. **Mesh preload:** Maya's skeletal mesh [`MAYA_MESH_PATH`] loaded through the definition store ([`preload_mesh`]),
+///    an UNVERIFIED stand-in for the streaming load that brings it with her pawn.
+/// 5. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
         return Ok(());
@@ -463,6 +550,13 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
         }
     }
     preload_player_tree(vm)?;
+    // Maya's mesh data (lane SLICE-HARNESS-MAYA-MESH, hub ruling), before the class select spawns her pawn: the
+    // skeleton source (once per VM), then the mesh. Both are logged inside the `maya` step, so the slice gate's harness list for
+    // the link shows them.
+    if vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_none() {
+        install_skeleton_source(vm, &psk_roots())?;
+    }
+    preload_mesh(vm, MAYA_MESH_PATH)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
     let Some(f) = vm.find_method(own, "ServerPlayerSelectClass", state)? else {

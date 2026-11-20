@@ -13,9 +13,7 @@
 //! separator, no `.` or `..`, no drive or stream colon, no NUL), and the file found must resolve, links and junctions
 //! followed, to a place under the canonical export root. Anything else is the source's error, never a read.
 
-// No driver installs it yet: the consumers' lanes (#529's socket attach, #566's per-bone builds) install it when they
-// switch over, so the harness items are unused until then.
-#![allow(dead_code)]
+// The slice harness installs it in Off (`combat::install_skeleton_source`, lane SLICE-HARNESS-MAYA-MESH).
 
 use std::path::{Path, PathBuf};
 
