@@ -2,14 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on #618 at 3630cd59, with review r1 of #631):** AI-assisted
+**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on main 92c79308, with reviews r1 and r2 of #631):** AI-assisted
 (Claude Code, Opus 5.5). The owner's `PostInitAnimTree` after the tree initialisation, and
 `SkeletalMeshComponent.FindAnimNode` / `FindSkelControl` in Off (bound for Engine by their package-qualified identity),
 from NATIVE_TREE_INIT_OWNER_EVENT.md (#612 at 3691317c), replacing #561's owner-event refusal. `cargo build --workspace
---locked` clean; `cargo test --workspace --locked -j 4` 3,047 passed / 0 failed / 51 ignored (23 new in
-`anim_tree_copy`, the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm --all-targets` adds no
-warning in the touched files. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge of this branch
-with #592's squash, against the same merge of #618 alone: ok 4 / NotYet 9 / error 1 of 14 on both. Links 1, 3, 4, 5, 13
+--locked` clean; `cargo test --workspace --locked -j 4` 3,199 passed / 0 failed / 51 ignored (26 new in
+`anim_tree_copy`, 3 of them for review r2; the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm
+--all-targets` adds no warning in the touched files. Installed Off `--slice-gate` (strict, under the lock) on this
+branch at its r2 code commit, against main 92c79308: ok 4 / NotYet 10 / error 0 of 14 on both. Links 1, 3, 4, 5, 13
 and 14 now stop at the body's rendering hooks ("InitializeBodyComposition: the body's rendering hooks"); before, they
 stopped at the owner's event. The other eight links' stops are unchanged. Maya's `.psk` was exported locally with
 UModel 1590 for the run, as #592 records. ctest and verify_packages not run (no C++ change). No real-game run; every
