@@ -2723,6 +2723,14 @@ pub(super) mod tests {
                 .ret,
             Value::None
         );
+        // A key kept by `Vm::keep_struct_none` is handed the `None` in Off (review r1 of #638, item 2), and only while
+        // the VM is in Off: switched to Reference afterwards, the conversion is back (review r2 of #638, item 2).
+        r.vm.keep_struct_none(&key);
+        assert_eq!(r.on(o, "Core.Foo.ToNative", vec![]), Value::None);
+        r.vm.parity = ParityMode::Reference;
+        r.vm.rng = ow_core::rand::GameRng::from_world_seed(r.vm.rng.world_seed(), ParityMode::Reference);
+        assert!(!r.vm.keeps_struct_none(&key));
+        assert_eq!(r.on(o, "Core.Foo.ToNative", vec![]), zero);
     }
 
     /// A byte stored into an int slot of the heap is the int of the same number (the C++ keeps both kinds in one

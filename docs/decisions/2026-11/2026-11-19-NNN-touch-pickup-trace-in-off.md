@@ -63,3 +63,15 @@ packages, and r1's two cases:
 - the game classes' filter overrides. Every class with no read row refuses naming its filter.
 
 The test counts and the slice-gate reading are in the GATES row.
+
+**Review round 2** (Sol, the last round):
+- **A primitive with its own `CollideActors` clear never refuses on the Base chain.** The filter tests that flag
+  after the skip and blocking flags and before the Base walk. The owner's `bCollideActors` stays after the source and
+  Base identity checks. A regression case covers an unloaded owner with the Base on a different unloaded handle,
+  then the same primitive with `CollideActors` set, which refuses on the Base chain.
+- **The `None` exemption is checked against the current parity.** `Vm::keeps_struct_none` also requires Off, so a
+  VM switched to Reference after the key was kept converts again. The ow-vm test of the conversion now covers the
+  kept key in Off and the switch to Reference, through an element read past the end of an empty array, which is
+  the path that yields `None`.
+- **Correction to r1.** In the r1 bytecode test, `NO_OBJECT` yields a null object reference, not `None`, so that
+  test checks only that a null reference is refused. It never reached the conversion.

@@ -393,6 +393,12 @@ pub fn tested_from(
     if !flag(space, primitive, query.blocking_flag())? {
         return Ok(Candidate::NotTested);
     }
+    // The primitive's own half of the per-component test (note section 2) comes before the Base walk: a primitive
+    // that collides with no actor is never a candidate, so no link of the chain can refuse it (review r2 of #638,
+    // item 1).
+    if !flag(space, primitive, "CollideActors")? {
+        return Ok(Candidate::NotTested);
+    }
     // The source actor's exclusion (module documentation), before any flag of the owner is read. An undecided chain
     // (an unloaded link) is kept pending: the read filters below still reject what they can.
     let undecided = match source {
@@ -405,8 +411,8 @@ pub fn tested_from(
         None => false,
     };
     let unsupported = |rule: Unread| Candidate::Unsupported(if undecided { Unread::BaseChainLink } else { rule });
-    // The per-component test (note section 2), on the live primitive and its live owner.
-    if !flag(space, primitive, "CollideActors")? || !flag(space, owner, "bCollideActors")? {
+    // The owner's half of the per-component test (note section 2), after the source and Base identity checks.
+    if !flag(space, owner, "bCollideActors")? {
         return Ok(Candidate::NotTested);
     }
     let Some(row) = row_of(space, class) else {

@@ -514,6 +514,27 @@ fn an_unloaded_base_link_refuses_only_a_possible_blocker() {
     x.set(walked, "CollisionComponent", Value::Object(Some(owned)));
     assert_eq!(x.call().unwrap(), Value::Bool(true));
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
+    // Review r2 of #638, item 1: a primitive whose own CollideActors is clear is no candidate, even with an unloaded
+    // owner and the Base on a different unloaded handle; the call checks the counters and the name table.
+    let mut x = fx(Some(Sweep::Clear));
+    let base = x.lazy("Actor");
+    let owner = x.lazy("Pickup");
+    let p = x.pickup;
+    x.set(p, "Base", Value::Object(Some(base)));
+    let (walked, _) = x.blocker("WillowGame.ToyGameActor");
+    let owned = make(&mut x.vm, "Engine.ToyOwnedPrimitive");
+    x.set(owned, "BlockZeroExtent", Value::Bool(true));
+    x.set(owned, "CollideActors", Value::Bool(false));
+    x.set(owned, "Owner", Value::Object(Some(owner)));
+    x.set(walked, "CollisionComponent", Value::Object(Some(owned)));
+    assert_eq!(x.call().unwrap(), Value::Bool(true));
+    for o in [base, owner] {
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, o), "still unloaded");
+    }
+    // The same primitive with CollideActors set is a possible blocker behind an undecided chain: it refuses.
+    x.set(owned, "CollideActors", Value::Bool(true));
+    let n = not_yet(x.call());
+    assert!(n.what.contains(ow_world::trace_filter::BASE_CHAIN_LINK), "{n}");
 }
 
 /// Review r1 of #638, item 2: an argument must be the declared `Vector` struct. Another struct named `Vector` is a
@@ -533,4 +554,9 @@ fn only_the_declared_vector_passes() {
     assert_eq!(marks(&x.vm), start, "nothing moved: {r:?}");
     assert!(script(r).contains("not a Vector"));
     assert!(x.service.as_ref().unwrap().asked.borrow().is_empty(), "nothing reached the collision service");
+    // Review r2 of #638, item 2: the exemption holds in Off only, checked when it is applied (the interpreter's
+    // conversion itself is tested in ow-vm, `a_none_given_to_a_natives_struct_parameter_is_the_zero_struct`).
+    assert!(x.vm.keeps_struct_none(TOUCH_PICKUP_TRACE));
+    x.vm.parity = ParityMode::Reference;
+    assert!(!x.vm.keeps_struct_none(TOUCH_PICKUP_TRACE), "not after a switch to Reference");
 }

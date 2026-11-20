@@ -109,6 +109,7 @@ clippy (ow-object, ow-vm, ow-world): no new warning. Slice gate not rerun for th
 only: NATIVE_COMPONENT_BOUNDS.md. Installed Off strict `--slice-gate` (release, under the machine lock): 4 ok / 10
 NotYet / 0 errors; links 6 and 7 pass `make` and stop in `touch` at `GetBoundingCylinder`'s refusal L. A throwaway
 probe with a stand-in past L stopped both at `DroppedPickup.TouchPickupTrace`. No real-game run.
+
 **IMPL-TOUCH-PICKUP-TRACE (2026-11-20, zuhu desktop, on main 4c4522d):** AI-assisted (Claude Code, Opus 5.5).
 `DroppedPickup.TouchPickupTrace` in Off, from NATIVE_TOUCH_PICKUP_TRACE.md (#624, 6dbdea1e). The pickup run's world
 gets link 9's `NoLevel` collision service (UNVERIFIED stand-in).

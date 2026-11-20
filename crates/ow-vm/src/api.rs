@@ -794,9 +794,10 @@ impl Vm {
         }
     }
 
-    /// Whether [`Vm::keep_struct_none`] holds `key`.
+    /// Whether [`Vm::keep_struct_none`] holds `key` and the VM is in `ParityMode::Off` now: a VM switched to Reference
+    /// after the key was kept converts again (review r2 of #638, item 2).
     pub fn keeps_struct_none(&self, key: &str) -> bool {
-        self.struct_none_kept.contains(key)
+        self.parity == ParityMode::Off && self.struct_none_kept.contains(key)
     }
 
     /// Binds the native implementation `imp` to the native function `f` and to every function with the same key in
