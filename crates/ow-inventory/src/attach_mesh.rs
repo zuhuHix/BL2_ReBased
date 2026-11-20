@@ -121,6 +121,7 @@ enum Want {
     Object,
     Bool,
     Int,
+    Float,
     Struct,
     Array,
 }
@@ -133,6 +134,7 @@ fn schemas(vm: &Vm, o: ObjRef, fields: &[(&str, Want)], what: &str) -> Result<()
             Want::Object => matches!(kind, PropKind::Object { .. }),
             Want::Bool => matches!(kind, PropKind::Bool),
             Want::Int => matches!(kind, PropKind::Int),
+            Want::Float => matches!(kind, PropKind::Float),
             Want::Struct => matches!(kind, PropKind::Struct(_)),
             Want::Array => matches!(kind, PropKind::Array(_)),
         };

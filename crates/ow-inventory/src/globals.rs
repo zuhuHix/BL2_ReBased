@@ -88,12 +88,36 @@ pub fn world_globals(vm: &mut Vm) -> Result<ObjRef, VmError> {
 /// `o`'s class, found through the parent chain, declared as one object reference whose class is exactly `class` (or
 /// any object reference when `class` is None). A mismatch is a data error (`VmError::Script`), raised before any
 /// value is read.
-pub fn declared_reference(vm: &mut Vm, o: ObjRef, name: &str, class: Option<&str>, what: &str) -> Result<(), VmError> {
-    let want = match class {
-        Some(path) => Some(vm.find_class(path)?),
-        None => None,
-    };
-    declared_reference_to(vm, o, name, want, class.unwrap_or("object"), what)
+///
+/// The declaration is checked first, then the declared class is compared with `class` by its own path, so nothing is
+/// looked up and nothing loads (lane FOLLOWUP-PICKUP-RB-VALIDATION: `Vm::find_class` can load, and a load is a write
+/// in an Off preflight). A declared class with no layout is `NotYet { NotRead }`.
+pub fn declared_reference(vm: &Vm, o: ObjRef, name: &str, class: Option<&str>, what: &str) -> Result<(), VmError> {
+    let declared = declared_reference_to(vm, o, name, None, class.unwrap_or("object"), what).and_then(|()| {
+        let own = vm.space.heap.get(o)?.class;
+        match vm.space.prop(own, name).and_then(|p| vm.space.classes.decl(p)).map(|d| &d.kind) {
+            Some(PropKind::Object { class: c }) => Ok(*c),
+            other => Err(bad(what, format!("{name} is declared as {other:?}, not one object reference"))),
+        }
+    })?;
+    match class {
+        None => Ok(()),
+        Some(path) => class_named(vm, declared, path, name, what),
+    }
+}
+
+/// Whether `c`, the class a declaration names, is the class at `path`, compared by the class's own path (no lookup,
+/// no load): a different class is a data error naming `name`; a class with no layout is `NotYet { NotRead }`.
+pub fn class_named(vm: &Vm, c: ClassId, path: &str, name: &str, what: &str) -> Result<(), VmError> {
+    match vm.space.classes.get_layout(c) {
+        Some(l) if l.path().as_str().eq_ignore_ascii_case(path) => Ok(()),
+        Some(l) => Err(bad(what, format!("{name} is declared as a reference to {}, not one {path}", l.path().as_str()))),
+        None => Err(NotYet::not_read(
+            format!("the class {name} is declared with, not loaded (a class load is a write)"),
+            RECORD,
+        )
+        .into()),
+    }
 }
 
 /// The class at `path` when it is ready with no load: a defined layout and loaded function and state code (lane
@@ -147,22 +171,36 @@ pub const PICKUP_CLASS: &str = "WillowGame.WillowPickup";
 /// The schemas of section 6.2 step 4 on the globals object, checked before any value is read: `TheGlobalsDefinition`
 /// (through the parent chain, declared as a `GearboxGlobalsDefinition`), `ThePopulationMaster` (an object reference)
 /// and `PickupList` (a dynamic array of `WillowPickup` references).
-pub fn globals_schemas(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
+pub fn globals_schemas(vm: &Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
     declared_reference(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
     declared_reference(vm, globals, "ThePopulationMaster", None, what)?;
     pickup_list_declared(vm, globals, what)
 }
 
 /// `PickupList`'s declaration on the globals' class: a dynamic array whose elements are `WillowPickup` references.
-pub fn pickup_list_declared(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
+/// The declaration is checked first, then its element class by its own path ([`class_named`]; nothing loads).
+pub fn pickup_list_declared(vm: &Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
     let class = vm.space.heap.get(globals)?.class;
     let p = vm.space.prop(class, "PickupList").ok_or_else(|| bad(what, "the globals declare no PickupList"))?;
     let declared = vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim));
-    let pickup = vm.find_class(PICKUP_CLASS)?;
-    match declared {
-        Some((PropKind::Array(inner), 1)) if matches!(*inner, PropKind::Object { class } if class == pickup) => Ok(()),
-        other => Err(bad(what, format!("PickupList is declared as {other:?}, not a dynamic array of WillowPickup"))),
-    }
+    let element = match &declared {
+        Some((PropKind::Array(inner), 1)) => match inner.as_ref() {
+            PropKind::Object { class } => Some(*class),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(element) = element else {
+        return Err(bad(what, format!("PickupList is declared as {declared:?}, not a dynamic array of WillowPickup")));
+    };
+    class_named(vm, element, PICKUP_CLASS, "PickupList's elements", what)
+        .map_err(|e| match e {
+            VmError::Script { function, message } => VmError::Script {
+                function,
+                message: format!("{message} (PickupList must be a dynamic array of WillowPickup)"),
+            },
+            other => other,
+        })
 }
 
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {

@@ -3,8 +3,13 @@
 //! ANALYST-PICKUP-RB-MINIMAL read the executable, this lane did not), with the hub's rulings on top. It replaces #520's
 //! `LayerAbsent` refusal. AI-assisted (Claude Code). **Every rule here is UNVERIFIED in the running game.**
 //!
-//! **The preflight** (note section 3), write-free, using only loaded objects, in this order and checking only what the
-//! chosen path needs:
+//! **The preflight** (note section 3), write-free, using only loaded objects, in this order. Every declaration the
+//! native reads is checked before the branches that read it, so a bad declaration is a data error on every path past
+//! `bUseRBPhysics` (lane FOLLOWUP-PICKUP-RB-VALIDATION, replacing review r1 of #587's "only on the branch that uses
+//! it"): the pickup's once `bUseRBPhysics` is set, C's and G's as soon as each is known, before the reattach and
+//! torque branches. Two exceptions, each by what is declared rather than by branch: with `bUseRBPhysics` clear the
+//! native reads nothing else (#520's answer), and the asset branch's three fields are declared only on a
+//! `SkeletalMeshComponent`, so they are checked once C is known to be one (a plain primitive is refusal 2).
 //! 1. `bUseRBPhysics` (declaration, then value). Clear: nothing at all (#520's answer).
 //! 2. C: `CollisionComponent` (declaration, value), a `PrimitiveComponent` or none.
 //! 3. The pickup's fields steps 1, 2, 5, 6 and 7 use, and the world's timer service.
@@ -39,7 +44,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::{REATTACH_OWNER, REATTACH_SCENE, RECORD, Want, bool_of, is_zero, schemas};
+use super::{REATTACH_FIELDS, REATTACH_OWNER, REATTACH_SCENE, RECORD, Want, bool_of, is_zero, schemas};
 use crate::equip::{bad, object_of, required};
 
 /// The record of this rule.
@@ -51,15 +56,21 @@ pub const UNLOADED_DEFINITION: &str =
     "InitializePickupForRBPhysics: the physics asset of an inventory definition that is not loaded";
 const WHAT: &str = "WillowPickup.InitializePickupForRBPhysics";
 
-/// The pickup's fields steps 1, 2, 5, 6 and 7 use (preflight step 3).
-const PICKUP_FIELDS: [(&str, Want); 5] = [
+/// Every pickup field the native reads or writes past `bUseRBPhysics`, checked before the branches (the enum
+/// `Physics` by [`enum_value`]).
+const PICKUP_FIELDS: [(&str, Want); 9] = [
+    ("CollisionComponent", Want::Object),
     ("bForceRBToSleep", Want::Bool),
+    ("MaxRBAwakeTime", Want::Float),
     ("RotationRate", Want::Struct),
     ("bTorque", Want::Bool),
     ("bTorqueTemporary", Want::Bool),
     ("Torque", Want::Struct),
+    ("MaxImpactEffectPlayCount", Want::Int),
+    ("Inventory", Want::Object),
 ];
-/// C's fields step 4 reads or writes (the asset branch's checked when it is taken).
+/// Every field of C the native reads or writes on any `PrimitiveComponent`, checked before the reattach and torque
+/// branches (with [`REATTACH_FIELDS`]; the enum `RBChannel` by [`enum_value`]).
 const COMPONENT_FIELDS: [(&str, Want); 6] = [
     ("Scale3D", Want::Struct),
     ("BlockRigidBody", Want::Bool),
@@ -67,6 +78,18 @@ const COMPONENT_FIELDS: [(&str, Want); 6] = [
     ("BlockActors", Want::Bool),
     ("bNotifyRigidBodyCollision", Want::Bool),
     ("RBCollideWithChannels", Want::Struct),
+];
+/// The asset branch's fields, declared only on a `SkeletalMeshComponent`: checked once C is known to be one.
+const ASSET_FIELDS: [(&str, Want); 3] =
+    [("PhysicsWeight", Want::Float), ("PhysicsAsset", Want::Object), ("bHasPhysicsAssetInstance", Want::Bool)];
+/// G's float fields, the spin range included, checked before the torque branch.
+const DEFINITION_FIELDS: [(&str, Want); 6] = [
+    ("DropImpactEffectMax", Want::Float),
+    ("DropImpactEffectThreshold", Want::Float),
+    ("PickupSpinVMin", Want::Float),
+    ("PickupSpinVMax", Want::Float),
+    ("PickupSpinHMin", Want::Float),
+    ("PickupSpinHMax", Want::Float),
 ];
 /// The nine channel updates of step 4.8, in order: the channel's container field and its new value.
 const CHANNELS: [(&str, bool); 9] = [
@@ -212,19 +235,20 @@ struct WithComponent {
     asset: ObjRef,
 }
 
-/// The refusal checks with C, in the note's order (section 3, step 4), each field checked only on the branch that
-/// uses it (review r1 of #587, item 3).
+/// The refusal checks with C, in the note's order (section 3, step 4). Every declaration of C and G the native reads
+/// is checked first, before any branch (lane FOLLOWUP-PICKUP-RB-VALIDATION).
 fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithComponent, VmError> {
     // 4.1. G, as the pickup world's set-up prepared it, with no class load (review r1 of #587, item 1).
     let world = crate::globals::world_globals(vm)?;
     let g = crate::globals::globals_definition_loaded(vm, world, WHAT)?;
-    // 4.2. The declarations of the fields every path with C uses.
+    // 4.2. Every declaration of C and G, before the branches.
     schemas(vm, c, &COMPONENT_FIELDS, WHAT)?;
-    schemas(vm, pickup, &[("MaxImpactEffectPlayCount", Want::Int), ("Inventory", Want::Object)], WHAT)?;
-    // 4.3. The deferred reattach, with CollideActors clear (refusals 3 and 4); its fields only then.
+    schemas(vm, c, &REATTACH_FIELDS, WHAT)?;
+    enum_value(vm, c, "RBChannel", "RBCC_WillowPickup")?;
+    schemas(vm, g, &DEFINITION_FIELDS, WHAT)?;
+    // 4.3. The deferred reattach, with CollideActors clear (refusals 3 and 4).
     let reattach = !flag(vm, c, "CollideActors")?;
     if reattach {
-        schemas(vm, c, &[("Owner", Want::Object), ("Scene", Want::Struct), ("bNeedsReattach", Want::Bool)], WHAT)?;
         match object_of(&required(vm, c, "Owner", WHAT)?, WHAT)? {
             Some(owner) => {
                 if (flag(vm, owner, "bStatic")? || flag(vm, owner, "bTickIsDisabled")?) && !flag(vm, owner, "bDeleteMe")? {
@@ -243,6 +267,7 @@ fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithCompon
     if !is_a(vm, c, "Engine.SkeletalMeshComponent")? {
         return Err(no_asset());
     }
+    schemas(vm, c, &ASSET_FIELDS, WHAT)?;
     let Some(inventory) = object_of(&required(vm, pickup, "Inventory", WHAT)?, WHAT)? else {
         return Err(no_asset());
     };
@@ -265,16 +290,16 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Vec<Step>>, VmError> 
     if !flag(vm, pickup, "bUseRBPhysics")? {
         return Ok(None);
     }
+    // Every other pickup declaration the native reads, before the branches.
+    schemas(vm, pickup, &PICKUP_FIELDS, WHAT)?;
+    let mode = enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
     // 2. C.
-    schemas(vm, pickup, &[("CollisionComponent", Want::Object)], WHAT)?;
     let component = match object_of(&required(vm, pickup, "CollisionComponent", WHAT)?, WHAT)? {
         Some(c) if is_a(vm, c, "Engine.PrimitiveComponent")? => Some(c),
         _ => None,
     };
-    // 3. The pickup's fields of steps 1, 2, 5, 6 and 7, and the timer service.
-    schemas(vm, pickup, &PICKUP_FIELDS, WHAT)?;
+    // 3. The pickup's awake time and the timer service.
     let awake_time = float_of(&required(vm, pickup, "MaxRBAwakeTime", WHAT)?, "MaxRBAwakeTime")?;
-    let mode = enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
     ow_world::timers::timers_of(vm)?;
     let with = match component {
         Some(c) => Some(component_checks(vm, pickup, c)?),
@@ -320,8 +345,8 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Vec<Step>>, VmError> 
         // 5. The physics mode.
         plan.push(planned(vm, pickup, "Physics", Value::Byte(mode))?);
         // 6. The torque, or the spin: three draws on the port's stand-in for the engine's seeded generator
-        // (UNVERIFIED; the values feed only the impulse, which the port does not apply). The spin range is read only
-        // on the spin's branch.
+        // (UNVERIFIED; the values feed only the impulse, which the port does not apply). The spin range's
+        // declarations were checked in 4.2; its values are read here.
         if flag(vm, pickup, "bTorque")? {
             if flag(vm, pickup, "bTorqueTemporary")? {
                 plan.push(planned(vm, pickup, "bTorque", Value::Bool(false))?);

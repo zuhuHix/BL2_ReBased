@@ -50,6 +50,15 @@ machine lock: 4 ok / 10 NotYet / 0 errors without stand-ins (link 8 at `BuildCom
 `make`, passes both mesh changes in `init` and stops at the unbound `PrimitiveComponent.SetScale(float)`). No real-game run;
 `UNVERIFIED` in game. Decision 2026-11-19-242; raw output under ignored `local/analysis/smmc/`.
 
+**FOLLOWUP-PICKUP-RB-VALIDATION (2026-11-20, zuhu desktop, on main b0d9ca08):** AI-assisted (Claude Code, Opus 5.5).
+`InitializePickupForRBPhysics` checks every declaration it reads before its branches, and the globals' reference
+checks compare the declared class by its path with no lookup (no load). `cargo test --workspace -j 2` 2,874 passed /
+0 failed / 50 ignored; clippy on `ow-inventory` adds no warning. Installed Off `--slice-gate` strict (release build,
+under the machine lock): 3 ok / 9 NotYet / 2 errors. Links 6 and 7 pass the native (0 of 1 driver step, `make`) and
+stop later, at "stopped after partial writes: ParticleSystemComponent.ActivateSystem", so the new checks refuse
+nothing on the installed data (the base was not rerun). ctest and verify_packages not run (no C++ change). No
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p

@@ -293,14 +293,14 @@ fn reference_binds_nothing_and_a_bound_key_is_kept() {
 fn the_declared_reference_types_are_checked() {
     let mut x = fx(ParityMode::Off);
     let g = x.globals;
-    globals_schemas(&mut x.vm, g, "test").unwrap();
+    globals_schemas(&x.vm, g, "test").unwrap();
     let wrong = make(&mut x.vm, "WillowGame.ToyWrongGlobals");
-    match globals_schemas(&mut x.vm, wrong, "test").unwrap_err() {
+    match globals_schemas(&x.vm, wrong, "test").unwrap_err() {
         VmError::Script { message, .. } => assert!(message.contains("TheGlobalsDefinition"), "{message}"),
         e => panic!("{e}"),
     }
-    declared_reference(&mut x.vm, wrong, "ThePopulationMaster", None, "test").unwrap();
-    match pickup_list_declared(&mut x.vm, wrong, "test").unwrap_err() {
+    declared_reference(&x.vm, wrong, "ThePopulationMaster", None, "test").unwrap();
+    match pickup_list_declared(&x.vm, wrong, "test").unwrap_err() {
         VmError::Script { message, .. } => assert!(message.contains("WillowPickup"), "{message}"),
         e => panic!("{e}"),
     }
@@ -347,4 +347,28 @@ fn the_rarity_schema_wants_the_declared_struct() {
         VmError::Script { message, .. } => assert!(message.contains("RarityLevelColor"), "{message}"),
         e => panic!("{e}"),
     }
+}
+
+/// Lane FOLLOWUP-PICKUP-RB-VALIDATION, fix 2: `declared_reference` checks the declaration first and compares the
+/// declared class by its own path, with no class lookup, so nothing loads. A wanted class no package holds is a plain
+/// mismatch (a data error), and #518's three counters do not move on a pass or on a refusal.
+#[test]
+fn the_declared_reference_check_looks_nothing_up() {
+    let mut x = fx(ParityMode::Off);
+    let g = x.globals;
+    let counters = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+    let start = counters(&x.vm);
+    declared_reference(&x.vm, g, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), "test").unwrap();
+    match declared_reference(&x.vm, g, "TheGlobalsDefinition", Some("WillowGame.ToyNoSuchClass"), "test").unwrap_err() {
+        VmError::Script { message, .. } => {
+            assert!(message.contains("TheGlobalsDefinition") && message.contains("ToyNoSuchClass"), "{message}")
+        }
+        e => panic!("a data error, not a lookup: {e}"),
+    }
+    let wrong = make(&mut x.vm, "WillowGame.ToyWrongGlobals");
+    let start_wrong = counters(&x.vm);
+    assert!(matches!(globals_schemas(&x.vm, wrong, "test"), Err(VmError::Script { .. })));
+    assert!(matches!(pickup_list_declared(&x.vm, wrong, "test"), Err(VmError::Script { .. })));
+    assert_eq!(counters(&x.vm), start_wrong, "nothing moved on the refusals");
+    assert_eq!(start.2, x.vm.defs.load_transitions(), "no load at all");
 }
