@@ -1,6 +1,6 @@
 # WillowPickup.SpawnPickupParticles: the pickup's particle effect (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SPAWN-PICKUP-PARTICLES (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SPAWN-PICKUP-PARTICLES (decision 2026-11-19-198, number
 pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
