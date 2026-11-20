@@ -45,6 +45,18 @@ rows are byte-identical. ctest and verify_packages not run (no C++ change). No r
 (the destinations' slots read before the first write; 2 tests): `cargo test --workspace -j 2` 2,463 passed / 0 failed
 / 46 ignored; no slice-gate rerun (the slice's path has full slot vectors).
 
+**IMPL-GET-BOUNDING-CYLINDER (2026-11-20, pc-hummer, on main 66378ec4):** AI-assisted (Claude Code, Opus 5.5).
+`Actor`/`Pawn`/`NavigationPoint.GetBoundingCylinder` in Off from NATIVE_GET_BOUNDING_CYLINDER.md at 6800f603
+(`ow-world` `world::bounding_cylinder`): body by exact class, refusals C/T/N/L/S, both out arguments written last;
+`placement::extent` unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,572 passed / 0 failed / 48
+ignored (8 new); `crate_edges_test.py` OK. On the pre-rebase base 93ce3dbf: `ctest` 165 / 166, the one failure
+`py-real_game_pending` (2 checks that need a folder outside the Temp directory, which a worktree under Temp cannot
+give; no Python or real-game helper changed); `verify_packages.py --reader` exit 0. Installed Off `--slice-gate`
+strict: 2 ok / 4 NotYet / 8 errors, all 14 rows byte-identical with and without the binding. Links 6 and 7 pass 0
+steps and stop in `make` at the unbound `PrimitiveComponent.SetLightEnvironment(object)`, before `touch` reaches this
+native, so it is proved by tests only. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+ignored `local/p2/gbc/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 1 (2026-11-19, zuhu desktop, on fix/rust-set-anim-tree-template c1c8a73, #495):**
 AI-assisted (Claude Code, Opus 5.5). `SetForceRefPose`, `SetHidden`, `SetOwnerNoSee`, `HideBoneByName` and
 `Actor.AttachComponent` in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md part 1, with an empty scene layer in the pickup
