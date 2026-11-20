@@ -94,7 +94,6 @@ None. Nothing is loaded, written or drawn, and the returned handle is not loaded
 | The receiver's class is not `GearboxMind` or a subclass | `VmError::Script` (the native belongs to `GearboxMind`) |
 | The receiver's class does not declare `AIComponent`, or the field holds a value that is not an object | `VmError::Script` (a malformed class or value) |
 | `AIComponent` names a class default's own template component (not an instance; the port's choice, not the native's) | `NotYet { NotRead }`: "the mind's AIComponent is its class default's template, not an instance". A hold written to it would land on the shared template, and the game always holds an instance here |
-
 | The receiver is an unloaded definition handle | `NotYet { NotRead }` (above), nothing loaded |
 
 No `LayerAbsent` or `NotPorted` case: the answer needs only the receiver and its class, which a call already has.
