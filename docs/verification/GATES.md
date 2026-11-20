@@ -28,6 +28,14 @@ Installed Off `--slice-gate` (strict, under the lock) on the branch and its base
 both, every link the same (link 9: 2 of 2 steps, stopped at the IRuleEngineOwner class not loaded). ctest and
 verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
 
+**HARNESS-LINK8-GESTALT-PRELOAD (2026-11-20, pc-hummer, on main 4c4522d7):** AI-assisted (Claude Code, Opus 5.5).
+The equip world's logged, UNVERIFIED preload of the weapon type's `GestaltMesh` (hub ruling on stop 3 of
+ANALYST-LINK8-NEXT). `cargo test --workspace -j 2` 2,981 passed / 0 failed / 51 ignored (3 new in
+`inventory/equip_run_gestalt_tests.rs`); `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release, under
+the machine lock): on this branch 4 ok / 9 NotYet / 1 error, link 8 at `GetExpLevelFromManufacturerData` as on main; on
+a probe merge with #596, #613, #577 and #599, 4 ok / 10 NotYet / 0 errors, link 8 passes `make` and stops in `init` at
+#599's `SetSkeletalMesh` mesh-change LayerAbsent. ctest and verify_packages not run (no C++ change). No real-game run.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p

@@ -23,7 +23,10 @@
 //!   source, where `WeaponResourcePoolAttributeContextResolver` is not read. A harness stand-in, not a rule.
 //!   In Off it also preloads the muzzle-flash collections ([`preload_muzzle_flashes`], lane IMPL-GET-PARTICLE-EFFECT):
 //!   the native loads nothing, as #518 counts a lazy load as a write, so the harness loads them, the way #528 preloads
-//!   the body class and #541 the unlock data. A logged harness input, not a rule.
+//!   the body class and #541 the unlock data. A logged harness input, not a rule. Then the weapon type's
+//!   `GestaltMesh` ([`preload_gestalt_mesh`], lane HARNESS-LINK8-GESTALT-PRELOAD): `BuildCompositeMesh`'s preflight
+//!   refuses a cold gestalt definition, so the harness loads it, an UNVERIFIED stand-in for the game keeping it
+//!   resident.
 //! - **init**: the installed `WillowWeapon.InitializeInternal(false)`, the spawn's script (bases, ammo, the attribute
 //!   slots, the weapon's own effects and slot modifiers, the card).
 //! - **bases**: `CalculateWeaponBaseValues` (the crate's override), so the equip phases start from computed bases
@@ -757,7 +760,47 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -
 fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
+    preload_gestalt_mesh(vm, weapon)?;
     Ok(weapon)
+}
+
+/// The text of [`preload_gestalt_mesh`]'s harness lines.
+pub(crate) const GESTALT_INPUT: &str = "harness input: preload the weapon type's GestaltMesh";
+
+/// The Off harness preload of lane HARNESS-LINK8-GESTALT-PRELOAD (the hub's ruling on stop 3 of ANALYST-LINK8-NEXT):
+/// the weapon's `DefinitionData.WeaponTypeDefinition`'s `GestaltMesh`, when it is set and one of the store's unloaded
+/// handles, is loaded through the store. `BuildCompositeMesh`'s preflight (NATIVE_BUILD_COMPOSITE_MESH.md section 4,
+/// step 3) refuses a gestalt definition that is not resident, because a lazy load is a write; in the game it is
+/// resident with the weapon type, which this load stands in for (**UNVERIFIED**). It is logged before it runs (rule 7)
+/// and its outcome after; a failed load keeps its error. No type, no `GestaltMesh`, or one already loaded: nothing.
+/// Outside Off, nothing.
+pub(crate) fn preload_gestalt_mesh(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    let Ok(Value::Object(Some(weapon_type))) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition").cloned()
+    else {
+        return Ok(());
+    };
+    let Some(Value::Object(Some(gestalt))) = ow_inventory::equip::read_prop(vm, weapon_type, "GestaltMesh") else {
+        return Ok(());
+    };
+    if !vm.defs.is_unloaded(&vm.space, gestalt) {
+        return Ok(());
+    }
+    let name = ow_vm::path_name::path_name(vm, gestalt).unwrap_or_else(|_| format!("{gestalt:?}"));
+    vm.log.push(format!(
+        "{GESTALT_INPUT} {name} (BuildCompositeMesh loads nothing; the game keeps it resident: UNVERIFIED stand-in)"
+    ));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, gestalt);
+    vm.log.extend(vm.defs.take_log());
+    match &loaded {
+        Ok(()) => vm.log.push(format!("{GESTALT_INPUT} {name}: loaded")),
+        Err(e) => vm.log.push(format!("{GESTALT_INPUT} {name}: failed ({e})")),
+    }
+    loaded.map_err(VmError::from)
 }
 
 /// The definition fields whose `MuzzleFlashPSTemplates` the weapon's client initialisation asks, in its order
@@ -904,6 +947,10 @@ fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute)
     write_t(vm, weapon, "ExpLevel", Value::Int(r.level))?;
     Ok(weapon)
 }
+
+#[cfg(test)]
+#[path = "equip_run_gestalt_tests.rs"]
+mod gestalt_tests;
 
 #[cfg(test)]
 mod tests {
