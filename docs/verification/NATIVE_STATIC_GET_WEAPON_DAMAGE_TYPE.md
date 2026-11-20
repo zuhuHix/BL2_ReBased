@@ -1,6 +1,6 @@
 # WillowWeapon.StaticGetWeaponDamageType on link 8 (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-STATIC-GET-WEAPON-DAMAGE-TYPE (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-STATIC-GET-WEAPON-DAMAGE-TYPE (decision 2026-11-19-191, number
 pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
