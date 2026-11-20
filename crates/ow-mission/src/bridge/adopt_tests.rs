@@ -156,8 +156,8 @@ fn the_globals_natives_have_one_owner_on_the_map_route() {
     let _script = MissionScript::adopt(&mut m.world, &m.mission).expect("adopt over the owners' bindings");
     let vm = &mut m.world.vm;
     for path in GLOBALS_NATIVES {
-        let key = native_key(vm, path).unwrap();
-        assert!(vm.has_native(&key), "{path} is bound");
+        let f = native_at(vm, path).unwrap();
+        assert!(vm.is_bound(f), "{path} is bound");
     }
     let f = vm.find_function("WillowGame.WillowGlobals.GetWillowGlobals").unwrap();
     assert_eq!(vm.call(f, None, Vec::new()).unwrap().ret, Value::Object(Some(m.globals)), "the inventory owner's answer");

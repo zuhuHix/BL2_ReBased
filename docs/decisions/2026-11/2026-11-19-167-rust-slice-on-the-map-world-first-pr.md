@@ -79,3 +79,7 @@ and no existing `NotYet` guard was relaxed. Reference is unchanged, and so is ev
   - the `--slice-run` family, and the pickup, equip and phaselock worlds, on the adopt path;
   - the full installed run, a player spawned and adopted on Sanctuary. It needs `IsSplitScreen`, then the auto-state
     work for the GRI and the tracker.
+- **Landing (hub run, 2026-11-20).** On #519's package-qualified native dispatch, which landed first, the
+  globals-natives check and its test use `native_at` and `Vm::is_bound` in place of `native_key` and
+  `Vm::has_native` (the same check). Two doc comments in `ow-cli`'s `map_route.rs` name the game's config files
+  without their extension, for #499's source scan.

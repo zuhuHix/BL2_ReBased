@@ -14,7 +14,7 @@
 //! 4. **The engine's local player** (a harness input): one [`LOCAL_PLAYER_CLASS`] from class defaults, with no actor,
 //!    standing for what engine start-up makes before any map (NATIVE_MAP_LOAD.md section 6.1).
 //! 5. **`load_map`**, then **`bring_up_map_for_play`** (lane 2): the configured default game from the install's
-//!    `DefaultGame.ini`, no URL options, every actor routed. The bring-up counts its failures and goes on (its own
+//!    default game config file, no URL options, every actor routed. The bring-up counts its failures and goes on (its own
 //!    rule); the count and the game info's own stops are logged as harness lines (SLICE_MAPLOAD.md Q4: whether a link
 //!    may pass over an incomplete bring-up is the maintainer's call).
 //! 6. **The local-player spawn** (lane 3) with the map's name as the URL text, the empty net id and
@@ -41,7 +41,7 @@ use super::MissionBridge;
 /// The installed globals definition (NATIVE_WILLOW_GLOBALS.md section 2: the configured
 /// `DefaultGlobalsDefinitionName`), as the pickup world uses it.
 pub const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
-/// The engine's local player class (the installed `BaseEngine.ini`'s `LocalPlayerClassName`).
+/// The engine's local player class (the installed base engine config file's `LocalPlayerClassName`).
 pub const LOCAL_PLAYER_CLASS: &str = "Engine.LocalPlayer";
 
 /// A harness line, to the VM's log and to `notes`.

@@ -840,8 +840,8 @@ impl MissionScript {
             .into()
         })?;
         for path in GLOBALS_NATIVES {
-            if let Ok(key) = native_key(vm, path)
-                && !vm.has_native(&key)
+            if let Ok(f) = native_at(vm, path)
+                && !vm.is_bound(f)
             {
                 return Err(VmError::NotYet(NotYet::layer_absent(
                     format!("{path} on the map route"),
