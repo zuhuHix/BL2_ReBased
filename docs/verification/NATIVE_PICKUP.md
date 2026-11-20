@@ -57,7 +57,9 @@ While the pickup is in its `Pickup` state:
      package declaration, whose parameters are `StartLoc` then `EndLoc`: the script passes the toucher's location as
      the start and the pickup's touch trace point as the end. That point is the pickup's location raised by half its
      bounding cylinder's height. This matches NATIVE_INVENTORY_EQUIP.md's `TouchPickupTrace(from, to)` and corrects
-     its prose ("from the pickup to the pawn"). What blocks the trace inside the native was not read: a named `NotYet`
+     its prose ("from the pickup to the pawn"). **Superseded** by
+     NATIVE_TOUCH_PICKUP_TRACE.md section 2: the native traces from `EndLoc` to `StartLoc`, and that note reads what
+     blocks the trace. What blocks the trace inside the native was not read: a named `NotYet`
      in Off (Off contract, below). If the trace fails, the touch is checked again after 0.5 seconds;
    - the game info's `PickupQuery` agreeing (section 5, "PickupQuery").
 3. **The controller's side** (`WillowPlayerController.TouchedPickupable`): with the pickup enabled, it becomes the
