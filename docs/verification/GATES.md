@@ -156,7 +156,7 @@ name; Reference unchanged. `cargo build --workspace` clean; `cargo test --worksp
 ignored (7 new tests); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 3 ok / 10 NotYet / 1 error, all
 14 rows byte-identical to main's. Link 9 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun
 `ReplicationStrategy` 2 refusal, before the lift asks this native. No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/p2/is/`.
+2026-11-19-227; logs under ignored `local/p2/is/`.
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
