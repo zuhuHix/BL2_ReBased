@@ -44,8 +44,8 @@
 //!   the deferred reattach's preflight, then `PreviousLightEnvironment`, `LightEnvironment` and `bNeedsReattach`. The
 //!   two fields are **UNVERIFIED (fitted)**.
 //! - `WillowPickup.InitializePickupForRBPhysics()` (6.3): `bUseRBPhysics` false is nothing (the native's own rule);
-//!   otherwise [`RB_PHYSICS`], `NotYet { LayerAbsent }` ([`RB_LAYER`]), before any write. The hub's ruling on 6.6:
-//!   its script-visible writes do not separate from the physics work, so no part of it is a port answer.
+//!   otherwise the minimal answer of NATIVE_PICKUP_RB_MINIMAL.md in [`pickup_rb`] (lane IMPL-PICKUP-RB), which
+//!   replaced 6.6's rigid-body `LayerAbsent`.
 //! - `WillowPickup.SpawnPickupParticles()` (6.4): `PickupParticles` None is [`PARTICLES_REMOVAL`],
 //!   `NotYet { NotRead }`; otherwise [`PARTICLES`], `NotYet { LayerAbsent }` ([`PARTICLES_LAYER`]), both before any
 //!   write of its own.
@@ -63,6 +63,8 @@ use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
 use crate::equip::{bad, object_of, required, write};
+
+pub mod pickup_rb;
 
 /// The record these natives follow.
 pub const RECORD: &str = "docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md";
@@ -90,8 +92,6 @@ pub const INIT_RB_PHYSICS: &str = "WillowPickup.InitializePickupForRBPhysics()";
 pub const SPAWN_PICKUP_PARTICLES: &str = "WillowPickup.SpawnPickupParticles()";
 
 /// Part 2's named `NotYet`s, the note's texts.
-pub const RB_PHYSICS: &str = "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up";
-pub const RB_LAYER: &str = "a rigid-body physics layer (the port has none)";
 pub const PARTICLES_REMOVAL: &str = "WillowPickup.SpawnPickupParticles with no particle system: the particles' removal";
 pub const PARTICLES: &str = "WillowPickup.SpawnPickupParticles: the pickup's particle effect";
 pub const PARTICLES_LAYER: &str = "a particle-effects layer (the port has none)";
@@ -354,16 +354,6 @@ fn fits(vm: &Vm, o: ObjRef, name: &str, v: &Value, what: &str) -> Result<(), VmE
         .map_err(|e| bad(what, format!("{name} cannot take the value: {e}")))
 }
 
-/// `InitializePickupForRBPhysics()` on `pickup` in Off (module documentation, part 2). Writes nothing.
-pub fn initialize_pickup_for_rb_physics(vm: &Vm, pickup: ObjRef) -> Result<(), VmError> {
-    const WHAT: &str = "WillowPickup.InitializePickupForRBPhysics";
-    schemas(vm, pickup, &[("bUseRBPhysics", Want::Bool)], WHAT)?;
-    if !bool_of(&required(vm, pickup, "bUseRBPhysics", WHAT)?, "bUseRBPhysics", WHAT)? {
-        return Ok(());
-    }
-    Err(NotYet::layer_absent(RB_PHYSICS, RB_LAYER, RECORD).into())
-}
-
 /// `SpawnPickupParticles()` on `pickup` in Off (module documentation, part 2). Writes nothing.
 pub fn spawn_pickup_particles(vm: &Vm, pickup: ObjRef) -> Result<(), VmError> {
     const WHAT: &str = "WillowPickup.SpawnPickupParticles";
@@ -383,7 +373,7 @@ fn light_environment_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn rb_physics_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let pickup = this(c, INIT_RB_PHYSICS)?;
-    initialize_pickup_for_rb_physics(c.vm, pickup)?;
+    pickup_rb::initialize(c.vm, pickup)?;
     Ok(Value::None)
 }
 

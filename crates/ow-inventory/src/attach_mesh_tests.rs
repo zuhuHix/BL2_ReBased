@@ -556,18 +556,18 @@ fn set_light_environment_follows_the_three_cases() {
     assert_eq!(light_fields(&x, owned), before, "nothing written");
 }
 
-/// `InitializePickupForRBPhysics` (6.3, the hub's ruling on 6.6): `bUseRBPhysics` false is nothing; true is the
-/// rigid-body `LayerAbsent`, unmarked, with nothing written.
+/// `InitializePickupForRBPhysics` (6.3): `bUseRBPhysics` false is nothing. The set rule is lane IMPL-PICKUP-RB's
+/// (`attach_mesh/pickup_rb_tests.rs`); on this toy, whose pickup declares none of its fields, it is a data error
+/// before any write.
 #[test]
-fn the_rigid_body_set_up_is_layer_absent_unless_the_pickup_skips_it() {
+fn the_rigid_body_set_up_is_nothing_when_the_pickup_skips_it() {
     let mut x = fx(ParityMode::Off, true);
     let pickup = x.obj("Engine.WillowPickup");
     assert_eq!(x.call(RB_FN, pickup, vec![]).unwrap(), Value::None, "bUseRBPhysics false");
     x.set(pickup, "bUseRBPhysics", Value::Bool(true));
     let before = (x.get(pickup, "bUseRBPhysics"), x.get(pickup, "PickupParticles"), x.get(pickup, "Components"));
-    let n = not_yet(x.call(RB_FN, pickup, vec![]));
-    assert_eq!(n.what.as_ref(), "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up");
-    unmarked(&n, Missing::LayerAbsent("a rigid-body physics layer (the port has none)"), RB_PHYSICS);
+    let e = x.call(RB_FN, pickup, vec![]).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("CollisionComponent")), "{e:?}");
     assert_eq!((x.get(pickup, "bUseRBPhysics"), x.get(pickup, "PickupParticles"), x.get(pickup, "Components")), before);
 }
 

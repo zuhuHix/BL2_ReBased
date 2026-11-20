@@ -15,6 +15,15 @@ passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 fa
 crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
 `FlagExpressionEvaluator.Evaluate(object)`.
 
+**IMPL-PICKUP-RB (2026-11-20, zuhu desktop, on fix/rust-attach-mesh-to-pickup-2 4d0539b2, #520):** AI-assisted
+(Claude Code, Opus 5.5). `InitializePickupForRBPhysics` in Off from NATIVE_PICKUP_RB_MINIMAL.md, with the asset
+branch at rest and a seeded stand-in stream (hub rulings; UNVERIFIED in game). `cargo test --workspace -j 2`: 2,476
+passed, 0 failed (48 result lines); `ow-inventory` 215 passed (10 new in `attach_mesh/pickup_rb_tests.rs`);
+`ow-core` rand 14 passed (1 new). Clippy: no warning in the touched files. `tests/crate_edges_test.py`: 19 OK.
+Installed `--slice-gate` (Off, strict): ok 0, notyet 7, error 7 of 14. Links 6 and 7 move from "the pickup's
+rigid-body set-up" (`LayerAbsent`) to "stopped after partial writes: WillowPickup.SpawnPickupParticles: the pickup's
+particle effect" in `make`, as #574 foresaw. The other 12 rows read as before. This is what the host did, not parity.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

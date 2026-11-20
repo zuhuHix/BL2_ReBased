@@ -310,7 +310,13 @@ pub struct GameRng {
     mode: ParityMode,
     crt: [CrtRand; 8],
     script: [ScriptGen; 2],
+    /// The port's stand-in for the engine's seeded generator (lane IMPL-PICKUP-RB): [`ENGINE_SEEDED_ID`].
+    engine_seeded: CrtRand,
 }
+
+/// The seed id of [`GameRng::engine_seeded`], after every [`CrtStream`] and [`ScriptStream`] id, so no other stream's
+/// seed moves (lane IMPL-PICKUP-RB, the hub's ruling on #574).
+pub const ENGINE_SEEDED_ID: u64 = 0x200;
 
 impl GameRng {
     /// Each [`CrtStream`] is `CrtRand::new(stream_seed(seed, id))`. Each [`ScriptStream`] is the same in
@@ -328,6 +334,7 @@ impl GameRng {
             mode,
             crt,
             script,
+            engine_seeded: CrtRand::new(stream_seed(seed, ENGINE_SEEDED_ID)),
         }
     }
 
@@ -353,6 +360,15 @@ impl GameRng {
                     ScriptGen::Lcg(r) => r.draws.0,
                 })
                 .sum::<u64>()
+            + self.engine_seeded.draws()
+    }
+
+    /// The port's stand-in for the engine's seeded random generator (the one `GlobalsDefinition.ApplySpinToPickup`
+    /// draws on, NATIVE_PICKUP_RB_MINIMAL.md section 2, step 6), a stream of its own so drawing it moves no other.
+    /// **UNVERIFIED:** the engine generator's constants and seed are not read, so its values are the port's own; only
+    /// the number of draws is claimed. It is a [`CrtRand`] seeded from [`ENGINE_SEEDED_ID`].
+    pub fn engine_seeded(&mut self) -> &mut CrtRand {
+        &mut self.engine_seeded
     }
 
     /// The named C-`rand()` stream. Drawing it moves no other stream.
@@ -635,6 +651,27 @@ mod tests {
         let rng = GameRng::from_world_seed(1, ParityMode::Off);
         for (i, s) in CrtStream::ALL.iter().enumerate() {
             assert_eq!(rng.crt[i], CrtRand::new(stream_seed(1, s.id())));
+        }
+    }
+
+    /// Lane IMPL-PICKUP-RB: the engine-seeded stand-in has its own id after every other stream's, drawing it moves no
+    /// other stream, and its draws are counted.
+    #[test]
+    fn the_engine_seeded_stream_moves_no_other_stream() {
+        let ids: Vec<u64> = CrtStream::ALL.map(CrtStream::id).into_iter().chain(ScriptStream::ALL.map(ScriptStream::id)).collect();
+        assert!(ids.iter().all(|&id| id < ENGINE_SEEDED_ID), "{ids:?}");
+        let mut a = GameRng::from_world_seed(7, ParityMode::Off);
+        let mut b = GameRng::from_world_seed(7, ParityMode::Off);
+        assert_eq!(*a.engine_seeded(), CrtRand::new(stream_seed(7, ENGINE_SEEDED_ID)));
+        for _ in 0..3 {
+            frand_f32(a.engine_seeded());
+        }
+        assert_eq!((a.draws(), a.engine_seeded().draws()), (3, 3));
+        for s in CrtStream::ALL {
+            assert_eq!(a.crt(s).rand15(), b.crt(s).rand15(), "{s:?}");
+        }
+        for s in ScriptStream::ALL {
+            assert_eq!(a.script(s).rand_limit(32_768), b.script(s).rand_limit(32_768), "{s:?}");
         }
     }
 
