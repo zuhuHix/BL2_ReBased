@@ -1,6 +1,6 @@
 # CacheWeaponCard's slot count, and its slots past 0 (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-CARD-SLOT-COUNT (decision 2026-11-19-NNN, a placeholder),
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-CARD-SLOT-COUNT (decision 2026-11-19-136, a placeholder),
 for slice link 8. A companion to NATIVE_CACHE_WEAPON_CARD.md (the outline, section 3, step 3) and
 NATIVE_CACHE_WEAPON_CARD_BODY.md (PR #484's body note, on `research/rust-cache-weapon-card-body`; its open question 1).
 That note is not on main yet, so this is a sibling note rather than a new section of it.
