@@ -129,6 +129,12 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
             Ok(Value::Bool(is_staggered(c.vm, pawn)?))
         })?;
     }
+    // DropCombatPerch (NATIVE_DROP_COMBAT_PERCH.md; lane IMPL-DROPCOMBATPERCH).
+    bind_fn(vm, DROP_COMBAT_PERCH, |c| {
+        let pawn = this(c, "WillowAIPawn.DropCombatPerch")?;
+        drop_combat_perch(c.vm, pawn)?;
+        Ok(Value::None)
+    })?;
     bind_fn(vm, "Engine.ResourcePool.GetTimeSeconds", |c| {
         this(c, "ResourcePool.GetTimeSeconds")?;
         Ok(Value::Float(c.vm.world_time_seconds()?))
@@ -737,8 +743,85 @@ pub fn is_staggered_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<bool,
     Err(s2())
 }
 
+/// The record of [`drop_combat_perch`].
+pub const RECORD_PERCH: &str = "docs/verification/NATIVE_DROP_COMBAT_PERCH.md";
+/// The declaration bound to [`drop_combat_perch`].
+pub const DROP_COMBAT_PERCH: &str = "WillowGame.WillowAIPawn.DropCombatPerch";
+/// D3's text: the drop itself, read only to its edge.
+pub const PERCH_DROP: &str = "WillowAIPawn.DropCombatPerch: the perch projectile's spawn and launch (not read)";
+/// `ROLE_Authority` as the raw byte the guard compares (the stock enum, UNVERIFIED).
+pub const ROLE_AUTHORITY: u8 = 3;
+
+/// `WillowAIPawn.DropCombatPerch()` in Off (NATIVE_DROP_COMBAT_PERCH.md section 3; lane IMPL-DROPCOMBATPERCH, coded from
+/// that note alone, clean room). **UNVERIFIED in the running game.** [`drop_combat_perch_with`] with
+/// [`NATIVE_AI_PAWN_DESCENDANTS`].
+pub fn drop_combat_perch(vm: &Vm, pawn: ObjRef) -> Result<(), VmError> {
+    drop_combat_perch_with(vm, pawn, &NATIVE_AI_PAWN_DESCENDANTS)
+}
+
+/// [`drop_combat_perch`] with `native` as the native descendants of `WillowAIPawn`. Write-free, load-free and RNG-free;
+/// the first failure is the answer:
+/// 1. the receiver's class is `WillowAIPawn` or a child (`by_path` and `is_child_of` only): otherwise a `VmError::Script`;
+/// 2. **D1**, `NotYet { NotRead }`: an unloaded handle, or a slotless stand-in (two texts);
+/// 3. **D2**, `NotYet { NotRead }`: a native descendant of `WillowAIPawn`, or a child of one (its slot was not read).
+///    Script-only children take `WillowAIPawn`'s rule;
+/// 4. the declarations, by name: `Role` a byte, `PerchProjectile` an object, `bPerchAttached` a bool. A missing field
+///    or a wrong kind is a `VmError::Script` naming it;
+/// 5. the guard, in order: `Role` not [`ROLE_AUTHORITY`], or `PerchProjectile` None, or `bPerchAttached` clear: the
+///    answer, with nothing written;
+/// 6. **D3** (the guard holds): `NotYet { NotRead }` ([`PERCH_DROP`]), before any write.
+pub fn drop_combat_perch_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<(), VmError> {
+    const WHAT: &str = "WillowAIPawn.DropCombatPerch";
+    let space = &vm.space;
+    let path = ow_attr::eval::class_path(space, pawn);
+    let obj = space.heap.get(pawn)?;
+    let class = obj.class;
+    let Some(ai) = space.classes.by_path("WillowGame.WillowAIPawn").filter(|&a| space.classes.is_child_of(class, a)) else {
+        return Err(super::access::error(format!("{WHAT}: {path} is not a WillowAIPawn")));
+    };
+    if vm.defs.is_unloaded(space, pawn) {
+        return Err(NotYet::not_read(format!("{WHAT}: the pawn {path} is an unloaded handle (a load is a write)"), RECORD_PERCH).into());
+    }
+    if u32::try_from(obj.slots.len()).ok() != space.classes.get_layout(class).map(|l| l.slot_count()) {
+        return Err(NotYet::not_read(
+            format!("{WHAT}: the pawn {path} is a stand-in with no properties (an object the store cannot load)"),
+            RECORD_PERCH,
+        )
+        .into());
+    }
+    let natives: Vec<_> = native.iter().filter_map(|p| space.classes.by_path(p)).collect();
+    let mut cursor = Some(class);
+    while let Some(c) = cursor.filter(|&c| c != ai) {
+        if natives.contains(&c) {
+            return Err(NotYet::not_read(format!("{WHAT}: the perch rule of {path} (its virtual was not read)"), RECORD_PERCH).into());
+        }
+        cursor = space.classes.get_layout(c).and_then(|l| l.super_class());
+    }
+    let field = |name: &str, want: &str, ok: fn(&PropKind) -> bool| -> Result<Value, VmError> {
+        let bad = |why: String| super::access::error(format!("{WHAT}: {path}.{name} {why}"));
+        let p = space.prop(class, name).ok_or_else(|| bad("is not declared".to_string()))?;
+        match space.classes.decl(p).map(|d| &d.kind) {
+            Some(k) if ok(k) => Ok(space.read(pawn, ow_object::ids::PropAddr::scalar(p))?.clone()),
+            _ => Err(bad(format!("is not {want}"))),
+        }
+    };
+    let role = field("Role", "a byte", |k| matches!(k, PropKind::Byte { .. }))?;
+    let projectile = field("PerchProjectile", "an object", |k| matches!(k, PropKind::Object { .. }))?;
+    let attached = field("bPerchAttached", "a bool", |k| matches!(k, PropKind::Bool))?;
+    let role = matches!(role, Value::Byte(ROLE_AUTHORITY));
+    let projectile = matches!(projectile, Value::Object(Some(_)));
+    let attached = matches!(attached, Value::Bool(true));
+    if !role || !projectile || !attached {
+        return Ok(());
+    }
+    Err(NotYet::not_read(PERCH_DROP, RECORD_PERCH).into())
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[path = "pools/stagger_tests.rs"]
 mod stagger_tests;
+#[cfg(test)]
+#[path = "pools/perch_tests.rs"]
+mod perch_tests;
