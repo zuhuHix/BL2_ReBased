@@ -46,3 +46,7 @@ Off only. Reference is unchanged: the equip pack binds nothing there, as before.
     `WillowWeapon.RecomputeAttributeBaseValues()`. Link 9 is NotYet at `cast` (steps `spawn`, `cast`), at the noun
     resolver's strategy-2 refusal, which #523 settles. On main, neither link reaches `ResolveContext` yet; the earlier
     probes reached it only with #523 and the link 9 stack merged.
+- **Open items:**
+  - the note's test 13 assumed the wrong parent class for `FlagDefinition` (it is a `GBXDefinition` in the installed
+    packages, not an `AttributeDefinitionBase`). The port follows the note's receiver check, so that receiver is a
+    `VmError::Script`, as the hub ruled (2026-11-20).
