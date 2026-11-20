@@ -16,7 +16,8 @@ only. Based on main c687c135.
   3. The class:
      - exactly `WillowAIPawn`, or a script-only child of it: the AI rule;
      - a native descendant (`NATIVE_AI_PAWN_DESCENDANTS`, carried with the binding from
-       `research/native_by_class.json`: `WillowAICranePawn`), or a child of one: **S2**;
+       `research/native_by_class.json`: `WillowAICranePawn`, and `DeployableTurretActor` from the export super
+       chain, added on review r1 of #620), or a child of one: **S2**;
      - exactly `WillowPawn`: false;
      - any other child of `WillowPawn`, script-only ones included: **S2**.
   4. The AI rule reads by name, with no offset: `StaggerState` must be declared as a `WillowAIPawn.StaggerStateData`

@@ -80,6 +80,11 @@ fn willow(shape: Shape) -> Vec<u8> {
     }
     t.class("ToyAIPawnChild", ai);
     t.class("ToyNativeAIPawn", ai);
+    // The two native descendants of the list carried with the binding, and an invented child of each.
+    let crane = t.class("WillowAICranePawn", ai);
+    t.class("ToyCraneChild", crane);
+    let turret = t.class("DeployableTurretActor", ai);
+    t.class("ToyTurretChild", turret);
     t.class("WillowPlayerPawn", pawn);
     t.class("ToyOtherPawn", pawn);
     t.class("ToyPawnChild", pawn);
@@ -128,6 +133,10 @@ fn fx_with(mode: ParityMode, shape: Shape) -> Fx {
         "WillowAIPawn",
         "ToyAIPawnChild",
         "ToyNativeAIPawn",
+        "WillowAICranePawn",
+        "ToyCraneChild",
+        "DeployableTurretActor",
+        "ToyTurretChild",
         "WillowPlayerPawn",
         "ToyOtherPawn",
         "ToyPawnChild",
@@ -238,7 +247,22 @@ fn a_native_descendant_of_willow_ai_pawn_is_s2() {
     let pawn = x.pawn("ToyNativeAIPawn");
     x.refuses_with(pawn, &["WillowGame.ToyNativeAIPawn"], "the stagger rule of WillowGame.ToyNativeAIPawn");
     assert!(!is_staggered_with(&x.vm, pawn, &[]).unwrap());
-    assert_eq!(NATIVE_AI_PAWN_DESCENDANTS, ["WillowGame.WillowAICranePawn"], "the list carried with the binding");
+    assert_eq!(
+        NATIVE_AI_PAWN_DESCENDANTS,
+        ["WillowGame.WillowAICranePawn", "WillowGame.DeployableTurretActor"],
+        "the list carried with the binding"
+    );
+}
+
+/// S2 through the list carried with the binding: `WillowAICranePawn` and `DeployableTurretActor`, and an invented
+/// child of each (a native class at or above the receiver, below `WillowAIPawn`, holds its own slot).
+#[test]
+fn the_listed_native_descendants_and_their_children_are_s2() {
+    let mut x = fx();
+    for class in ["WillowAICranePawn", "ToyCraneChild", "DeployableTurretActor", "ToyTurretChild"] {
+        let pawn = x.pawn(class);
+        x.refuses(pawn, &format!("the stagger rule of WillowGame.{class}"));
+    }
 }
 
 /// A receiver outside `WillowPawn` is a `VmError::Script`; so is a call with no receiver.

@@ -640,7 +640,9 @@ pub const IS_STAGGERED: [&str; 2] = ["WillowGame.WillowPawn.IsStaggered", "Willo
 
 /// The native (C++) descendants of `WillowAIPawn`, carried with the binding so the class check stays load-free: the
 /// classes under `WillowAIPawn` that `research/native_by_class.json` lists (NATIVE_IS_STAGGERED.md section 3, step 4).
-pub const NATIVE_AI_PAWN_DESCENDANTS: [&str; 1] = ["WillowGame.WillowAICranePawn"];
+/// `DeployableTurretActor` is the second, found in the export super chain (the hub's ruling on review r1 of #620,
+/// applied to #619).
+pub const NATIVE_AI_PAWN_DESCENDANTS: [&str; 2] = ["WillowGame.WillowAICranePawn", "WillowGame.DeployableTurretActor"];
 /// The struct type the AI rule reads.
 pub const STAGGER_STATE_DATA: &str = "WillowGame.WillowAIPawn.StaggerStateData";
 
