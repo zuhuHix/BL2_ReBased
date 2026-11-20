@@ -46,25 +46,14 @@ passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice
 4 ok / 9 NotYet / 1 error. Links 6 and 7 pass `make` (1 of 3, 1 of 4) and stop in `touch` at refusal S (they stopped
 at L before). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-253.
 
-**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on #608 at 193ef94f):** AI-assisted (Claude Code, Opus 5.5).
-The owner's `PostInitAnimTree` after the tree initialisation, and `SkeletalMeshComponent.FindAnimNode` /
-`FindSkelControl` in Off, from NATIVE_TREE_INIT_OWNER_EVENT.md (#612 at 3691317c), replacing #561's owner-event
-refusal. `cargo build --workspace --locked` clean; `cargo test --workspace --locked -j 4` 3,038 passed / 0 failed /
-51 ignored (18 new in `anim_tree_copy`, the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm --all-targets` adds no
-warning in the touched files. Installed Off `--slice-gate` (strict, under the lock; measured before the rebase, on the 383c929c stack) on a throwaway merge with #570
-(d910fa13), #592, #500 and #528, against the same merge without this branch: ok 1 / NotYet 10 / error 3 of 14 on both.
-Links 1, 3, 4, 5, 13 and 14 run 0 of 1 step and now stop at #557's body composition lookup refusal ("needs an
-animation-tree instance for the skeletal mesh"); before, they stopped at the owner's event. The other eight links' stops
-are unchanged. Maya's `.psk` was exported locally with UModel 1590 for the run, as #592 records. ctest and
-verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
-**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on #618 at 3630cd59, with review r1 of #631):** AI-assisted
+**IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on main 92c79308, with reviews r1 and r2 of #631):** AI-assisted
 (Claude Code, Opus 5.5). The owner's `PostInitAnimTree` after the tree initialisation, and
 `SkeletalMeshComponent.FindAnimNode` / `FindSkelControl` in Off (bound for Engine by their package-qualified identity),
 from NATIVE_TREE_INIT_OWNER_EVENT.md (#612 at 3691317c), replacing #561's owner-event refusal. `cargo build --workspace
---locked` clean; `cargo test --workspace --locked -j 4` 3,047 passed / 0 failed / 51 ignored (23 new in
-`anim_tree_copy`, the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm --all-targets` adds no
-warning in the touched files. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge of this branch
-with #592's squash, against the same merge of #618 alone: ok 4 / NotYet 9 / error 1 of 14 on both. Links 1, 3, 4, 5, 13
+--locked` clean; `cargo test --workspace --locked -j 4` 3,199 passed / 0 failed / 51 ignored (26 new in
+`anim_tree_copy`, 3 of them for review r2; the 2 owner-event refusal tests removed); `cargo clippy -p ow-world -p ow-vm
+--all-targets` adds no warning in the touched files. Installed Off `--slice-gate` (strict, under the lock) on this
+branch at its r2 code commit, against main 92c79308: ok 4 / NotYet 10 / error 0 of 14 on both. Links 1, 3, 4, 5, 13
 and 14 now stop at the body's rendering hooks ("InitializeBodyComposition: the body's rendering hooks"); before, they
 stopped at the owner's event. The other eight links' stops are unchanged. Maya's `.psk` was exported locally with
 UModel 1590 for the run, as #592 records. ctest and verify_packages not run (no C++ change). No real-game run; every

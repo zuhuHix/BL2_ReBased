@@ -98,3 +98,21 @@ owner-event refusal is gone with the refusal, and its fixture declares `ParentAn
 `cargo test --workspace --locked` 3,047 passed / 0 failed / 51 ignored. The strict slice gate on #618 plus #592 moves
 links 1, 3, 4, 5, 13 and 14 from the owner's event to the body's rendering hooks; the other eight are unchanged.
 Every rule is still UNVERIFIED.
+
+**Rebased onto main 92c79308 (batch 8, with #608 and #618), and review r2 of #631 (Sol), the fixes:**
+1. The owner event's preflight predicts the two lookups' answers from its own scan, which holds only for the port's
+   handlers. The binding still keeps an earlier registration, and the world now records which handlers it bound (a
+   port-side VM service, not a game structure). The event is admitted only when Engine's two keys resolve to those
+   handlers; any other is `NotYet { NotPorted }` (two new texts), before any write.
+2. `Vm::check_call` now also meets the call entry's two refusals, read only and shared with the call: the script call
+   depth, and the frame's value-slot bounds. With `max_call_depth` 0 the preflight refuses and nothing is copied. The
+   slot bounds are not reached by a synthetic frame in the tests.
+3. The heap outer does not tell the current copy from an earlier copy on the same component, so the world records each
+   copy's root and the objects it made. `FindAnimNode` refuses a tick-list entry outside the current copy (its gather
+   refusal), and `FindSkelControl` refuses a control reached through `ControlHead` or `NextControl` outside it.
+4. The toy `WillowPlayerPawn` event is labelled an UNVERIFIED stand-in where it is defined. The player test says which
+   assertions go through bytecode (the argument, the flag and the two caches) and which call the Rust lookups. The
+   aim-offset find stays out of the bytecode: it needs a `BodyClass != None` guard, an object comparison the test
+   toolkit has no tested form of, and unguarded it would read a None context in the tests where `BodyClass` is None.
+
+Every rule is still UNVERIFIED.
