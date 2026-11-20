@@ -1,6 +1,6 @@
 # The behavior-variable setters of BehaviorProviderDefinition (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-SET-OBJECT-BEHAVIOR-VARIABLE (decision 2026-11-19-NNN, a
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-SET-OBJECT-BEHAVIOR-VARIABLE (decision 2026-11-19-149, a
 placeholder), for slice link 9. **Analyst only:** a different lane implements it (clean room).
 
 **Sources:**
