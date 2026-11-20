@@ -1,4 +1,4 @@
-//! Tests of the behavior-variable setters (decision 2026-11-19-NNN) on an invented `GearboxFramework` package
+//! Tests of the behavior-variable setters (decision 2026-11-19-159) on an invented `GearboxFramework` package
 //! (AGENTS.md rule 9): the value struct, its type enum in an order unlike the game's, the five natives, and a script
 //! caller that grows a local array and fills it as link 9's caller does. AI-assisted (Claude Code).
 

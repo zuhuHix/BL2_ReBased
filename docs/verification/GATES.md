@@ -176,7 +176,7 @@ ignored; clippy flags nothing in the changed files. Installed Off `--slice-gate`
 with #523 and #535 (never pushed; #523's two counter call sites renamed to #518's names for the merge): 1 ok / 3
 NotYet / 10 errors. Link 9 passes `spawn` and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`,
 the argument of `OnSelectedTarget`'s event fire, after the two setter calls. No baseline run without this change. ctest and
-verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-159; logs under
 ignored `local/p2/sbv/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
