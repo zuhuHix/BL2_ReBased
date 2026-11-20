@@ -227,19 +227,27 @@ fn the_skill_world_attaches_a_light_to_a_pawn() {
     assert_eq!(x.get(pawn, "Components"), Value::array(vec![Value::Object(Some(light))]));
 }
 
-/// Without the world's scene layer (the Phaselock world installs none) the rule refuses layer-absent before any write:
-/// the three counters and the component's fields are unchanged.
+/// The skill world's own scene layer: `World::new` installs the empty scene layer in Off (#610, a logged harness
+/// input), so a skill world that adds none itself still has one and the attach answers, with the rule's four
+/// committed writes (the two flags, `Owner`, `Components`) and no draw and no load. A world without the layer, which
+/// `World::new` can no longer build, is #610's own test in `ow-world/src/actors/component_attach_tests.rs`.
 #[test]
-fn without_a_scene_layer_the_attach_refuses_before_any_write() {
+fn the_skill_world_s_own_scene_layer_lets_the_attach_answer() {
     let mut x = fx(ParityMode::Off, false, Inventory::Absent);
     let pawn = x.obj("Engine.Pawn");
     let light = x.obj("Engine.PointLightComponent");
-    let (before, counters) = (x.written(light), x.counters());
-    let n = not_yet(x.attach(pawn, light));
-    assert_eq!(n.missing, Missing::LayerAbsent(ow_inventory::attach_mesh::SCENE_LAYER));
-    assert!(!ow_core::notyet::is_partial_writes(&n.what), "a preflight refusal is unmarked");
-    assert_eq!((x.written(light), x.counters()), (before, counters));
-    assert_eq!(x.get(pawn, "Components"), Value::array(vec![]));
+    x.set(light, "bNeedsReattach", Value::Bool(true));
+    x.set(light, "bNeedsUpdateTransform", Value::Bool(true));
+    let before = x.counters();
+    assert_eq!(x.attach(pawn, light).unwrap(), Value::None);
+    let after = x.counters();
+    assert_eq!(after[0] - before[0], 4, "exactly the four planned writes");
+    assert_eq!((after[1], after[2]), (before[1], before[2]), "no draw and no load");
+    assert_eq!(
+        x.written(light),
+        vec![Value::Object(Some(pawn)), Value::Bool(false), Value::Bool(false), Value::Bool(false)]
+    );
+    assert_eq!(x.get(pawn, "Components"), Value::array(vec![Value::Object(Some(light))]));
 }
 
 /// A light already attached is the rule's detach-before-attach refusal, not read, before any write.

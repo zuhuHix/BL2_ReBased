@@ -61,3 +61,5 @@ NATIVE_ATTACH_MESH_TO_PICKUP.md; it reuses that note's existing implementation.
     than a small change.
   - The slice's worlds use `Engine`'s `Actor`. Whether any other installed package declares a same-keyed
     `AttachComponent` was not checked.
+
+Landing (hub ruling, 2026-11-20): #610 makes `World::new` install the empty scene layer in Off, so a skill world built by `World::new` can no longer lack it; the no-scene-layer refusal is covered by #610's test in `ow-world/src/actors/component_attach_tests.rs`, and this lane's test now asserts that the attach answers in the skill world (`the_skill_world_s_own_scene_layer_lets_the_attach_answer`).
