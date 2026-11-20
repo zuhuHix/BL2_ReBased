@@ -35,6 +35,7 @@ fn engine() -> Vec<u8> {
         "ArrayProperty",
         "ScriptStruct",
         "StructProperty",
+        "IntProperty",
     ]);
     let object = t.class("Object", 0);
     let vector = ow_package::testkit::reflect::toy_struct(&mut t, object, "Vector", None);
@@ -58,9 +59,17 @@ fn engine() -> Vec<u8> {
     t.class("StaticMeshComponent", primitive);
     t.class("ParticleSystemComponent", primitive);
     t.class("ToyCylinderKind", cylinder);
+    // Review r1 of #660, item 2: a primitive whose BulletListener is declared as an int.
+    let int_skip = t.class("ToyIntSkipComponent", primitive);
+    t.prop("Int", int_skip, "BulletListener", 0, 0);
     t.class("DynamicLightEnvironmentComponent", object);
     let actor = t.class("Actor", object);
     t.prop("Struct", actor, "Location", 0, vector);
+    // Review r1 of #660, item 1: a float the radius can be written to, and an object the height cannot.
+    let toy_radius = t.p.next_export() + 1;
+    t.prop("Float", actor, "ToyRadius", 0, 0);
+    let toy_height = t.p.next_export() + 1;
+    t.prop("Object", actor, "ToyHeight", 0, object);
     t.prop("Object", actor, "CollisionComponent", 0, object);
     let array = t.p.next_export();
     t.prop("Array", actor, "Components", 0, array + 1);
@@ -70,14 +79,28 @@ fn engine() -> Vec<u8> {
     let nav = t.class("NavigationPoint", actor);
     t.prop("Object", nav, "CylinderComponent", 0, object);
     t.class("Trigger", actor);
+    let mut on_actor = None;
     for class in [actor, pawn, nav] {
         let spec = FunctionSpec::new(NATIVE_FLAGS, "GetBoundingCylinder");
         let params = [
             Param { flags: CPF_OUT, ..Param::new("Float", "CollisionRadius") },
             Param { flags: CPF_OUT, ..Param::new("Float", "CollisionHeight") },
         ];
-        t.function(class, "GetBoundingCylinder", &params, None, &[], &spec, |_| None);
+        let f = t.function(class, "GetBoundingCylinder", &params, None, &[], &spec, |_| None);
+        on_actor.get_or_insert(f.function);
     }
+    // `ToyAskCylinder`: GetBoundingCylinder(ToyRadius, ToyHeight), from script.
+    let native = on_actor.unwrap();
+    t.function(actor, "ToyAskCylinder", &[], None, &[], &FunctionSpec::new(0x1 | 0x2 | 0x20000, "ToyAskCylinder"), |_| {
+        let mut a = ow_package::testkit::script::Asm::new();
+        a.stmt().final_function(native, |a| {
+            a.instance(toy_radius);
+            a.instance(toy_height);
+        });
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.p.build()
 }
 
@@ -804,4 +827,53 @@ fn an_unrecorded_entry_is_l_before_the_skip_flag() {
         x.set(cyl, "BulletListener", Value::Bool(bit));
         x.refuses(pickup, l(), REFUSAL_L, RECORD);
     }
+    // Review r1 of #660, item 3a: a malformed flag is never read before L.
+    let class = x.vm.space.heap.get(cyl).unwrap().class;
+    let p = x.vm.space.prop(class, SKIP_FIELD).unwrap();
+    *x.vm.space.slot_mut(cyl, PropAddr::scalar(p)).unwrap() = Value::Int(7);
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+}
+
+/// Review r1 of #660, item 2: a `BulletListener` declared as an int is a `VmError::Script` naming it on the live and
+/// template paths, even when its slot holds a bool.
+#[test]
+fn a_non_bool_skip_declaration_is_a_script_error() {
+    let mut x = fx();
+    x.vm.find_class("Engine.ToyIntSkipComponent").unwrap();
+    let c = x.live("Engine.ToyIntSkipComponent");
+    x.set(c, "CollideActors", Value::Bool(true));
+    x.set(c, "bAttached", Value::Bool(true));
+    let class = x.vm.space.heap.get(c).unwrap().class;
+    let p = x.vm.space.prop(class, SKIP_FIELD).unwrap();
+    assert_eq!(x.vm.space.classes.decl(p).map(|d| d.kind.clone()), Some(ow_object::layout::PropKind::Int));
+    *x.vm.space.slot_mut(c, PropAddr::scalar(p)).unwrap() = Value::Bool(true);
+    let pickup = x.live("WillowGame.WillowPickup");
+    x.attach(pickup, c);
+    x.components(pickup, vec![Some(c)]);
+    let r = x.same("live", |x| answer(&x.vm, pickup));
+    script_error(r, SKIP_FIELD);
+    let t = x.template("Engine.Actor");
+    x.components(t, vec![Some(c)]);
+    let r = x.same("template", |x| answer(&x.vm, t));
+    script_error(r, SKIP_FIELD);
+}
+
+/// Review r1 of #660, item 1: from script, a writable radius and a height destination of another kind. Both outs are
+/// checked before either write, so the call fails with the radius property unchanged and nothing counted.
+#[test]
+fn a_bad_height_destination_leaves_the_radius_unwritten() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.attach(pickup, cyl);
+    x.components(pickup, vec![Some(cyl)]);
+    x.set(pickup, "ToyRadius", Value::Float(-3.0));
+    x.answers(pickup, cylinder_box(64.0, 20.0), "the answer the outs would carry");
+    let f = x.vm.find_function("Engine.Actor.ToyAskCylinder").unwrap();
+    let r = x.same("a refused out write", |x| x.vm.call(f, Some(pickup), vec![]).map(|r| r.ret));
+    assert!(!matches!(r, Ok(_) | Err(VmError::NotYet(_))), "the height write is refused: {r:?}");
+    let class = x.vm.space.heap.get(pickup).unwrap().class;
+    let p = x.vm.space.prop(class, "ToyRadius").unwrap();
+    assert_eq!(x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap(), &Value::Float(-3.0), "the radius is unchanged");
 }

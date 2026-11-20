@@ -37,6 +37,9 @@ fn fx() -> Fx {
     let primitive = s.classes.define("Engine.PrimitiveComponent", Some(object), decls).unwrap();
     // A primitive class whose per-component check was not read (lane IMPL-SKIP-FLAG).
     s.classes.define("Engine.SkeletalMeshComponent", Some(primitive), vec![]).unwrap();
+    // Review r1 of #660, item 2: a primitive whose BulletListener is declared as an int.
+    let decls = vec![d(&mut s, "BulletListener", PropKind::Int)];
+    s.classes.define("Test.IntSkipComponent", Some(primitive), decls).unwrap();
     let decls = vec![d(&mut s, "CollisionRadius", PropKind::Float), d(&mut s, "CollisionHeight", PropKind::Float)];
     s.classes.define("Engine.CylinderComponent", Some(primitive), decls).unwrap();
     s.classes.define("Test.AudioComponent", Some(object), vec![]).unwrap();
@@ -179,6 +182,33 @@ fn an_attached_colliding_primitive_reads_the_skip_flag() {
     x.components(t, vec![Some(p), Some(skel)]);
     let before = marks(&x);
     assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3], "bullet listeners are skipped");
+    assert_eq!(marks(&x), before);
+    // Review r1 of #660, item 3b: the clear `CylinderComponent` the note names, in `Components` with
+    // `CollisionComponent` unset (so the cylinder shortcut is not taken): the bounds step's L.
+    let cyl = x.cylinder(64.0, 20.0);
+    x.set(cyl, "bAttached", Value::Bool(true));
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.set(t, "CollisionComponent", Value::Object(None));
+    x.components(t, vec![Some(cyl)]);
+    let before = marks(&x);
+    match extent(&x.vm, t).unwrap_err() {
+        VmError::NotYet(n) => assert_eq!((n.missing, n.what.as_ref()), (Missing::LayerAbsent(BOUNDS_LAYER), REFUSAL_L)),
+        other => panic!("expected L, got {other:?}"),
+    }
+    assert_eq!(marks(&x), before);
+    // Review r1 of #660, item 2: an int declaration holding a bool is a data error naming the field.
+    let odd = x.obj("Test.IntSkipComponent");
+    x.set(odd, "bAttached", Value::Bool(true));
+    x.set(odd, "CollideActors", Value::Bool(true));
+    let class = x.vm.space.heap.get(odd).unwrap().class;
+    let p = x.vm.space.prop(class, "BulletListener").unwrap();
+    *x.vm.space.slot_mut(odd, PropAddr::scalar(p)).unwrap() = Value::Bool(true);
+    x.components(t, vec![Some(odd)]);
+    let before = marks(&x);
+    match extent(&x.vm, t).unwrap_err() {
+        VmError::Script { function, message } => assert!(function.contains("BulletListener") || message.contains("BulletListener"), "{message}"),
+        other => panic!("expected a data error, got {other:?}"),
+    }
     assert_eq!(marks(&x), before);
 }
 

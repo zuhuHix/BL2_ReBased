@@ -67,7 +67,7 @@ use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
-use crate::actors::{attached_to, field, flag, float, object, objects};
+use crate::actors::{attached_to, declared_flag, field, flag, float, object, objects};
 use crate::placement::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, PAWN_RULE_CLASSES, box_cylinder};
 
 /// The record of refusals T, N, L and S.
@@ -127,8 +127,13 @@ fn get_bounding_cylinder(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             message: "the function does not declare two out arguments".to_string(),
         });
     }
-    c.set_out(0, Value::Float(radius))?;
-    c.set_out(1, Value::Float(height))?;
+    // Both destinations are checked before either write, so a bad height destination cannot leave the radius written
+    // (review r1 of #660, item 1).
+    let (radius, height) = (Value::Float(radius), Value::Float(height));
+    c.check_out(0, &radius)?;
+    c.check_out(1, &height)?;
+    c.set_out(0, radius)?;
+    c.set_out(1, height)?;
     Ok(Value::None)
 }
 
@@ -226,7 +231,7 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
         if template(space, this)? {
             // #595's template path: bAttached, CollideActors, the skip check, the component check, then the bounds,
             // which the port does not compute for a template: L.
-            if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? || flag(space, c, SKIP_FIELD)? {
+            if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? || declared_flag(space, c, SKIP_FIELD)? {
                 continue;
             }
             component_check(space, c)?;
@@ -241,7 +246,7 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
             return Err(bounds_refusal());
         }
         // The skip check (lane IMPL-SKIP-FLAG): a bullet listener is left out of the box.
-        if flag(space, c, SKIP_FIELD)? {
+        if declared_flag(space, c, SKIP_FIELD)? {
             continue;
         }
         // The per-component check, right before the box (the hub's ruling on #653).

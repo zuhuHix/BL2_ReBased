@@ -370,7 +370,10 @@ fn actor_rule(vm: &Vm, template: ObjRef, class: &str) -> Result<[f32; 3], VmErro
             )
             .into());
         }
-        if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? || flag(space, c, trace_filter::SKIP_FLAG_FIELD)? {
+        if !flag(space, c, "bAttached")?
+            || !flag(space, c, "CollideActors")?
+            || crate::actors::declared_flag(space, c, trace_filter::SKIP_FLAG_FIELD)?
+        {
             continue;
         }
         crate::world::bounding_cylinder::component_check(space, c)?;

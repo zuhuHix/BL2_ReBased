@@ -97,6 +97,19 @@ fn wrong_kind(space: &ObjectSpace, o: ObjRef, name: &str, wanted: &str, v: &Valu
     )
 }
 
+/// A bool property `name` of `o` whose **declaration** is `PropKind::Bool`, read-only (review r1 of #660, item 2):
+/// another declared kind is a `VmError::Script` naming it, whatever the slot holds; then the slot must hold a bool.
+pub(crate) fn declared_flag(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    let p = prop_of(space, o, name)?;
+    match space.classes.decl(p).map(|d| &d.kind) {
+        Some(ow_object::layout::PropKind::Bool) => flag(space, o, name),
+        other => Err(rule_error(
+            name,
+            format!("{}.{name} is declared as {other:?}, expected a bool", ow_attr::eval::class_path(space, o)),
+        )),
+    }
+}
+
 pub(crate) fn flag(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, VmError> {
     match field(space, o, name)? {
         Value::Bool(b) => Ok(b),

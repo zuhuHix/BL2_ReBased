@@ -54,3 +54,14 @@ The tests that expected S now expect the cylinder's box, L or N.
 - who sets `BulletListener` on an instance.
 
 The test counts and the slice-gate reading are in the GATES row.
+
+**Review round 1** (Sol xhigh):
+- **No partial out write.** The native checks both out destinations before either write, so a bad height destination
+  leaves the radius unwritten. A script-caller regression test asserts the radius property unchanged and the four
+  counters.
+- **The skip flag's declaration.** `actors::declared_flag` requires the declaration to be a bool as well as the
+  value. All three paths use it: the live path, the template path and the spawn extent. Each is tested with an int
+  declaration holding a bool.
+- **Stronger fixtures:**
+  - an unrecorded entry with a malformed flag is still L;
+  - the spawn extent's clear `CylinderComponent` sits in `Components` with `CollisionComponent` unset.
