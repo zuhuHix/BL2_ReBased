@@ -54,7 +54,9 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
    7. (a non-null replacement) with an animation tree (the component's `Animations` is an `AnimTree`), the tree's
       per-bone state is resized
       to the new mesh's reference-skeleton bone count, unless `bKeepSpaceBases` holds and the count is unchanged;
-   8. (a non-null replacement) the bone transforms are rebuilt from the new mesh's reference pose, using the bone
+   8. (a non-null replacement) **corrected by [NATIVE_SKELMESH_MESH_CHANGE.md](NATIVE_SKELMESH_MESH_CHANGE.md)
+      (section 2): the transforms are not rebuilt here; the buffer stays empty until an attach's pose update.** As
+      first written: the bone transforms are rebuilt from the new mesh's reference pose, using the bone
       names, and several
       per-component bone and LOD arrays are rebuilt;
    9. (a non-null replacement) part of the component pass of the tree initialisation runs (the same step NATIVE_COPY_ANIM_TREE.md section 2

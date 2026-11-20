@@ -42,6 +42,14 @@ InitGestaltMeshDataFromOther's one operand order (None, unloaded, class and fiel
 0 errors, the same as main; link 8 passes `make` and stops at `BuildCompositeMesh`'s cold gestalt definition (#632).
 ctest and verify_packages not run (no C++ change). No real-game run.
 
+**ANALYST-SKELMESH-MESH-CHANGE (2026-11-20, pc-hummer, on main df0970ec):** AI-assisted (Claude Code, Opus 5.5).
+Analyst note only (NATIVE_SKELMESH_MESH_CHANGE.md); no code changed, so no test numbers move. Probe (local throwaway
+merge of main 4c4522d7 with #577, #599, #596 and #613, deleted after), installed Off `--slice-gate` strict under the
+machine lock: 4 ok / 10 NotYet / 0 errors without stand-ins (link 8 at `BuildCompositeMesh`'s unloaded definition);
+4 ok / 9 NotYet / 1 error with a gestalt preload and SetSkeletalMesh's mesh-change refusal stubbed (link 8 runs
+`make`, passes both mesh changes in `init` and stops at the unbound `PrimitiveComponent.SetScale(float)`). No real-game run;
+`UNVERIFIED` in game. Decision 2026-11-19-NNN; raw output under ignored `local/analysis/smmc/`.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
