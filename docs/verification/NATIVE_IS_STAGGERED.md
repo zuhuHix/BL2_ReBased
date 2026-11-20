@@ -24,18 +24,28 @@ is UNVERIFIED** in the running game.
 `native function bool IsStaggered()` is declared on `WillowPawn`, and `WillowAIPawn` declares it native again. Both
 register the same exec step. That step reads no arguments and returns what one pawn virtual answers, so the answer
 depends on the receiver's C++ class:
-- **`WillowAIPawn`:** `StaggerState.bIsStaggered`, the first bool of the `StaggerStateData` struct. The read falls on
-  that member once the layout tool's known 4-byte shortfall for `WillowPawn` is added (the same shortfall other notes
-  record). By fit, UNVERIFIED.
+- **`WillowAIPawn`:** `StaggerState.bIsStaggered`, the first bool of the struct `WillowAIPawn.StaggerStateData`.
+  - **The structural oracle:** the read lands on the struct's first bool, at the place where the layout tool puts
+    `StaggerState` plus 4 bytes. That 4-byte shortfall for `WillowPawn` is the one NATIVE_PLAYER_MOVEMENT.md (line 118,
+    the "four bytes off" fields) records.
+  - The fit is evidence about the native's body only, and the port uses no offset (section 3, step 5). By fit,
+    UNVERIFIED.
 - **`WillowPawn` itself:** false. Its slot holds a shared stub that answers zero.
-- **`WillowPlayerPawn`, and any other C++ subclass:** not read. Whether a subclass of `WillowAIPawn` overrides the
-  slot was not checked either.
+- **`WillowPlayerPawn`, and any other C++ subclass:** not read. That includes `WillowAICranePawn`, a native child of
+  `WillowAIPawn` (`research/native_by_class.json` lists natives for it, so it has its own C++ class), whose slot was
+  not read.
 
 **It writes, loads and draws nothing.**
 
-**The state it reads, from the script.** `WillowAIPawn.Stagger` sets `StaggerState.bIsStaggered` true (with `bForced`
-false, the instigator, and `RestaggeredCount` 0). `WillowAIPawn.UnStagger` sets it false (with `bForced` true), under
-an authority test. Nothing else in the nine code packages writes the bool.
+**The state it reads, from the script.**
+- `WillowAIPawn.Stagger` sets `StaggerState.bIsStaggered` true, with `bForced` false, the instigator, and
+  `RestaggeredCount` 0.
+- `WillowAIPawn.UnStagger` sets it false, with `bForced` true. Both writes sit under the script's own test
+  `Role == ROLE_Authority && StaggerState.bIsStaggered`.
+- Those are the only member writes of the bool that the name search found (every function of the nine code packages
+  that mentions `StaggerState`). The search did not separate whole-struct assignments, and `StaggerState` is also
+  handled in `ReplicatedEvent`, so a client's copy can change by replication. "Only `Stagger` and `UnStagger`" holds for
+  the member writes alone.
 
 ## 2. Link 9's call
 
@@ -57,17 +67,33 @@ default's, false in the probe, so the script goes straight to `LiftTarget`. The 
 - **Reference** keeps the stub policy and is unchanged.
 
 **Preflight** (write-free, load-free, RNG-free), in this order; the first failure is the answer:
-1. **The receiver** is set, otherwise a `VmError::Script`.
-2. **S1, an unloaded receiver:** a handle the store has not loaded (`vm.defs.is_unloaded`), or a stand-in with no
-   slots, is `NotYet { NotRead }`, "WillowPawn.IsStaggered: the pawn <path> is not loaded (a load is a write)".
-3. **The class**, by the class table's `by_path` and `is_child_of` only:
-   - a `WillowAIPawn` or a child: the AI rule (step 4). A child is taken to keep `WillowAIPawn`'s slot (UNVERIFIED,
-     open question 1);
-   - exactly `WillowPawn`: answer **false**;
-   - **S2, any other class** (`WillowPlayerPawn` included): `NotYet { NotRead }`, "WillowPawn.IsStaggered: the
-     stagger rule of <class> (its virtual was not read)", record this note.
-4. **The AI rule:** `StaggerState` declared as a struct with a bool `bIsStaggered`, otherwise a `VmError::Script` naming
-   the field. The answer is that bool, read from the resident pawn's slot with `vm.space.read`.
+1. **The receiver** is set, and its class is `WillowPawn` or a child (the class table's `by_path` and `is_child_of`
+   only), as #604's step 1 does. Otherwise a `VmError::Script`.
+2. **S1, an unresident receiver**, with two texts, both `NotYet { NotRead }` on this note's record:
+   - an unloaded handle (`vm.defs.is_unloaded`): "WillowPawn.IsStaggered: the pawn <path> is an unloaded handle (a load
+     is a write)";
+   - a slotless stand-in that the store does not load: "WillowPawn.IsStaggered: the pawn <path> is a stand-in with no
+     properties (an object the store cannot load)", worded as `ow-attr`'s `eval.rs` words that case.
+
+   `StaggerState` is an inline struct of the pawn, so reading it loads nothing. Any read helper that can load
+   (`access::get` and the like) may be reached only after S1.
+3. **The class**, by the class table's `by_path` and `is_child_of` only (hub ruling on #611):
+   - **exactly `WillowAIPawn`, or a script-only child of it:** the AI rule (step 5);
+   - **a native descendant of `WillowAIPawn`**: any class the native table lists, today `WillowAICranePawn`. It is S2:
+     its slot was not read;
+   - **exactly `WillowPawn`:** answer **false**;
+   - **S2, any other child of `WillowPawn`** (`WillowPlayerPawn` included): `NotYet { NotRead }`,
+     "WillowPawn.IsStaggered: the stagger rule of <class> (its virtual was not read)", record this note. A script-only
+     child of `WillowPawn` is S2 too; it is not assumed to answer false.
+4. **Which classes are native** comes from a list carried with the binding, built from `research/native_by_class.json`'s
+   classes under `WillowAIPawn`, so the check stays load-free.
+5. **The AI rule, read by name:**
+   - the field through `vm.space.prop(class, "StaggerState")`;
+   - its declaration a struct of type `WillowAIPawn.StaggerStateData`;
+   - the member through that struct layout's `field("bIsStaggered")`, a bool, as `hit/pools.rs` reads struct members.
+
+   A field that is not declared, a field that is not that struct, or a member that is not a bool is a
+   `VmError::Script` naming it. The answer is that bool, read from the resident pawn's slot. No offset is used.
 
 **The write:** none. The answer is returned, so no refusal is ever marked "stopped after partial writes: " from
 inside it.
@@ -76,10 +102,14 @@ inside it.
 1. a `WillowAIPawn` with `bIsStaggered` clear: false; set: true;
 2. a script subclass of `WillowAIPawn`: the AI rule;
 3. a plain `WillowPawn`, even with a `StaggerState`-like field declared: false;
-4. a `WillowPlayerPawn`, and another `WillowPawn` subclass: S2;
-5. an unloaded pawn handle and a slotless stand-in: S1, nothing loaded (#518's three counters unchanged);
-6. a `StaggerState` of the wrong shape: `VmError::Script`;
-7. a key bound first keeps its binding; under `ParityMode::Reference` nothing new is bound.
+4. a `WillowPlayerPawn`, another `WillowPawn` subclass, and a script-only child of `WillowPawn`: S2;
+5. **an invented native child of `WillowAIPawn`** (listed as native for the test): S2;
+6. a receiver outside `WillowPawn`: `VmError::Script`;
+7. an unloaded pawn handle and a slotless stand-in: S1, each with its own text, nothing loaded (#518's three counters
+   unchanged);
+8. the wrong shape, as three cases: `StaggerState` missing, `StaggerState` not a struct, and `bIsStaggered` not a
+   bool, each a `VmError::Script`;
+9. a key bound first keeps its binding; under `ParityMode::Reference` nothing new is bound.
 
 ## 4. The probe (local, never pushed)
 
@@ -105,9 +135,7 @@ So link 9's next stop is `WillowAIPawn.DropCombatPerch()`.
 
 ## Open questions
 
-1. **Not read:**
-   - `WillowPlayerPawn`'s slot, and whether any C++ subclass of `WillowAIPawn` overrides it;
-   - the authority test's place in `UnStagger` (script, outside this native).
+1. **Not read:** the slots of `WillowPlayerPawn` and of `WillowAICranePawn` (S2 for both).
 2. **UNVERIFIED:** the `StaggerState` fit (the 4-byte `WillowPawn` shortfall).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)

@@ -19,3 +19,16 @@ gives one. Docs only: no code, no dependency, and no bounds check changed.
 - **Probe** (local, never pushed; stand-ins named in the note): installed Off `--slice-gate`, strict, ok 2, notyet 9,
   error 3. Link 9 passes 1 of 2 steps and stops at the unbound `WillowAIPawn.DropCombatPerch()`.
 - **Clean room:** a different lane implements this note.
+
+## Edits: review r1 of #611
+
+- **S2's class set** (hub ruling): the AI rule is for exactly `WillowAIPawn` and its script-only children. A native
+  descendant (today `WillowAICranePawn`) and every other `WillowPawn` child refuse S2.
+- **Step 1** requires a `WillowPawn` receiver, as #604 does.
+- **S1** has two texts, and the read goes by name with no offset. The 4-byte fit is cited
+  (NATIVE_PLAYER_MOVEMENT.md) as evidence about the body only.
+- **Small fixes:**
+  - the struct type is named;
+  - the shape test is split in three, and tests are added for a native child and an outside receiver;
+  - `UnStagger`'s authority test is stated;
+  - the "only writer" claim is narrowed to member writes.
