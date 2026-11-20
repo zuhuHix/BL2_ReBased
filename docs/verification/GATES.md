@@ -541,7 +541,7 @@ otherwise configure prints which group it left out, and everything else still ru
 `-DOW_REQUIRE_TEST_TOOLS=ON`, which turns a group left out into a configure error. CI's step "Case counts of the tests labelled
 needs-*" prints each such entry's case count and fails the job if any of them skipped a case.
 
-**CI legs (since 2026-11-19, decision `docs/decisions/2026-11/2026-11-19-NNN-ci-parallel-ctest-split-lzo-legs-cargo-cache-docs-only-skip.md`):**
+**CI legs (since 2026-11-19, decision `docs/decisions/2026-11/2026-11-19-100-ci-parallel-ctest-split-lzo-legs-cargo-cache-docs-only-skip.md`):**
 ctest runs in parallel (`--parallel` at the runner's core count). The LZO=ON job runs every entry; the LZO=OFF job runs only the
 entries labelled `cxx-binary` (`ctest -L cxx-binary`): those whose command runs `ow-package`, `ow-weapongen` or
 `ow-weapon-firing-test`, found by `tests/CMakeLists.txt` from its own `add_test` calls. The `needs-*` case-count step checks the
