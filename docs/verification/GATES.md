@@ -124,7 +124,7 @@ passed, nav_join 7); clippy no new warnings; `crate_edges_test.py` OK. Installed
 build, under the machine lock): 1 ok / 4 NotYet / 9 errors, as expected with nothing calling the join (the stops are
 main's: `maya:8` `GetOnlineSubsystem`, `SetAnimTreeTemplate`, `CacheWeaponCard`, the bounding-cylinder rule,
 `GetAllMissions`). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/analysis/navjoin/`.
+2026-11-19-155; logs under ignored `local/analysis/navjoin/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

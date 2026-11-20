@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-MAPLOAD-NAVLIST (decision 2026-11-19-NNN, number pending). A level's navigation, cover and pylon
+//! Owner: lane IMPL-MAPLOAD-NAVLIST (decision 2026-11-19-155, number pending). A level's navigation, cover and pylon
 //! lists joined onto the world's, in `ParityMode::Off`, coded from docs/verification/NATIVE_MAP_LOAD.md sections 5 and 6
 //! alone (#536 at d89963fe; clean room: lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR read the executable, this lane did not).
 //! AI-assisted (Claude Code). **Every rule here is UNVERIFIED in the running game.**
