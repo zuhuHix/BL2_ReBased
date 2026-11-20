@@ -55,3 +55,10 @@ maintainer gives one. Written on #618 and rebased onto main 92c79308 after batch
    counters and the name table's length.
 3. **The socket preload reports readable sockets and slotless stand-ins apart** ("N loaded, M already readable, K
    unresolved stand-ins"). A stand-in is left as it is. There is a harness test.
+
+## Edits: review r2 of #641
+
+- **The back link's slot is read in the preflight,** read-only, on the new component's template. The made child takes
+  the template's slots, so a template without that slot now refuses as a `VmError::Script` before the build writes.
+  Before, it failed after the parent's `Attachments` and the child's entry were written. Its regression asserts #518's
+  three counters and the name table's length.

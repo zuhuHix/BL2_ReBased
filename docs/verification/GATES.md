@@ -10,10 +10,6 @@ AI-assisted (Claude Code, Opus 5.5). Link 9's set-up registers the AI holds' nat
 unloaded context resolver `GD_Siren_Skills.Attributes.IsPhaselocked.PawnAttributeContextResolver_0`. UNVERIFIED in
 game.
 
-**IMPL-BODYCOMP-SOCKET-BONE-TABLES (2026-11-20, pc-hummer, on fix/rust-bodycomp-socket-bone-tables, stacked on
-#618 3630cd59):** AI-assisted (Claude Code, Opus 5.5). The body composition's socket attach in Off
-(NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4), and the harness's socket preload (not wired until the rebase onto
-main, which holds #592). `cargo test --workspace`: 3043 passed / 0 failed / 51 ignored (13 new in `ow-world`
 **IMPL-BODYCOMP-SOCKET-BONE-TABLES (2026-11-20, pc-hummer, on fix/rust-bodycomp-socket-bone-tables from main
 92c79308):** AI-assisted (Claude Code, Opus 5.5). The body composition's socket attach in Off
 (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4), and the harness's socket preload beside #592's mesh preload.

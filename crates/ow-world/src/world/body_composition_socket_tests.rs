@@ -503,3 +503,37 @@ fn a_malformed_destination_refuses_before_any_write() {
     assert_eq!(e.vm.space.names.len(), names, "nothing interned");
     assert!(entries(&e, p).is_empty(), "no entry appended");
 }
+
+/// Review r2 of #641: a child template whose `bAttached` reads but which has no slot for `AttachedToSkelComponent`
+/// (the made child takes the template's slots) refuses in the preflight, before the build writes: #518's three
+/// counters and the name table's length unchanged, no entry appended.
+#[test]
+fn a_template_without_the_back_link_slot_refuses_before_any_write() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let head = child(&mut e, "Head_Template");
+    let skel = e.skeletal;
+    let slot_of = |e: &Env, name: &str| {
+        let p = e.vm.space.prop(skel, name).unwrap();
+        e.vm.space.classes.decl(p).unwrap();
+        ow_object::ids::PropAddr::scalar(p)
+    };
+    let back = slot_of(&e, "AttachedToSkelComponent");
+    // Drop slots from the end until the back link's slot is gone while `bAttached` still reads.
+    while e.vm.space.read(head, back).is_ok() {
+        let slots = &mut e.vm.space.heap.get_mut(head).unwrap().slots;
+        assert!(!slots.is_empty(), "the back link's slot could not be removed");
+        slots.pop();
+    }
+    assert!(e.vm.space.read(head, slot_of(&e, "bAttached")).is_ok(), "bAttached must still read for this case");
+    let p = body(&mut e, pt, &[(head, "Shield")]);
+    let before = Counters::read(&e.vm);
+    let names = e.vm.space.names.len();
+    let err = run(&mut e, p).unwrap_err();
+    assert!(matches!(&err, VmError::Script { message, .. } if message.contains("AttachedToSkelComponent cannot be read")), "{err:?}");
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert_eq!(e.vm.space.names.len(), names, "nothing interned");
+    assert!(entries(&e, p).is_empty(), "no entry appended");
+}

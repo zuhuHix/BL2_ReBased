@@ -697,6 +697,13 @@ fn socket_plan(vm: &Vm, x: &Socket, socket: &Value) -> Result<Option<SocketAttac
     let back_link = is_a(vm, x.class, SKELETAL);
     if back_link {
         require_kind(vm, x.class, "AttachedToSkelComponent", Want::Takes(x.pc))?;
+        // The made child takes its template's slots, so the back link's slot must be there to write (review r2 of
+        // #641): read it from the template, read-only, so a template without it refuses before the build writes.
+        let class = class_path(vm, x.class);
+        let p = vm.space.prop(x.class, "AttachedToSkelComponent").ok_or_else(|| script(format!("{class} has no AttachedToSkelComponent")))?;
+        vm.space
+            .read(x.template, PropAddr::scalar(p))
+            .map_err(|e| script(format!("{class}.AttachedToSkelComponent cannot be read on the new component's template: {e}")))?;
     }
     let sa = SocketAttach { parent: x.parent, bone, location, rotation, entry, back_link };
     // The write's values against the heap's write rules (review r1 of #641, item 2), so no write fails after the build
