@@ -33,7 +33,7 @@
 //! ([`particle_activation::ParticleEngineFlags`]); each is logged as UNVERIFIED.
 
 use ow_core::NotYet;
-use ow_object::ids::{ClassId, ObjRef};
+use ow_object::ids::{ClassId, NameId, ObjRef};
 use ow_object::layout::PropKind;
 use ow_object::value::{StructValue, Value};
 use ow_vm::api::Vm;
@@ -233,8 +233,10 @@ struct Plan {
     new: Option<NewComponent>,
     /// The writes up to and including step 7, then the parameter step, then the rest.
     before: Vec<(ObjRef, &'static str, Value)>,
-    /// The `InstanceParameters` value, built whole in the plan (review r1 of #609): the apply phase only writes it.
-    parameter: Option<Value>,
+    /// The `InstanceParameters` value, built whole in the plan (review r1 of #609), and the index of an appended entry
+    /// whose `Name` is still the placeholder because the name table has no "RColor" yet: the apply phase interns the
+    /// name and sets it there before the write (review r2 of #617), so the preflight never interns.
+    parameter: Option<(Value, Option<usize>)>,
     after: Vec<(ObjRef, &'static str, Value)>,
 }
 
@@ -289,8 +291,7 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             (d, Some(NewComponent { class: preload.class, defaults: d, slots }))
         }
     };
-    // Steps 4 to 10 read only. The parameter value is built after them (review r1 of #617), so the parameter name is
-    // interned only after the last refusal.
+    // Steps 4 to 10 read only; the parameter value is built after them (review r1 of #617).
     let (before, after, params, at, colour) = {
         // 4. Step 4, the rarity choice (only the choice; the colour is step 7).
         let world = crate::globals::world_globals(vm)?;
@@ -376,12 +377,11 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
         (before, after, params, at, colour)
     };
     // The parameter value, built whole in the plan (review r1 of #609) after the last NotYet (review r1 of #617). The
-    // name is interned only when the table has no spelling of it yet: a name-table change, no object, generator draw
-    // or store load, which #518's counters count; every refusal before it changes nothing at all.
-    let color_name = match vm.space.names.find(COLOR_PARAMETER) {
-        Some(n) => n,
-        None => vm.space.names.intern(COLOR_PARAMETER),
-    };
+    // preflight never interns (review r2 of #617; interning is a side effect, decision 2026-11-15-23): the name is
+    // found, or an appended entry holds the placeholder `NameId::NONE` until the apply phase interns the real one.
+    // `fits` checks the value with the placeholder, which has the same kind.
+    let found = vm.space.names.find(COLOR_PARAMETER);
+    let color_name = found.unwrap_or(NameId::NONE);
     let vm: &Vm = vm;
     let mut params = params;
     let vector = |base: &Value| {
@@ -403,9 +403,10 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             params.push(with_fields(vm, &zero, &[("Name", Value::Name(color_name)), ("ParamType", Value::Byte(PARAM_VECTOR)), ("Vector", v)])?);
         }
     }
+    let patch = (at.is_none() && found.is_none()).then(|| params.len() - 1);
     let value = Value::array(params);
     super::fits(vm, c, "InstanceParameters", &value, WHAT)?;
-    let parameter = Some(value);
+    let parameter = Some((value, patch));
     Ok(Plan { component: c, new, before, parameter, after })
 }
 
@@ -432,7 +433,18 @@ fn apply(vm: &mut Vm, pickup: ObjRef, plan: Plan) -> Result<(), VmError> {
     for (o, name, v) in plan.before {
         write(vm, remap(o), name, remap_value(v), WHAT)?;
     }
-    if let Some(v) = plan.parameter {
+    if let Some((v, patch)) = plan.parameter {
+        // The appended entry's real name, interned only now, in the write phase (review r2 of #617).
+        let v = match patch {
+            Some(i) => {
+                let name = vm.space.names.intern(COLOR_PARAMETER);
+                let mut items = v.elements().map(<[Value]>::to_vec).unwrap_or_default();
+                let entry = items.get(i).ok_or_else(|| bad(WHAT, "the planned parameter entry is missing"))?;
+                items[i] = with_fields(vm, entry, &[("Name", Value::Name(name))])?;
+                Value::array(items)
+            }
+            None => v,
+        };
         write(vm, c, "InstanceParameters", v, WHAT)?;
     }
     for (o, name, v) in plan.after {

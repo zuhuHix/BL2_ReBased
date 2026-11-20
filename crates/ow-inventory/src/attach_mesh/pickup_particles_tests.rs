@@ -139,12 +139,18 @@ fn engine() -> Vec<u8> {
     t.prop("Byte", param, "ParamType", 0, 0);
     t.prop("Struct", param, "Vector", 0, vector);
     toy_array_of(&mut t, psc, "InstanceParameters", "Struct", param);
+    let other = toy_struct(&mut t, psc, "ToyOtherParam", None);
+    t.prop("Name", other, "Name", 0, 0);
+    t.prop("Byte", other, "ParamType", 0, 0);
+    t.prop("Struct", other, "Vector", 0, vector);
     t.class("WillowInventory", actor);
     let definition = t.class("WillowInventoryDefinition", object);
     t.prop("Struct", definition, "PickupFlagOffset", 0, vector);
     t.prop("Struct", definition, "LootBeamColorOverride", 0, color);
     let holder = t.class("ToyHolder", object);
     t.prop("Object", holder, "Target", 0, system);
+    // Links `ToyOtherParam` (review r2 of #617's wrong-type entry).
+    t.prop("Struct", holder, "ToyOther", 0, other);
     let target = t.p.add_export(system, "ToyTemplate", {
         let mut p = ints(&[0]);
         p.extend_from_slice(&t.none);
@@ -763,16 +769,17 @@ fn the_lod_bias_and_the_forced_lowest_lod_are_ported() {
     refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
 }
 
-/// Review r1 of #617, item 2: step 11 itself, with `game_thread_lod` clear (so the level for location before the delay
-/// does not run) and two LOD distances. The forced lowest LOD asks for level 1: `LODLevel` 1 plans, `LODLevel` 0 is
-/// `LOD_CHANGE`. With the forced lowest LOD clear, a non-automatic `LODMethod` and no bias, no level is checked. The
-/// LOD bias is not tested: it stays unreachable while more than one distance needs the camera layer for the level for
-/// location, and with one distance every level clamps to 0.
+/// Review r1 of #617, item 2, and review r2, item 2: step 11 itself, with `game_thread_lod` clear (so the level for
+/// location before the delay does not run) and two LOD distances. The forced lowest LOD asks for level 1: `LODLevel` 1
+/// plans, `LODLevel` 0 is `LOD_CHANGE`. With a bias of −1 step 16 moves that level 1 to 0: `LODLevel` 0 plans and 1 is
+/// `LOD_CHANGE`. With the forced lowest LOD clear, a non-automatic `LODMethod` and no bias, no level is checked.
 #[test]
 fn step_11_sets_the_forced_lowest_level() {
     let lowest = ParticleEngineFlags { force_lowest: true, game_thread_lod: false, ..ParticleEngineFlags::SLICE };
     let fixed = ParticleEngineFlags { game_thread_lod: false, ..ParticleEngineFlags::SLICE };
-    for (flags, level, ok) in [(lowest, 1, true), (lowest, 0, false), (fixed, 0, true), (fixed, 1, true)] {
+    let biased = ParticleEngineFlags { lod_bias: -1, ..lowest };
+    let cases = [(lowest, 1, true), (lowest, 0, false), (biased, 0, true), (biased, 1, false), (fixed, 0, true), (fixed, 1, true)];
+    for (flags, level, ok) in cases {
         let mut x = slice_with(Opts { flags: Some(flags), ..OPTS });
         let t = x.template;
         x.set(t, "LODDistances", Value::array(vec![Value::Float(0.0), Value::Float(100.0)]));
@@ -780,7 +787,7 @@ fn step_11_sets_the_forced_lowest_level() {
         x.set(c, "bAutoActivate", Value::Bool(true));
         x.set(c, "LODLevel", Value::Int(level));
         if ok {
-            x.call().unwrap_or_else(|e| panic!("force_lowest {} level {level}: {e}", flags.force_lowest));
+            x.call().unwrap_or_else(|e| panic!("force_lowest {} bias {} level {level}: {e}", flags.force_lowest, flags.lod_bias));
             assert_eq!(x.get(c, "LODLevel"), Value::Int(level), "no level written");
         } else {
             refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
@@ -817,14 +824,37 @@ fn the_parameter_value_is_built_in_the_plan() {
     let mut x = slice();
     let p = x.pickup;
     let plan = preflight(&mut x.vm, p).unwrap();
-    let planned = plan.parameter.clone().expect("a parameter value");
+    let (planned, patch) = plan.parameter.clone().expect("a parameter value");
+    assert_eq!(patch, Some(0), "the appended entry waits for its name");
     let items = planned.elements().expect("an array").to_vec();
-    let name = x.vm.space.names.find(COLOR_PARAMETER).expect("interned by the plan");
-    assert!(items.iter().any(|e| matches!(field(&x.vm, e, "Name"), Ok(Value::Name(n)) if n == name)), "{items:?}");
+    // The preflight interns nothing (review r2 of #617): the appended entry holds the placeholder name.
+    assert_eq!(x.vm.space.names.find(COLOR_PARAMETER), None, "not interned by the plan");
+    assert!(items.iter().any(|e| matches!(field(&x.vm, e, "Name"), Ok(Value::Name(n)) if n == ow_object::ids::NameId::NONE)), "{items:?}");
     let mut y = slice();
     y.call().unwrap();
     let c = y.component();
     assert_eq!(y.get(c, "InstanceParameters").elements().map(<[Value]>::len), Some(items.len()));
+    // The apply phase interned the real name and set it on the appended entry.
+    let name = y.vm.space.names.find(COLOR_PARAMETER).expect("interned by the write");
+    let written = y.get(c, "InstanceParameters").elements().unwrap().to_vec();
+    assert!(written.iter().any(|e| matches!(field(&y.vm, e, "Name"), Ok(Value::Name(n)) if n == name)), "{written:?}");
+}
+
+/// Review r2 of #617, item 1: a held component whose `InstanceParameters` holds an entry with the expected fields but
+/// another struct type passes the field reads and fails the late `fits`. The call is a data error, and the name table
+/// and #518's counters are unchanged: no "RColor" was interned.
+#[test]
+fn a_late_fits_failure_interns_no_parameter_name() {
+    let mut x = slice();
+    let c = x.held();
+    let ty = x.vm.space.classes.struct_by_path("Engine.ParticleSystemComponent.ToyOtherParam").expect("the toy struct");
+    let wrong = x.vm.space.classes.zero_value(&PropKind::Struct(ty));
+    x.put(c, "InstanceParameters", Value::array(vec![wrong]));
+    let names = x.vm.space.names.len();
+    assert_eq!(x.vm.space.names.find(COLOR_PARAMETER), None);
+    data_error(&mut x, "InstanceParameters cannot take the value");
+    assert_eq!(x.vm.space.names.find(COLOR_PARAMETER), None, "not interned");
+    assert_eq!(x.vm.space.names.len(), names, "the name table is unchanged");
 }
 
 /// The note's test 5: a template object (the class default itself, held): SetTemplate's own writes only, no

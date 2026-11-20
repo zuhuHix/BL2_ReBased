@@ -74,3 +74,24 @@ Gates for this round: `cargo test --workspace -j 2` 2,505 passed / 0 failed / 46
 `ow-inventory` 244 passed. `crate_edges_test.py` OK. Clippy has no hits in the touched files. The slice gate was not
 rerun: the changed paths are reached only with an audio-enabled held component or the forced lowest LOD, and links
 6 and 7 stop at `touch` as before.
+
+### Review r2 of #617 (FIX)
+
+AI-assisted (Claude Code, Claude Opus 5.5). Off only, **UNVERIFIED** in the running game. This round corrects two
+claims of r1 above.
+1. **The preflight never interns "RColor".** r1's item 3 still interned the name in the preflight when it was absent,
+   before `fits` checked the finished array. So a failed `fits` left the name interned, and a preflight that planned
+   interned it too. Interning is a side effect (decision 2026-11-15-23), so neither counts as write-free. Now the plan
+   only looks the name up. When the table lacks it, the appended entry is built and checked with the placeholder
+   `NameId::NONE`, which has the same kind. The apply phase interns the real name and sets it on that entry just
+   before writing `InstanceParameters`. The claim is now exact: **the preflight changes nothing, the name table
+   included, whether it refuses, fails or plans.** A regression test puts an entry of another struct type (same
+   fields) on a held component. The field reads pass, `fits` fails (a data error), and the name table and #518's
+   counters are unchanged. The plan test checks for the placeholder, and checks that the write sets the real name.
+2. **The LOD bias is tested through step 11.** r1's item 2 said the bias could not be reached. That was wrong: with the
+   forced lowest LOD, step 11 asks for level count − 1, and step 16 adds the bias. A new case uses `force_lowest`,
+   `game_thread_lod` clear, two distances and `lod_bias` −1. Step 11 asks for level 1 and the bias moves it to 0, so
+   `LODLevel` 0 plans and `LODLevel` 1 is `LOD_CHANGE`. The test comment says the same.
+
+Gates for this round: `cargo test --workspace -j 2` 2,506 passed / 0 failed / 46 ignored; `ow-inventory` 245 passed. `crate_edges_test.py`
+OK. Clippy has no hits in the touched files.
