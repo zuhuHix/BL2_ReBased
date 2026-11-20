@@ -54,6 +54,24 @@
 //! `SlotNodes` empty, on authority `RepMeshScale` = the made component's `Scale`, and `CollisionComponent` = the mesh
 //! when `bUseMeshForCollision`.
 //!
+//! **The socket attach to a skeletal parent** (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES, coded from
+//! NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4 alone at c376's head 05b96935; clean room: this lane did not
+//! analyse the executable; **UNVERIFIED**). It replaces #529's refusal "the socket and bone tables of <mesh>" at the
+//! same site. The preflight ([`socket_plan`]):
+//! 1. the remap through the parent's `GestaltData.SocketMappings`, the first matching entry;
+//! 2. a None name or a parent with no `SkeletalMesh` is false (the owner retry), with nothing of the mesh read;
+//! 3. the sockets, in order, to the first match (`skeletal::find_socket`), by name id;
+//! 4. on a miss, the bones (`skeletal::find_bone`); no bone is false;
+//! 5. the gates, in order: the new component's `bAttached` (the detach, `NotRead`), the parent's
+//!    `ParentAnimComponent` (`NotRead`), a component of exactly `Engine.DecalComponent` with the parent's
+//!    `bAcceptsDynamicDecals` clear (`NotRead`), and the parent's `bAttached` (the placement, `LayerAbsent`,
+//!    [`BONE_TRANSFORM_LAYER`]); the parent's unidentified state test is taken as passing;
+//! 6. the destinations' shapes.
+//!
+//! On a true attach the build writes the parent's `Attachments` entry (overwrite or append; unit scale) and, for a
+//! skeletal component, its `AttachedToSkelComponent`, in place of the owner retry ([`write_socket_attach`]). Every
+//! refusal comes from the build-wide preflight, so a refused build writes nothing.
+//!
 //! **The writes** ([`build`]), in the note's order: per made attachment, in list order: a component is made from its
 //! template, its entry appended, its collision set, attached (the parent's attach, else the owner retry), then the
 //! pawn's `PostInitBodyComposition` writes; a switch's entry; a custom head or skin's entry. After the walk, on
@@ -67,7 +85,7 @@ use std::rc::Rc;
 
 use ow_core::NotYet;
 use ow_object::heap::Origin;
-use ow_object::ids::{ClassId, ObjRef, PropAddr, StructId};
+use ow_object::ids::{ClassId, NameId, ObjRef, PropAddr, StructId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
@@ -137,10 +155,18 @@ pub fn releasing_old(field: &str) -> String {
     format!("InitializeBodyComposition: releasing the old {field}")
 }
 
-/// `"InitializeBodyComposition: the socket and bone tables of <mesh>"`.
-pub fn socket_tables(mesh: &str) -> String {
-    format!("InitializeBodyComposition: the socket and bone tables of {mesh}")
-}
+/// The socket attach's note (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES).
+pub const RECORD_SOCKETS: &str = "docs/verification/NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md";
+/// The socket attach's refusals (the note's section 4, rule 5).
+pub const SOCKET_DETACH: &str = "InitializeBodyComposition: the detach before a socket attach";
+pub const SOCKET_PARENT_ANIM: &str =
+    "InitializeBodyComposition: a socket attach to a component with a parent animation component";
+pub const SOCKET_DECAL: &str = "InitializeBodyComposition: a decal attached to a skeletal component";
+pub const SOCKET_PLACEMENT: &str = "InitializeBodyComposition: the placement of a socket attach";
+/// The layer the placement needs, as NATIVE_SET_SKELETAL_MESH.md names it.
+pub const BONE_TRANSFORM_LAYER: &str = "a skeletal mesh component's bone transforms";
+/// The decal class the note's decal case tests (exactly).
+pub const DECAL: &str = "Engine.DecalComponent";
 
 /// A parent component that is not a skeletal component (the note reads only the actor and skeletal targets).
 pub fn other_target(class: &str) -> String {
@@ -393,11 +419,27 @@ struct MeshRest {
     tree: Option<ObjRef>,
 }
 
+/// A socket attach to a skeletal parent that answered true (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4): the
+/// parent's `Attachments` entry and the back link, decided in the preflight.
+#[derive(Debug, Clone)]
+struct SocketAttach {
+    /// The parent attachment's index (its made component takes the entry).
+    parent: usize,
+    bone: NameId,
+    location: [f32; 3],
+    /// Pitch, yaw, roll.
+    rotation: [i32; 3],
+    /// The parent's `Attachments` entry struct.
+    entry: StructId,
+    /// `AttachedToSkelComponent` = the parent (the new component is a `SkeletalMeshComponent`).
+    back_link: bool,
+}
+
 /// What the walk makes for one attachment (its record).
 #[derive(Debug, Clone)]
 enum Made {
     No,
-    Component { template: ObjRef, class: ClassId, collision: u8, post: PostInit },
+    Component { template: ObjRef, class: ClassId, collision: u8, post: PostInit, socket: Option<SocketAttach> },
     /// A switch's record holds its own parent.
     Switch { parent: Parent },
     /// A custom head or skin: an entry, but not made.
@@ -546,6 +588,163 @@ fn write_mesh_rest(vm: &mut Vm, owner: ObjRef, made: ObjRef, m: &MeshRest, autho
     Ok(())
 }
 
+/// One socket attach's inputs: the parent attachment's index, its template and class, and the new component's.
+struct Socket {
+    parent: usize,
+    pt: ObjRef,
+    pc: ClassId,
+    template: ObjRef,
+    class: ClassId,
+}
+
+fn sockets_not_read(what: &'static str) -> VmError {
+    NotYet::not_read(what, RECORD_SOCKETS).into()
+}
+
+/// A bool property of `o` as it stands; a missing or non-bool one is `VmError::Script`.
+fn bool_prop(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    match read_prop(vm, o, name)? {
+        Some(Value::Bool(b)) => Ok(b),
+        Some(other) => Err(script(format!("{}.{name} holds {}, not a bool", class_path(vm, class), other.kind_name()))),
+        None => Err(script(format!("{} has no {name}", class_path(vm, class)))),
+    }
+}
+
+/// An object property of `o` as it stands; a missing or non-object one is `VmError::Script`.
+fn object_prop(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    match read_prop(vm, o, name)? {
+        Some(Value::Object(x)) => Ok(x),
+        Some(other) => Err(script(format!("{}.{name} holds {}, not an object", class_path(vm, class), other.kind_name()))),
+        None => Err(script(format!("{} has no {name}", class_path(vm, class)))),
+    }
+}
+
+/// Rule 1, the remap: the first `GestaltData.SocketMappings` entry whose `OriginalSocketName` is `name` gives its
+/// `MangledSocketName`; with no match the name stays.
+fn remap(vm: &Vm, pt: ObjRef, name: NameId) -> Result<NameId, VmError> {
+    let Some(data) = read_prop(vm, pt, "GestaltData")? else {
+        return Err(script(format!("{} has no GestaltData", class_path(vm, vm.space.heap.get(pt)?.class))));
+    };
+    let list = field(vm, &data, "SocketMappings", "GestaltDataContainer")?;
+    let entries = list.elements().ok_or_else(|| script("GestaltDataContainer.SocketMappings is not an array".into()))?;
+    for e in entries {
+        let from = field(vm, e, "OriginalSocketName", "SocketRemapEntry")?;
+        let to = field(vm, e, "MangledSocketName", "SocketRemapEntry")?;
+        match (from, to) {
+            (Value::Name(f), Value::Name(t)) if f == name => return Ok(t),
+            (Value::Name(_), Value::Name(_)) => {}
+            _ => return Err(script("a SocketRemapEntry holds a non-name".into())),
+        }
+    }
+    Ok(name)
+}
+
+/// The skeletal component's socket attach, planned (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4, rules 1 to 6):
+/// `Ok(None)` is its false (the owner retry). Reads only: nothing is written, loaded, drawn or interned.
+fn socket_plan(vm: &Vm, x: &Socket, socket: &Value) -> Result<Option<SocketAttach>, VmError> {
+    let Value::Name(asked) = socket else {
+        return Ok(None);
+    };
+    // 1. The remap. 2. The early exits: a None name, or no mesh.
+    let name = remap(vm, x.pt, *asked)?;
+    if is_none_name(vm, &Value::Name(name)) {
+        return Ok(None);
+    }
+    let Some(mesh) = object_prop(vm, x.pt, "SkeletalMesh")? else {
+        return Ok(None);
+    };
+    // 3. The sockets, in order, to the first match. 4. The bones, on a miss.
+    let (bone, location, rotation) = match crate::world::skeletal::find_socket(vm, mesh, name)? {
+        Some(found) => {
+            let l = found.socket.location;
+            let r = found.socket.rotation;
+            // Added to the zero offsets the body composition passes; the socket's scale is not used.
+            (found.bone, [0.0 + l[0], 0.0 + l[1], 0.0 + l[2]], [r[0].wrapping_add(0), r[1].wrapping_add(0), r[2].wrapping_add(0)])
+        }
+        None => match crate::world::skeletal::find_bone(vm, mesh, name)? {
+            Some(_) => (name, [0.0; 3], [0; 3]),
+            None => return Ok(None),
+        },
+    };
+    // 5. The attach's gates, in the note's order. The parent's state test is taken as passing (UNVERIFIED).
+    if vm.defs.is_unloaded(&vm.space, x.template) {
+        return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, x.template))));
+    }
+    if bool_prop(vm, x.template, "bAttached")? {
+        return Err(sockets_not_read(SOCKET_DETACH));
+    }
+    if object_prop(vm, x.pt, "ParentAnimComponent")?.is_some() {
+        return Err(sockets_not_read(SOCKET_PARENT_ANIM));
+    }
+    if class_path(vm, x.class).eq_ignore_ascii_case(DECAL) && !bool_prop(vm, x.pt, "bAcceptsDynamicDecals")? {
+        return Err(sockets_not_read(SOCKET_DECAL));
+    }
+    if bool_prop(vm, x.pt, "bAttached")? {
+        return Err(NotYet::layer_absent(SOCKET_PLACEMENT, BONE_TRANSFORM_LAYER, RECORD_SOCKETS).into());
+    }
+    // 6. The writes' destinations, checked so no write fails: the parent's `Attachments` and its entry's five fields,
+    // and the new component's `AttachedToSkelComponent`.
+    let p = vm.space.prop(x.pc, "Attachments").ok_or_else(|| script(format!("{} has no Attachments", class_path(vm, x.pc))))?;
+    let entry = match vm.space.classes.decl(p).map(|d| &d.kind) {
+        Some(PropKind::Array(inner)) => match inner.as_ref() {
+            PropKind::Struct(id) => *id,
+            _ => return Err(script(format!("{}.Attachments is not an array of structs", class_path(vm, x.pc)))),
+        },
+        _ => return Err(script(format!("{}.Attachments is not an array", class_path(vm, x.pc)))),
+    };
+    let zero = vm.space.classes.zero_value(&PropKind::Struct(entry));
+    for f in ["Component", "BoneName"] {
+        field(vm, &zero, f, "Attachment")?;
+    }
+    for (f, parts) in [("RelativeLocation", ["X", "Y", "Z"]), ("RelativeRotation", ["Pitch", "Yaw", "Roll"]), ("RelativeScale", ["X", "Y", "Z"])] {
+        let v = field(vm, &zero, f, "Attachment")?;
+        for part in parts {
+            field(vm, &v, part, f)?;
+        }
+    }
+    let back_link = is_a(vm, x.class, SKELETAL);
+    if back_link {
+        require_kind(vm, x.class, "AttachedToSkelComponent", Want::Takes(x.pc))?;
+    }
+    Ok(Some(SocketAttach { parent: x.parent, bone, location, rotation, entry, back_link }))
+}
+
+/// The socket attach's writes (the note's section 4, "The writes"): `parent`'s `Attachments` entry for `child` (an
+/// overwrite of the entry already naming `child`, else an append), then the back link.
+fn write_socket_attach(vm: &mut Vm, parent: ObjRef, child: ObjRef, sa: &SocketAttach) -> Result<(), VmError> {
+    let mut e = vm.space.classes.zero_value(&PropKind::Struct(sa.entry));
+    set_field(vm, &mut e, "Component", Value::Object(Some(child)), "Attachment")?;
+    set_field(vm, &mut e, "BoneName", Value::Name(sa.bone), "Attachment")?;
+    let put = |vm: &Vm, e: &mut Value, f: &str, parts: [&str; 3], values: [Value; 3]| -> Result<(), VmError> {
+        let mut v = field(vm, e, f, "Attachment")?;
+        for (part, x) in parts.into_iter().zip(values) {
+            set_field(vm, &mut v, part, x, f)?;
+        }
+        set_field(vm, e, f, v, "Attachment")
+    };
+    put(vm, &mut e, "RelativeLocation", ["X", "Y", "Z"], sa.location.map(Value::Float))?;
+    put(vm, &mut e, "RelativeRotation", ["Pitch", "Yaw", "Roll"], sa.rotation.map(Value::Int))?;
+    put(vm, &mut e, "RelativeScale", ["X", "Y", "Z"], [1.0f32; 3].map(Value::Float))?;
+    let class = vm.space.heap.get(parent)?.class;
+    let p = vm.space.prop(class, "Attachments").ok_or_else(|| script(format!("{} has no Attachments", class_path(vm, class))))?;
+    let mut list = vm.space.read(parent, PropAddr::scalar(p))?.clone();
+    let at = list.elements().and_then(|items| {
+        items.iter().position(|v| field(vm, v, "Component", "Attachment").is_ok_and(|c| object_of(&c) == Some(child)))
+    });
+    let items = list.array_mut().ok_or_else(|| script(format!("{}.Attachments is not an array", class_path(vm, class))))?;
+    match at {
+        Some(i) => items[i] = e,
+        None => items.push(e),
+    }
+    vm.space.write(parent, PropAddr::scalar(p), list)?;
+    if sa.back_link {
+        write_prop(vm, child, "AttachedToSkelComponent", Value::Object(Some(parent)))?;
+    }
+    Ok(())
+}
+
 /// The preflight (module documentation): reads only, writes and loads nothing.
 pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
     let Some(owner) = i.owner else {
@@ -684,6 +883,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 require_prop(vm, class, "Owner")?;
                 let socket = field(vm, &cd, "MeshSocketName", "ComponentData")?;
                 let has_socket = !is_none_name(vm, &socket);
+                let mut socket_attach = None;
                 let skeletal_parent = match parent {
                     Parent::Owner => {
                         if has_socket {
@@ -702,11 +902,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                             if vm.defs.is_unloaded(&vm.space, *pt) {
                                 return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, *pt))));
                             }
-                            // No mesh asset: the skeletal attach answers false and the owner retry takes it.
-                            if let Some(mesh) = read_prop(vm, *pt, "SkeletalMesh")?.and_then(|v| object_of(&v)) {
-                                let path = crate::world::pawn_meshes::handle_path(vm, mesh);
-                                return Err(NotYet::layer_absent(socket_tables(&path), MESH_LAYER, RECORD).into());
-                            }
+                            // The skeletal component's socket attach (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section
+                            // 4): `None` is its false, and the owner retry takes the attachment.
+                            socket_attach = socket_plan(vm, &Socket { parent: b, pt: *pt, pc: *pc, template, class }, &socket)?;
                         }
                         true
                     }
@@ -759,7 +957,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 if !render_hooks_answered() {
                     return Err(NotYet::layer_absent(RENDER_HOOKS, RENDER_LAYER, RECORD).into());
                 }
-                made.push(Made::Component { template, class, collision, post });
+                made.push(Made::Component { template, class, collision, post, socket: socket_attach });
             }
         }
     }
@@ -796,7 +994,9 @@ fn entry_from(vm: &Vm, plan: &Plan, data: &Value, copied: &[&str]) -> Result<Val
 
 fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan) -> Result<(), VmError> {
     let mut set = set;
+    let mut made_objects: Vec<Option<ObjRef>> = Vec::with_capacity(plan.made.len());
     for (a, m) in plan.attachments.iter().zip(&plan.made) {
+        made_objects.push(None);
         match m {
             Made::No => {}
             Made::Switch { .. } => {
@@ -808,8 +1008,11 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                 let e = entry_from(vm, plan, &a.data, &["Name", "Type", "BodyCompositionIndex"])?;
                 append(vm, owner, &mut set, e)?;
             }
-            Made::Component { template, class, collision, post } => {
+            Made::Component { template, class, collision, post, socket } => {
                 let made = make_component(vm, owner, *template)?;
+                if let Some(last) = made_objects.last_mut() {
+                    *last = Some(made);
+                }
                 let mut e = entry_from(vm, plan, &a.data, &["Name", "Type", "DeleteByOwner", "ComponentData", "BodyCompositionIndex"])?;
                 let mut cd = field(vm, &e, "ComponentData", "InstanceDataUnion")?;
                 set_field(vm, &mut cd, "Component", Value::Object(Some(made)), "ComponentData")?;
@@ -827,7 +1030,17 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                         write_prop(vm, owner, f, Value::Bool(true))?;
                     }
                 }
-                attach_to_actor(vm, owner, made)?;
+                match socket {
+                    Some(sa) => {
+                        let parent = made_objects
+                            .get(sa.parent)
+                            .copied()
+                            .flatten()
+                            .ok_or_else(|| script("a socket attach's parent was not made".into()))?;
+                        write_socket_attach(vm, parent, made, sa)?;
+                    }
+                    None => attach_to_actor(vm, owner, made)?,
+                }
                 if let Some(m) = &post.mesh {
                     write_mesh_rest(vm, owner, made, m, plan.authority)?;
                 }

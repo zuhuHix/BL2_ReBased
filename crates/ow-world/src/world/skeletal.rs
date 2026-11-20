@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use ow_core::{DetMap, NotYet};
 use ow_object::heap::Origin;
-use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::ids::{NameId, ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
@@ -281,30 +281,84 @@ fn ints(vm: &Vm, v: &Value, names: [&str; 3], what: &str) -> Result<[i32; 3], Vm
     Ok(out)
 }
 
-/// `mesh`'s sockets, in its `Sockets` order (module documentation). Reads only.
-pub fn sockets(vm: &Vm, mesh: ObjRef) -> Result<Vec<MeshSocket>, VmError> {
+/// A `Sockets` entry as the socket object it names, refused as the module documentation says: a None entry is
+/// `NotYet { NotRead }`, an unloaded one `NotYet { LayerAbsent }` (the store's load), another kind `VmError::Script`.
+fn socket_object(vm: &Vm, item: &Value) -> Result<ObjRef, VmError> {
+    let s = match item {
+        Value::Object(Some(s)) => *s,
+        Value::Object(None) => {
+            return Err(NotYet::not_read(format!("{UNIT}: a None entry in a mesh's Sockets"), RECORD).into());
+        }
+        other => return Err(script(format!("a Sockets entry holds {}, not an object", other.kind_name()))),
+    };
+    loaded(vm, s, "socket")?;
+    Ok(s)
+}
+
+fn name_id(v: &Value, what: &str) -> Result<NameId, VmError> {
+    match v {
+        Value::Name(n) => Ok(*n),
+        other => Err(script(format!("{what} holds {}, not a name", other.kind_name()))),
+    }
+}
+
+fn read_socket(vm: &Vm, s: ObjRef) -> Result<MeshSocket, VmError> {
+    Ok(MeshSocket {
+        name: name_of(vm, &prop(vm, s, "SocketName")?, "SocketName")?,
+        bone: name_of(vm, &prop(vm, s, "BoneName")?, "BoneName")?,
+        location: floats(vm, &prop(vm, s, "RelativeLocation")?, ["X", "Y", "Z"], "RelativeLocation")?,
+        rotation: ints(vm, &prop(vm, s, "RelativeRotation")?, ["Pitch", "Yaw", "Roll"], "RelativeRotation")?,
+        scale: floats(vm, &prop(vm, s, "RelativeScale")?, ["X", "Y", "Z"], "RelativeScale")?,
+    })
+}
+
+fn mesh_sockets(vm: &Vm, mesh: ObjRef) -> Result<Vec<Value>, VmError> {
     check_mesh(vm, mesh)?;
     let list = prop(vm, mesh, "Sockets")?;
-    let items = list.elements().ok_or_else(|| script("Sockets is not an array".to_string()))?;
+    Ok(list.elements().ok_or_else(|| script("Sockets is not an array".to_string()))?.to_vec())
+}
+
+/// `mesh`'s sockets, in its `Sockets` order (module documentation). Reads only.
+pub fn sockets(vm: &Vm, mesh: ObjRef) -> Result<Vec<MeshSocket>, VmError> {
+    let items = mesh_sockets(vm, mesh)?;
     let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        let s = match item {
-            Value::Object(Some(s)) => *s,
-            Value::Object(None) => {
-                return Err(NotYet::not_read(format!("{UNIT}: a None entry in a mesh's Sockets"), RECORD).into());
-            }
-            other => return Err(script(format!("a Sockets entry holds {}, not an object", other.kind_name()))),
-        };
-        loaded(vm, s, "socket")?;
-        out.push(MeshSocket {
-            name: name_of(vm, &prop(vm, s, "SocketName")?, "SocketName")?,
-            bone: name_of(vm, &prop(vm, s, "BoneName")?, "BoneName")?,
-            location: floats(vm, &prop(vm, s, "RelativeLocation")?, ["X", "Y", "Z"], "RelativeLocation")?,
-            rotation: ints(vm, &prop(vm, s, "RelativeRotation")?, ["Pitch", "Yaw", "Roll"], "RelativeRotation")?,
-            scale: floats(vm, &prop(vm, s, "RelativeScale")?, ["X", "Y", "Z"], "RelativeScale")?,
-        });
+    for item in &items {
+        let s = socket_object(vm, item)?;
+        out.push(read_socket(vm, s)?);
     }
     Ok(out)
+}
+
+/// A socket [`find_socket`] found, with its `BoneName` as the name table's id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FoundSocket {
+    pub socket: MeshSocket,
+    pub bone: NameId,
+}
+
+/// The first of `mesh`'s sockets whose `SocketName` is `name` (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES,
+/// NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4, rule 3). It walks `Sockets` in order, refuses each entry it
+/// reaches as [`sockets`] does, compares name ids (the table's one id per text: the base case-blind, the instance
+/// number exactly), and reads nothing after the first match. Reads only; loads and interns nothing.
+pub fn find_socket(vm: &Vm, mesh: ObjRef, name: NameId) -> Result<Option<FoundSocket>, VmError> {
+    for item in &mesh_sockets(vm, mesh)? {
+        let s = socket_object(vm, item)?;
+        if name_id(&prop(vm, s, "SocketName")?, "SocketName")? != name {
+            continue;
+        }
+        let socket = read_socket(vm, s)?;
+        let bone = name_id(&prop(vm, s, "BoneName")?, "BoneName")?;
+        return Ok(Some(FoundSocket { socket, bone }));
+    }
+    Ok(None)
+}
+
+/// The index of the bone of `mesh`'s reference skeleton named `name` (the note's section 4, rule 4): each bone's text
+/// is looked up in the name table without interning (`NameTable::find`, its own split into base and number) and
+/// compared by id, so a text the table has never seen is no name. Reads only.
+pub fn find_bone(vm: &Vm, mesh: ObjRef, name: NameId) -> Result<Option<usize>, VmError> {
+    let skeleton = reference_skeleton(vm, mesh)?;
+    Ok(skeleton.bones.iter().position(|b| vm.space.names.find(&b.name) == Some(name)))
 }
 
 #[cfg(test)]

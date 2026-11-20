@@ -105,10 +105,14 @@ fn env_with(reattach: bool) -> Env {
         let object = t.p.add_import("Core", "Class", core, "Object");
         let component = t.class("ActorComponent", object);
         t.prop("Object", component, "Owner", 0, object);
+        // The socket attach's fields (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES).
+        t.prop("Bool", component, "bAttached", 0, 0);
         let primitive = t.class("PrimitiveComponent", component);
         for flag in FLAGS {
             t.prop("Bool", primitive, flag, 0, 0);
         }
+        t.prop("Bool", primitive, "bAcceptsDynamicDecals", 0, 0);
+        t.class("DecalComponent", primitive);
         t.prop("Object", primitive, "LightEnvironment", 0, object);
         t.prop("Float", primitive, "Scale", 0, 0);
         let cylinder = t.class("CylinderComponent", primitive);
@@ -116,6 +120,38 @@ fn env_with(reattach: bool) -> Env {
         let mesh = t.class("MeshComponent", primitive);
         let skeletal = t.class("SkeletalMeshComponent", mesh);
         t.prop("Object", skeletal, "SkeletalMesh", 0, object);
+        // The socket attach's component fields and the mesh and socket classes (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES).
+        let vector = toy_struct(&mut t, skeletal, "ToyVector", None);
+        for c in ["X", "Y", "Z"] {
+            t.prop("Float", vector, c, 0, 0);
+        }
+        let rotator = toy_struct(&mut t, skeletal, "ToyRotator", None);
+        for c in ["Pitch", "Yaw", "Roll"] {
+            t.prop("Int", rotator, c, 0, 0);
+        }
+        let remap = toy_struct(&mut t, skeletal, "SocketRemapEntry", None);
+        t.prop("Name", remap, "OriginalSocketName", 0, 0);
+        t.prop("Name", remap, "MangledSocketName", 0, 0);
+        let gestalt = toy_struct(&mut t, skeletal, "GestaltDataContainer", None);
+        toy_array_of(&mut t, gestalt, "SocketMappings", "Struct", remap);
+        t.prop("Struct", skeletal, "GestaltData", 0, gestalt);
+        let entry = toy_struct(&mut t, skeletal, "Attachment", None);
+        t.prop("Object", entry, "Component", 0, component);
+        t.prop("Name", entry, "BoneName", 0, 0);
+        t.prop("Struct", entry, "RelativeLocation", 0, vector);
+        t.prop("Struct", entry, "RelativeRotation", 0, rotator);
+        t.prop("Struct", entry, "RelativeScale", 0, vector);
+        toy_array_of(&mut t, skeletal, "Attachments", "Struct", entry);
+        t.prop("Object", skeletal, "AttachedToSkelComponent", 0, skeletal);
+        t.prop("Object", skeletal, "ParentAnimComponent", 0, skeletal);
+        let skel_mesh = t.class("SkeletalMesh", object);
+        toy_array_of(&mut t, skel_mesh, "Sockets", "Object", object);
+        let socket = t.class("SkeletalMeshSocket", object);
+        t.prop("Name", socket, "SocketName", 0, 0);
+        t.prop("Name", socket, "BoneName", 0, 0);
+        t.prop("Struct", socket, "RelativeLocation", 0, vector);
+        t.prop("Struct", socket, "RelativeRotation", 0, rotator);
+        t.prop("Struct", socket, "RelativeScale", 0, vector);
         t.prop("Bool", skeletal, "bSkipAllUpdateWhenPhysicsAsleep", 0, 0);
         // The animation classes the lookups read (NATIVE_ANIM_NODE_LOOKUP.md), with only the fields they read.
         let node = t.class("AnimNode", object);
@@ -196,6 +232,8 @@ fn env_with(reattach: bool) -> Env {
         let skeletal = t.p.add_import("Core", "Class", engine, "SkeletalMeshComponent");
         let cylinder = t.p.add_import("Core", "Class", engine, "CylinderComponent");
         let holder = t.p.add_import("Core", "Class", engine, "ToyTemplateHolder");
+        let skel_mesh = t.p.add_import("Core", "Class", engine, "SkeletalMesh");
+        let socket = t.p.add_import("Core", "Class", engine, "SkeletalMeshSocket");
         let anim_tree = t.p.add_import("Core", "Class", engine, "AnimTree");
         let component = |t: &mut ScriptToy, class: i32, name: &str| {
             let mut payload = ow_package::testkit::ints(&[0, 0]);
@@ -223,6 +261,17 @@ fn env_with(reattach: bool) -> Env {
         }
         payload.extend_from_slice(&t.none);
         t.p.add_export(holder, "Holder", payload);
+        // A mesh export whose one socket is a subobject the store leaves unloaded until asked (lane
+        // IMPL-BODYCOMP-SOCKET-BONE-TABLES): the skeleton source answers for it by its leaf name.
+        let m = t.p.next_export();
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.array_tag("Sockets", 1, &ow_package::testkit::ints(&[m + 1])));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(skel_mesh, "ToyBodyMesh", payload);
+        let mut empty = ow_package::testkit::ints(&[0]);
+        empty.extend_from_slice(&t.none);
+        let cold = t.p.add_export(socket, "Socket_Cold", empty);
+        t.p.set_outer(cold, m);
         t.build()
     };
     let files: Vec<(&str, &[u8])> =
@@ -274,6 +323,9 @@ fn env_with(reattach: bool) -> Env {
     let skeletal = vm.find_class(SKELETAL).unwrap();
     vm.find_class(PRIMITIVE).unwrap();
     vm.find_class(MESH_COMPONENT).unwrap();
+    for c in ["Engine.SkeletalMesh", "Engine.SkeletalMeshSocket", DECAL] {
+        vm.find_class(c).unwrap();
+    }
     let actor = class(&mut vm, "Engine.Actor", object, &[
         ("Role", PropKind::Byte { enum_: None }),
         ("bNetDirty", PropKind::Bool),
@@ -817,7 +869,7 @@ fn prop_object(e: &Env, o: ObjRef, name: &str) -> ObjRef {
 /// The preflight's other refusals, each its named kind and text, write-free.
 #[test]
 fn the_named_refusals_are_write_free() {
-    for case in ["rebuild", "client", "template", "hit", "actor socket", "socket tables", "parent link", "other target"] {
+    for case in ["rebuild", "client", "template", "hit", "actor socket", "parent link", "other target"] {
         let mut e = env();
         // The later attachments' refusals need the earlier made component past the rendering hooks.
         answer_render_hooks_for_tests(true);
@@ -830,12 +882,6 @@ fn the_named_refusals_are_write_free() {
             "template" => (vec![attachment(&mut e, A { ty: ACTOR_TEMPLATE, ..A::default() })], "NotRead", OBJECT_TEMPLATES.into()),
             "hit" => (vec![attachment(&mut e, A { template: Some(cyl), hit_region: Some(thing), ..A::default() })], "NotRead", HIT_REGION.into()),
             "actor socket" => (vec![attachment(&mut e, A { template: Some(cyl), socket: "Hips", ..A::default() })], "NotRead", ACTOR_SOCKETS.into()),
-            "socket tables" => {
-                put(&mut e.vm, skel, "SkeletalMesh", Value::Object(Some(thing)));
-                let a0 = attachment(&mut e, A { template: Some(skel), ..A::default() });
-                let a1 = attachment(&mut e, A { base: 0, template: Some(cyl), socket: "Spine3", ..A::default() });
-                (vec![a0, a1], "LayerAbsent", socket_tables(&crate::world::pawn_meshes::handle_path(&e.vm, thing)))
-            }
             "parent link" => {
                 let head = make(&mut e.vm, e.skeletal, "Head_Template");
                 let a0 = attachment(&mut e, A { template: Some(skel), ..A::default() });
@@ -870,10 +916,7 @@ fn the_named_refusals_are_write_free() {
         let before = Counters::read(&e.vm);
         let err = run(&mut e, p).unwrap_err();
         let VmError::NotYet(n) = &err else { panic!("{case}: {err:?}") };
-        match want_kind {
-            "LayerAbsent" => assert!(matches!(&n.missing, Missing::LayerAbsent(l) if *l == MESH_LAYER), "{case}: {n:?}"),
-            _ => assert_eq!(n.missing, Missing::NotRead, "{case}"),
-        }
+        assert_eq!((want_kind, &n.missing), ("NotRead", &Missing::NotRead), "{case}");
         assert_eq!(n.what, want, "{case}");
         assert_eq!(Counters::read(&e.vm), before, "{case}: write-free");
     }
@@ -1569,3 +1612,7 @@ fn a_scale_that_is_not_a_float_fails_before_any_write() {
     assert!(entries(&e, p).is_empty());
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
 }
+
+/// The socket attach (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES, NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4.1).
+#[path = "body_composition_socket_tests.rs"]
+mod socket_tests;

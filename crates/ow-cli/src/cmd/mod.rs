@@ -14,6 +14,7 @@ pub mod items_roll;
 pub mod items_stats;
 pub mod kismet;
 pub mod mission;
+pub mod mesh_sockets;
 pub mod mover;
 pub mod objects;
 pub mod properties;
