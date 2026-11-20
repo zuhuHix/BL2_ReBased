@@ -10,19 +10,22 @@ implements it). The decision number is pending from the hub (three digits); NNN 
   - it runs at the component's attach, at a mesh change's re-attach, and from `ForceSkelUpdate` on an attached
     component. `UpdateAnimations` only ticks the tree's nodes;
   - an unattached component's buffer is never filled.
-- **What the slice meets:** the port never sets a made component's `bAttached`, so no slice link reaches the layer
-  today. The probe shows the socket attaches' parent unattached, links 6 and 7 stopping before the skeletal entry, and
-  link 8's mesh change on an unattached component. The nearest consumers are the unbound `UpdateAnimations` (Maya's
+- **What the slice meets:** the port never sets `bAttached` on a made primitive or skeletal component (only #605's
+  AI component copies get it), so no slice link reaches the layer today. The probe shows the socket attaches' parent
+  unattached, links 6 and 7 stopping before the skeletal entry, and link 8's mesh change on an unattached component. The nearest consumers are the unbound `UpdateAnimations` (Maya's
   `UpdateAnimSets`) and `ForceSkelUpdate` (`PlayWeaponEquip`).
 - **Proposed Off answer:**
-  - #569's layer gains each bone's bind pose (from the `.psk` reader, UNVERIFIED as the reference skeleton) and a
-    read-only composed reference pose;
-  - one gate for consumers: no mesh or `bSkipUpdateSkelPose` keeps the buffer; an unloaded mesh is `NotRead`; a
-    parent animation component and a tree (without `bForceRefpose`) are `LayerAbsent`; a discarded root motion is
-    `NotPorted`; otherwise the reference pose;
+  - #569's layer gains each bone's bind pose (`Option` per bone, from the `.psk` reader, UNVERIFIED as the reference
+    skeleton) and a read-only composed reference pose, with its formula and cache;
+  - consumers read `SpaceBases` as stored (`stored_space_bases`, a declaration check only), never a computed pose;
+  - a separate `pose_update` for the fill paths only, with tests only for now: no mesh or `bSkipUpdateSkelPose` is
+    `Skip`; an unloaded mesh is `NotRead`; a parent animation component and a tree (with `bForceRefpose`, an int,
+    zero) are `LayerAbsent`; a discarded root motion is `NotPorted`; otherwise the reference pose. Only `SpaceBases`
+    would be written;
   - `ForceSkelUpdate`: nothing when unattached, `NotRead` when attached;
   - `UpdateAnimations`: nothing with no tree, `NotPorted` with one;
-  - Reference unchanged; a test list of nine.
+  - every read field's kind stated, each with its `VmError::Script`;
+  - Reference unchanged; a test list of ten.
 - **Sources:**
   - the records (#636, #639, #635, #569);
   - the script (the callers and the bone readers);
@@ -34,3 +37,14 @@ implements it). The decision number is pending from the hub (three digits); NNN 
 - **Verified:** nothing in the running game. Every rule is **UNVERIFIED**.
 - **Probe:** main 241a6c47, 4 ok / 9 NotYet / 1 error, with and without local stand-ins (never pushed).
 - **Index:** a NATIVE_INDEX row and a GATES row were added.
+- **Review r1 of #646** (FIX):
+  1. the consumers' read and the fill paths' pose update are split;
+  2. every field's kind is given, `bForceRefpose` as an int;
+  3. the `bAttached` claim is scoped to made primitive and skeletal components (#605's AI copies set it), and the
+     actor attach's writes are listed;
+  4. the bind-pose data shape is given: an `Option` per bone, `Eq` dropped, the three literals, the cache, the formula
+     and the `BoneAtom` mapping;
+  5. the unloaded mesh is `NotRead` in the pose update, while #569's direct calls keep `LayerAbsent`;
+  6. the root-motion refusal is a numbered rule;
+  7. only `SpaceBases` is written;
+  8. #636 and #639 are open; #645, not #641, implements #635.

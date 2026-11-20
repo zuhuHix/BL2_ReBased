@@ -1,14 +1,19 @@
 # The bone-transform layer: a skeletal component's current bone transforms (2026-11-20)
 
 AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BONE-TRANSFORM-LAYER (decision 2026-11-19-NNN, number
-pending). Analyst only: a different lane implements it (clean room). This thread implemented #627/#642 and #641 and
-wrote the socket note (#636), which end at this layer; it implements nothing here.
+pending). Analyst only: a different lane implements it (clean room). This thread wrote the socket note (#636) and
+implemented #627/#642 and an earlier SetSkeletalMesh mesh-change branch, which meet this layer; it implements nothing
+here.
 
-**Why.** Three accepted notes stop at "the current bone transforms":
-- NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md (#636): the socket attach's placement branch, run when the parent is itself
-  attached;
-- NATIVE_COMPONENT_BOUNDS.md (#639): a skeletal component's bounds on the physics-asset branch;
-- NATIVE_SKELMESH_MESH_CHANGE.md (#635): the mesh change empties the buffer, and only a re-attach refills it.
+**Why.** Three notes stop at "the current bone transforms":
+- NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md (#636, accepted, **open**: queued for landing batch 10): the socket attach's
+  placement branch, run when the parent is itself attached;
+- NATIVE_COMPONENT_BOUNDS.md (#639, **open**): a skeletal component's bounds on the physics-asset branch;
+- NATIVE_SKELMESH_MESH_CHANGE.md (#635, on main): the mesh change empties the buffer, and only a re-attach refills it.
+  Its implementation is #645 (**open**); main still has #599's blanket mesh-change refusal.
+
+This note can land before or after any of them: it changes no code, and each of them refers to this layer by name
+only.
 
 This note settles how that buffer is filled, which slice links reach it, and a minimal Off answer. It does not repeat
 those notes; they keep their own rules and refer here.
@@ -89,22 +94,26 @@ change. **An attached one is filled at attach,** and again on each forced update
 
 ## 4. What the slice meets
 
-1. **The port never sets a made component's `bAttached`.** The actor attach writes `Owner` and the `Components` list
-   only, so every path in section 3 that needs an attached component is unreachable in the port today.
+1. **The port never sets `bAttached` on a made primitive or skeletal component.** The port's actor attach (#511,
+   `ow-inventory` `attach_mesh.rs`) writes `bNeedsReattach` and `bNeedsUpdateTransform` false, `Owner`, and the
+   actor's `Components` list, and leaves `bAttached` as it was. Only the spawn's component pass (#605,
+   `ow-world` `actors/component_attach.rs`) sets `bAttached` true, and only on copies of the two AI component classes
+   (`GearboxFramework.AIComponent` and `WillowGame.WillowAIComponent`), which are not skeletal. So every path in
+   section 3 that needs an attached skeletal component is unreachable in the port today.
 2. **The six Maya links (1, 3, 4, 5, 13, 14):** the socket attach's placement branch needs the parent attached. The probe
    (section 5) logged attachment 0's `bAttached` **clear** at all eight socket attaches, so the branch is skipped and
    the layer is not reached. In the running game the pawn's components are attached at spawn, so the branch most
    likely runs there (UNVERIFIED). Maya's mesh has a tree, so her buffer would come from the tree, which this layer
    cannot answer.
 3. **Links 6 and 7:** #639's skeletal entry is not reached (they refuse at the cylinder entry first).
-4. **Link 8:** on main its two mesh changes meet #599's blanket refusal, which names this layer. Under #635's rule (#641)
-   the component is unattached, so the change neither needs nor reaches the layer.
+4. **Link 8:** on main its two mesh changes meet #599's blanket refusal, which names this layer. Under #635's rule (its
+   implementation #645, open) the component is unattached, so the change neither needs nor reaches the layer.
 5. **Script callers on slice paths:** `WillowPawn.UpdateAnimSets` calls `Mesh.UpdateAnimations`, and
    `WillowWeapon.PlayWeaponEquip` calls `Arms.ForceSkelUpdate`. Both are **unbound** in the port, so each would
    stop as an unbound native once the stops before it lift. Their Off answers are simple (section 6).
 
-**So today no slice link reaches the layer.** The nearest consumers are those two natives and, once attachment is
-ported, the attach itself.
+**So today no slice link reaches the layer.** The nearest consumers are those two natives and, once the attach of a
+skeletal component is ported, the attach itself.
 
 ## 5. Probe (local, never pushed)
 
@@ -124,73 +133,133 @@ logged, and the `Parent` link passed), the gate is still 4 / 9 / 1:
 
 ## 6. Proposed Off answer (for a separate implementer)
 
-**Every rule below is UNVERIFIED.** **Reference is unchanged.** The record of each new `NotYet` is this note.
+**Every rule below is UNVERIFIED.** **Reference is unchanged.** The record of each new `NotYet` is this note. Two
+separate answers, which must not be merged (review r1 of #646, item 1):
+- **6.2, the read:** what a consumer gets when it asks for the current transforms. It is the stored buffer, never a
+  computed pose;
+- **6.3, the pose update:** what a **fill path** would write. Only the fill paths (section 3) may call it, and none of
+  them is ported yet, so it ships with its tests only.
 
-### 6.1 The layer: a read-only reference pose
+### 6.1 The data: the bind pose in #569's layer
 
-Add to #569's skeletal-mesh data layer (`ow-world` `world/skeletal.rs`):
-- **the bind pose per bone.** `SkeletonBone` gains each bone's reference rotation and position relative to its
-  parent. ow-cli's `.psk` source already parses them: `ow-assets` `skeletal::Bone::bind`, "relative to the parent".
-  That the export's bind pose equals the mesh's reference skeleton is **UNVERIFIED** (the export's mirroring is
-  undone by the reader, as for the mesh layer). A source without bind data answers "unknown", which is
-  `LayerAbsent` with the layer's own text.
-- **`skeletal::reference_space_bases(vm, mesh) -> Result<Vec<BoneAtom>, VmError>`**, read-only, cached by mesh
-  identity like `reference_skeleton`. It composes each bone's bind transform onto its parent's composed one, root
-  first, with scale 1. It is section 2's steps 6 (reference pose) and 8 with no tree and no skeletal controls. Every
-  bone counts as required: an UNVERIFIED simplification, because `RequiredBones` is LOD-dependent and native.
+`ow-world` `world/skeletal.rs`, today `SkeletonBone { name, parent }` and `ReferenceSkeleton { bones }`, both deriving
+`Eq`:
+- **`SkeletonBone` gains `bind: Option<BoneBind>`.** `BoneBind { rotation: [f32; 4], translation: [f32; 3] }` is the
+  bone's reference transform relative to its parent: rotation `(x, y, z, w)`, translation in uu, in `ow-assets`'
+  convention (`skeletal::BoneTransform`: `p_parent = q p q* + t`, Hamilton quaternions). "Unknown" lives **per bone**:
+  `None` means the source gave no bind data for that bone.
+- Because `f32` has no `Eq`, `SkeletonBone` and `ReferenceSkeleton` drop `Eq` and keep `PartialEq`. Every
+  `Eq`-requiring use must change; none is known in the tree besides the derives.
+- **The three struct literals that change** (each gains `bind`):
+  - `ow-cli` `cmd/skeletal_source.rs` (the `.psk` source). It fills `bind: Some(..)` from `ow-assets`
+    `skeletal::Bone::bind`, which that reader already parses and has checked against UModel's own export (its module
+    documentation). That this bind pose equals the mesh's reference skeleton is **UNVERIFIED**;
+  - `ow-world` `world/skeletal_tests.rs` and `world/anim_tree_copy_tests.rs`: `bind: None` unless a test needs it.
 
-### 6.2 Who may use it, and when it refuses
+**The composed reference pose:** `skeletal::reference_space_bases(vm, mesh) -> Result<Rc<Vec<SpaceBase>>, VmError>`,
+read-only. Here `SpaceBase { rotation: [f32; 4], translation: [f32; 3], scale: f32 }`.
+- **The formula, root first:** for the root, `q_cs = q_local` and `t_cs = t_local`. For any other bone with parent
+  `p`, `q_cs = q_cs(p) · q_local` and `t_cs = t_cs(p) + q_cs(p) t_local q_cs(p)*`, where `·` is the Hamilton
+  product. The scale is 1 for every bone.
+- **Every bone counts as required** (an UNVERIFIED simplification: `RequiredBones` depends on the LOD and is native).
+- **Refusals:** any bone with `bind: None` is `NotYet { LayerAbsent }` with #569's layer text (`skeletal::LAYER`).
+  The mesh and source checks are #569's own (`reference_skeleton`'s).
+- **The cache:** a new per-mesh cache beside `reference_skeleton`'s, a `DetMap` by identity holding the composed
+  `Rc<Vec<SpaceBase>>`. A second ask of the same mesh computes nothing and asks the source nothing, because
+  `reference_skeleton` itself is cached.
+- **The mapping onto `Object.BoneAtom`**, for a fill path that writes the buffer: `Rotation` is a `Quat` struct `{X, Y,
+  Z, W}` from `rotation[0..4]`; `Translation` is a `Vector` `{X, Y, Z}` from `translation`; `Scale` is a float from
+  `scale`. The member names and kinds are checked against the declared `Object.BoneAtom` (else `VmError::Script`).
 
-A consumer that needs the component's current transforms (the three notes above, and the natives below) asks a
-single gate, `skeletal::current_space_bases(vm, component)`. Its rules, in this order, are write-free, load-free and
-RNG-free:
-1. no `SkeletalMesh`, or `bSkipUpdateSkelPose` set: the caller's own "no update" case. The buffer stays as it is,
-   and the gate returns the component's current `SpaceBases`, read only;
-2. the mesh unresident: `NotYet { NotRead }`, "the bone-transform layer: an unloaded mesh (a load is a write)";
-3. `ParentAnimComponent` set: `NotYet { LayerAbsent("the bone-transform layer's parent copy") }`, because the bones
-   come from the parent;
-4. `Animations` set and `bForceRefpose` clear: `NotYet { LayerAbsent("the animation tree's pose") }`, because the
-   tree's evaluation is not ported. **That is Maya's case**, and every slice component with a tree;
-5. otherwise, the reference pose of 6.1, as the buffer's new value. The caller writes it into `SpaceBases`, in its own
-   write phase. The `SpaceBases` declaration must be an array of `Object.BoneAtom` (else `VmError::Script`).
+### 6.2 The read: the buffer as stored (for consumers)
 
-**Not ported, and refused where they would matter:**
-- the update-rate and not-rendered skips (section 2, step 5) are taken as not skipping;
-- `bForceDiscardRootMotion`'s root reset and `RootBoneTranslation`: with the flag set, `NotYet { NotPorted }`, "the
-  bone-transform layer: the discarded root motion";
-- the skeletal controls: they come only with a tree, which rule 4 already refuses.
+`skeletal::stored_space_bases(vm, component) -> Result<Vec<Value>, VmError>`. Read-only, load-free, RNG-free and
+intern-free. Its only rule: `SpaceBases` declared on the component's class as an array of `Object.BoneAtom`, else a
+`VmError::Script` naming it. It returns the entries **as stored**, possibly empty. It never computes a pose.
 
-### 6.3 The two script natives
+The consumers keep their own rules over what it returns. For example, #636's placement checks the bone index
+against its length, and #639's physics-asset branch reads each body's bone from it. An unattached component's empty
+buffer stays empty to them, as in the native.
 
-- **`SkeletalMeshComponent.ForceSkelUpdate()`** in Off, through the keep-existing binding:
-  - `bAttached` clear: nothing, as in the native. That is every component the port makes today;
+### 6.3 The pose update (for fill paths only; tests only for now)
+
+`skeletal::pose_update(vm, component) -> Result<PoseUpdate, VmError>`, write-free. It is the plan a fill path
+writes in its own write phase, where `PoseUpdate` is `Skip` (write nothing) or `Write(Rc<Vec<SpaceBase>>)` (the new
+`SpaceBases`).
+
+**Field kinds** (review r1 of #646, item 2), each read by name on the component's class. Another declaration, or none,
+is a `VmError::Script` naming the field:
+- `SkeletalMesh`, `Animations` and `ParentAnimComponent`: objects;
+- `bSkipUpdateSkelPose` and `bForceDiscardRootMotion`: bools;
+- `bForceRefpose`: an **int**, as #511's `SetForceRefPose` declares and writes it (`ow-inventory` `attach_mesh.rs`):
+  non-zero means set;
+- `SpaceBases`: an array of `Object.BoneAtom` (6.2's check).
+
+**Rules, in this order.** The first that applies is the answer:
+1. no `SkeletalMesh`, or `bSkipUpdateSkelPose` set: `Skip`;
+2. the mesh not resident (an unloaded or failed handle, or a slotless stand-in): `NotYet { NotRead }`, "the
+   bone-transform layer: the mesh is an unloaded handle (a load is a write)". The residency check comes first, as in
+   #635's rows 5 and 6, so this answer is `NotRead`. A direct call of #569's functions on an unresident mesh keeps
+   #569's own kind (`LayerAbsent`, the store's load);
+3. `ParentAnimComponent` set: `NotYet { LayerAbsent("the bone-transform layer's parent copy") }`, because the bones come
+   from the parent;
+4. `Animations` set and `bForceRefpose` zero: `NotYet { LayerAbsent("the animation tree's pose") }`, because the tree's
+   evaluation is not ported. That is Maya's case, and every slice component with a tree;
+5. `bForceDiscardRootMotion` set: `NotYet { NotPorted }`, "the bone-transform layer: the discarded root motion" (the
+   root reset and `RootBoneTranslation`);
+6. otherwise: `Write(reference_space_bases(mesh))` (6.1).
+
+**What a fill path writes** (UNVERIFIED port answer, review r1 of #646, item 7): only `SpaceBases`, set to the
+planned entries. The port does **not** write the native's `bRecentlyRendered` refresh, `LocalAtoms` (neither its resize
+nor its entries), `RootBoneTranslation`, or the "buffer reset" flag (section 2, steps 2, 3 and 7). The update-rate and
+not-rendered skips (step 5) are taken as not skipping. The skeletal controls come only with a tree, which rule 4
+refuses.
+
+### 6.4 The two script natives
+
+- **`SkeletalMeshComponent.ForceSkelUpdate()`** in Off, through the keep-existing binding. `bAttached` is declared as
+  a bool, else `VmError::Script`:
+  - `bAttached` clear: nothing, as in the native. That is every skeletal component the port makes today;
   - `bAttached` set: `NotYet { NotRead }`, "ForceSkelUpdate on an attached component (the tree tick, the LOD choice,
-    the pose update and the transform update)". It can be lifted to rule 5 of 6.2 for a tree-less component once the
-    transform update has a port answer.
-- **`SkeletalMeshComponent.UpdateAnimations()`** in Off:
+    the pose update and the transform update)". It can be lifted to 6.3 for a tree-less component once the transform
+    update has a port answer.
+- **`SkeletalMeshComponent.UpdateAnimations()`** in Off. `Animations` is declared as an object, else
+  `VmError::Script`:
   - `Animations` None: nothing;
   - `Animations` set: `NotYet { NotPorted }`, "UpdateAnimations: the tree nodes' ticks". The tag write comes first in
     the native, so it is part of the refused step: nothing is written.
 
-**The attach** (registration) stays unported. Making components attached is a host decision beyond this note. Until
-then, the consumers' placement branches stay unreached in the port, as section 4 says.
+**The attach** (registration) of a skeletal component stays unported. Making those components attached is a host
+decision beyond this note. Until then, the consumers' placement branches stay unreached in the port, as section 4 says.
 
-### 6.4 Test list
+### 6.5 Test list
 
 On synthetic classes and an invented skeleton source (`package()` / `tag()`, every value invented):
-1. `reference_space_bases` on a three-bone chain with invented bind rotations and positions: each component-space
-   transform is the parent's composed with the bone's own. The root equals its bind transform, and every scale is 1;
-2. a source without bind data: `LayerAbsent` with the layer's text; nothing cached, nothing written;
-3. the gate, each rule on its own: no mesh, and `bSkipUpdateSkelPose`, give the current buffer unchanged; an unloaded
-   mesh is `NotRead`; `ParentAnimComponent` set is the parent-copy `LayerAbsent`; `Animations` set is the tree's
-   `LayerAbsent`; `Animations` set with `bForceRefpose` gives the reference pose; `bForceDiscardRootMotion` is
-   `NotPorted`;
-4. a `SpaceBases` declared as another kind: `VmError::Script`, before any write;
-5. `ForceSkelUpdate`: unattached is nothing (no counter moves); attached is the `NotRead`;
-6. `UpdateAnimations`: no tree is nothing; a tree is `NotPorted`, with the tag unwritten;
-7. every refusal leaves #518's three counters and the name table's length unchanged;
-8. keep-existing binding in Off, and nothing bound under Reference;
-9. the cache: a second ask of the same mesh parses nothing (the source is asked once).
+1. `reference_space_bases` on a three-bone chain with invented bind rotations and translations: each entry follows
+   6.1's formula. The root equals its bind transform, every scale is 1, and a 90-degree parent rotation carries the
+   child's translation;
+2. a bone with `bind: None`: `LayerAbsent` with #569's layer text. Nothing is put in the **new composed-pose cache**:
+   a later ask with the data present still computes. `reference_skeleton`'s own cache is unchanged by the refusal;
+3. the composed-pose cache: a second ask of the same mesh computes nothing (the source is asked once in total);
+4. `stored_space_bases`: an empty buffer gives an empty answer (no pose is made); a filled one gives its entries; a
+   `SpaceBases` of another kind is `VmError::Script`;
+5. `pose_update`, each rule on its own:
+   - no mesh, and `bSkipUpdateSkelPose`, give `Skip`;
+   - an unloaded mesh is `NotRead`;
+   - `ParentAnimComponent` set is the parent copy's `LayerAbsent`;
+   - `Animations` set is the tree's `LayerAbsent`;
+   - `Animations` set with `bForceRefpose` 1 gives `Write`;
+   - `bForceDiscardRootMotion` is `NotPorted`;
+   - a tree-less component gives `Write` with 6.1's entries;
+6. the field kinds: `bForceRefpose` declared as a bool, `bSkipUpdateSkelPose` as an int, `Animations` as an int, and
+   each other field of 6.3 with a wrong kind or undeclared, give `VmError::Script` naming it. A `bForceRefpose` of
+   2 counts as set;
+7. `ForceSkelUpdate`: unattached is nothing (no counter moves); attached is the `NotRead`; `bAttached` of another kind
+   is `VmError::Script`;
+8. `UpdateAnimations`: no tree is nothing; a tree is `NotPorted`, with the tag unwritten; `Animations` of another kind
+   is `VmError::Script`;
+9. every refusal and every `Skip` leaves #518's three counters and the name table's length unchanged;
+10. keep-existing binding in Off, and nothing bound under Reference.
 
 ## Open questions
 
@@ -203,6 +272,7 @@ On synthetic classes and an invented skeleton source (`package()` / `tag()`, eve
    - `ForceSkelUpdate`'s second tick condition.
 2. **UNVERIFIED:**
    - that the pawn's components are attached at spawn in the running game, so that the placement branch runs there;
+   - the port answer that a fill path writes only `SpaceBases` (6.3);
    - the `.psk` bind pose as the reference skeleton;
    - every bone as required;
    - `InitTag` as `UpdateAnimations`' tag field (by fit).
