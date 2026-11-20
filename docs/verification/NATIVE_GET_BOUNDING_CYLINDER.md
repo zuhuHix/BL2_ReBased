@@ -1,6 +1,6 @@
 # Actor.GetBoundingCylinder: an actor's collision radius and half height (draft, 2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-GET-BOUNDING-CYLINDER (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-GET-BOUNDING-CYLINDER (decision 2026-11-19-202, number
 pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
