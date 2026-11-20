@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-REFRESH-BALANCE-DATA (decision 2026-11-19-NNN, number pending).
+//! Owner: lane IMPL-REFRESH-BALANCE-DATA (decision 2026-11-19-179, number pending).
 //! `WillowPlayerController.RefreshBalanceDataFromMissionCompletion(Mission)` in `ParityMode::Off`. AI-assisted (Claude
 //! Code).
 //!
