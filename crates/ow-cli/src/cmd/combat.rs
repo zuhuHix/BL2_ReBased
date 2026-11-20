@@ -557,6 +557,7 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
         install_skeleton_source(vm, &psk_roots())?;
     }
     preload_mesh(vm, MAYA_MESH_PATH)?;
+    gear_likeness_setup(vm)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
     let Some(f) = vm.find_method(own, "ServerPlayerSelectClass", state)? else {
@@ -568,6 +569,24 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
     vm.log.push(format!("harness input: ServerPlayerSelectClass({PLAYER_CLASS_PATH})"));
     vm.call(f, Some(controller), vec![Value::Str(PLAYER_CLASS_PATH.into())])?;
     Ok(())
+}
+
+/// The made `Mesh`'s class, whose interface entries hook 1 reads (lane HARNESS-GEARLIKENESS-SETUP).
+pub(crate) const MAYA_MESH_CLASS: &str = "Engine.SkeletalMeshComponent";
+
+/// The body composition's hook 1 set-up (lane HARNESS-GEARLIKENESS-SETUP, the hub's call on #657's probes), inside the
+/// `maya` step so the link's harness list shows it: the gear-likeness interface is loaded
+/// ([`crate::cmd::slice_gate::preload_class`], an UNVERIFIED stand-in for the game having it loaded), then the
+/// interface entries on the made `Mesh`'s class chain are resolved ([`crate::cmd::slice_gate::resolve_interface`]).
+/// The rule itself (ow_world::world::render_hooks) is unchanged and still loads nothing.
+fn gear_likeness_setup(vm: &mut Vm) -> Result<(), VmError> {
+    let (line, outcome) = crate::cmd::slice_gate::preload_class(vm, ow_world::world::render_hooks::GEAR_LIKENESS);
+    vm.log.push(line);
+    outcome?;
+    let (line, outcome) =
+        crate::cmd::slice_gate::resolve_interface(vm, MAYA_MESH_CLASS, ow_world::world::render_hooks::GEAR_LIKENESS);
+    vm.log.push(line);
+    outcome
 }
 
 /// The `--map <name>` option right after `--cooked <dir>` (module documentation): the map's name and the steps after

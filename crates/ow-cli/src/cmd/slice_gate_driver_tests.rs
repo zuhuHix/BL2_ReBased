@@ -745,3 +745,86 @@ fn a_mind_not_yet_is_marked_once_at_the_start() {
     assert_eq!(marked.record, "R.md");
     assert!(matches!(marked.missing, Missing::NotRead));
 }
+
+// ---- Lane HARNESS-GEARLIKENESS-SETUP: the set-up interface check (resolve_interface) ------------------------------
+
+static GEAR_NEXT: AtomicU32 = AtomicU32::new(0);
+
+/// A WillowGame package with decoded class bodies (`Declarations`): the gear-likeness interface, another interface,
+/// a component class whose only entry is that other interface, and one that implements the gear-likeness interface.
+fn decoded_gear_vm() -> (Vm, PathBuf) {
+    use ow_object::class_body::CLASS_INTERFACE;
+    use ow_package::testkit::reflect::{ClassBodySpec, Declarations, class_body};
+    let dir = std::env::temp_dir().join(format!("ow-cli-gearlike-{}-{}", std::process::id(), GEAR_NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut d = Declarations::with_imports(&["Class", "Function", "StructProperty"]);
+    let object_body = class_body(&mut d.p, &ClassBodySpec::new(0, 1, 2));
+    let obj = d.p.add_export(0, "Object", object_body);
+    d.default_object(obj, "Object");
+    let gear = d.real_class("IGearLikenessConsumer", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    let other = d.real_class("IToyOther", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    d.real_class("ToyMesh", obj, obj, 2, &[other], None);
+    d.real_class("ToyLikeness", obj, obj, 2, &[gear], None);
+    let bytes = d.build();
+    let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .expect("store");
+    let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(ow_attr::AttributeSystem::new_empty()), ParityMode::Off);
+    (vm, dir)
+}
+
+fn counters(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes() as u64, vm.defs.load_transitions() as u64, vm.rng.draws() as u64)
+}
+
+/// A decoded class whose entry is another interface: the answer (no) is read from the packages' interface lists, its
+/// entry resolved at set-up (a labelled write). Afterwards hook 1's read-only check answers with no write, no load and
+/// no draw, and a second set-up check resolves nothing.
+#[test]
+fn the_set_up_interface_check_reads_the_packages_lists_and_hook_1_then_loads_nothing() {
+    use ow_world::world::render_hooks::{GEAR_LIKENESS, GEAR_UNRESOLVED, gear_likeness};
+    let (mut vm, dir) = decoded_gear_vm();
+    let mesh = vm.find_class("WillowGame.ToyMesh").unwrap();
+    vm.find_class(GEAR_LIKENESS).unwrap();
+    let Err(VmError::NotYet(n)) = gear_likeness(&vm, mesh) else { panic!("an unresolved entry refuses first") };
+    assert_eq!(&*n.what, GEAR_UNRESOLVED);
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyMesh", GEAR_LIKENESS);
+    assert!(outcome.is_ok());
+    assert!(line.starts_with(SETUP_INTERFACE_INPUT) && line.contains(": no, read from the packages' interface lists;"), "{line}");
+    assert!(line.contains("resolved at set-up (a write; UNVERIFIED stand-in for when"), "{line}");
+    let before = counters(&vm);
+    gear_likeness(&vm, mesh).unwrap();
+    assert_eq!(counters(&vm), before, "hook 1 reads only");
+    let (line, _) = resolve_interface(&mut vm, "WillowGame.ToyMesh", GEAR_LIKENESS);
+    assert!(line.ends_with("already resolved, nothing resolved"), "{line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An implementer answers yes, read the same way, and hook 1 then refuses with the refresh's `LayerAbsent`.
+#[test]
+fn the_set_up_interface_check_reads_an_implementer_s_yes() {
+    use ow_world::world::render_hooks::{GEAR_LIKENESS, GEAR_REFRESH, gear_likeness};
+    let (mut vm, dir) = decoded_gear_vm();
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyLikeness", GEAR_LIKENESS);
+    assert!(outcome.is_ok());
+    assert!(line.contains(": yes, read from the packages' interface lists;"), "{line}");
+    let like = vm.space.classes.by_path("WillowGame.ToyLikeness").unwrap();
+    let Err(VmError::NotYet(n)) = gear_likeness(&vm, like) else { panic!() };
+    assert!(matches!(n.missing, Missing::LayerAbsent(_)) && &*n.what == GEAR_REFRESH, "{n:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Bodies that do not decode (the toy's `ScriptToy` classes) answer by the structural fallback, labelled an
+/// UNVERIFIED stand-in; a class the packages do not hold resolves nothing.
+#[test]
+fn the_set_up_interface_check_labels_a_structural_answer_and_reports_an_absent_class() {
+    let mut t = toy();
+    let vm = &mut t.world.vm;
+    let (line, outcome) = resolve_interface(vm, "Engine.ToyPawn", TARGET_FLAG_PROVIDER);
+    assert!(outcome.is_ok());
+    assert!(line.contains("by the structural fallback") && line.contains("UNVERIFIED stand-in"), "{line}");
+    let before = counters(vm);
+    let (line, outcome) = resolve_interface(vm, "Engine.NoSuchComponent", TARGET_FLAG_PROVIDER);
+    assert!(outcome.is_ok());
+    assert!(line.ends_with("not in the packages, nothing resolved"), "{line}");
+    assert_eq!(counters(vm), before, "nothing loaded");
+}
