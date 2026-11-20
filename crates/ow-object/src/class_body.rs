@@ -20,10 +20,16 @@ use ow_package::tables;
 /// Class flag bit 14 marks an interface class (C++ `CLASS_Interface`).
 pub const CLASS_INTERFACE: u32 = 0x4000;
 
-/// Class flag bit 7 (value 128) marks a native class (C++ `CLASS_Native`). **Fitted, UNVERIFIED** (lane
-/// FOLLOWUP-602-CLASS-POLICY): over the installed code packages it is set on 2,547 of the 3,339 decoded classes, and on
-/// every one of the 101 loaded classes that declare a native function. A census, not a proof that a class without it
-/// has no native code.
+/// Class flag bit 7 (value 128) marks a native class. **Fitted, UNVERIFIED** (lane FOLLOWUP-602-CLASS-POLICY; the hub
+/// accepted the fit on #640). The structural oracle is a census:
+/// - **Package set:** the code packages that `reflect::load_code_packages` loads from the installed `CookedPCConsole`.
+///   Of their class exports, 3,339 bodies decode, and the bit is set on 2,547 of them.
+/// - **The native-function classes:** the world `--equip-run` builds (`ow-cli` `run_world`, Off) had 123 classes with a
+///   decoded body loaded. 101 of them own a function whose declaration carries a native key (`FunctionDecl::is_native`,
+///   its `owner` being the class). The bit is set on all 101.
+///
+/// It is a census, not a proof that a class without the bit has no native code. The census was a local, uncommitted
+/// probe; rerunning it means walking those two sets the same way.
 pub const CLASS_NATIVE: u32 = 1 << 7;
 
 /// The end-of-script token a non-empty class script ends in (`script::EX_EndOfScript` in `src/script.hpp`; the

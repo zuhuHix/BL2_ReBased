@@ -15,9 +15,16 @@ three review points the hub kept from #637's review, not an independent review.
   including native classes whose own answer #589 did not read. `ClassTable::is_native` marks engine stand-ins only,
   so the class bodies' flags are used:
   - **A fitted native-class bit**, `CLASS_NATIVE` in `ow-object`'s `class_body.rs` (bit 7, value 128), **UNVERIFIED**.
-    The structural oracle, over the installed code packages: it is set on 2,547 of 3,339 decoded classes, and on all
-    101 loaded classes that declare a native function. That supports the fit, but does not prove that a class without
-    the bit has no native code.
+    The hub accepted the fit on #640. The structural oracle is a census, which can be rerun as follows:
+    - **the package set** is the code packages `ow_object::reflect::load_code_packages` loads from the installed
+      `CookedPCConsole`. Of their class exports, 3,339 bodies decode, and the bit is set on 2,547 of them;
+    - **the native-function classes** are taken from the world `--equip-run` builds (`ow-cli`'s `run_world`, Off),
+      which had 123 classes with a decoded body loaded. 101 of them own a function whose declaration carries a native
+      key (`FunctionDecl::is_native`, with the class as its `owner`). The bit is set on all 101;
+    - the census was a local, uncommitted probe that walked those two sets.
+
+    It supports the fit, but does not prove that a class without the bit has no native code. No C++ flag name is
+    given: this lane has no public source to cite for one (review r1 of #640, item 3).
   - **The rule:** from the asked object's class upward, the first class that is native (the bit, an engine stand-in,
     or a body that did not decode) and outside the note's read list stops the rule with `NotYet { NotRead }`. The read
     list is `Controller`, `AIController`, `GearboxAIController`, `GearboxMind` and `WillowMind`. A read class, or the
@@ -41,3 +48,12 @@ three review points the hub kept from #637's review, not an independent review.
 - **Every case** checks #518's three counters, the class table's length and the name table's length before and after.
   The production binding stays keep-existing and Off only; Reference is unchanged.
 - **Verified:** nothing in the running game. Every rule is UNVERIFIED.
+- **Review r1 of #640 (Sol):**
+  - the binding test now uses decoded classes that carry the native bit for all five read classes, in invented
+    `Engine`, `GearboxFramework` and `WillowGame` packages. It runs each of the five on both paths, and adds an unread
+    native child of `WillowMind` as a refusal;
+  - new tests: of two unread native ancestors, the nearer is named; a class body that does not decode counts as an
+    unread native; a reserved `IWorldBody` id, passed straight through both dispatch paths, gives the reserved
+    refusal from a read controller and the class policy's refusal from an unread native one, with the counters
+    unchanged;
+  - the census's reproduction is recorded, and the C++ flag name is dropped.

@@ -63,7 +63,8 @@ fn engine() -> Vec<u8> {
     let world = real_class(&mut t, "IWorldBody", object, object, INTERFACE, &[]);
     real_class(&mut t, "ISoundBehavior", object, object, INTERFACE, &[]);
     let other = real_class(&mut t, "IOther", object, object, INTERFACE, &[]);
-    let controller = real_class(&mut t, "Controller", object, object, 2, &[]);
+    // `Controller` carries the native bit, as the read classes do (review r1 of #640, item 1).
+    let controller = real_class(&mut t, "Controller", object, object, NATIVE, &[]);
     for field in ["Pawn", "PlayerReplicationInfo"] {
         t.prop("Object", controller, field, 0, object);
     }
@@ -76,6 +77,21 @@ fn engine() -> Vec<u8> {
     let native = real_class(&mut t, "NativeController", controller, object, NATIVE, &[thing]);
     real_class(&mut t, "ScriptUnderNative", native, object, 2, &[]);
     real_class(&mut t, "AccessorController", controller, object, NATIVE, &[thing]);
+    // Review r1 of #640, item 2: a second unread native under the first (the nearest wins), and a class whose body
+    // does not decode (its export names another super than its body: the decoder's "super differs").
+    real_class(&mut t, "NativeUnderNative", native, object, NATIVE, &[]);
+    {
+        let at = t.p.next_export();
+        let body = class_body(&mut t.p, &ClassBodySpec::new(controller, object, at + 1));
+        let mut export = Export::new(0, "UndecodableController", body);
+        export.super_ = native;
+        assert_eq!(t.p.add_export_with(export), at);
+        let mut default = ints(&[0]);
+        default.extend_from_slice(&t.none);
+        t.p.add_export_with(Export::new(at, "Default__UndecodableController", default));
+    }
+    // The production line's first read class below `Controller` (the rest are in [`gearbox`] and [`willow`]).
+    real_class(&mut t, "AIController", controller, object, NATIVE, &[]);
     let mind = real_class(&mut t, "ToyMind", controller, object, 2, &[]);
     t.prop("Object", mind, "MyWillowPawn", 0, object);
     real_class(&mut t, "BareController", object, object, 2, &[thing]);
@@ -90,6 +106,34 @@ fn engine() -> Vec<u8> {
     real_class(&mut t, "Vehicle", pawn, object, 2, &[]);
     real_class(&mut t, "ToyPRI", object, object, 2, &[thing]);
     real_class(&mut t, "ToyNotPorted", object, object, 2, &[]);
+    t.build()
+}
+
+/// The invented `GearboxFramework.upk`: `GearboxAIController` under `Engine.AIController`, and `GearboxMind` under it,
+/// both with the native bit (review r1 of #640, item 1).
+fn gearbox() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let ai = t.p.add_import("Core", "Class", engine, "AIController");
+    let gai = real_class(&mut t, "GearboxAIController", ai, object, NATIVE, &[]);
+    real_class(&mut t, "GearboxMind", gai, object, NATIVE, &[]);
+    t.build()
+}
+
+/// The invented `WillowGame.upk`: `WillowMind` under `GearboxFramework.GearboxMind` with `MyWillowPawn`, an unread
+/// native child of it (`ToyNativeMind`), and `WillowPlayerController` under `Engine.PlayerController`.
+fn willow() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let gearbox = t.p.add_import("Core", "Package", 0, "GearboxFramework");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let player = t.p.add_import("Core", "Class", engine, "PlayerController");
+    let gearbox_mind = t.p.add_import("Core", "Class", gearbox, "GearboxMind");
+    let mind = real_class(&mut t, "WillowMind", gearbox_mind, object, NATIVE, &[]);
+    t.prop("Object", mind, "MyWillowPawn", 0, object);
+    real_class(&mut t, "ToyNativeMind", mind, object, NATIVE, &[]);
+    real_class(&mut t, "WillowPlayerController", player, object, NATIVE, &[]);
     t.build()
 }
 
@@ -110,7 +154,9 @@ fn objects() -> Vec<u8> {
 }
 
 /// The classes the tests resolve at set-up (all but `ColdController`).
-const RESOLVED: [&str; 21] = [
+const RESOLVED: [&str; 23] = [
+    "Engine.NativeUnderNative",
+    "Engine.AIController",
     "Engine.NativeController",
     "Engine.ScriptUnderNative",
     "Engine.AccessorController",
@@ -134,6 +180,15 @@ const RESOLVED: [&str; 21] = [
     "Engine.ToyNotPorted",
 ];
 
+/// The production classes of [`gearbox`] and [`willow`].
+const PRODUCTION: [&str; 5] = [
+    "GearboxFramework.GearboxAIController",
+    "GearboxFramework.GearboxMind",
+    "WillowGame.WillowMind",
+    "WillowGame.ToyNativeMind",
+    "WillowGame.WillowPlayerController",
+];
+
 struct Env {
     vm: Vm,
     dir: PathBuf,
@@ -152,9 +207,9 @@ impl Env {
         Env::new_with(mode, false)
     }
 
-    /// With `production`, the production classes the fixture's package lacks are defined by hand before
-    /// [`register`] runs (`AIController`, `GearboxMind`, `WillowMind` with `MyWillowPawn`, `WillowPlayerController`),
-    /// so every binding is present.
+    /// With `production`, `GearboxFramework.upk` and `WillowGame.upk` are loaded and their classes found and resolved
+    /// before [`register`] runs, so every production binding is present, on decoded classes with the native bit
+    /// (review r1 of #640, item 1).
     fn new_with(mode: ParityMode, production: bool) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-combat-controller-interface-{}-{}",
@@ -162,14 +217,13 @@ impl Env {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let (engine, objects) = (engine(), objects());
-        let defs = DefStore::from_synthetic(
-            &dir,
-            &[("Engine.upk", engine.as_slice()), ("ToyObjects.upk", objects.as_slice())],
-            IdentityPolicy::FirstInScanOrder,
-            mode,
-        )
-        .unwrap();
+        let (engine, objects, gearbox, willow) = (engine(), objects(), gearbox(), willow());
+        let mut files = vec![("Engine.upk", engine.as_slice()), ("ToyObjects.upk", objects.as_slice())];
+        if production {
+            files.push(("GearboxFramework.upk", gearbox.as_slice()));
+            files.push(("WillowGame.upk", willow.as_slice()));
+        }
+        let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
         let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
         vm.defs.code_mut().1.load(&PackageName::parse("Engine").unwrap()).unwrap();
         for path in RESOLVED.iter().chain(["Engine.ColdController", "Engine.Vehicle"].iter()) {
@@ -178,15 +232,10 @@ impl Env {
         let object = vm.find_class("Engine.Object").unwrap();
         vm.space.classes.define("WillowGame.IPlayerMaster", Some(object), vec![]).unwrap();
         if production {
-            let controller = vm.find_class("Engine.Controller").unwrap();
-            let player = vm.find_class("Engine.PlayerController").unwrap();
-            let c = &mut vm.space.classes;
-            let ai = c.define("Engine.AIController", Some(controller), vec![]).unwrap();
-            let gearbox = c.define("GearboxFramework.GearboxMind", Some(ai), vec![]).unwrap();
-            let decl = PropertyDecl::new(vm.space.names.intern("MyWillowPawn"), PropKind::Object { class: object });
-            let c = &mut vm.space.classes;
-            c.define("WillowGame.WillowMind", Some(gearbox), vec![decl]).unwrap();
-            c.define("WillowGame.WillowPlayerController", Some(player), vec![]).unwrap();
+            for path in PRODUCTION {
+                let c = vm.find_class(path).unwrap();
+                vm.resolve_interface_tables(c);
+            }
         }
         let echoed = Rc::new(RefCell::new(Vec::new()));
         if mode == ParityMode::Off {
@@ -547,6 +596,7 @@ fn every_binding_present_resolves_to_the_nearest_rule_on_both_paths() {
         ("WillowGame.WillowMind", true),
         ("Engine.PlayerController", true),
         ("Engine.AIController", false),
+        ("GearboxFramework.GearboxAIController", false),
         ("GearboxFramework.GearboxMind", false),
     ] {
         let c = e.class(path);
@@ -561,10 +611,22 @@ fn every_binding_present_resolves_to_the_nearest_rule_on_both_paths() {
     e.link(mind, "MyWillowPawn", b);
     assert_eq!(e.ask(mind, "Engine.IWorldBody").unwrap(), Some(b), "read-only: MyWillowPawn");
     assert_eq!(ask_ordinary(&mut e, mind, "Engine.IWorldBody").unwrap(), Some(b), "ordinary: MyWillowPawn");
-    let gearbox = e.make("GearboxFramework.GearboxMind");
-    e.link(gearbox, "Pawn", a);
-    assert_eq!(e.ask(gearbox, "Engine.IWorldBody").unwrap(), Some(a), "read-only: Pawn");
-    assert_eq!(ask_ordinary(&mut e, gearbox, "Engine.IWorldBody").unwrap(), Some(a), "ordinary: Pawn");
+    // The four read classes that use `Pawn`, each with the native bit, on both paths.
+    for path in ["Engine.Controller", "Engine.AIController", "GearboxFramework.GearboxAIController", "GearboxFramework.GearboxMind"] {
+        let class = e.class(path);
+        let native = e.vm.defs.code().key_of(class).map(|k| e.vm.defs.code().class(k).body.as_ref().unwrap().is_native());
+        assert_eq!(native, Some(true), "{path}: a decoded class with the native bit");
+        let c = e.make(path);
+        e.link(c, "Pawn", a);
+        assert_eq!(e.ask(c, "Engine.IWorldBody").unwrap(), Some(a), "{path}, read-only: Pawn");
+        assert_eq!(ask_ordinary(&mut e, c, "Engine.IWorldBody").unwrap(), Some(a), "{path}, ordinary: Pawn");
+    }
+    // An unread native child of `WillowMind`: refused on both paths, naming it.
+    let child = e.make("WillowGame.ToyNativeMind");
+    e.link(child, "MyWillowPawn", b);
+    let words = ["the interface answer of WillowGame.ToyNativeMind", "own answer was not read"];
+    not_yet(e.ask(child, "Engine.IWorldBody"), Missing::NotRead, &words);
+    not_yet(ask_ordinary(&mut e, child, "Engine.IWorldBody"), Missing::NotRead, &words);
     let player = e.make("Engine.PlayerController");
     not_yet(e.ask(player, "Engine.IToyThing"), Missing::NotRead, &["PlayerController"]);
     not_yet(ask_ordinary(&mut e, player, "Engine.IToyThing"), Missing::NotRead, &["PlayerController"]);
@@ -632,5 +694,44 @@ fn the_rule_reads_the_pawn_only_on_the_branch_that_reaches_it() {
     let r = query_read_only(&e.vm, c, Some(reserved));
     not_yet(r, Missing::NotRead, &["Engine.IReserved", "reserved but not defined"]);
     assert_eq!(counters(&e.vm), before);
+}
+
+/// Review r1 of #640, item 2: precedence. Of two unread native ancestors the nearest is named; a class whose body did
+/// not decode counts as an unread native; each on both paths, with the counters unchanged.
+#[test]
+fn the_nearest_unread_native_wins_and_an_undecodable_body_is_unread() {
+    let mut e = Env::new(ParityMode::Off);
+    let nested = e.make("Engine.NativeUnderNative");
+    for r in [e.ask(nested, "Engine.IToyThing"), ask_ordinary(&mut e, nested, "Engine.IToyThing")] {
+        not_yet(r, Missing::NotRead, &["the interface answer of Engine.NativeUnderNative"]);
+    }
+    let class = e.class("Engine.UndecodableController");
+    let key = e.vm.defs.code().key_of(class).expect("a package class");
+    assert!(e.vm.defs.code().class(key).body.is_err(), "the fixture's body does not decode");
+    let bad = e.make("Engine.UndecodableController");
+    for r in [e.ask(bad, "Engine.IToyThing"), ask_ordinary(&mut e, bad, "Engine.IToyThing")] {
+        not_yet(r, Missing::NotRead, &["the interface answer of Engine.UndecodableController"]);
+    }
+}
+
+/// Review r1 of #640, item 2: a reserved `IWorldBody` id (declared, no layout), passed straight through both dispatch
+/// paths. Asked of a read controller: the reserved-interface refusal (the class policy passes, then the interface
+/// layout check). Asked of an unread native controller: the class policy's refusal comes first.
+#[test]
+fn a_reserved_interface_after_the_class_policy_on_both_paths() {
+    let mut e = Env::new(ParityMode::Off);
+    let reserved = e.vm.space.classes.declare("Toy.IWorldBody").unwrap();
+    assert!(e.vm.space.classes.get_layout(reserved).is_none_or(|l| !l.is_defined()), "reserved, not defined");
+    let read = e.make("Engine.ListingController");
+    let unread = e.make("Engine.NativeController");
+    for (c, words) in [
+        (read, ["Toy.IWorldBody", "reserved but not defined"]),
+        (unread, ["the interface answer of Engine.NativeController", "own answer was not read"]),
+    ] {
+        let before = counters(&e.vm);
+        not_yet(query_read_only(&e.vm, c, Some(reserved)), Missing::NotRead, &words);
+        not_yet(e.vm.query_interface(c, reserved), Missing::NotRead, &words);
+        assert_eq!(counters(&e.vm), before);
+    }
 }
 
