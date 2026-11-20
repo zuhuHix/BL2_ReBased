@@ -31,9 +31,9 @@ depends on the receiver's C++ class:
   - The fit is evidence about the native's body only, and the port uses no offset (section 3, step 5). By fit,
     UNVERIFIED.
 - **`WillowPawn` itself:** false. Its slot holds a shared stub that answers zero.
-- **`WillowPlayerPawn`, and any other C++ subclass:** not read. That includes `WillowAICranePawn`, a native child of
-  `WillowAIPawn` (`research/native_by_class.json` lists natives for it, so it has its own C++ class), whose slot was
-  not read.
+- **`WillowPlayerPawn`, and any other C++ subclass:** not read. That includes the two children of `WillowAIPawn` in
+  `WillowGame`'s export super chain, `WillowAICranePawn` and `DeployableTurretActor`. The layout tool reports both as
+  extending it, and neither one's slot was read.
 
 **It writes, loads and draws nothing.**
 
@@ -79,14 +79,15 @@ default's, false in the probe, so the script goes straight to `LiftTarget`. The 
    (`access::get` and the like) may be reached only after S1.
 3. **The class**, by the class table's `by_path` and `is_child_of` only (hub ruling on #611):
    - **exactly `WillowAIPawn`, or a script-only child of it:** the AI rule (step 5);
-   - **a native descendant of `WillowAIPawn`**: any class the native table lists, today `WillowAICranePawn`. It is S2:
-     its slot was not read;
+   - **a recorded native descendant of `WillowAIPawn`**, `WillowGame.WillowAICranePawn` or
+     `WillowGame.DeployableTurretActor` (checked with `is_child_of`, no load): S2, since its slot was not read;
    - **exactly `WillowPawn`:** answer **false**;
    - **S2, any other child of `WillowPawn`** (`WillowPlayerPawn` included): `NotYet { NotRead }`,
      "WillowPawn.IsStaggered: the stagger rule of <class> (its virtual was not read)", record this note. A script-only
      child of `WillowPawn` is S2 too; it is not assumed to answer false.
-4. **Which classes are native** comes from a list carried with the binding, built from `research/native_by_class.json`'s
-   classes under `WillowAIPawn`, so the check stays load-free.
+4. **Which classes are native** comes from the list recorded in step 3, carried with the binding, so the check stays
+   load-free. The list was taken from the super chain; `research/native_by_class.json` holds function counts only and
+   cannot decide which class is native.
 5. **The AI rule, read by name:**
    - the field through `vm.space.prop(class, "StaggerState")`;
    - its declaration a struct of type `WillowAIPawn.StaggerStateData`;
@@ -103,7 +104,7 @@ inside it.
 2. a script subclass of `WillowAIPawn`: the AI rule;
 3. a plain `WillowPawn`, even with a `StaggerState`-like field declared: false;
 4. a `WillowPlayerPawn`, another `WillowPawn` subclass, and a script-only child of `WillowPawn`: S2;
-5. **an invented native child of `WillowAIPawn`** (listed as native for the test): S2;
+5. **an invented child of `WillowAIPawn` for each listed class** (`WillowAICranePawn` and `DeployableTurretActor`): S2;
 6. a receiver outside `WillowPawn`: `VmError::Script`;
 7. an unloaded pawn handle and a slotless stand-in: S1, each with its own text, nothing loaded (#518's three counters
    unchanged);
@@ -135,7 +136,7 @@ So link 9's next stop is `WillowAIPawn.DropCombatPerch()`.
 
 ## Open questions
 
-1. **Not read:** the slots of `WillowPlayerPawn` and of `WillowAICranePawn` (S2 for both).
+1. **Not read:** the slots of `WillowPlayerPawn`, `WillowAICranePawn` and `DeployableTurretActor` (S2 for all three).
 2. **UNVERIFIED:** the `StaggerState` fit (the 4-byte `WillowPawn` shortfall).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)

@@ -32,3 +32,9 @@ gives one. Docs only: no code, no dependency, and no bounds check changed.
   - the shape test is split in three, and tests are added for a native child and an outside receiver;
   - `UnStagger`'s authority test is stated;
   - the "only writer" claim is narrowed to member writes.
+
+## Edits: after review of #620
+
+- `WillowGame.DeployableTurretActor` joins `WillowAICranePawn` in S2's recorded list of native descendants (the
+  super chain's two children of `WillowAIPawn`), and its slot is added to "Not read". The list is taken from the
+  super chain rather than `native_by_class.json`, which holds function counts only.
