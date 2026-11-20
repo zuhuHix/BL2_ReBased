@@ -27,3 +27,13 @@ lane implements it). The decision number is pending from the hub (three digits);
 - **Verified:** nothing in the running game. Every rule is **UNVERIFIED**.
 - **Probe:** not run (docs only). The stop cited is the recorded probe of NATIVE_BONE_TRANSFORM_LAYER.md section 5.
 - **Index:** a NATIVE_INDEX row and a GATES row were added.
+- **Review r1 of #654** (FIX):
+  1. the cylinder half is UNVERIFIED and not measured: attachment 13 most likely meets Maya's own attached
+     `CylinderComponent`, which the Off answer refuses (its scene detach not read). It is named as the expected stop;
+  2. both corrections to #529 are stated: the list (the pawn's `Components`) and the gate (membership, not
+     attachment). The places still saying "a global list" are named;
+  3. a value assigned earlier in this build keeps today's refusal; membership and removal work on the planned
+     `Components`, with tests;
+  4. the owner test's three "unknown" cases are listed, by fit, with the probe that would settle them, citing #647;
+  5. the unresident refusal comes right after membership;
+  6. #646 is cited as accepted, landing batch 12.
