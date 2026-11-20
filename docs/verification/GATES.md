@@ -46,7 +46,7 @@ Results:
   - After review r1 of #542 (#528 @ 0e8e2312 merged instead): the same, link 1 0 of 1 at the same stop.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN.
+2026-11-19-153.
 
 **IMPL-INIT-PAWN-MESHES (2026-11-19, pc-hummer, on research/rust-init-pawn-meshes 5d284e27, #517 on #513):**
 AI-assisted (Claude Code, Opus 5.5). `WillowPawn` / `WillowPlayerPawn.InitializePawnMeshes()` in Off:

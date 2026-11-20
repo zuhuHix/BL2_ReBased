@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BODY-COMPOSITION (decision 2026-11-19-NNN, number pending). `InstanceDataHelper.InitializeBodyComposition`
+//! Owner: lane IMPL-BODY-COMPOSITION (decision 2026-11-19-153, number pending). `InstanceDataHelper.InitializeBodyComposition`
 //! in `ParityMode::Off`, for the pawn wrapper (`WillowPawn.InitializePawnMeshes`, crate::world::pawn_meshes).
 //! AI-assisted (Claude Code).
 //!
