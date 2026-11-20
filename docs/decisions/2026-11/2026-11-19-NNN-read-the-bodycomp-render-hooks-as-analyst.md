@@ -15,7 +15,8 @@ implements it). The decision number is pending from the hub (three digits); NNN 
   Hooks 2 and 3 follow the natives' own rules, already ported in `attach_mesh.rs`. **Proposed:**
   - real answers for hook 1's "no" and for hooks 2 and 3;
   - `LayerAbsent` kept for a gear-likeness implementer (render-side, not read);
-  - `NotRead` for the unidentified gate parts, or a hub ruling taking them as allowing.
+  - `NotRead` for the unidentified gate parts: hook 2's pawn test wherever its unknown result would change the outcome
+    (the hub's ruling on #622), and hook 3's array check, the current stop on that path.
 - **Sources:**
   - the records;
   - the packages (WillowGame's name table, class layouts);
@@ -28,3 +29,15 @@ implements it). The decision number is pending from the hub (three digits); NNN 
 - **Probe:** with local stand-ins for #612's event and these hooks, the six links (1, 3, 4, 5, 13, 14) stop next at
   attachment 1's socket attach ("the socket and bone tables of Char_Siren.Mesh.Skel_SirenBody", `LayerAbsent`).
 - **Index:** a NATIVE_INDEX row was added.
+
+**Review r1 of #622** (FIX; note sections 2 to 4):
+1. the setters' planning and apply logic move into `ow-world` (or a common dependency). The body composition calling
+   `ow-inventory` would be a crate cycle. The existing natives and the body composition use one implementation, and
+   the bindings stay, `SetLightEnvironment`'s keep-existing registration included;
+2. hook 2's pawn test is `NotRead` exactly when it would decide; the Maya scenario, tests and this decision follow;
+3. the preflight plans only with settled (loaded) template values, else `NotRead` before any write, and on the slots
+   the real attach produces;
+4. hook 1 goes before the `CustomHead` validation and hooks 2 and 3 after it. The setters' checks become immutable
+   planners in their own order;
+5. hook 3's array check is the current stop once `bAcceptsLights` passes; the write case and its tests are
+   conditional on that check being read or a harness input.

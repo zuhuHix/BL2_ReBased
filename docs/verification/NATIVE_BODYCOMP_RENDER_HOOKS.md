@@ -82,17 +82,23 @@ Links 1, 3, 4, 5, 13 and 14 meet the hooks first on Maya's attachment 0, her mad
 mode 0). Links 3, 4, 5, 13 and 14 are blocked behind link 1, so each needs what link 1 needs:
 - **Hook 1:** an Engine `SkeletalMeshComponent` does not implement the WillowGame interface (by its class tables;
   checkable read-only), so nothing happens.
-- **Hook 2:** her pawn is the local player's, so the gate passes by fit. The outcome then depends on her `Mesh`
-  template's `bOwnerNoSee`: true is nothing; false meets `REATTACH_OWNER`, since the made component's `Owner` is set
-  by the attach. Her template's value was not read for this note.
-- **Hook 3:** `MyLightEnvironment` is set. A mesh component that accepts lights, in the port's empty scene layer
-  (`bAttached` left false by `Actor.AttachComponent`, NATIVE_ATTACH_MESH_TO_PICKUP.md section 5), gets the one write
-  `LightEnvironment` = `MyLightEnvironment`.
+- **Hook 2** (the hub's ruling on #622: the unidentified pawn test is `NotRead` whenever it would decide). Her
+  controller is the local player's, so the known parts of the gate pass by fit, and the outcome turns on her `Mesh`
+  template's `bOwnerNoSee`, which was not read for this note:
+  - true: the setter would do nothing, and so would a failed pawn test. The test does not decide, so hook 2 is
+    nothing;
+  - false: a passing test would run the setter (its deferred-reattach refusal, since the attach sets the component's
+    `Owner`), and a failing one would do nothing. The test decides, so hook 2 is `NotYet { NotRead }`, the pawn test.
+- **Hook 3:** `MyLightEnvironment` is set. If her template's `bAcceptsLights` (fitted) is clear, hook 3 is nothing.
+  If it is set, the helper's unidentified array check is reached, and it is `NotYet { NotRead }` (no passing answer is
+  authorised, review r1 of #622). That check is the **current stop on this path**. The one `LightEnvironment` write is
+  reachable only once that check is read, or under an explicit harness input the hub grants.
 
-**After the hooks** (section 5's probe), the six links stop at attachment 1's socket attach on her mesh:
-"InitializeBodyComposition: the socket and bone tables of Char_Siren.Mesh.Skel_SirenBody", `LayerAbsent`, the
-skeletal mesh data reader. #569's layer now has `sockets()` and `reference_skeleton()`, so that refusal is the next
-lane.
+**After the hooks** (section 5's probe, where all three hooks were answered with nothing as a stand-in), the six links
+stop at attachment 1's socket attach on her mesh: "InitializeBodyComposition: the socket and bone tables of
+Char_Siren.Mesh.Skel_SirenBody", `LayerAbsent`, the skeletal mesh data reader. With the rules of section 4 instead of
+the stand-in, they may stop earlier, at hook 2's pawn test or hook 3's array check, depending on her template's values.
+#569's layer now has `sockets()` and `reference_skeleton()`, so the socket refusal is the next lane after these.
 
 ## 3. Real answer or harness input, hook by hook
 
@@ -105,14 +111,23 @@ no layer.
   refresh)", layer "a rendering layer". An empty render-layer harness input (as #605's `SceneLayer`) could answer it
   only under a hub ruling, because what it writes was not read. Maya's gear-likeness components meet their socket
   attach first, so the slice does not need that ruling now.
-- **Hook 2: a real answer.** `SetOwnerNoSee`'s rule is already ported. Only the two gate virtuals are new:
-  - the controller test can use the port's Off `IsLocalPlayerController` (decision 2026-11-19-15), by fit;
-  - the pawn virtual is not identified. The proposed answer takes it as allowing under the same ruling as #529's
-    unread flags (hub to confirm), else `NotYet { NotRead }`.
-- **Hook 3: a real answer.** `SetLightEnvironment`'s rule is already ported. The mesh-component test's fitted parts:
-  - the `bAcceptsLights` test is answered;
-  - the unidentified array check and the lighting-channel branch are each `NotYet { NotRead }` when they would act.
-  - On Maya's path that depends on her template's values, which the implementer's strict re-run shows.
+- **Hook 2: a real answer where the pawn test does not decide, `NotRead` where it does.** `SetOwnerNoSee`'s rule is
+  already ported. The controller test can use the port's Off `IsLocalPlayerController` (decision 2026-11-19-15), by
+  fit. The pawn virtual is not identified. Under the hub's ruling it is `NotYet { NotRead }` exactly when its unknown
+  result would change the outcome (section 4, rule 2).
+- **Hook 3: a real answer up to the array check.** `SetLightEnvironment`'s rule is already ported. The mesh-component
+  test's fitted `bAcceptsLights` is answered; once it passes, the unidentified array check is `NotYet { NotRead }`
+  (no passing answer is authorised), and so is the lighting-channel branch when it would act.
+
+**Where the shared logic lives** (review r1 of #622, item 1). The two setters' Off rules are in `ow-inventory`
+(`attach_mesh.rs`), and `ow-inventory` already depends on `ow-world`. So the body composition (`ow-world`) cannot call
+them: that would be a crate cycle. The proposal:
+- move the setters' **planning and apply logic** into `ow-world` (a module beside the body composition, or another
+  crate both already depend on). The planning functions read only; the apply functions take the plan and write;
+- the existing Off natives in `ow-inventory` and the body composition then both call that one implementation;
+- the bindings stay as they are, `SetLightEnvironment`'s keep-existing registration included. Only the code behind
+  them moves, so each native rule keeps one implementation;
+- `crate_edges_test.py` confirms the new edge set.
 
 ## 4. Proposed Off answer (for a separate implementer)
 
@@ -120,12 +135,41 @@ no layer.
 test-only switch, per made component. **Reference is unchanged.** Every new `NotYet` carries this note as its record:
 `docs/verification/NATIVE_BODYCOMP_RENDER_HOOKS.md`.
 
-**Where:** in the body composition's preflight, per made attachment, where `RENDER_HOOKS` is raised today. The writes
-go in the walk's writes for that attachment, after its identifier writes and in the hooks' order (1, the custom
-head, 2, 3).
+**Where, in the preflight** (review r1 of #622, item 4). Per made attachment, the game runs hook 1, then the
+custom-head step, then hooks 2 and 3. Today's `RENDER_HOOKS` site comes after the `CustomHead` validation (the
+`HeadMesh` declaration check), so the hooks go in two places:
+1. **hook 1 before the `CustomHead` validation**, right after the identifier steps. Otherwise a malformed `HeadMesh`
+   declaration would mask hook 1's earlier refusal;
+2. **hooks 2 and 3 after it**, at today's `RENDER_HOOKS` site.
+
+The writes go in the walk's writes for that attachment, after its identifier writes, in the same order: hook 1 (none
+in Off), the custom head, hook 2, hook 3.
+
+**The values the preflight may plan with** (review r1 of #622, item 3):
+- **Settled template values only.** The walk accepts lazy component templates and loads them in `make_component`
+  before it copies their slots. A preflight that read an unloaded template could plan a no-op (`bAcceptsLights`
+  clear) for a component whose loaded value turns out true. Loading in the preflight is itself a write. So on every
+  path that needs a template value (hook 2's `bOwnerNoSee`; hook 3's `bAcceptsLights`, `LightingChannels`,
+  `LightEnvironment` and `bAttached`), an unloaded or failed template is `NotYet { NotRead }`, "the rendering hooks
+  on a template not loaded at set-up (its values are not settled)", before any write.
+- **The slots the real attach produces.** The made component's values are its template's, with what
+  `Actor.AttachComponent` writes in the port's empty scene: `Owner` = the pawn, the component appended to the pawn's
+  `Components`, and `bNeedsReattach` and `bNeedsUpdateTransform` cleared. `bAttached` stays as copied from the
+  template, and so does `Scene`. The planners read those values, never the template's `Owner` (None).
+
+**The setters' planners** (review r1 of #622, item 4). Each setter's own validation order is kept, so a malformed
+component cannot pass the preflight and then fail after earlier writes:
+- `set_flag` (behind `SetOwnerNoSee`) checks the deferred-reattach declarations, then the flag's declaration, and only
+  then the equal-value shortcut, then the reattach's refusals;
+- `set_light_environment` checks `LightEnvironment`, then the equal value, then `bAttached`, and on each path the
+  destination's compatibility and the slots it writes, before its first write.
+
+These checks are extracted into immutable planners (reads only, the same order, the same errors). The preflight calls
+the planners; the writes call the apply side with the plan. The existing natives become planner then apply, with no
+behaviour change.
 
 **Preflight, in this order** (write-free, load-free, RNG-free; reads with `vm.space.prop` / `vm.space.read`):
-1. **Hook 1:**
+1. **Hook 1** (before the `CustomHead` validation):
    - the engine flags: taken as allowing (the hub's ruling on #529);
    - `WillowGame.IGearLikenessConsumer` resolved read-only (`classes.by_path`, a defined class), else
      `NotYet { NotRead }`, "the gear-likeness interface not resolved at set-up";
@@ -134,49 +178,59 @@ head, 2, 3).
      `NotYet { NotRead }`;
    - no: nothing. Yes: `NotYet { LayerAbsent }`, "InitializeBodyComposition: the body's rendering hooks (the
      gear-likeness refresh)", layer "a rendering layer".
-2. **Hook 2,** in mode 0 and for a `PrimitiveComponent`:
-   - the pawn virtual: taken as allowing (hub to confirm), else `NotYet { NotRead }`, "the owner-no-see gate's pawn
-     test (not identified)";
-   - the pawn's `Controller`: declared as an object, else `VmError::Script`. None, or not a `PlayerController`: the
-     gate fails and nothing happens. A `PlayerController`: its Off `IsLocalPlayerController` answer, read-only (the
-     same rule as the native, without calling it);
-   - gate passed: `SetOwnerNoSee(true)`'s own preflight, planned on the made component's template values. If
-     `bOwnerNoSee` is true, nothing. Otherwise the deferred reattach's refusals in their order: an `Owner` that the
-     attach will set is `REATTACH_OWNER`, `NotYet { NotRead }`. The plan must use the value the attach writes, not
-     the template's None;
+2. **Hook 2** (after it):
+   - the known parts of the gate, in the game's order. Not mode 0, not a `PrimitiveComponent`, or a pawn
+     `Controller` that is None or not a local `PlayerController` (its Off `IsLocalPlayerController` answer,
+     read-only): the gate fails whatever the pawn test says, so nothing;
+   - the known parts pass: the settled template must be loaded (above), and `set_flag`'s planner runs on the slots the
+     attach produces. If it plans nothing (`bOwnerNoSee` already true), the pawn test cannot change the outcome, so
+     nothing;
+   - otherwise the pawn test decides (pass: the setter's plan, here the deferred reattach's `REATTACH_OWNER`, since
+     `Owner` is set; fail: nothing), so `NotYet { NotRead }`, "the owner-no-see gate's pawn test (not identified)".
+     It is raised before the setter's own refusals, because the gate comes first;
    - each field read declared with its kind, else `VmError::Script` naming it.
-3. **Hook 3,** with the pawn's `LightEnvironment` set (declared as an object, else `VmError::Script`):
-   - the made class is a `MeshComponent`, and its `bAcceptsLights` (fitted) is set: else nothing;
-   - the helper's array check: `NotYet { NotRead }`, "the light-environment step's array check (not identified)",
-     unless the hub rules it as passing;
-   - a set `LightingChannels` bit (fitted): `NotYet { NotRead }`, "the light-environment step's lighting-channel
-     refresh";
-   - then `SetLightEnvironment`'s own preflight (`attach_mesh::set_light_environment`'s checks, write-free), planned
-     with the made component's values after the attach: the same value is nothing; not attached is one write;
-     attached runs the deferred reattach's refusals.
+3. **Hook 3** (after hook 2), with the pawn's `LightEnvironment` set (declared as an object, else `VmError::Script`):
+   - the made class is not a `MeshComponent`: nothing;
+   - the settled template must be loaded (above); its `bAcceptsLights` (fitted) clear: nothing;
+   - set: the helper's array check, `NotYet { NotRead }`, "the light-environment step's array check (not
+     identified)". This is the current stop on that path;
+   - **only once that check is read, or under an explicit harness input:**
+     - a set `LightingChannels` bit (fitted) is `NotYet { NotRead }`, "the light-environment step's lighting-channel
+       refresh";
+     - then `set_light_environment`'s planner on the slots the attach produces: the same value is nothing; not
+       attached is one write; attached runs the deferred reattach's refusals.
 
-**Writes** (only after the whole preflight passed, in the hooks' order): hook 2's `bOwnerNoSee` and `bNeedsReattach`
-when they apply; hook 3's `LightEnvironment` (one write, or the attached path's three). The writes call the same
-functions `attach_mesh.rs` exposes, so the native rules have one implementation.
+**Writes** (only after the whole preflight passed, in the hooks' order): the setters' apply side with their plans.
+Hook 2's writes are never reached under today's rules: where the setter would write, the pawn test refuses first.
+Hook 3's writes come only once the array check is resolved.
 
 **After writes started:** the walk's writes precede these. A `NotYet` raised in a hook's writes despite the preflight is
 marked "stopped after partial writes: " by #518's counters, its kind and record kept.
 
 **Tests for the implementer** (synthetic packages through `package()`/`tag()`; each refusal with the heap writes, draws
 and load transitions unchanged):
-1. a made component whose class does not implement the gear-likeness interface: hook 1 writes nothing;
-2. one whose class implements it: the gear-likeness `LayerAbsent`, before any write;
+1. hook 1, a made component whose class does not implement the gear-likeness interface: nothing written;
+2. hook 1, one whose class implements it: the gear-likeness `LayerAbsent`, before any write;
 3. the interface class not resolved at set-up, and an unresolved table entry: each `NotRead`;
-4. hook 2 in mode 0 with a local player controller: `bOwnerNoSee` already true writes nothing; false meets
-   `REATTACH_OWNER`;
-5. hook 2 with no controller, a non-player controller, and mode 3: nothing;
-6. hook 2 on a non-primitive made object: nothing;
-7. hook 3 with no pawn `LightEnvironment`, and on a non-mesh component: nothing;
-8. hook 3 with `bAcceptsLights` clear: nothing;
-9. hook 3 on an unattached mesh component: the one `LightEnvironment` write, after the walk's own writes;
-10. hook 3 with the lighting-channel bit set, and with the array check acting: each `NotRead`, before any write;
-11. a malformed pawn or component field: `VmError::Script` naming it, before any write;
-12. Reference: unchanged.
+4. hook 1's refusal and a malformed `HeadMesh` declaration together: hook 1's refusal is the one reported;
+5. hook 2 with a local player controller and `bOwnerNoSee` already true: nothing (the pawn test does not decide);
+6. hook 2 with a local player controller and `bOwnerNoSee` clear: the pawn test's `NotRead`, before any write, ahead
+   of `REATTACH_OWNER`;
+7. hook 2 with no controller, a non-player controller, a non-local one, mode 3, or a non-primitive made object:
+   nothing;
+8. hook 2 with a malformed reattach declaration on a component whose flag already equals the value: the setter
+   planner's `VmError::Script` (its order kept), before any write;
+9. hook 3 with no pawn `LightEnvironment`, on a non-mesh component, or with `bAcceptsLights` clear: nothing;
+10. hook 3 with `bAcceptsLights` set: the array check's `NotRead`, before any write;
+11. an unloaded or failed template on a path that needs its values (hooks 2 and 3): the not-settled `NotRead`, with
+    nothing loaded;
+12. a malformed pawn or component field: `VmError::Script` naming it, before any write;
+13. **conditional on the array check being read, or on an explicit harness input:** hook 3 on an unattached mesh
+    component gets the one `LightEnvironment` write after the walk's own writes; the lighting-channel bit set is
+    `NotRead`;
+14. the existing Off natives (`SetOwnerNoSee`, `SetLightEnvironment`) keep their tests unchanged after the move to the
+    shared planners, and `crate_edges_test.py` passes;
+15. Reference: unchanged.
 
 ## 5. Local probe (never pushed)
 
@@ -190,7 +244,7 @@ the skeletal mesh data reader), attachment 1's socket attach. The branch was del
 ## Open questions
 
 1. **UNVERIFIED:** every rule above.
-2. **Not identified:** the two engine flags of hook 1, hook 2's pawn virtual, and hook 3's array check.
+2. **Not identified:** the two engine flags of hook 1, hook 2's pawn virtual (`NotRead` where it decides, the hub's ruling on #622), and hook 3's array check (the current stop on its path).
 3. **By fit:** the interface name (`IGearLikenessConsumer`), hook 2's controller test (`IsLocalPlayerController`),
    and hook 3's `bAcceptsLights` and `LightingChannels` fields (the constant shift of #598).
 4. **Not read:** the gear-likeness refresh, and hook 3's lighting-channel virtual.
@@ -199,6 +253,6 @@ the skeletal mesh data reader), attachment 1's socket attach. The branch was del
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
 1. After Maya spawns, her `Mesh.bOwnerNoSee` is true (hook 2) and `Mesh.LightEnvironment` is `MyLightEnvironment`
-   (hook 3).
+   (hook 3); the pawn test's answer on her pawn (hook 2's gate) and the array check's input (hook 3).
 2. Her `HeadMesh` (attachment 1) gets the same light environment, and a gear-likeness component on her gets its
    refreshed look; an enemy pawn's `Mesh.bOwnerNoSee` stays as its template has it.
