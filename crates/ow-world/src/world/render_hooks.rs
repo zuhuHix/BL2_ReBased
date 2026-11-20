@@ -8,11 +8,12 @@
 //! and both are refused there. So the body composition's writes are unchanged.
 //!
 //! 1. **The gear-likeness step** ([`gear_likeness`]), before the custom-head step. The made component's class is asked
-//!    whether it implements `WillowGame.IGearLikenessConsumer`, read only, in `implements`' own order: a class chain
-//!    whose bodies did not all decode answers by the structural rule (synthetic packages), as `implements` does;
-//!    otherwise only interface entries already resolved answer. An entry not resolved yet is [`GEAR_UNRESOLVED`]
-//!    (`NotRead`): resolving it would load. A class the code index does not hold (hand-declared) answers through its
-//!    nearest indexed parent, or no when it has none. The interface not defined at set-up is [`GEAR_INTERFACE`].
+//!    whether it implements `WillowGame.IGearLikenessConsumer`, read only, in `implements`' own order: only interface
+//!    entries already resolved answer, and an entry not resolved yet is [`GEAR_UNRESOLVED`] (`NotRead`): resolving it
+//!    would load. Two answers are **UNVERIFIED stand-ins** for data the game's lists do not cover (review of #657,
+//!    LOW 1): a class the code index does not hold (hand-declared) answers through its nearest indexed parent, or no
+//!    when it has none; and a class chain whose bodies did not all decode (synthetic packages) answers by the
+//!    structural fallback, as `implements` does. The interface not defined at set-up is [`GEAR_INTERFACE`].
 //!    No: nothing. Yes: the refresh, not read and render-side, is [`GEAR_REFRESH`] (`LayerAbsent`).
 //! 2. **The owner-no-see setting** ([`owner_no_see`]): the gate's known parts first, in the game's order. Not a
 //!    `PrimitiveComponent`; a pawn `Controller` that is None, not an `Engine.PlayerController`, or not local by the Off
@@ -78,7 +79,9 @@ fn object_field(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmErro
     }
 }
 
-/// The template's values are settled: it is not a store handle still unloaded (a load is a write).
+/// The template's values are settled: it is not a store handle still unloaded (a load is a write). The failed-handle
+/// branch is not reached from the body composition, whose walk refuses a failed template first (its
+/// `failed_template` refusal); it is kept for a direct caller and tested directly (review of #657, LOW 2).
 fn settled(vm: &Vm, template: ObjRef) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, template) || vm.defs.is_failed(&vm.space, template) {
         return Err(NotYet::not_read(NOT_SETTLED, RECORD).into());
@@ -95,7 +98,8 @@ pub fn gear_likeness(vm: &Vm, class: ClassId) -> Result<(), VmError> {
     let Some(ik) = code.key_of(iface) else {
         return Err(NotYet::not_read(GEAR_INTERFACE, RECORD).into());
     };
-    // The nearest class of the chain the code index holds (a hand-declared class has its package parent's tables).
+    // UNVERIFIED stand-in (module documentation): the nearest class of the chain the code index holds (a hand-declared
+    // class has its package parent's tables), or no when there is none.
     let mut cursor = Some(class);
     let mut key = None;
     while let Some(c) = cursor {
@@ -115,6 +119,7 @@ pub fn gear_likeness(vm: &Vm, class: ClassId) -> Result<(), VmError> {
             None => return Err(NotYet::not_read(GEAR_UNRESOLVED, RECORD).into()),
         }
     } else {
+        // UNVERIFIED stand-in (module documentation): the structural fallback for bodies that did not decode.
         code.implements_structurally(ck, ik)
     };
     if implements {
