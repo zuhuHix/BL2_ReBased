@@ -118,7 +118,7 @@ the machine lock, on a throwaway merge with #572 (3d948c43), #534 (8fc0420b) and
 by hand) — #552 conflicts with #534 in `card.rs` and was left out: 1 ok / 5 NotYet / 8 errors. Link 8 is 1 of 5 driver
 steps (`make` passes, 6 components instanced), stopping in `init` at "stopped after partial writes: value resolver
 class WillowGame.DamageTypeAttributeValueResolver". ctest and verify_packages not run (no C++ change). No real-game
-run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under the throwaway worktree's ignored `local/probe/`.
+run; `UNVERIFIED` in game. Decision 2026-11-19-218; logs under the throwaway worktree's ignored `local/probe/`.
 Rebased onto main c687c13 (98f22f6, desktop): `cargo test -p ow-world -p ow-cli` 461 passed / 0 failed / 9 ignored;
 `cargo test --workspace -j 2` 2,742 passed / 0 failed / 49 ignored; clippy flags nothing in the changed files.
 
