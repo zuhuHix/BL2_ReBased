@@ -240,7 +240,7 @@ receiver's own field as stored, no load (low, a fitted step, UNVERIFIED). `cargo
 local merge with #523, #535, #548 (22b29bfb) and #555 (0e9092a8), never pushed: 1 ok / 3 NotYet / 10 errors. Link 9
 passes `spawn` (1 of 2) and gets past this native in `cast`, then stops at the unbound `Object.GetFuncName()`, the next
 argument of the same event call. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in
-game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/gbpd-impl/`.
+game. Decision 2026-11-19-171; logs under ignored `local/analysis/gbpd-impl/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
