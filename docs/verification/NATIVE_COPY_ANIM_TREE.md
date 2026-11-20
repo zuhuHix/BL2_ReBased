@@ -1,6 +1,6 @@
 # The animation tree's copy and initialisation (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-COPY-ANIM-TREE (decision 2026-11-19-NNN, number pending).
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-COPY-ANIM-TREE (decision 2026-11-19-162, number pending).
 Analyst only: a different lane implements it (clean room).
 
 **Sources:**
