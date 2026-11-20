@@ -11,7 +11,8 @@
 //!
 //! Per weapon (each phase runs even when an earlier one stopped, so one run lists every phase's stop):
 //! - **make**: a `WillowWeapon` from its class defaults with the line's definition data and `ExpLevel`, as
-//!   `--script-diff` makes it; its owner is a `WillowPlayerPawn` (`Instigator` and `Owner`) whose `Controller` is a
+//!   `--script-diff` makes it, and in Off with its own copy of each component the class default owns (a logged,
+//!   UNVERIFIED harness input: the spawn path's instancing, NATIVE_SET_SKELETAL_MESH.md section 4); its owner is a `WillowPlayerPawn` (`Instigator` and `Owner`) whose `Controller` is a
 //!   `WillowPlayerController` (whose `Pawn` is the pawn) and whose `InvManager` is a `WillowInventoryManager` (whose
 //!   `Owner` is the pawn), each from its class defaults. These links stand in for the pickup and `AddInventory`
 //!   (lane H-INTERACT, the host side), which the run does not play: a harness choice, not a rule. The controller
@@ -379,6 +380,23 @@ fn write_t(vm: &mut Vm, object: ObjRef, name: &str, v: Value) -> Result<(), VmEr
         .prop(class, name)
         .ok_or_else(|| script(format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, object))))?;
     Ok(vm.space.write(object, PropAddr::scalar(p), v)?)
+}
+
+/// The line logged for the harness input of [`instance_weapon_components`].
+pub(crate) const WEAPON_COMPONENTS_INPUT: &str =
+    "harness input: the weapon's components instanced through the spawn path (UNVERIFIED harness input)";
+
+/// A harness input, **UNVERIFIED** (the hub's ruling on #583; NATIVE_SET_SKELETAL_MESH.md section 4): in the game every
+/// spawned weapon owns its mesh components, but the run makes its weapon from the class defaults, which leaves the
+/// shared template components in its slots. So the weapon gets its own copy of each component the class default owns,
+/// through the spawn path's instancing (`ow_world::actors::instance_components`, #435), and the run logs that it did.
+fn instance_weapon_components(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    let defaults = vm.defs.class_default(&mut vm.space, WEAPON);
+    vm.log.extend(vm.defs.take_log());
+    let defaults = defaults.map_err(VmError::from)?;
+    let pairs = ow_world::actors::instance_components(vm, defaults, weapon)?;
+    vm.log.push(format!("{WEAPON_COMPONENTS_INPUT}: {} component(s)", pairs.len()));
+    Ok(())
 }
 
 fn make_t(vm: &mut Vm, class: &str) -> Result<ObjRef, VmError> {
@@ -832,9 +850,13 @@ fn manufacturer_inputs(vm: &mut Vm, data: &mut Value, balance: ObjRef, level: i3
 }
 
 /// The weapon of a request, its definition data and level set, with no owner. `wrote` is set once the weapon exists.
+/// In Off it gets its own components first ([`instance_weapon_components`]).
 fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -> Result<ObjRef, VmError> {
     let weapon = make_t(vm, WEAPON)?;
     *wrote = true;
+    if vm.parity == ParityMode::Off {
+        instance_weapon_components(vm, weapon)?;
+    }
     let weapon_type = find_object_t(vm, &r.weapon_type)?;
     let balance = find_object_t(vm, &r.balance)?;
     let mut data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
