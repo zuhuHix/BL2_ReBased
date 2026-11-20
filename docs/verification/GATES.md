@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-BONE-TRANSFORM-LAYER (2026-11-20, pc-hummer, on main 241a6c47):** AI-assisted (Claude Code, Opus 5.5).
+Analyst note NATIVE_BONE_TRANSFORM_LAYER.md, no code. Installed Off `--slice-gate` strict on main: 4 ok / 9 NotYet / 1
+error; with local stand-ins (never pushed) for #612, #622, the socket attach and the Parent link, still 4 / 9 / 1, the
+six Maya links next at AnimNodeSpecialMoveBlend, and the parent's `bAttached` clear at all eight socket attaches: no
+slice link reaches the layer today.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
