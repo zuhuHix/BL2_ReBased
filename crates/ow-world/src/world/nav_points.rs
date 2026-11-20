@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-ALL-NAVIGATION-POINTS (decision 2026-11-19-NNN, number pending). The engine iterator
+//! Owner: lane IMPL-ALL-NAVIGATION-POINTS (decision 2026-11-19-125, number pending). The engine iterator
 //! `WorldInfo.AllNavigationPoints(BaseClass, out N)`, link 1's stop in `GameInfo.FindPlayerStart` (a `Teleporter` walk)
 //! and `GameInfo.ChoosePlayerStart` (a `PlayerStart` walk). AI-assisted (Claude Code).
 //!
@@ -44,7 +44,7 @@ use crate::actors::{actors_of, is_destroyed};
 /// The native key, as the installed declaration carries it.
 pub const KEY: &str = "WorldInfo.AllNavigationPoints(class,object)";
 /// The record these rules come from (no analyst note: the stock iterator, the packages and the script).
-pub const RECORD: &str = "docs/decisions/2026-11/2026-11-19-NNN-all-navigation-points-in-off.md";
+pub const RECORD: &str = "docs/decisions/2026-11/2026-11-19-125-all-navigation-points-in-off.md";
 /// The navigation point base class.
 pub const NAVIGATION_POINT: &str = "Engine.NavigationPoint";
 

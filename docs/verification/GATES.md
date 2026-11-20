@@ -28,7 +28,7 @@ ignored; `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict (relea
 false locally only, uncommitted, under the machine lock): 0 ok / 5 NotYet / 9 errors. Links 1, 3, 4, 5, 13 and 14 get
 past the iterator and stop in `maya:8` at the unbound `WillowPlayerPawn.InitializePawnMeshes()` (link 1: 0 of 1 driver
 step). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/analysis/navpoints/`.
+2026-11-19-125; logs under ignored `local/analysis/navpoints/`.
 
 **IMPL-IS-EDITOR (2026-11-19, pc-hummer, on fix/rust-link1-after-login c42f2e35, #499):** AI-assisted (Claude Code, Opus
 5.5). `WillowGameInfo.IsEditor` answers false in Off (the hub's ruling). `cargo build --workspace --locked -j 4` clean;
