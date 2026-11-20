@@ -1,6 +1,6 @@
 # A primitive component's `Bounds`: how they are computed, and what links 6 and 7 need
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-COMPONENT-BOUNDS (decision 2026-11-19-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-COMPONENT-BOUNDS (decision 2026-11-19-246), the analyst half of the
 clean room: another lane implements this note. This lane read the natives in `Borderlands2.exe` locally, with Ghidra
 12.1.4 read-only through `tools/ghidra/run.ps1` and a local copy of the table-read helper. The script was read with
 `research/script_disasm.py`. Raw output stays under ignored `local/analysis/component_bounds/`. No bl-sdk session was
