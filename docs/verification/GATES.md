@@ -67,6 +67,19 @@ build, under the machine lock): 2 ok / 4 NotYet / 8 errors. Link 8 is `notyet` i
 before either native, so the gate does not reach them (the base was not rerun). ctest and verify_packages not run (no
 C++ change). No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/gestalt/`.
 
+**IMPL-GEARBOXMIND-GETAICOMPONENT (2026-11-20, pc-hummer, on main 3ad58b08):** AI-assisted (Claude Code, Opus 5.5).
+`GearboxMind.GetAIComponent` in Off from NATIVE_GEARBOXMIND_GETAICOMPONENT.md as final at 660d0b32 (`ow-combat`
+`holds::get_ai_component`): the mind's own `AIComponent` by a plain heap read, an unloaded mind `NotYet { NotRead }`, a
+template component (outer `Origin::Default` or `Default__...`) `NotYet { NotRead }`, both also in the Off hold preflight;
+Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,669 passed / 0 failed / 48 ignored (5
+new `ow-combat` and 1 new `ow-ai` hold tests, #518's counters checked); `crate_edges_test.py` OK. Installed Off
+`--slice-gate` strict: 2 ok / 10 NotYet / 2 errors, all 14 rows byte-identical with and without the binding. Link 9
+passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun `ReplicationStrategy` 2 refusal ("stopped
+after partial writes: NounAttributeValueResolver with ReplicationStrategy 2 on a provider..."), before the flag
+evaluator reaches this native. A probe stacked on #523 was not run: #523 conflicts with main in 10 files (its counter
+names against #518's), which is #523's rebase. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs
+under ignored `local/p2/gac/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

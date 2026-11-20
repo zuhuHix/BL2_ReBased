@@ -342,10 +342,13 @@ fn subclass_virtuals_are_refused_for_all_kinds_before_mutation() {
     }
 }
 
-/// Every heap object's class, slots and origin, and the store's load state: equal before and after means nothing was
-/// written, made or loaded (#518's counters are not on main yet).
+/// #518's three counters (heap committed writes, store load transitions, generator draws), then every heap object's
+/// class, slots and origin and the store's load state: equal before and after means nothing was written, made, loaded
+/// or drawn.
 fn fingerprint(vm: &Vm) -> String {
-    vm.space
+    let counters = format!("{} {} {}\n", vm.space.heap.committed_writes(), vm.defs.load_transitions(), vm.rng.draws());
+    let objects: String = vm
+        .space
         .heap
         .handles()
         .into_iter()
@@ -353,7 +356,8 @@ fn fingerprint(vm: &Vm) -> String {
             let o = vm.space.heap.get(h).unwrap();
             format!("{h:?} {:?} {:?} {:?} {}\n", o.class, o.origin, o.slots, vm.defs.is_unloaded(&vm.space, h))
         })
-        .collect()
+        .collect();
+    counters + &objects
 }
 
 /// An invented `GearboxMind` (with `AIComponent`) and a `WillowMind` under it, at the paths the native reads.
