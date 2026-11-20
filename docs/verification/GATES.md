@@ -231,6 +231,15 @@ link 1 runs 0 of 1 step, its first stop moved from #569's unloaded-mesh `LayerAb
 section 2 step 5 (the initialisation's pass over the component; links 3, 4, 5, 13 and 14 blocked behind it). ctest and
 verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
 
+**IMPL-COPY-COMPONENT-PASS (2026-11-20, pc-hummer, on #585 at ce3be0ac):** AI-assisted (Claude Code, Opus 5.5). The
+tree initialisation's component pass and per-bone control arrays in Off from NATIVE_COPY_COMPONENT_PASS.md (#598 at
+6809f93a), replacing #561's two step-5 refusals. `cargo test --workspace --locked -j 2` 2,584 passed / 0 failed / 49
+ignored (11 new in `anim_tree_copy`); `cargo clippy -p ow-world --all-targets` adds no warning in the touched files;
+`crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #592, #570,
+#500 and #528: ok 1 / NotYet 10 / error 3 of 14; links 1, 3, 4, 5, 13 and 14 run 0 of 1 step and stop at the owner's
+event after the tree initialisation (was the component pass). ctest and verify_packages not run (no C++ change). No
+real-game run; every rule UNVERIFIED.
+
 **IMPL-PER-BONE-WEIGHTS (2026-11-19, pc-hummer, on #575 at e30b7fa9 with #569 at 10be0643 merged):** AI-assisted
 (Claude Code, Opus 5.5). The per-bone weight builders in Off from NATIVE_PER_BONE_WEIGHTS.md (#580 at 5b1a567). `cargo
 test -p ow-world` 337 passed / 0 failed / 5 ignored; `cargo test -p ow-object` 138 / 0; `cargo test --workspace --locked
