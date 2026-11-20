@@ -1,0 +1,486 @@
+//! Tests of `SkeletalMeshComponent.SetSkeletalMesh`'s mesh change in Off (lane IMPL-SKELMESH-MESH-CHANGE,
+//! NATIVE_SKELMESH_MESH_CHANGE.md section 4 and its test list) on invented packages (AGENTS.md rule 9): `Engine.upk`
+//! declares `SkeletalMesh` (with `Origin` and `RotOrigin`), `SkeletalMeshComponent` with the fields the rule reads and
+//! writes, and invented variants for the declaration cases; `GD_ToyMesh.upk` holds meshes, a holder whose fields name
+//! unloaded meshes, and a mesh whose payload is cut short (its load fails). The LOD count comes from an in-memory
+//! [`SkeletonSource`](crate::world::skeletal::SkeletonSource). Every value is invented. AI-assisted (Claude Code).
+
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use ow_attr::AttributeSystem;
+use ow_core::{Missing, ObjectPath, ParityMode};
+use ow_defs::DefStore;
+use ow_defs::identity::IdentityPolicy;
+use ow_object::heap::{ObjectSpace, Origin};
+use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::layout::{PropKind, PropertyDecl};
+use ow_object::value::Value;
+use ow_package::testkit::ints;
+use ow_package::testkit::reflect::{toy_array_of, toy_struct};
+use ow_package::testkit::script::ScriptToy;
+use ow_vm::api::{FunctionDecl, Vm};
+use ow_vm::error::VmError;
+
+use super::*;
+use crate::world::skeletal::{ReferenceSkeleton, SkeletalMeshes, SkeletonSource};
+
+static NEXT: AtomicU32 = AtomicU32::new(0);
+const PATH: &str = "Engine.SkeletalMeshComponent.SetSkeletalMesh";
+const COMPONENT: &str = "Engine.SkeletalMeshComponent";
+
+/// The component's fields, except `bHasValidBodies` (declared per class below).
+fn component_fields(t: &mut ScriptToy, c: i32, object: i32, mesh: i32) {
+    t.prop("Object", c, "SkeletalMesh", 0, mesh);
+    toy_array_of(t, c, "SpaceBases", "Int", 0);
+    for (n, k) in [("PhysicsAssetInstance", object), ("Animations", object), ("ParentAnimComponent", object), ("PhysicsAsset", object)] {
+        t.prop("Object", c, n, 0, k);
+    }
+    t.prop("Bool", c, "bAttached", 0, 0);
+    t.prop("Bool", c, "bAnimTreeInitialised", 0, 0);
+    toy_array_of(t, c, "MorphSets", "Object", object);
+    t.prop_tail("Map", c, "MorphTargetIndexMap", 0, &ints(&[0, 0]));
+    toy_array_of(t, c, "LODInfo", "Int", 0);
+}
+
+fn packages() -> Vec<(&'static str, Vec<u8>)> {
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let engine = {
+        let mut t = ScriptToy::with_imports(&[
+            "Class",
+            "ScriptStruct",
+            "ObjectProperty",
+            "ArrayProperty",
+            "IntProperty",
+            "FloatProperty",
+            "BoolProperty",
+            "StructProperty",
+            "MapProperty",
+        ]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let mesh = t.class("SkeletalMesh", object);
+        let vector = toy_struct(&mut t, mesh, "Vector", None);
+        for n in ["X", "Y", "Z"] {
+            t.prop("Float", vector, n, 0, 0);
+        }
+        let rotator = toy_struct(&mut t, mesh, "Rotator", None);
+        for n in ["Pitch", "Yaw", "Roll"] {
+            t.prop("Int", rotator, n, 0, 0);
+        }
+        t.prop("Struct", mesh, "Origin", 0, vector);
+        t.prop("Struct", mesh, "RotOrigin", 0, rotator);
+        // Row 11's declaration cases: Origin an int; no RotOrigin.
+        let int_origin = t.class("ToyIntOriginMesh", object);
+        t.prop("Int", int_origin, "Origin", 0, 0);
+        t.prop("Struct", int_origin, "RotOrigin", 0, rotator);
+        let no_rot = t.class("ToyNoRotMesh", object);
+        t.prop("Struct", no_rot, "Origin", 0, vector);
+        let component = t.class("SkeletalMeshComponent", object);
+        component_fields(&mut t, component, object, object);
+        t.prop("Bool", component, "bHasValidBodies", 0, 0);
+        // Row D's cases: bHasValidBodies an int; no bHasValidBodies.
+        let int_bodies = t.class("ToyIntBodiesComponent", object);
+        component_fields(&mut t, int_bodies, object, object);
+        t.prop("Int", int_bodies, "bHasValidBodies", 0, 0);
+        let no_bodies = t.class("ToyNoBodiesComponent", object);
+        component_fields(&mut t, no_bodies, object, object);
+        let holder = t.class("ToyHolder", object);
+        for n in ["Lazy", "Lazy2", "Broken"] {
+            t.prop("Object", holder, n, 0, object);
+        }
+        t.build()
+    };
+    let gd = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let mesh = t.p.add_import("Core", "Class", engine, "SkeletalMesh");
+        let int_origin = t.p.add_import("Core", "Class", engine, "ToyIntOriginMesh");
+        let no_rot = t.p.add_import("Core", "Class", engine, "ToyNoRotMesh");
+        let holder = t.p.add_import("Core", "Class", engine, "ToyHolder");
+        let mut empty = ints(&[0]);
+        empty.extend_from_slice(&t.none);
+        for n in ["Mesh_A", "Mesh_B", "Mesh_Zero"] {
+            t.p.add_export(mesh, n, empty.clone());
+        }
+        t.p.add_export(int_origin, "Mesh_IntOrigin", empty.clone());
+        t.p.add_export(no_rot, "Mesh_NoRot", empty.clone());
+        let first = t.p.next_export();
+        t.p.add_export(mesh, "Mesh_Lazy", empty.clone());
+        t.p.add_export(mesh, "Mesh_Lazy2", empty.clone());
+        t.p.add_export(mesh, "Mesh_Broken", vec![1, 2]);
+        let mut h = ints(&[0]);
+        for (i, n) in ["Lazy", "Lazy2", "Broken"].iter().enumerate() {
+            h.extend(t.p.object_tag(n, first + i32::try_from(i).unwrap()));
+        }
+        h.extend_from_slice(&t.none);
+        t.p.add_export(holder, "Holder_0", h);
+        t.build()
+    };
+    vec![("Core.upk", core), ("Engine.upk", engine), ("GD_ToyMesh.upk", gd)]
+}
+
+/// The LOD counts by mesh leaf; any other leaf has no answer.
+struct Lods(Vec<(&'static str, usize)>);
+
+impl SkeletonSource for Lods {
+    fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+        Ok(None)
+    }
+    fn lod_count(&self, _: &str, _: &str, leaf: &str) -> Result<Option<usize>, String> {
+        Ok(self.0.iter().find(|(l, _)| *l == leaf).map(|(_, n)| *n))
+    }
+}
+
+struct Fx {
+    vm: Vm,
+    dir: PathBuf,
+}
+
+impl Drop for Fx {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The fixture, with the LOD layer answering `lods` (or not installed with `None`).
+fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
+    let dir = std::env::temp_dir().join(format!("ow-world-smmc-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files = packages();
+    let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    let defs = DefStore::from_synthetic(&dir, &refs, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    for c in [COMPONENT, "Engine.SkeletalMesh", "Engine.ToyIntBodiesComponent", "Engine.ToyNoBodiesComponent"] {
+        vm.find_class(c).unwrap();
+    }
+    let component = vm.space.classes.by_path(COMPONENT).unwrap();
+    let mesh = vm.space.classes.by_path("Engine.SkeletalMesh").unwrap();
+    let d = |vm: &mut Vm, n: &str, k: PropKind| PropertyDecl::new(vm.space.names.intern(n), k);
+    let params = vec![
+        d(&mut vm, "NewMesh", PropKind::Object { class: mesh }).with_flags(PropertyDecl::PARAM),
+        d(&mut vm, "bKeepSpaceBases", PropKind::Bool).with_flags(PropertyDecl::PARAM | PropertyDecl::OPTIONAL),
+    ];
+    let f = FunctionDecl::native(ObjectPath::parse(PATH).unwrap(), SET_SKELETAL_MESH).with_owner(component).with_params(params);
+    vm.declare_function(f).unwrap();
+    register(&mut vm).unwrap();
+    if let Some(l) = lods {
+        SkeletalMeshes::install(&mut vm, Box::new(Lods(l))).unwrap();
+    }
+    let mut x = Fx { vm, dir };
+    for n in ["Mesh_A", "Mesh_B", "Mesh_Zero", "Mesh_IntOrigin", "Mesh_NoRot", "Holder_0"] {
+        x.export(n);
+    }
+    x
+}
+
+/// The default: every resident mesh of the package answers a known LOD count of zero.
+fn fx() -> Fx {
+    fx_with(Some(vec![("Mesh_A", 0), ("Mesh_B", 0), ("Mesh_Zero", 0), ("Mesh_IntOrigin", 0), ("Mesh_NoRot", 0)]))
+}
+
+/// #518's counters, and the name table's length.
+fn marks(vm: &Vm) -> (u64, u64, u64, usize) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+impl Fx {
+    fn export(&mut self, leaf: &str) -> ObjRef {
+        let path = ObjectPath::parse(&format!("GD_ToyMesh.{leaf}")).unwrap();
+        self.vm.defs.find(&mut self.vm.space, &path).unwrap().unwrap()
+    }
+
+    /// The holder's field `n`: an unloaded handle (the `Broken` one fails when loaded).
+    fn held(&mut self, n: &str) -> ObjRef {
+        let holder = self.export("Holder_0");
+        match self.get(holder, n) {
+            Value::Object(Some(o)) => o,
+            other => panic!("{n}: {other:?}"),
+        }
+    }
+
+    /// A component of `class`, holding `mesh`, every other field at its default.
+    fn component_of(&mut self, class: &str, mesh: Option<ObjRef>) -> ObjRef {
+        let c = self.vm.space.classes.by_path(class).unwrap();
+        let o = self.vm.space.alloc(c, "Comp", None, Origin::Runtime).unwrap();
+        self.put(o, "SkeletalMesh", Value::Object(mesh));
+        o
+    }
+
+    fn component(&mut self, mesh: Option<ObjRef>) -> ObjRef {
+        self.component_of(COMPONENT, mesh)
+    }
+
+    fn get(&self, o: ObjRef, n: &str) -> Value {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, n).unwrap();
+        self.vm.space.read(o, PropAddr::scalar(p)).unwrap().clone()
+    }
+
+    /// `o.n := v`, past the heap's write checks (a fixture).
+    fn put(&mut self, o: ObjRef, n: &str, v: Value) {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, n).unwrap();
+        *self.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+    }
+
+    /// Member `m` of the struct field `n` of `o` set to `v`.
+    fn put_member(&mut self, o: ObjRef, n: &str, m: &str, v: Value) {
+        let mut s = self.get(o, n);
+        let ty = s.as_struct().unwrap().ty;
+        let id = self.vm.space.names.find(m).unwrap();
+        let (i, _) = self.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        s.struct_mut().unwrap().fields[usize::try_from(i).unwrap()] = v;
+        self.put(o, n, s);
+    }
+
+    fn call(&mut self, c: ObjRef, args: Vec<Value>) -> Result<Value, VmError> {
+        let f = self.vm.find_function(PATH).unwrap();
+        self.vm.call(f, Some(c), args).map(|r| r.ret)
+    }
+
+    /// One refused call: the refusal, with #518's counters, the name table's length and every slot of the component
+    /// unchanged.
+    fn refused(&mut self, c: ObjRef, args: Vec<Value>) -> VmError {
+        let (before, slots) = (marks(&self.vm), self.vm.space.heap.get(c).unwrap().slots.clone());
+        let e = self.call(c, args).unwrap_err();
+        assert_eq!(marks(&self.vm), before, "no write, draw, load or name: {e}");
+        assert_eq!(self.vm.space.heap.get(c).unwrap().slots, slots, "the component unchanged: {e}");
+        e
+    }
+}
+
+fn some(o: ObjRef) -> Value {
+    Value::Object(Some(o))
+}
+
+/// The refusal's kind and text.
+fn kind(e: VmError) -> (Missing, String) {
+    match e {
+        VmError::NotYet(n) => {
+            assert_eq!(n.record, CHANGE_RECORD, "{n}");
+            (n.missing, n.what.to_string())
+        }
+        other => panic!("expected a NotYet, got {other:?}"),
+    }
+}
+
+fn script_text(e: VmError) -> String {
+    match e {
+        VmError::Script { message, .. } => message,
+        other => panic!("expected a script error, got {other:?}"),
+    }
+}
+
+/// Test 1's addition: a malformed argument is reported ahead of a malformed `SkeletalMesh` declaration (row 2 before
+/// row 3); the receiver's residency before both.
+#[test]
+fn a_malformed_argument_comes_before_the_mesh_declaration() {
+    let mut x = fx();
+    let c = x.component_of("Engine.ToyIntBodiesComponent", None);
+    x.put(c, "SkeletalMesh", Value::Int(3));
+    assert!(script_text(x.refused(c, vec![Value::Int(1)])).contains("NewMesh holds"));
+}
+
+/// Test 2: rows 5 and 6, an unloaded or failed old mesh (a resident new one), an unloaded or failed new mesh (no old
+/// one), and with both unloaded, the old one's refusal. Nothing is loaded.
+#[test]
+fn unloaded_and_failed_meshes_are_not_read() {
+    let mut x = fx();
+    let (lazy, lazy2, broken, a) = (x.held("Lazy"), x.held("Lazy2"), x.held("Broken"), x.export("Mesh_A"));
+    assert!(x.vm.defs.ensure_loaded(&mut x.vm.space, broken).is_err(), "the cut payload fails to load");
+    for old in [lazy, broken] {
+        let c = x.component(Some(old));
+        assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, OLD_UNLOADED.to_string()));
+    }
+    for new in [lazy, broken] {
+        let c = x.component(None);
+        assert_eq!(kind(x.refused(c, vec![some(new)])), (Missing::NotRead, NEW_UNLOADED.to_string()));
+    }
+    let c = x.component(Some(lazy));
+    assert_eq!(kind(x.refused(c, vec![some(lazy2)])).1, OLD_UNLOADED, "both unloaded: the old mesh's");
+    for o in [lazy, lazy2] {
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, o), "never loaded");
+    }
+}
+
+/// One fixture change: the component and a second mesh.
+type Setter = Box<dyn Fn(&mut Fx, ObjRef, ObjRef)>;
+
+/// Test 3: each row of C on its own, before any write.
+#[test]
+fn each_unported_path_refuses_before_any_write() {
+    let cases: Vec<(&str, Setter, bool, Missing, &str)> = vec![
+        ("7 keep", Box::new(|x, c, _| x.put(c, "SpaceBases", Value::array(vec![Value::Int(1)]))), true, Missing::LayerAbsent(BONES_LAYER), KEEP),
+        ("8 physics instance", Box::new(|x, c, o| x.put(c, "PhysicsAssetInstance", some(o))), false, Missing::LayerAbsent(PHYSICS_INSTANCE_LAYER), PHYSICS_INSTANCE),
+        ("9 attached", Box::new(|x, c, _| x.put(c, "bAttached", Value::Bool(true))), false, Missing::NotRead, ATTACHED),
+        ("10 tree", Box::new(|x, c, o| x.put(c, "Animations", some(o))), false, Missing::NotPorted, TREE),
+        ("12 parent", Box::new(|x, c, o| x.put(c, "ParentAnimComponent", some(o))), false, Missing::LayerAbsent(BONE_NAMES_LAYER), PARENT_BONES),
+        ("13 physics asset", Box::new(|x, c, o| x.put(c, "PhysicsAsset", some(o))), false, Missing::LayerAbsent(BONE_NAMES_LAYER), VALID_BODIES),
+        ("14 morph sets", Box::new(|x, c, o| x.put(c, "MorphSets", Value::array(vec![some(o)]))), false, Missing::NotPorted, MORPH),
+    ];
+    for (row, set, keep, missing, text) in cases {
+        let mut x = fx();
+        let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+        let c = x.component(Some(a));
+        set(&mut x, c, b);
+        let got = kind(x.refused(c, vec![some(b), Value::Bool(keep)]));
+        assert_eq!(got, (missing, text.to_string()), "row {row}");
+    }
+    // Row 11: a non-zero Origin, then a non-zero RotOrigin, on the new mesh and then on the old.
+    for (field, member, v) in [("Origin", "X", Value::Float(1.0)), ("RotOrigin", "Yaw", Value::Int(16384))] {
+        for on_new in [true, false] {
+            let mut x = fx();
+            let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+            x.put_member(if on_new { b } else { a }, field, member, v.clone());
+            let c = x.component(Some(a));
+            assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::LayerAbsent(TRANSFORM_LAYER), TRANSFORM.to_string()), "{field} new {on_new}");
+        }
+    }
+    // Row 14: a MorphTargetIndexMap that is not None.
+    let mut x = fx();
+    let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+    let c = x.component(Some(a));
+    x.put(c, "MorphTargetIndexMap", Value::Int(1));
+    assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::NotPorted, MORPH.to_string()));
+}
+
+/// Test 4: mixed cases: a non-zero origin with a LOD blocker reports the transform (row 11 before 15); attached with
+/// a tree reports row 9; morph sets with a LOD blocker report row 14.
+#[test]
+fn mixed_cases_report_the_earlier_row() {
+    let mut x = fx_with(None);
+    let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+    x.put_member(b, "Origin", "Z", Value::Float(2.0));
+    let c = x.component(Some(a));
+    assert_eq!(kind(x.refused(c, vec![some(b)])).0, Missing::LayerAbsent(TRANSFORM_LAYER));
+    let c = x.component(Some(a));
+    x.put(c, "bAttached", Value::Bool(true));
+    x.put(c, "Animations", some(a));
+    assert_eq!(kind(x.refused(c, vec![some(b)])).1, ATTACHED);
+    let zero = x.export("Mesh_Zero");
+    let c = x.component(Some(a));
+    x.put(c, "MorphSets", Value::array(vec![some(a)]));
+    assert_eq!(kind(x.refused(c, vec![some(zero)])).1, MORPH);
+}
+
+/// Tests 5 and 8: keep with a current mesh and an empty buffer is no refusal; the minimal change (no old mesh) makes
+/// the four writes, and `LODInfo` and `MorphTargetIndexMap` stay as they were.
+#[test]
+fn the_minimal_change_makes_the_four_writes() {
+    let mut x = fx();
+    let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+    for (old, keep) in [(None, false), (Some(a), true)] {
+        let c = x.component(old);
+        x.put(c, "bAnimTreeInitialised", Value::Bool(true));
+        x.put(c, "bHasValidBodies", Value::Bool(true));
+        let (lod, morph) = (x.get(c, "LODInfo"), x.get(c, "MorphTargetIndexMap"));
+        let (w, d, l, n) = marks(&x.vm);
+        x.call(c, vec![some(b), Value::Bool(keep)]).unwrap();
+        assert_eq!(marks(&x.vm), (w + 4, d, l, n), "four writes, no draw, no load, no name");
+        assert_eq!(x.get(c, "bAnimTreeInitialised"), Value::Bool(false));
+        assert_eq!(x.get(c, "SkeletalMesh"), some(b));
+        assert_eq!(x.get(c, "SpaceBases"), Value::array(Vec::new()));
+        assert_eq!(x.get(c, "bHasValidBodies"), Value::Bool(false));
+        assert_eq!((x.get(c, "LODInfo"), x.get(c, "MorphTargetIndexMap")), (lod, morph), "not written");
+    }
+}
+
+/// Test 6: row 11's declarations: `Origin` of another kind, or no `RotOrigin`, is a script error naming it, before
+/// any write; `-0.0` members count as zero.
+#[test]
+fn origin_declarations_and_negative_zero() {
+    let mut x = fx();
+    let a = x.export("Mesh_A");
+    for (leaf, field) in [("Mesh_IntOrigin", "Origin"), ("Mesh_NoRot", "RotOrigin")] {
+        let bad = x.export(leaf);
+        let c = x.component(Some(a));
+        let e = script_text(x.refused(c, vec![some(bad)]));
+        assert!(e.contains(field), "{leaf}: {e}");
+    }
+    let b = x.export("Mesh_B");
+    x.put_member(b, "Origin", "Y", Value::Float(-0.0));
+    let c = x.component(Some(a));
+    x.call(c, vec![some(b)]).unwrap();
+    assert_eq!(x.get(c, "SkeletalMesh"), some(b), "-0.0 is zero");
+}
+
+/// Test 7: row 15. No layer answer: LayerAbsent; a known zero with an empty `LODInfo`: nothing; a known 2, with two
+/// entries and with none: LayerAbsent; a known zero against a non-empty `LODInfo`: LayerAbsent.
+#[test]
+fn the_lod_row() {
+    let mut x = fx_with(Some(vec![("Mesh_A", 0), ("Mesh_B", 2)]));
+    let (a, b, zero) = (x.export("Mesh_A"), x.export("Mesh_B"), x.export("Mesh_Zero"));
+    let c = x.component(None);
+    assert_eq!(kind(x.refused(c, vec![some(zero)])), (Missing::LayerAbsent(LOD_LAYER), LOD.to_string()), "no answer");
+    let c = x.component(None);
+    x.call(c, vec![some(a)]).unwrap();
+    for entries in [vec![Value::Int(0), Value::Int(0)], vec![]] {
+        let c = x.component(None);
+        x.put(c, "LODInfo", Value::array(entries));
+        assert_eq!(kind(x.refused(c, vec![some(b)])).0, Missing::LayerAbsent(LOD_LAYER), "a known 2");
+    }
+    let c = x.component(None);
+    x.put(c, "LODInfo", Value::array(vec![Value::Int(0)]));
+    assert_eq!(kind(x.refused(c, vec![some(a)])).0, Missing::LayerAbsent(LOD_LAYER), "zero against one entry");
+    // No layer installed at all: no answer.
+    let mut y = fx_with(None);
+    let a = y.export("Mesh_A");
+    let c = y.component(None);
+    assert_eq!(kind(y.refused(c, vec![some(a)])).0, Missing::LayerAbsent(LOD_LAYER));
+}
+
+/// Test 9: the clear (a set mesh to None): an unloaded old mesh is row 5; a resident old mesh at zero origin gives the
+/// four writes with `SkeletalMesh` None and `LODInfo` unchanged, with no layer answer at all; a non-zero origin is the
+/// transform's LayerAbsent.
+#[test]
+fn the_clear() {
+    let mut x = fx_with(None);
+    let (lazy, a) = (x.held("Lazy"), x.export("Mesh_A"));
+    let c = x.component(Some(lazy));
+    assert_eq!(kind(x.refused(c, vec![Value::Object(None)])).1, OLD_UNLOADED);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy));
+    let c = x.component(Some(a));
+    x.put(c, "LODInfo", Value::array(vec![Value::Int(5)]));
+    let (w, ..) = marks(&x.vm);
+    x.call(c, vec![Value::Object(None)]).unwrap();
+    assert_eq!(marks(&x.vm).0, w + 4);
+    assert_eq!(x.get(c, "SkeletalMesh"), Value::Object(None));
+    assert_eq!(x.get(c, "LODInfo"), Value::array(vec![Value::Int(5)]), "a clear leaves LODInfo");
+    x.put_member(a, "RotOrigin", "Roll", Value::Int(1));
+    let c = x.component(Some(a));
+    assert_eq!(kind(x.refused(c, vec![Value::Object(None)])).0, Missing::LayerAbsent(TRANSFORM_LAYER));
+}
+
+/// Test 10: row D: a late destination that cannot take its write (`bHasValidBodies` an int, or not declared) is a
+/// script error naming it, with nothing written.
+#[test]
+fn an_unwritable_destination_writes_nothing() {
+    let mut x = fx();
+    let b = x.export("Mesh_B");
+    for class in ["Engine.ToyIntBodiesComponent", "Engine.ToyNoBodiesComponent"] {
+        let c = x.component_of(class, None);
+        let e = script_text(x.refused(c, vec![some(b)]));
+        assert!(e.contains("bHasValidBodies"), "{class}: {e}");
+        assert_eq!(x.get(c, "SkeletalMesh"), Value::Object(None), "{class}: SkeletalMesh unchanged");
+    }
+}
+
+/// Test 11: Reference binds nothing; the world's pack binds the key in Off only.
+#[test]
+fn reference_binds_nothing() {
+    let dir = std::env::temp_dir().join(format!("ow-world-smmc-ref-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files = packages();
+    let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    let defs = DefStore::from_synthetic(&dir, &refs, IdentityPolicy::FirstInScanOrder, ParityMode::Reference).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Reference);
+    ow_vm::api::NativePack::register(&crate::world::Pack, &mut vm).unwrap();
+    assert!(!vm.native_keys().any(|k| k == SET_SKELETAL_MESH));
+    let _ = std::fs::remove_dir_all(&dir);
+}
