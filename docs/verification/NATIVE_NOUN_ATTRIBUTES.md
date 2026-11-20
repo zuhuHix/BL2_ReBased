@@ -180,7 +180,7 @@ says "none", reads return 0.0 and writes return false, and nothing changes.
 
 ## 10. The providers' arrays and the replicated copy (lane ANALYST-NOUN-REPLICATION, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-NOUN-REPLICATION (decision 2026-11-19-NNN).
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-NOUN-REPLICATION (decision 2026-11-19-128).
 - **Sources:**
   - the game executable, read with Ghidra (`tools/ghidra/run.ps1` read-only queries and the local table reader, one
     headless run at a time under the machine lock);
