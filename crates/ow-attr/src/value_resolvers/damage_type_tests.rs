@@ -8,9 +8,11 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 
-use super::damage_type::{CLASS, DAMAGE_TYPE_RECORD};
+use ow_package::store::PackageStore;
+
+use super::damage_type::{CLASS, DAMAGE_TYPE_RECORD, DamageType};
 use super::testworld::{Fx, system};
-use crate::api::{AttrError, EvalCx};
+use crate::api::{AttrError, EvalCx, InitData, ValueResolver};
 
 /// A weapon whose `DefinitionData` holds `weapon_type` and `part`, written through the slot (the test world types
 /// those fields for its own `Object`; a store handle is of another class).
@@ -44,7 +46,10 @@ fn part(fx: &mut Fx, custom: Option<ObjRef>) -> ObjRef {
     fx.obj(c, "Part", vec![("CustomDamageTypeDefinition", Value::Object(custom))])
 }
 
-/// The resolver over `entries` (name, `ValueIfMatched`), with `ValueIfNotMatched` 0.
+/// The invented `ValueIfNotMatched` of the fixtures: not 0, so a hardcoded 0 fails (review r1 of #584, item 2).
+const FALLBACK: f32 = 7.0;
+
+/// The resolver over `entries` (name, `ValueIfMatched`), with `ValueIfNotMatched` [`FALLBACK`].
 fn resolver(fx: &mut Fx, entries: &[(&str, f32)]) -> ObjRef {
     let sel = fx.c.damage_sel;
     let mut list = Vec::new();
@@ -52,18 +57,44 @@ fn resolver(fx: &mut Fx, entries: &[(&str, f32)]) -> ObjRef {
         let (name, value) = (fx.name(n), fx.k(*v));
         list.push(fx.st(sel, vec![("AssociatedDamageTypeName", name), ("ValueIfMatched", value)]));
     }
-    let zero = fx.k(0.0);
+    let zero = fx.k(FALLBACK);
     let c = fx.by_path(CLASS);
     fx.obj(c, "DamageType", vec![("DamageTypes", Value::array(list)), ("ValueIfNotMatched", zero)])
 }
 
-/// The value of an attribute over the resolver `r` behind a context resolver aimed at `context`.
-fn value(fx: &mut Fx, r: ObjRef, context: ObjRef) -> Result<Option<f32>, AttrError> {
+/// An attribute over the resolver `r` behind a context resolver aimed at `context` (built before a counter is read).
+fn attr_for(fx: &mut Fx, r: ObjRef, context: ObjRef) -> ObjRef {
     let ctx = fx.target(Some(context));
-    let attr = fx.attr("WeaponDamage_Is_Test", vec![ctx], vec![r]);
+    fx.attr("WeaponDamage_Is_Test", vec![ctx], vec![r])
+}
+
+/// The value of `attr`, building nothing.
+fn read_attr(fx: &mut Fx, attr: ObjRef) -> Result<Option<f32>, AttrError> {
     let sys = system();
     let mut cx = EvalCx::new(&mut fx.w);
     Ok(sys.value_of(attr, None, None, &mut cx)?.map(|v| v.value))
+}
+
+/// The value of an attribute over the resolver `r` behind a context resolver aimed at `context`.
+fn value(fx: &mut Fx, r: ObjRef, context: ObjRef) -> Result<Option<f32>, AttrError> {
+    let attr = attr_for(fx, r, context);
+    let sys = system();
+    let mut cx = EvalCx::new(&mut fx.w);
+    Ok(sys.value_of(attr, None, None, &mut cx)?.map(|v| v.value))
+}
+
+/// Writes property `name` of `o` through its slot (no class check: a store handle may be set in a test-world field).
+fn set(fx: &mut Fx, o: ObjRef, name: &str, v: Value) {
+    let class = fx.w.space.heap.get(o).unwrap().class;
+    let p = fx.w.space.prop(class, name).unwrap();
+    *fx.w.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+}
+
+fn not_ported(e: AttrError) -> String {
+    match e {
+        AttrError::NotYet(n) if n.missing == Missing::NotPorted => n.what.into_owned(),
+        other => panic!("expected NotYet {{ NotPorted }}, got {other:?}"),
+    }
 }
 
 fn not_read(e: AttrError) -> String {
@@ -77,7 +108,7 @@ fn not_read(e: AttrError) -> String {
 /// otherwise `ValueIfNotMatched`.
 #[test]
 fn the_default_damage_type_matches_by_name() {
-    for (dmg, expected) in [("TestDmg_Acid", 1.0f32), ("TestDmg_Plain", 0.0)] {
+    for (dmg, expected) in [("TestDmg_Acid", 1.0f32), ("TestDmg_Plain", FALLBACK)] {
         let mut fx = Fx::new();
         let d = damage_type(&mut fx, dmg);
         let t = weapon_type(&mut fx, Some(d));
@@ -90,7 +121,7 @@ fn the_default_damage_type_matches_by_name() {
 /// The elemental part's custom damage type replaces the default; a part with no custom type keeps the default.
 #[test]
 fn the_elemental_parts_custom_type_replaces_the_default() {
-    for (custom, expected) in [(Some("TestDmg_Acid"), 1.0f32), (None, 0.0)] {
+    for (custom, expected) in [(Some("TestDmg_Acid"), 1.0f32), (None, FALLBACK)] {
         let mut fx = Fx::new();
         let plain = damage_type(&mut fx, "TestDmg_Plain");
         let t = weapon_type(&mut fx, Some(plain));
@@ -111,13 +142,15 @@ fn no_damage_type_matches_no_entry() {
     let p = part(&mut fx, Some(acid));
     let gun = weapon(&mut fx, None, Some(p));
     let r = resolver(&mut fx, &[("None", 1.0), ("TestDmg_Acid", 1.0)]);
-    assert_eq!(value(&mut fx, r, gun), Ok(Some(0.0)), "the part is not read without a type");
+    assert_eq!(value(&mut fx, r, gun), Ok(Some(FALLBACK)), "the part is not read without a type");
     let t = weapon_type(&mut fx, None);
     let gun = weapon(&mut fx, Some(t), None);
-    assert_eq!(value(&mut fx, r, gun), Ok(Some(0.0)));
+    assert_eq!(value(&mut fx, r, gun), Ok(Some(FALLBACK)));
 }
 
-/// An empty list is `ValueIfNotMatched`; with several matching entries the first one's value is taken.
+/// An empty list is `ValueIfNotMatched`; with several matching entries the first one's value is taken. Each entry
+/// carries its own `ValueIfMatched` (the installed class layout), so a match answers that entry's value; the installed
+/// lists all hold 1 (review r1 of #584, item 4).
 #[test]
 fn an_empty_list_is_not_matched_and_the_first_match_wins() {
     let mut fx = Fx::new();
@@ -125,7 +158,7 @@ fn an_empty_list_is_not_matched_and_the_first_match_wins() {
     let t = weapon_type(&mut fx, Some(d));
     let gun = weapon(&mut fx, Some(t), None);
     let empty = resolver(&mut fx, &[]);
-    assert_eq!(value(&mut fx, empty, gun), Ok(Some(0.0)));
+    assert_eq!(value(&mut fx, empty, gun), Ok(Some(FALLBACK)));
     let twice = resolver(&mut fx, &[("TestDmg_Other", 5.0), ("TestDmg_Acid", 2.0), ("TestDmg_Acid", 3.0)]);
     assert_eq!(value(&mut fx, twice, gun), Ok(Some(2.0)));
 }
@@ -210,6 +243,38 @@ fn store_handles_are_read_only_when_resident() {
     let r = resolver(&mut fx, &[("TestDmg_Acid", 1.0)]);
     let counters = |fx: &Fx| (fx.w.space.heap.committed_writes(), fx.w.defs.as_ref().unwrap().load_transitions());
 
+    // A cold resolver (a store handle, called directly as a value or base-value read would reach it): refused by
+    // name before any field of it is read, with nothing loaded or written (review r1 of #584, item 1).
+    let gun = weapon(&mut fx, Some(type_handle), None);
+    let before = counters(&fx);
+    let sys = system();
+    for base in [false, true] {
+        let mut cx = EvalCx::new(&mut fx.w);
+        let e = if base {
+            DamageType.base_value(&sys, part_handle, gun, 0.0, &mut cx)
+        } else {
+            DamageType.value(&sys, part_handle, gun, 0.0, &mut cx)
+        };
+        let what = not_read(e.unwrap_err());
+        assert!(what.contains("the resolver") && what.contains("a load is a write"), "{what}");
+    }
+    assert_eq!(counters(&fx), before, "no write, no load");
+    assert!(fx.w.defs.as_ref().unwrap().is_unloaded(&fx.w.space, part_handle));
+
+    // A fallback whose InitializationDefinition is a cold handle: refused before it is touched (item 2).
+    let plain = damage_type(&mut fx, "TestDmg_Plain");
+    let warm_type = weapon_type(&mut fx, Some(plain));
+    let warm_gun = weapon(&mut fx, Some(warm_type), None);
+    let cold_fallback = resolver(&mut fx, &[]);
+    let data = fx.of_def(part_handle);
+    set(&mut fx, cold_fallback, "ValueIfNotMatched", data);
+    let at = attr_for(&mut fx, cold_fallback, warm_gun);
+    let before = counters(&fx);
+    let what = not_ported(read_attr(&mut fx, at).unwrap_err());
+    assert!(what.contains("ValueIfNotMatched"), "{what}");
+    assert_eq!(counters(&fx), before, "no write, no load");
+    assert!(fx.w.defs.as_ref().unwrap().is_unloaded(&fx.w.space, part_handle));
+
     // The type is cold: refused by name, nothing loaded.
     let gun = weapon(&mut fx, Some(type_handle), None);
     let before = counters(&fx);
@@ -242,4 +307,62 @@ fn store_handles_are_read_only_when_resident() {
     assert_eq!(counters(&fx).1, loads, "the damage type is never loaded");
     assert!(fx.w.defs.as_ref().unwrap().is_unloaded(&fx.w.space, dmg_handle));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only constant `AttributeInitializationData` is evaluated: a matched entry or a fallback with a
+/// `BaseValueAttribute` or an `InitializationDefinition` is `NotYet { NotPorted }` with nothing written (review r1 of
+/// #584, item 2). A scaled constant is its constant times its scale.
+#[test]
+fn only_constant_values_are_evaluated() {
+    let mut fx = Fx::new();
+    let d = damage_type(&mut fx, "TestDmg_Acid");
+    let t = weapon_type(&mut fx, Some(d));
+    let gun = weapon(&mut fx, Some(t), None);
+    let attr = fx.constant_attr("Inner", 4.0);
+    let def = fx.definition(vec![]);
+    let scaled = fx.data(InitData { base_value_scale_constant: 3.0, ..InitData::constant(2.0) });
+    let r = resolver(&mut fx, &[("TestDmg_Acid", 1.0)]);
+    let sel = fx.c.damage_sel;
+    let n = fx.name("TestDmg_Acid");
+    let entry = fx.st(sel, vec![("AssociatedDamageTypeName", n.clone()), ("ValueIfMatched", scaled)]);
+    set(&mut fx, r, "DamageTypes", Value::array(vec![entry]));
+    assert_eq!(value(&mut fx, r, gun), Ok(Some(6.0)));
+    for (which, data) in [("attribute", fx.of_attr(attr)), ("definition", fx.of_def(def))] {
+        let entry = fx.st(sel, vec![("AssociatedDamageTypeName", n.clone()), ("ValueIfMatched", data.clone())]);
+        set(&mut fx, r, "DamageTypes", Value::array(vec![entry]));
+        let unmatched = resolver(&mut fx, &[]);
+        set(&mut fx, unmatched, "ValueIfNotMatched", data);
+        let (matched_attr, unmatched_attr) = (attr_for(&mut fx, r, gun), attr_for(&mut fx, unmatched, gun));
+        let writes = fx.w.space.heap.committed_writes();
+        let what = not_ported(read_attr(&mut fx, matched_attr).unwrap_err());
+        assert!(what.contains("a ValueIfMatched with"), "{which}: {what}");
+        let what = not_ported(read_attr(&mut fx, unmatched_attr).unwrap_err());
+        assert!(what.contains("a ValueIfNotMatched with"), "{which}: {what}");
+        assert_eq!(fx.w.space.heap.committed_writes(), writes, "{which}");
+    }
+}
+
+/// Reference keeps the refusal of the unregistered class: the loading and resident preflights, a value, a base value
+/// and the storage (review r1 of #584, item 3).
+#[test]
+fn reference_keeps_the_unregistered_refusal() {
+    let mut fx = Fx::new();
+    fx.w.defs = Some(DefStore::new(PackageStore::new_empty(), IdentityPolicy::FirstInScanOrder, ParityMode::Reference));
+    let d = damage_type(&mut fx, "TestDmg_Acid");
+    let t = weapon_type(&mut fx, Some(d));
+    let gun = weapon(&mut fx, Some(t), None);
+    let r = resolver(&mut fx, &[("TestDmg_Acid", 1.0)]);
+    let ctx = fx.target(Some(gun));
+    let attr = fx.attr("WeaponDamage_Is_Test", vec![ctx], vec![r]);
+    let sys = system();
+    let expected = format!("value resolver class {CLASS} [NATIVE_ATTRIBUTES.md section 6]");
+    let writes = fx.w.space.heap.committed_writes();
+    let mut cx = EvalCx::new(&mut fx.w);
+    assert_eq!(not_read(sys.preflight_read(attr, &mut cx).unwrap_err()), expected, "preflight");
+    assert_eq!(not_read(sys.preflight_read_resident(attr, &mut cx).unwrap_err()), expected, "resident preflight");
+    assert_eq!(not_read(DamageType.value(&sys, r, gun, 0.0, &mut cx).unwrap_err()), expected, "value");
+    assert_eq!(not_read(DamageType.base_value(&sys, r, gun, 0.0, &mut cx).unwrap_err()), expected, "base value");
+    assert_eq!(not_read(DamageType.storage(&sys, r, gun, &mut cx).unwrap_err()), expected, "storage");
+    assert_eq!(not_read(sys.value_of(attr, None, None, &mut cx).unwrap_err()), expected, "a read");
+    assert_eq!(fx.w.space.heap.committed_writes(), writes);
 }

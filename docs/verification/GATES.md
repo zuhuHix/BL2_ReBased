@@ -275,7 +275,8 @@ run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19
 **IMPL-DAMAGE-TYPE-RESOLVER (2026-11-19, zuhu desktop, on 144a73f5 / #573):** AI-assisted (Claude Code, Opus 5.5).
 `WillowGame.DamageTypeAttributeValueResolver` in `ow-attr`, from NATIVE_WEAPON_RULES.md section 5 ("Name-part
 expressions") with the weapon's damage type by NATIVE_STATIC_GET_WEAPON_DAMAGE_TYPE.md (#576 at 3225f887), reading
-resident objects only. `cargo test --workspace -j 2` 2,478 passed / 0 failed / 46 ignored (7 new in `ow-attr`); clippy
+resident objects only; Off only, Reference keeps the unregistered refusal, and only constant values are evaluated
+(review r1 of #584). `cargo test --workspace -j 2` 2,480 passed / 0 failed / 46 ignored (9 new in `ow-attr`); clippy
 flags nothing in the changed files; `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict on a local,
 unpushed merge with #534 (8fc0420b) and #552 (0438f6b3): 1 ok / 4 notyet / 9 error. Link 8 is 1 of 5, past the
 evaluators, and stops at `init` on the unbound `InventoryBalanceDefinition.GetExpLevelFromManufacturerData(object,int)`
