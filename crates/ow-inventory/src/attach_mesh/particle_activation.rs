@@ -11,8 +11,8 @@
 //!
 //! **Engine flags** (hub ruling 1 on #597): [`ParticleEngineFlags`], a world service the harness supplies and logs as
 //! UNVERIFIED. A world without it is [`FLAGS`] (`NotRead`) before any write. Only a game session is ported: the
-//! editor, a non-game session, the forced lowest LOD and a non-zero LOD bias are [`OUTSIDE_SESSION`] (`NotPorted`, an
-//! implementer's guard, not a note refusal).
+//! editor and a non-game session are [`OUTSIDE_SESSION`] (`NotPorted`, an implementer's guard, not a note refusal).
+//! The forced lowest LOD and the LOD bias are ported, as the note's section 3 steps 11 and 16 give them.
 //!
 //! **Kept out, as the rulings say:** `EmitterInstances` stays empty (ruling 4; 4 in the game on the slice);
 //! `bUseDelayRange` is [`DELAY_RANGE`] (`NotPorted`, ruling 2: the C runtime's `rand()`, single precision, has no port
@@ -36,9 +36,11 @@ use crate::equip::{bad, field, object_of, required};
 pub const RECORD_ACTIVATION: &str = "docs/verification/NATIVE_PARTICLE_ACTIVATION.md";
 /// The engine flags not supplied by the world's set-up (hub ruling 1 on #597).
 pub const FLAGS: &str = "ParticleSystemComponent.SetTemplate: the engine flags (a harness input the world's set-up did not supply)";
-/// The implementer's guard: engine flags this port does not take.
+/// The implementer's guard: engine flags this port does not take, the editor or a session that is not a game (the
+/// note reads branches for them that are not coded). The forced lowest LOD and the LOD bias are ported (section 3,
+/// steps 11 and 16).
 pub const OUTSIDE_SESSION: &str =
-    "ParticleSystemComponent.SetTemplate: engine flags outside a game session, the forced lowest LOD or an LOD bias (not ported)";
+    "ParticleSystemComponent.SetTemplate: engine flags outside a game session (the editor or a non-game session; not ported)";
 pub const PHYSX: &str = "ParticleSystemComponent.SetTemplate: the PhysX-level template swap (the machine's PhysX level)";
 pub const INSTANCES_RESET: &str = "ParticleSystemComponent.SetTemplate: the emitter instances' reset";
 pub const OLD_AUDIO: &str = "ParticleSystemComponent.SetTemplate: the old template's stop audio events";
@@ -50,8 +52,10 @@ pub const WARM_UP: &str = "ParticleSystemComponent.ActivateSystem: the warm-up t
 pub const WORLD_TIME: &str = "ParticleSystemComponent.ActivateSystem: the world's time for LastRenderTime";
 /// The implementer's guard: an LOD level that would change (step 16's reattach and the instances' LOD).
 pub const LOD_CHANGE: &str = "ParticleSystemComponent.ActivateSystem: a change of LOD level (the instances' LOD and its reattach)";
-/// The template not loaded (the old template of the reset); #581's refusal B text.
-pub const OLD_NOT_LOADED: &str = "WillowPickup.SpawnPickupParticles: a particle template that is not loaded (a load is a write)";
+/// The reset's stop-audio step met an old template that is not loaded or a stand-in (review r1 of #609): read only
+/// inside that step's gate, so a component the gate skips plans as the note says.
+pub const OLD_NOT_LOADED: &str =
+    "ParticleSystemComponent.SetTemplate: the old template's stop audio events read a template that is not loaded (a load is a write)";
 pub const PARTICLE_LAYER: &str = "a particle simulation layer (the port has none)";
 pub const AUDIO_LAYER: &str = "an audio layer (the port has none)";
 pub const CAMERA_LAYER: &str = "a camera layer (the port has none)";
@@ -377,10 +381,19 @@ impl<'a> Setup<'a> {
         if self.vm.space.heap.get(c)?.destroyed {
             return Ok(());
         }
+        // The template the step reads, only now (review r1 of #609): loaded, and its three stop fields declared.
+        if let Some(t) = template {
+            if self.vm.defs.is_unloaded(&self.vm.space, t) || super::pickup_particles::stand_in(self.vm, t)? {
+                return Err(NotYet::not_read(OLD_NOT_LOADED, RECORD_ACTIVATION).into());
+            }
+            check(self.vm, t, &TEMPLATE_FIELDS[15..], WHAT)?;
+        }
+        // A recorded looping sound: `AkPlayingId` set (review r1 of #609). The note leaves the test unread ("by its
+        // role"); the playing id is what names a playing sound, so that member is the test (UNVERIFIED).
         let info = self.get(c, "LoopingAkPlayingInfo")?;
-        let holds = match &info {
-            Value::Struct(s) => s.fields.iter().any(|f| !matches!(f, Value::Object(None) | Value::Int(0))),
-            other => return Err(bad(WHAT, format!("LoopingAkPlayingInfo holds {}, not a struct", other.kind_name()))),
+        let holds = match field(self.vm, &info, "AkPlayingId")? {
+            Value::Int(id) => id != 0,
+            other => return Err(bad(WHAT, format!("LoopingAkPlayingInfo.AkPlayingId holds {}, not an int", other.kind_name()))),
         };
         let events = match template {
             Some(t) => self.object(t, "StopAudioEvent")?.is_some() || self.object(t, "StopLoopingAudioEvent")?.is_some(),
@@ -422,12 +435,6 @@ impl<'a> Setup<'a> {
         if !template_object {
             if !self.array(c, "EmitterInstances")?.is_empty() {
                 return Err(NotYet::layer_absent(INSTANCES_RESET, PARTICLE_LAYER, RECORD_ACTIVATION).into());
-            }
-            if let Some(o) = old {
-                if self.vm.defs.is_unloaded(&self.vm.space, o) || super::pickup_particles::stand_in(self.vm, o)? {
-                    return Err(NotYet::not_read(OLD_NOT_LOADED, RECORD_PARTICLES).into());
-                }
-                check(self.vm, o, &TEMPLATE_FIELDS[15..], WHAT)?;
             }
             if changed {
                 self.set(c, "SMComponents", Value::array(Vec::new()))?;
@@ -504,11 +511,20 @@ impl<'a> Setup<'a> {
         if distances.len() > 1 {
             return Err(NotYet::layer_absent(LOD_LOCATION, CAMERA_LAYER, RECORD_ACTIVATION).into());
         }
-        if distances.is_empty() {
+        // At most one LOD distance: level 0, applied by step 16.
+        self.apply_lod_level(t, 0)
+    }
+
+    /// Step 16, applying an LOD level, only when T has LOD distances: the level plus the LOD bias, clamped to 0 .. T's
+    /// LOD count − 1 (the count read as the number of `LODDistances`, one per level; UNVERIFIED). A level that differs
+    /// from `LODLevel` is [`LOD_CHANGE`]: the reattach and the instances' LOD are not modelled.
+    fn apply_lod_level(&mut self, t: ObjRef, level: i32) -> Result<(), VmError> {
+        let count = i32::try_from(self.array(t, "LODDistances")?.len()).unwrap_or(i32::MAX);
+        if count == 0 {
             return Ok(());
         }
-        // Level 0 plus the bias (0, the only one ported), clamped to the one level there is.
-        if self.int(self.c, "LODLevel")? != 0 {
+        let target = level.saturating_add(self.flags.lod_bias).clamp(0, count - 1);
+        if target != self.int(self.c, "LODLevel")? {
             return Err(NotYet::not_ported(LOD_CHANGE, RECORD_ACTIVATION).into());
         }
         Ok(())
@@ -562,14 +578,22 @@ impl<'a> Setup<'a> {
             None if w && self.flag(c, "bAttached")? => return Err(NotYet::not_read(D, RECORD_PARTICLES).into()),
             None => {}
         }
-        // Step 11, the LOD level: "automatic" by the raw byte (the forced lowest LOD is not ported).
-        let automatic = if self.flag(c, "bOverrideLODMethod")? {
-            self.byte(c, "LODMethod")? != LOD_METHOD_FIXED
+        // Step 11, the LOD level. With the forced lowest LOD: bOverrideLODMethod and LODMethod 1, and the level T's
+        // LOD count − 1, through step 16. Otherwise "automatic" by the raw byte, and the level for location.
+        if f.force_lowest {
+            self.set(c, "bOverrideLODMethod", Value::Bool(true))?;
+            self.set(c, "LODMethod", Value::Byte(LOD_METHOD_FIXED))?;
+            let count = i32::try_from(self.array(t, "LODDistances")?.len()).unwrap_or(i32::MAX);
+            self.apply_lod_level(t, count.saturating_sub(1))?;
         } else {
-            self.byte(t, "LODMethod")? != LOD_METHOD_FIXED
-        };
-        if automatic && f.game_thread_lod {
-            self.lod_for_location(t)?;
+            let automatic = if self.flag(c, "bOverrideLODMethod")? {
+                self.byte(c, "LODMethod")? != LOD_METHOD_FIXED
+            } else {
+                self.byte(t, "LODMethod")? != LOD_METHOD_FIXED
+            };
+            if automatic && f.game_thread_lod {
+                self.lod_for_location(t)?;
+            }
         }
         // Step 12, the warm-up.
         if self.float(c, "WarmupTime")? != 0.0 {
@@ -609,7 +633,7 @@ pub fn engine_flags(vm: &Vm) -> Result<ParticleEngineFlags, VmError> {
         Some(f) => *f.try_borrow().map_err(|_| VmError::ServiceBorrowed("ParticleEngineFlags"))?,
         None => return Err(NotYet::not_read(FLAGS, RECORD_ACTIVATION).into()),
     };
-    if !flags.is_game || flags.is_editor || flags.force_lowest || flags.lod_bias != 0 {
+    if !flags.is_game || flags.is_editor {
         return Err(NotYet::not_ported(OUTSIDE_SESSION, RECORD_ACTIVATION).into());
     }
     Ok(flags)

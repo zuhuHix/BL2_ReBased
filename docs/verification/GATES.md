@@ -15,6 +15,17 @@ passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 fa
 crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
 `FlagExpressionEvaluator.Evaluate(object)`.
 
+**PARTICLE-ACTIVATION-FOLLOWUP (2026-11-20, pc-hummer, on #609 @ 1d33bd29):** AI-assisted (Claude Code, Opus 5.5).
+This lane fixes #609's four review lows:
+- the old template is read only inside the stop-audio gate;
+- the forced lowest LOD and the LOD bias are ported;
+- a looping sound counts as recorded by `AkPlayingId`;
+- the `InstanceParameters` value is built in the plan.
+
+`cargo test --workspace -j 2`: 2,504 passed / 0 failed / 46 ignored (4 new). The installed Off `--slice-gate` strict:
+0 ok / 5 NotYet / 9 errors. Links 6 and 7 pass `make` and stop at `touch` (`Actor.GetBoundingCylinder`), unchanged
+from #609. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (particle activation follow-up).
+
 **IMPL-PARTICLE-ACTIVATION (2026-11-20, zuhu desktop, on fix/rust-spawn-pickup-particles 9777c2cc, #593):**
 AI-assisted (Claude Code, Opus 5.5). `SetTemplate`'s activation and initialisation in Off from
 NATIVE_PARTICLE_ACTIVATION.md (#597, 3df9cd88), with the hub's rulings: `SpawnPickupParticles` plans every write, then

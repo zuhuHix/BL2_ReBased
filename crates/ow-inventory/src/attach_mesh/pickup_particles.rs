@@ -227,20 +227,14 @@ struct NewComponent {
     slots: Vec<Value>,
 }
 
-/// The `InstanceParameters` step: an update of entry `i`, or an append (the parameter name is interned only then, in
-/// the write phase).
-enum Parameter {
-    Update(usize),
-    Append,
-}
-
 struct Plan {
     /// The component the plan reads: a held one, or the default object a new one stands for.
     component: ObjRef,
     new: Option<NewComponent>,
     /// The writes up to and including step 7, then the parameter step, then the rest.
     before: Vec<(ObjRef, &'static str, Value)>,
-    parameter: Option<(Parameter, Vec<Value>, [f32; 3])>,
+    /// The `InstanceParameters` value, built whole in the plan (review r1 of #609): the apply phase only writes it.
+    parameter: Option<Value>,
     after: Vec<(ObjRef, &'static str, Value)>,
 }
 
@@ -295,6 +289,9 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             (d, Some(NewComponent { class: preload.class, defaults: d, slots }))
         }
     };
+    // The parameter name, interned here so the plan can build the parameter value whole (review r1 of #609). It
+    // changes the name table only: no object, generator draw or store load, which #518's counters count.
+    let color_name = vm.space.names.intern(COLOR_PARAMETER);
     // 4. Step 4, the rarity choice (only the choice; the colour is step 7).
     let world = crate::globals::world_globals(vm)?;
     let vm: &Vm = vm;
@@ -347,8 +344,8 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
     }
     // 8. The parameter plan.
     pa::check(vm, c, &STEP_FIELDS[..1], WHAT)?;
-    let params = s.array(c, "InstanceParameters")?;
-    let name = vm.space.names.find(COLOR_PARAMETER);
+    let mut params = s.array(c, "InstanceParameters")?;
+    let name = Some(color_name);
     let mut at = None;
     for (i, p) in params.iter().enumerate() {
         let n = match field(vm, p, "Name")? {
@@ -364,7 +361,28 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             at = Some(i);
         }
     }
-    let parameter = Some((at.map_or(Parameter::Append, Parameter::Update), params, colour));
+    let vector = |base: &Value| {
+        with_fields(vm, base, &[("X", Value::Float(colour[0])), ("Y", Value::Float(colour[1])), ("Z", Value::Float(colour[2]))])
+    };
+    match at {
+        Some(i) => {
+            let v = vector(&field(vm, &params[i], "Vector")?)?;
+            params[i] = with_fields(vm, &params[i], &[("Vector", v)])?;
+        }
+        None => {
+            let class = vm.space.heap.get(c)?.class;
+            let p = vm.space.prop(class, "InstanceParameters").ok_or_else(|| bad(WHAT, "no InstanceParameters"))?;
+            let Some(PropKind::Array(inner)) = vm.space.classes.decl(p).map(|d| d.kind.clone()) else {
+                return Err(bad(WHAT, "InstanceParameters is not an array"));
+            };
+            let zero = vm.space.classes.zero_value(&inner);
+            let v = vector(&field(vm, &zero, "Vector")?)?;
+            params.push(with_fields(vm, &zero, &[("Name", Value::Name(color_name)), ("ParamType", Value::Byte(PARAM_VECTOR)), ("Vector", v)])?);
+        }
+    }
+    let value = Value::array(params);
+    super::fits(vm, c, "InstanceParameters", &value, WHAT)?;
+    let parameter = Some(value);
     let before = std::mem::take(&mut s.writes);
     // 9. SetHidden(false): only when HiddenGame is set.
     if s.flag(c, "HiddenGame")? {
@@ -376,31 +394,6 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
     s.transform_refusals()?;
     let after = std::mem::take(&mut s.writes);
     Ok(Plan { component: c, new, before, parameter, after })
-}
-
-/// The planned parameter array with the colour in place.
-fn parameters(vm: &mut Vm, c: ObjRef, how: Parameter, mut params: Vec<Value>, colour: [f32; 3]) -> Result<Value, VmError> {
-    let vector = |vm: &Vm, base: &Value| {
-        with_fields(vm, base, &[("X", Value::Float(colour[0])), ("Y", Value::Float(colour[1])), ("Z", Value::Float(colour[2]))])
-    };
-    match how {
-        Parameter::Update(i) => {
-            let v = vector(vm, &field(vm, &params[i], "Vector")?)?;
-            params[i] = with_fields(vm, &params[i], &[("Vector", v)])?;
-        }
-        Parameter::Append => {
-            let class = vm.space.heap.get(c)?.class;
-            let p = vm.space.prop(class, "InstanceParameters").ok_or_else(|| bad(WHAT, "no InstanceParameters"))?;
-            let Some(PropKind::Array(inner)) = vm.space.classes.decl(p).map(|d| d.kind.clone()) else {
-                return Err(bad(WHAT, "InstanceParameters is not an array"));
-            };
-            let zero = vm.space.classes.zero_value(&inner);
-            let name = vm.space.names.intern(COLOR_PARAMETER);
-            let v = vector(vm, &field(vm, &zero, "Vector")?)?;
-            params.push(with_fields(vm, &zero, &[("Name", Value::Name(name)), ("ParamType", Value::Byte(PARAM_VECTOR)), ("Vector", v)])?);
-        }
-    }
-    Ok(Value::array(params))
 }
 
 /// The write phase: the plan applied in order (module documentation).
@@ -426,8 +419,7 @@ fn apply(vm: &mut Vm, pickup: ObjRef, plan: Plan) -> Result<(), VmError> {
     for (o, name, v) in plan.before {
         write(vm, remap(o), name, remap_value(v), WHAT)?;
     }
-    if let Some((how, params, colour)) = plan.parameter {
-        let v = parameters(vm, c, how, params, colour)?;
+    if let Some(v) = plan.parameter {
         write(vm, c, "InstanceParameters", v, WHAT)?;
     }
     for (o, name, v) in plan.after {

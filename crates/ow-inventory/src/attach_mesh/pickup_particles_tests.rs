@@ -644,10 +644,11 @@ fn the_held_components_refusals_come_before_any_write() {
     x.set(c, "Template", Value::Object(Some(old)));
     x.set(c, "AudioEnabled", Value::Bool(true));
     refused(&mut x, AUDIO, OLD_AUDIO, RECORD_ACTIVATION);
-    // An old template the store has not loaded is not loaded here.
+    // An old template the store has not loaded, read by the stop-audio step (AudioEnabled set): its own refusal, and
+    // it is not loaded (review r1 of #609, item a).
     let u = x.unloaded;
     x.set(c, "Template", Value::Object(Some(u)));
-    refused(&mut x, Missing::NotRead, B, RECORD_PARTICLES);
+    refused(&mut x, Missing::NotRead, OLD_NOT_LOADED, RECORD_ACTIVATION);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, u));
     // A looping sound recorded is the audio layer too.
     let mut x = slice();
@@ -721,9 +722,77 @@ fn the_engine_flags_are_a_harness_input() {
     let outside = ParticleEngineFlags { is_game: false, ..ParticleEngineFlags::SLICE };
     let mut x = slice_with(Opts { flags: Some(outside), ..OPTS });
     refused(&mut x, Missing::NotPorted, OUTSIDE_SESSION, RECORD_ACTIVATION);
+    let editor = ParticleEngineFlags { is_editor: true, ..ParticleEngineFlags::SLICE };
+    let mut x = slice_with(Opts { flags: Some(editor), ..OPTS });
+    refused(&mut x, Missing::NotPorted, OUTSIDE_SESSION, RECORD_ACTIVATION);
+}
+
+/// Review r1 of #609, item a: on a held component with `AudioEnabled` clear the stop-audio step does not run, so an
+/// old template that is not loaded is never read: the call plans and applies, and the old template stays unloaded.
+#[test]
+fn an_unloaded_old_template_is_not_read_when_audio_is_off() {
+    let mut x = slice();
+    let c = x.held();
+    let u = x.unloaded;
+    x.set(c, "Template", Value::Object(Some(u)));
+    x.set(c, "AudioEnabled", Value::Bool(false));
+    x.call().unwrap();
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, u), "never read, never loaded");
+    assert_eq!(x.get(c, "Template"), Value::Object(Some(x.template)));
+}
+
+/// Review r1 of #609, item b: the LOD bias and the forced lowest LOD are ported (the note's section 3, steps 11 and 16).
+/// With one LOD distance a bias of 1 clamps to level 0, so nothing changes and the call passes. The forced lowest LOD
+/// writes `bOverrideLODMethod` and `LODMethod` 1 and asks for level count − 1 = 0, which also passes. With `LODLevel` 1 it
+/// is a change of level, the implementer's guard.
+#[test]
+fn the_lod_bias_and_the_forced_lowest_lod_are_ported() {
     let bias = ParticleEngineFlags { lod_bias: 1, ..ParticleEngineFlags::SLICE };
     let mut x = slice_with(Opts { flags: Some(bias), ..OPTS });
-    refused(&mut x, Missing::NotPorted, OUTSIDE_SESSION, RECORD_ACTIVATION);
+    x.call().unwrap();
+    let lowest = ParticleEngineFlags { force_lowest: true, ..ParticleEngineFlags::SLICE };
+    let mut x = slice_with(Opts { flags: Some(lowest), ..OPTS });
+    x.call().unwrap();
+    let c = x.component();
+    assert_eq!(x.get(c, "bOverrideLODMethod"), Value::Bool(true));
+    assert_eq!(x.get(c, "LODMethod"), Value::Byte(1));
+    let mut x = slice_with(Opts { flags: Some(lowest), ..OPTS });
+    let c = x.held();
+    x.set(c, "bAutoActivate", Value::Bool(true));
+    x.set(c, "LODLevel", Value::Int(1));
+    refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
+}
+
+/// Review r1 of #609, item c: a looping sound is recorded by `AkPlayingId` only. A `SourceComponent` set with a zero
+/// playing id is not a recorded sound: the step zeroes the struct and the call passes.
+#[test]
+fn a_looping_sound_is_recorded_by_its_playing_id_only() {
+    let mut x = slice();
+    let c = x.held();
+    x.set(c, "AudioEnabled", Value::Bool(true));
+    let source = make(&mut x.vm, "Engine.AkComponent");
+    let info = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("SourceComponent", Value::Object(Some(source)))]);
+    x.set(c, "LoopingAkPlayingInfo", info);
+    x.call().unwrap();
+    let zero = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("SourceComponent", Value::Object(None)), ("AkPlayingId", Value::Int(0))]);
+    assert_eq!(x.get(c, "LoopingAkPlayingInfo"), zero, "zeroed by the step");
+}
+
+/// Review r1 of #609, item d: the plan holds the whole `InstanceParameters` value (the "RColor" entry built), and the
+/// apply phase writes exactly that value.
+#[test]
+fn the_parameter_value_is_built_in_the_plan() {
+    let mut x = slice();
+    let p = x.pickup;
+    let plan = preflight(&mut x.vm, p).unwrap();
+    let planned = plan.parameter.clone().expect("a parameter value");
+    let items = planned.elements().expect("an array").to_vec();
+    let name = x.vm.space.names.find(COLOR_PARAMETER).expect("interned by the plan");
+    assert!(items.iter().any(|e| matches!(field(&x.vm, e, "Name"), Ok(Value::Name(n)) if n == name)), "{items:?}");
+    let mut y = slice();
+    y.call().unwrap();
+    let c = y.component();
+    assert_eq!(y.get(c, "InstanceParameters").elements().map(<[Value]>::len), Some(items.len()));
 }
 
 /// The note's test 5: a template object (the class default itself, held): SetTemplate's own writes only, no
