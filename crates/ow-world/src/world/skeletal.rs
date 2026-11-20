@@ -91,6 +91,12 @@ pub struct MeshSocket {
 /// `Err(text)`: the data failed to parse.
 pub trait SkeletonSource {
     fn skeleton(&self, package: &str, path: &str, leaf: &str) -> Result<Option<ReferenceSkeleton>, String>;
+
+    /// The mesh's LOD count, the same way (NATIVE_SKELMESH_MESH_CHANGE.md row 15, lane IMPL-SKELMESH-MESH-CHANGE).
+    /// `Ok(None)`: the source does not know it, which is the default: no source decodes the LOD models today.
+    fn lod_count(&self, _package: &str, _path: &str, _leaf: &str) -> Result<Option<usize>, String> {
+        Ok(None)
+    }
 }
 
 /// The layer's service: the installed source and the cache by mesh identity.
@@ -279,6 +285,23 @@ fn ints(vm: &Vm, v: &Value, names: [&str; 3], what: &str) -> Result<[i32; 3], Vm
         };
     }
     Ok(out)
+}
+
+/// `mesh`'s LOD count from the installed source (NATIVE_SKELMESH_MESH_CHANGE.md row 15). Reads only, and caches
+/// nothing. `None` when no source is installed, when the mesh has no package export to name it by, or when the source
+/// does not know the count (every source today). A source's parse failure is `VmError::Script`.
+pub fn lod_count(vm: &Vm, mesh: ObjRef) -> Result<Option<usize>, VmError> {
+    check_mesh(vm, mesh)?;
+    let Some(cell) = vm.service::<SkeletalMeshes>() else {
+        return Ok(None);
+    };
+    let (package, path, leaf) = match identity(vm, mesh) {
+        Ok(found) => found,
+        Err(VmError::NotYet(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let read = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.source.lod_count(&package, &path, &leaf);
+    read.map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))
 }
 
 /// `mesh`'s sockets, in its `Sockets` order (module documentation). Reads only.

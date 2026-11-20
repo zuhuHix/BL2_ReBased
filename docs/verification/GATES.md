@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SKELMESH-MESH-CHANGE (2026-11-20, pc-hummer, on main df0970ec):** AI-assisted (Claude Code, Opus 5.5).
+`SkeletalMeshComponent.SetSkeletalMesh`'s mesh change in Off from NATIVE_SKELMESH_MESH_CHANGE.md at ec99290a (`ow-world`
+`world::skeletal_mesh`, and an optional LOD count in `world::skeletal`): rows 1 to 15 and D in the note's order, then
+four writes; keep-existing binding; Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace`
+3,139 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 4 ok / 10 NotYet /
+0 errors, all 14 rows byte-identical to main; link 8 passes 2 of 2 steps (`make`, `init`) and still stops in `init` at
+BuildCompositeMesh's unloaded definition, before it reaches this native.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p

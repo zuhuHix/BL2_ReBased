@@ -526,8 +526,10 @@ impl NativePack for Pack {
             // Actor/Pawn/NavigationPoint.GetBoundingCylinder (NATIVE_GET_BOUNDING_CYLINDER.md; lane
             // IMPL-GET-BOUNDING-CYLINDER, decision 2026-11-19-203). The C++ binds none, so Reference keeps the stub (R3).
             bounding_cylinder::register(vm)?;
-            // SkeletalMeshComponent.SetSkeletalMesh (NATIVE_SET_SKELETAL_MESH.md, UNVERIFIED; lane
-            // IMPL-SET-SKELETAL-MESH): the same mesh does nothing; a change is LayerAbsent, before any write.
+            // SkeletalMeshComponent.SetSkeletalMesh (NATIVE_SET_SKELETAL_MESH.md and NATIVE_SKELMESH_MESH_CHANGE.md,
+            // UNVERIFIED; lanes IMPL-SET-SKELETAL-MESH and IMPL-SKELMESH-MESH-CHANGE): the same mesh does nothing; a
+            // change refuses each unported path before any write, else makes the minimal change's four writes. Bound
+            // keep-existing.
             skeletal_mesh::register(vm)?;
         }
         Ok(())
