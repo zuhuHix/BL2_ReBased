@@ -119,18 +119,7 @@ pub(super) fn equip_run(args: &[String], mode: ParityMode, out: &mut String) -> 
         let listed = own.iter().map(|h| quote(h)).collect::<Vec<_>>().join(",");
         let run = match result {
             Ok(run) => run,
-            Err(e) => {
-                // The original error stays the command's answer. The lines so far, then this weapon's line with its
-                // set-up error and harness lines, are written first.
-                lines.push_str(&format!(
-                    "{{\"line\":{},\"weapon_type\":{},\"make\":{},\"harness\":[{listed}]}}\n",
-                    n + 1,
-                    quote(&request.weapon_type),
-                    quote(&e),
-                ));
-                std::fs::write(&output, &lines).map_err(|w| format!("{output}: {w}"))?;
-                return Err(format!("line {}: {e}", n + 1));
-            }
+            Err(e) => return Err(failed_set_up(&output, lines, n + 1, &request.weapon_type, &e, &listed)),
         };
         let mut fields = Vec::new();
         for (k, phase) in PHASES.iter().enumerate() {
@@ -157,6 +146,19 @@ pub(super) fn equip_run(args: &[String], mode: ParityMode, out: &mut String) -> 
     out.push_str(&summary(weapons, &passed, &stops, &harness));
     let all = passed.iter().all(|p| *p == weapons);
     Ok(if all { 0 } else { 1 })
+}
+
+/// A weapon whose set-up failed (review r1 of #632): the lines so far, then its own line (the set-up error under `make`
+/// and its harness lines), written to `output` as a best effort; a failed write is ignored (review r2 of #632). The
+/// answer is always the original set-up error, "line N: ...", byte for byte.
+fn failed_set_up(output: &str, mut lines: String, line: usize, weapon_type: &str, e: &str, listed: &str) -> String {
+    lines.push_str(&format!(
+        "{{\"line\":{line},\"weapon_type\":{},\"make\":{},\"harness\":[{listed}]}}\n",
+        quote(weapon_type),
+        quote(e),
+    ));
+    let _ = std::fs::write(output, &lines);
+    format!("line {line}: {e}")
 }
 
 /// The `harness input:` lines `vm` logged since `from`, in order.
@@ -1155,6 +1157,25 @@ mod tests {
         assert_eq!(lines.len(), 2, "{:?}", vm.log);
         assert_eq!(lines[0], WEAPON_COMPONENTS_INPUT, "logged before it runs");
         assert_eq!(lines[1], &format!("{WEAPON_COMPONENTS_INPUT}: 1 component(s)"));
+    }
+
+    /// Review r2 of #632: a failed set-up whose partial write also fails (the output is a directory) still answers the
+    /// set-up error, byte for byte; with a writable output the partial lines are written.
+    #[test]
+    fn a_failed_set_up_answers_its_own_error_even_when_the_write_fails() {
+        let dir = std::env::temp_dir().join(format!("ow-cli-equip-run-failed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let as_dir = dir.to_string_lossy().into_owned();
+        let e = failed_set_up(&as_dir, String::new(), 3, "Toy.WT", "the toy set-up refused", "\"harness input: H\"");
+        assert_eq!(e, "line 3: the toy set-up refused");
+        assert!(dir.is_dir(), "the directory is left as it was");
+        let file = dir.join("out.jsonl");
+        let e = failed_set_up(&file.to_string_lossy(), "{\"line\":1}\n".into(), 3, "Toy.WT", "X", "");
+        assert_eq!(e, "line 3: X");
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(written, "{\"line\":1}\n{\"line\":3,\"weapon_type\":\"Toy.WT\",\"make\":\"X\",\"harness\":[]}\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

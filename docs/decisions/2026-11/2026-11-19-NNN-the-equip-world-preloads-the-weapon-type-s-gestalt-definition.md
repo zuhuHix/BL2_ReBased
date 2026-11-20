@@ -51,3 +51,10 @@ AI-assisted (Claude Code, Claude Opus 5.5).
 
 An installed `--equip-run` (50 weapons, under the machine lock) shows the GestaltMesh harness lines in the per-weapon
 output. This is what the host did, not parity.
+
+### Review r2 of #632 (FIX)
+
+AI-assisted (Claude Code, Claude Opus 5.5). When a weapon's set-up fails, the partial write of the output file is now
+a best effort: a failed write, for example `--output` naming a directory, is ignored. The command always returns the
+original set-up error, "line N: ...", byte for byte. The path is its own function, `failed_set_up`, and a test covers
+both an output that cannot be written (a directory) and one that can.
