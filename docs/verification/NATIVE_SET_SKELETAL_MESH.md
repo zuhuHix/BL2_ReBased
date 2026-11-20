@@ -31,9 +31,9 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
 
 **On link 8**, in order:
 1. `ClientInitializeFromWeaponTypeDefinition`, right after `FireOffset`, resets the meshes:
-   `FirstPersonMesh.SetSkeletalMesh(None)`, then `ThirdPersonMesh.SetSkeletalMesh(None)`, then the same for each
-   `ExtraSlots` entry's `Mesh`. Each call is made only when that component is set, and `bKeepSpaceBases` is omitted
-   (false).
+   `FirstPersonMesh.SetSkeletalMesh(None)`, then `ThirdPersonMesh.SetSkeletalMesh(None)`. Each call is made only when
+   that component is set, and `bKeepSpaceBases` is omitted (false). The script then calls `InitExtraMeshes`, and only
+   after that resets each `ExtraSlots` entry's `Mesh` the same way.
 2. Later, `WillowWeapon.InitMeshes` sets the composite mesh: `NewMesh` = `BuildCompositeMesh(FirstPersonMesh,
    DefinitionData)`, on `FirstPersonMesh`, then `ThirdPersonMesh`, then each extra slot's mesh.
 
@@ -41,7 +41,9 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
 
 1. **The same mesh:** when `NewMesh` is the component's current `SkeletalMesh` (None included), it **does nothing**:
    no write, no load, no draw.
-2. **A different mesh**, in order (each step by fit):
+2. **A different mesh**, in order (each step by fit). This covers both a replacement and a clear, a populated mesh
+   set to None. The reads of a new reference skeleton and pose (steps 7 and 8) apply only to a non-null replacement.
+   What the clear path does to the bone arrays and the tree's per-bone state is **UNVERIFIED** (not read separately):
    1. with `bKeepSpaceBases` and a current mesh, the current bone transforms are saved;
    2. the component's physics-asset instance, if any, is terminated and cleared;
    3. the component's animation-tree-initialised flag is cleared (the flag `SetAnimTreeTemplate` also clears;
@@ -77,27 +79,31 @@ covers the whole mesh change.
 **Every rule below is UNVERIFIED.** Bind `SkeletalMeshComponent.SetSkeletalMesh(object,bool)` in Off; Reference keeps
 the stub policy.
 
-**Preflight (write-free, loads nothing):**
-1. `this` is an unloaded definition handle: `NotYet` with missing kind `NotRead`, "SetSkeletalMesh: the component is
-   an unloaded handle (a load is a write)". On link 8 this is **the first stop** (section 5): the weapon's
-   `FirstPersonMesh` is the class default's component, not an instance of its own.
-2. `this` has no `SkeletalMesh` object field: a `VmError::Script` naming the field.
-3. `NewMesh` (an object or None) and `bKeepSpaceBases` (a bool, default false): otherwise a `VmError::Script`.
-
-**The answer:**
-- `NewMesh` equals the current `SkeletalMesh`: nothing, the native's own answer;
-- otherwise: `NotYet` with missing kind `LayerAbsent("a skeletal mesh component's bone transforms")`, "SetSkeletalMesh:
-  a mesh change (bones, the animation tree's per-bone state, physics and render state)", raised before any write.
+**Preflight and answer**, in this order. Every path writes nothing, loads nothing and draws nothing:
+1. **The receiver.** `this` must be set and resident. An unloaded definition handle refuses `NotYet` with missing
+   kind `NotRead`, "SetSkeletalMesh: the component is an unloaded handle (a load is a write)". Under the hub's ruling
+   (section 4, below) link 8's harness instances the weapon's components first, so this no longer stops link 8 there.
+2. **The current mesh:** read `SkeletalMesh` directly from the resident component's slot, as an `Option<ObjRef>`.
+   A class with no `SkeletalMesh` object field is a `VmError::Script` naming the field.
+3. **The arguments:** `NewMesh` is an object argument, and the script's `Object(None)` is null (`None`).
+   `bKeepSpaceBases` is read through `NativeCall::has`: when omitted it is false, otherwise it must be a bool. Any
+   other shape is a `VmError::Script`.
+4. **Identity first:** compare the two `Option<ObjRef>` values **before** checking whether either mesh asset is
+   resident:
+   - **equal** (both None, or the same handle): nothing, the native's own answer, even when that mesh asset is an
+     unloaded handle;
+   - **unequal** (a replacement, or a clear to None): `NotYet` with missing kind
+     `LayerAbsent("a skeletal mesh component's bone transforms")`, "SetSkeletalMesh: a mesh change (bones, the
+     animation tree's per-bone state, physics and render state)", raised before any write. The minimal answer refuses
+     both kinds of change; neither mesh asset's residency is checked.
 
 **The counters:** the native writes nothing on either path, so its refusals never carry the "stopped after partial
 writes: " prefix inside it. The caller's earlier writes can mark it, as the probe shows.
 
-**For the hub:** rule 1 is an instancing question, not this native's. In the game every spawned weapon has its own
-mesh components. The equip run builds its weapon from class defaults, so the components stay the shared template
-handles. Two choices:
-- the harness instances the weapon's components, through the subobject instancing the world's spawn path already
-  does (#435), logged as an UNVERIFIED harness input;
-- rule 1 stays the link 8 stop.
+**The instancing ruling (the hub, on #583):** in the game every spawned weapon owns its mesh components. The equip
+run builds its weapon from class defaults, so without help the components stay the shared template handles. **The
+harness instances the weapon's components through #435's spawn-path subobject instancing**, logged as an UNVERIFIED
+harness input. Rule 1 stays in the native for any other caller that hands it an unloaded handle.
 
 ## 5. What link 8 meets (local probe, uncommitted)
 
@@ -111,11 +117,13 @@ The probe ran on a local, unpushed merge of #558, #534, #552 and #572 (3d948c43)
 1. **Without loading:** `FirstPersonMesh` is the unloaded handle `FirstPersonWeaponMesh` (an
    `Engine.SkeletalMeshComponent` of the class default), so rule 1 is the stop, marked by the script's earlier
    writes.
-2. **With the probe loading it:** `FirstPersonWeaponMesh` and `ThirdPersonWeaponMesh` both hold `SkeletalMesh` None,
-   so both resets are None→None no-ops. There are no extra slots. The next stop is the unbound
-   **`WillowWeapon.BuildCompositeMesh(object,weapondefinitiondata)`**, the first call of `InitMeshes`, which builds
-   the composite mesh that `SetSkeletalMesh` then receives. That later call is a real mesh change and would refuse
-   by section 4.
+2. **With the probe loading the handles:** two resets were observed. `FirstPersonWeaponMesh` and
+   `ThirdPersonWeaponMesh` both hold `SkeletalMesh` None, so both are None→None no-ops. The probe's weapon had no
+   extra slots, so the extra-slot loop (after `InitExtraMeshes`) made no call. The run then stopped at the unbound
+   **`WillowWeapon.BuildCompositeMesh(object,weapondefinitiondata)`**, the first call of `InitMeshes`.
+3. **What comes after is a prediction:** `BuildCompositeMesh` can return None, and `InitMeshes` does other work
+   before its `SetSkeletalMesh` calls. Only **if** the run reaches the setter with a mesh different from the
+   component's does section 4 refuse with `LayerAbsent`.
 
 ## Open questions
 
