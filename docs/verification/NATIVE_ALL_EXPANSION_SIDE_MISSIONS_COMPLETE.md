@@ -1,6 +1,6 @@
 # MissionTracker.AllExpansionSideMissionsComplete (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK12-EXPANSION-SIDE-MISSIONS (decision 2026-11-19-NNN, a
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK12-EXPANSION-SIDE-MISSIONS (decision 2026-11-19-161, a
 placeholder), for slice link 12. **Analyst only:** a different lane implements it (clean room).
 
 **Sources:**
