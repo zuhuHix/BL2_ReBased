@@ -34,6 +34,14 @@ the analysis output were not opened. Synthetic fixtures only.
   - A stand-in with no slots counts as a lazy handle (N).
   - A receiver that is itself a lazy handle is N as well. This is the port's reading of the note's load-free
     contract, which names only components.
+- **`WillowPickup` differs from main's extent on purpose (review r1 of #595).** Main's `placement::rule` still
+  refuses C (`NotRead`) for a `WillowPickup` template's spawn extent, while this native answers the actor default for
+  `WillowGame.WillowPickup`. Both are right on their own notes: NATIVE_SPAWN_EXTENT.md read five classes only, and
+  the native's note (section 4, step 1) adds `WillowPickup` on its own reading of that class's vtable. Bringing the
+  extent's class list into line with it is a known follow-up for a `placement` lane, outside this native's scope (the
+  note keeps the two codes apart).
+- **The out arguments** are checked before either is written: both must exist and be declared `out` (review r1 of
+  #595), so a malformed declaration cannot leave the radius written and the height not.
 - **Malformed data** is a `VmError::Script` naming the field, through the world's field reads.
 - **Verified:** host unit tests on invented packages, covering the note's tests list. Every refusal leaves every heap
   object and the store's load state unchanged.

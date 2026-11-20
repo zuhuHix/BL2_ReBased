@@ -385,3 +385,34 @@ fn malformed_data_is_a_script_error() {
     script_error(answer(&x.vm, t), "CollisionRadius");
     script_error(x.call("Actor", None), NATIVE);
 }
+
+/// Template-or-live is asked only where it is used (note section 4, step 2): an export-origin `WillowPickup` with no
+/// primitive entry gives 0 and 0, not T; an export navigation point with a cylinder gives the cylinder's values; an
+/// export actor's primitive entry reaches step 5's `bAttached` test, where T is raised.
+#[test]
+fn an_export_receiver_is_t_only_where_its_origin_is_used() {
+    let mut x = fx();
+    let pickup = x.export("WillowGame.WillowPickup");
+    let light = x.live("Engine.DynamicLightEnvironmentComponent");
+    x.components(pickup, vec![None, Some(light)]);
+    assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0));
+    let nav = x.export("Engine.NavigationPoint");
+    let c = x.cylinder(31.0, 62.0);
+    x.set(nav, "CylinderComponent", Value::Object(Some(c)));
+    assert_eq!(answer(&x.vm, nav).unwrap(), (31.0, 62.0));
+    let actor = x.export("Engine.Actor");
+    let mesh = x.primitive(false, false);
+    x.components(actor, vec![Some(mesh)]);
+    x.refuses(actor, Missing::NotRead, REFUSAL_T, RECORD);
+}
+
+/// A loaded stand-in with no slots among the `Components` is N, like a lazy handle: its fields cannot be read.
+#[test]
+fn a_stand_in_with_no_slots_is_n() {
+    let mut x = fx();
+    let class = x.vm.find_class("Engine.SkeletalMeshComponent").unwrap();
+    let stand_in = x.vm.space.alloc_stand_in(class, "ToyStandIn", Origin::Resource { package: 0, index: -1 }).unwrap();
+    let pickup = x.live("WillowGame.WillowPickup");
+    x.components(pickup, vec![Some(stand_in)]);
+    x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
+}

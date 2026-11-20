@@ -88,6 +88,17 @@ fn get_bounding_cylinder(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         message: "called with no actor".to_string(),
     })?;
     let (radius, height) = answer(c.vm, this)?;
+    // Both arguments must exist and be declared `out` before either is written, so a malformed declaration cannot
+    // leave the radius written and the height not (review r1 of #595). This covers what `set_out` itself refuses (no
+    // such argument, not an out parameter). A failure inside the VM's write through a script caller's alias, after
+    // the first write, cannot be checked ahead from here: `NativeCall` exposes no dry run of that write.
+    let outs = c.vm.function(c.function).map(|f| (0..2).all(|i| f.params.get(i).is_some_and(|p| p.is_out())));
+    if c.arg_count() < 2 || outs != Some(true) {
+        return Err(VmError::Script {
+            function: NATIVE.to_string(),
+            message: "the function does not declare two out arguments".to_string(),
+        });
+    }
     c.set_out(0, Value::Float(radius))?;
     c.set_out(1, Value::Float(height))?;
     Ok(Value::None)
