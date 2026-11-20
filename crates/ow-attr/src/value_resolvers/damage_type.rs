@@ -33,7 +33,7 @@ use ow_object::value::Value;
 
 use super::RECORD;
 use crate::api::{AttrError, EvalCx, Storage, ValueResolver, WorldParts};
-use crate::eval::{class_path, elements, field, init_data, name, object, parity, resident_field};
+use crate::eval::{class_path, elements, field, init_data, name, object, parity, resident_field, slotless_refusal};
 use crate::registry::AttributeSystem;
 
 /// The resolver class.
@@ -51,11 +51,13 @@ fn reference_refusal(space: &ObjectSpace, resolver: ObjRef) -> AttrError {
     NotYet::not_read(format!("value resolver class {}", class_path(space, resolver)), RECORD).into()
 }
 
-/// `obj` must be resident: an unloaded store handle is `NotYet { NotRead }` naming `what`, a failed one `BadData`.
-/// Without a store every object is resident.
+/// `obj` must be resident, checked without a load: an unloaded store handle is `NotYet { NotRead }` naming `what`, a
+/// failed one `BadData`. A slotless resource object keeps the refusals a loading read gave it (review r2 of #584,
+/// item 2): `NotYet { LayerAbsent }` without a store, and `NotYet { NotRead }` for a stand-in the store leaves
+/// slotless.
 fn loaded(cx: &mut EvalCx<'_>, obj: ObjRef, what: &str) -> Result<(), AttrError> {
     let WorldParts { space, defs, .. } = cx.world.parts();
-    let Some(defs) = defs else { return Ok(()) };
+    let Some(defs) = defs else { return slotless_refusal(space, false, obj) };
     let named = || {
         let n = space.heap.get(obj).map_or_else(|_| "?".into(), |o| space.names.text(o.name).into_owned());
         format!("{} {n}", class_path(space, obj))
@@ -70,7 +72,7 @@ fn loaded(cx: &mut EvalCx<'_>, obj: ObjRef, what: &str) -> Result<(), AttrError>
         )
         .into());
     }
-    Ok(())
+    slotless_refusal(space, true, obj)
 }
 
 /// The resident context's `DefinitionData` field `name`, read without a load; a context with no `DefinitionData`
@@ -131,22 +133,26 @@ fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, A
     }
     loaded(cx, resolver, "the resolver")?;
     let entries = resident_field(cx, resolver, "DamageTypes")?;
-    let fallback = resident_field(cx, resolver, "ValueIfNotMatched")?;
-    let damage_type = weapon_damage_type(cx, context)?;
-    let space = cx.world.parts().space;
-    let type_name = match damage_type {
-        Some(t) => Some(space.heap.get(t)?.name),
-        None => None,
-    };
-    if type_name.is_some() {
+    // The list is checked whole on every path, a weapon with no damage type included (review r2 of #584, item 3).
+    let mut names = Vec::new();
+    {
+        let space = cx.world.parts().space;
         for entry in elements("DamageTypes", &entries)? {
-            let entry_name = name("AssociatedDamageTypeName", field(space, entry, "AssociatedDamageTypeName")?)?;
-            if Some(entry_name) == type_name {
-                return constant(space, field(space, entry, "ValueIfMatched")?, "ValueIfMatched");
-            }
+            names.push(name("AssociatedDamageTypeName", field(space, entry, "AssociatedDamageTypeName")?)?);
         }
     }
-    constant(space, &fallback, "ValueIfNotMatched")
+    let damage_type = weapon_damage_type(cx, context)?;
+    let space = cx.world.parts().space;
+    if let Some(t) = damage_type {
+        let type_name = space.heap.get(t)?.name;
+        if let Some(i) = names.iter().position(|n| *n == type_name) {
+            let entry = &elements("DamageTypes", &entries)?[i];
+            return constant(space, field(space, entry, "ValueIfMatched")?, "ValueIfMatched");
+        }
+    }
+    // Read only once no entry matched.
+    let fallback = resident_field(cx, resolver, "ValueIfNotMatched")?;
+    constant(cx.world.parts().space, &fallback, "ValueIfNotMatched")
 }
 
 impl ValueResolver for DamageType {

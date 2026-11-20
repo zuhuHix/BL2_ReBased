@@ -188,39 +188,43 @@ pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> 
     match defs {
         Some(defs) => {
             defs.ensure_loaded(space, obj)?;
-            // A handle the store leaves a stand-in (an object inside a class default object, for one) holds no field
-            // although its class has some: reading it would be a heap error, so it is `NotYet` naming the object (lane
-            // FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
-            let o = space.heap.get(obj)?;
-            let fields = space.classes.get_layout(o.class).map_or(0, |l| l.slot_count());
-            if o.slots.is_empty() && fields > 0 {
-                let path = format!(
-                    "{} {}",
-                    space
-                        .classes
-                        .get_layout(o.class)
-                        .map_or_else(String::new, |l| l.path().as_str().to_string()),
-                    space.names.text(o.name)
-                );
-                return Err(NotYet::not_read(
-                    format!(
-                        "the reference ({path}) stays a stand-in the definition store does not load (an object inside \
-                         a class default object is one), so its fields cannot be read"
-                    ),
-                    CHAINS,
-                )
-                .into());
-            }
-            Ok(())
+            slotless_refusal(space, true, obj)
         }
-        None if slotless => Err(NotYet::layer_absent(
-            format!("loading the unloaded definition {obj:?}"),
-            "ow-defs",
-            CHAINS,
-        )
-        .into()),
+        None if slotless => slotless_refusal(space, false, obj),
         None => Ok(()),
     }
+}
+
+/// The refusals [`ensure_loaded`] gives a slotless resource object, without loading anything: with a store, a handle
+/// the store leaves a stand-in (an object inside a class default object, for one) holds no field although its class
+/// has some, so reading it would be a heap error and it is `NotYet { NotRead }` naming the object (lane
+/// FIX-PHASELOCK-CHAIN, decision 2026-11-16-69); without a store, any slotless object is `NotYet { LayerAbsent }`
+/// for `ow-defs`. Any other object passes. Shared with resident-only readers (review r2 of #584, item 2).
+pub(crate) fn slotless_refusal(space: &ObjectSpace, with_store: bool, obj: ObjRef) -> Result<(), AttrError> {
+    let o = space.heap.get(obj)?;
+    if !matches!(o.origin, Origin::Resource { .. }) || !o.slots.is_empty() {
+        return Ok(());
+    }
+    if !with_store {
+        return Err(NotYet::layer_absent(format!("loading the unloaded definition {obj:?}"), "ow-defs", CHAINS).into());
+    }
+    let fields = space.classes.get_layout(o.class).map_or(0, |l| l.slot_count());
+    if fields > 0 {
+        let path = format!(
+            "{} {}",
+            space.classes.get_layout(o.class).map_or_else(String::new, |l| l.path().as_str().to_string()),
+            space.names.text(o.name)
+        );
+        return Err(NotYet::not_read(
+            format!(
+                "the reference ({path}) stays a stand-in the definition store does not load (an object inside a \
+                 class default object is one), so its fields cannot be read"
+            ),
+            CHAINS,
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// The class path of `obj`, for messages.
@@ -589,12 +593,14 @@ pub(crate) fn preflight_read_resident(sys: &AttributeSystem, attr: ObjRef, cx: &
         };
         // The dispatch first: a class this library does not implement is refused by its name, resident or not.
         let r = sys.value_resolver(cx.world.parts().space, resolver)?;
-        resident(cx, resolver, "a value resolver")?;
-        // The mode availability as metadata, with shared references only: the resolver's own `available`, which gets
-        // the mutable context, is never called here (review r2 of #573).
+        // Then the mode availability, as metadata with shared references only: the resolver's own `available`, which
+        // gets the mutable context, is never called here (review r2 of #573). It comes before the residency, so a
+        // class one mode does not implement is refused by its name, resident or not, as an unregistered class is
+        // (review r2 of #584, item 1).
         let WorldParts { space, defs, .. } = cx.world.parts();
         let mode = defs.as_ref().map_or(ow_core::ParityMode::Off, |d| d.mode());
         r.availability(space, resolver, mode)?;
+        resident(cx, resolver, "a value resolver")?;
     }
     Ok(())
 }

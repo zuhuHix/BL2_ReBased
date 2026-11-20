@@ -5,6 +5,7 @@
 use ow_core::{Missing, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
+use ow_object::heap::Origin;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 
@@ -365,4 +366,128 @@ fn reference_keeps_the_unregistered_refusal() {
     assert_eq!(not_read(DamageType.storage(&sys, r, gun, &mut cx).unwrap_err()), expected, "storage");
     assert_eq!(not_read(sys.value_of(attr, None, None, &mut cx).unwrap_err()), expected, "a read");
     assert_eq!(fx.w.space.heap.committed_writes(), writes);
+}
+
+/// The kind and text of a `NotYet`, or a panic.
+fn not_yet(e: AttrError) -> (Missing, String) {
+    match e {
+        AttrError::NotYet(n) => (n.missing, n.what.into_owned()),
+        other => panic!("expected NotYet, got {other:?}"),
+    }
+}
+
+/// Review r2 of #584, item 1: in Reference the resident preflight refuses a cold handle of a class registered to this
+/// resolver by the class's name, through the registry's dispatch, before any residency check. The store's class is
+/// invented (`WillowGame.TestColdDamageTypeResolver`, registered to [`DamageType`] here): the test world already
+/// declares the game's class path with its own layout, and the store would not bind a second one to it.
+#[test]
+fn reference_refuses_a_cold_resolver_by_its_class_first() {
+    use ow_package::testkit::script::ScriptToy;
+    // An invented WillowGame.upk declaring a resolver class (no fields), one export of it, and a holder naming it.
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    let object = t.class("Object", 0);
+    let resolver_class = t.class("TestColdDamageTypeResolver", object);
+    let holder_class = t.class("TestHolder", object);
+    t.prop("Object", holder_class, "Resolver", 0, resolver_class);
+    let mut empty = 0i32.to_le_bytes().to_vec();
+    empty.extend_from_slice(&t.none);
+    let cold = t.p.add_export(resolver_class, "ColdResolver", empty);
+    let mut holder = 0i32.to_le_bytes().to_vec();
+    holder.extend(t.p.object_tag("Resolver", cold));
+    holder.extend_from_slice(&t.none);
+    t.p.add_export(holder_class, "TestHolderObject", holder);
+    let bytes = t.build();
+    let dir = std::env::temp_dir().join(format!("ow-attr-damage-type-ref-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut fx = Fx::new();
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("WillowGame.upk", bytes.as_slice())],
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Reference,
+    )
+    .unwrap();
+    fx.w.defs = Some(defs);
+    let path = ow_core::ObjectPath::parse("WillowGame.TestHolderObject").unwrap();
+    let holder = fx.w.defs.as_mut().unwrap().find(&mut fx.w.space, &path).unwrap().unwrap();
+    let class = fx.w.space.heap.get(holder).unwrap().class;
+    let p = fx.w.space.prop(class, "Resolver").unwrap();
+    let handle = match fx.w.space.read(holder, PropAddr::scalar(p)).unwrap() {
+        Value::Object(Some(h)) => *h,
+        other => panic!("{other:?}"),
+    };
+    assert!(fx.w.defs.as_ref().unwrap().is_unloaded(&fx.w.space, handle), "the handle is cold");
+    const COLD_CLASS: &str = "WillowGame.TestColdDamageTypeResolver";
+    assert_eq!(crate::eval::class_path(&fx.w.space, handle), COLD_CLASS);
+    let sys = crate::AttributeSystem::new_empty().with_value_resolver(COLD_CLASS, DamageType).unwrap();
+    let warm = resolver(&mut fx, &[]);
+    let attr = fx.attr("WeaponDamage_Is_Test", vec![], vec![warm]);
+    set(&mut fx, attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(handle))]));
+    let loads = fx.w.defs.as_ref().unwrap().load_transitions();
+    let e = sys.preflight_read_resident(attr, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+    assert_eq!(not_read(e), format!("value resolver class {COLD_CLASS} [NATIVE_ATTRIBUTES.md section 6]"));
+    assert_eq!(fx.w.defs.as_ref().unwrap().load_transitions(), loads, "nothing loaded");
+    assert!(fx.w.defs.as_ref().unwrap().is_unloaded(&fx.w.space, handle));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review r2 of #584, item 2: slotless resource objects keep the refusals of a loading read, checked without one:
+/// `LayerAbsent` for `ow-defs` with no store, and `NotRead` for a stand-in the store leaves slotless; for the
+/// resolver and for an item context alike.
+#[test]
+fn slotless_resolvers_and_contexts_keep_their_refusals() {
+    for with_store in [false, true] {
+        let mut fx = Fx::new();
+        if with_store {
+            fx.w.defs = Some(DefStore::new_empty());
+        }
+        let d = damage_type(&mut fx, "TestDmg_Acid");
+        let t = weapon_type(&mut fx, Some(d));
+        let gun = weapon(&mut fx, Some(t), None);
+        let warm = resolver(&mut fx, &[("TestDmg_Acid", 1.0)]);
+        let resolver_class = fx.by_path(CLASS);
+        let at = Origin::Resource { package: 0, index: 1 };
+        let cold_resolver = fx.w.space.alloc_stand_in(resolver_class, "StandInResolver", at).unwrap();
+        let cold_gun = fx.w.space.alloc_stand_in(fx.c.weapon, "StandInWeapon", Origin::Resource { package: 0, index: 2 }).unwrap();
+        let sys = system();
+        for (case, r, ctx) in [("resolver", cold_resolver, gun), ("context", warm, cold_gun)] {
+            let mut cx = EvalCx::new(&mut fx.w);
+            let (missing, what) = not_yet(DamageType.value(&sys, r, ctx, 0.0, &mut cx).unwrap_err());
+            if with_store {
+                assert_eq!(missing, Missing::NotRead, "{case}");
+                assert!(what.contains("stays a stand-in the definition store does not load"), "{case}: {what}");
+            } else {
+                assert_eq!(missing, Missing::LayerAbsent("ow-defs"), "{case}: {what}");
+            }
+        }
+    }
+}
+
+/// Review r2 of #584, item 3: the list is checked whole on every path, a weapon with no damage type included, and the
+/// fallback is read only when no entry matched.
+#[test]
+fn the_list_is_checked_on_every_path_and_the_fallback_read_last() {
+    let mut fx = Fx::new();
+    let d = damage_type(&mut fx, "TestDmg_Acid");
+    let t = weapon_type(&mut fx, Some(d));
+    let typed = weapon(&mut fx, Some(t), None);
+    let untyped = weapon(&mut fx, None, None);
+    let sys = system();
+    // A list whose second entry's name is not a name: bad data for both weapons, even past the matching first entry.
+    let bad = resolver(&mut fx, &[]);
+    let sel = fx.c.damage_sel;
+    let (acid, one) = (fx.name("TestDmg_Acid"), fx.k(1.0));
+    let good = fx.st(sel, vec![("AssociatedDamageTypeName", acid), ("ValueIfMatched", one.clone())]);
+    let broken = fx.st(sel, vec![("AssociatedDamageTypeName", Value::Int(3)), ("ValueIfMatched", one)]);
+    set(&mut fx, bad, "DamageTypes", Value::array(vec![good, broken]));
+    for gun in [typed, untyped] {
+        let e = DamageType.value(&sys, bad, gun, 0.0, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+        assert!(matches!(e, AttrError::BadData { .. }), "{e:?}");
+    }
+    // A fallback that is not initialisation data: never read when an entry matches, bad data when none does.
+    let r = resolver(&mut fx, &[("TestDmg_Acid", 2.0)]);
+    set(&mut fx, r, "ValueIfNotMatched", Value::Int(3));
+    assert_eq!(DamageType.value(&sys, r, typed, 0.0, &mut EvalCx::new(&mut fx.w)), Ok(2.0));
+    let e = DamageType.value(&sys, r, untyped, 0.0, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+    assert!(matches!(e, AttrError::BadData { .. }), "{e:?}");
 }
