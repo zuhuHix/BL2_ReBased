@@ -29,7 +29,7 @@
 //! dialog kinds (and the target kind, `ow-ai`'s), replacing only the base kind. Any other subclass's table was not
 //! read: `NotYet { NotRead }`, as before. Damage-reader behavior is not proven.
 //!
-//! **`GearboxMind.GetAIComponent`** (lane IMPL-GEARBOXMIND-GETAICOMPONENT, decision 2026-11-19-NNN), coded from
+//! **`GearboxMind.GetAIComponent`** (lane IMPL-GEARBOXMIND-GETAICOMPONENT, decision 2026-11-19-210), coded from
 //! `docs/verification/NATIVE_GEARBOXMIND_GETAICOMPONENT.md` alone (the note as final at 660d0b32; clean room: lane
 //! ANALYST-GEARBOXMIND-GETAICOMPONENT wrote it). In Off it is [`get_ai_component`]: the mind's own `AIComponent`, read
 //! by name and returned as it is, None included. It writes, loads and draws nothing, and the returned handle is not

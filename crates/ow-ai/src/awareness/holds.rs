@@ -23,7 +23,7 @@
 //! **The kinds.** The base and target holds are part 2's bindings ([`super::actions::Pack`], from G26). The movement,
 //! demigod, god and dialog kinds are implemented from NATIVE_AI_HOLDS.md, and `GearboxMind.GetAIComponent` (the
 //! mind's own `AIComponent`) from NATIVE_GEARBOXMIND_GETAICOMPONENT.md, in `ow_combat::holds` (clean room, decisions
-//! 2026-11-16-83 and 2026-11-19-NNN), because
+//! 2026-11-16-83 and 2026-11-19-210), because
 //! `ow-combat`'s pawns reach the demigod kind through their script and `ow-combat` sits below this crate. [`Pack`]
 //! binds them in Off for a world without `ow_combat::hit::Pack` (which binds them too), and nothing under Reference.
 //! A key another pack has already bound keeps that binding.

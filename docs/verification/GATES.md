@@ -77,7 +77,7 @@ hold tests, 5 in `ow-combat` and 1 in `ow-ai`, and 1 renamed; #518's counters ch
 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun `ReplicationStrategy` 2 refusal ("stopped
 after partial writes: NounAttributeValueResolver with ReplicationStrategy 2 on a provider..."), before the flag
 evaluator reaches this native. A probe stacked on #523 was not run: #523 conflicts with main in 10 files (its counter
-names against #518's), which is #523's rebase. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs
+names against #518's), which is #523's rebase. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-210; logs
 under ignored `local/p2/gac/`.
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
