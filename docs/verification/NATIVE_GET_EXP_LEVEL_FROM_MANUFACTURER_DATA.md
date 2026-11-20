@@ -1,7 +1,7 @@
 # InventoryBalanceDefinition.GetExpLevelFromManufacturerData on link 8 (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-GET-EXP-LEVEL-FROM-MANUFACTURER-DATA (decision
-2026-11-19-NNN, number pending). Analyst only: a different lane implements it (clean room).
+2026-11-19-181, number pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
 - the script, read with `research/script_disasm.py` (callers in the nine code packages);
