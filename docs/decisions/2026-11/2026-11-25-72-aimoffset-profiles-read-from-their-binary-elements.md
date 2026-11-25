@@ -16,8 +16,9 @@ fix/rust-aimoffset-set-profile. The design was ruled by the hub before coding. N
   3. **The switch.** In `SetActiveProfileByName` / `ByIndex` (step 3 of NATIVE_AIMOFFSET_SET_PROFILE.md, #730):
      - a decoded non-empty list is the slot's values;
      - a list the store marked skipped is the profiles layer's names (`ow_world::world::aim_profiles`, cached by the
-       node's identity);
-     - an empty list on a loaded definition that is not marked is "no match";
+       node, its package and its export index);
+     - an empty list is "no match" only when the owner's own export tags `Profiles` (review of #737); an untagged or
+       inherited empty list, or one over a skipped class default, is the reader's "no Profiles tag" `LayerAbsent`;
      - any other empty list keeps the `LayerAbsent`.
 - **The layer's shape.** `ow-world` may not depend on `ow-assets` (the crate edges), so the layer takes the reader as
   an installed `ProfileSource`, as the skeletal mesh layer takes its skeleton source. `ow-cli` installs
@@ -52,7 +53,8 @@ fix/rust-aimoffset-set-profile. The design was ruled by the hub before coding. N
   - the marker in `ow-defs`, in both modes: skipped, decoded-empty, untagged, through a handle's load;
   - the reader on invented bytes: the values, and each oracle miss refused;
   - the switch in `ow-world`: the reader's names on the node and through a run-time copy, a reader refusal, a walk
-    mismatch, and decoded-empty or untagged giving "no match";
+    mismatch, decoded-empty giving "no match", and untagged, inherited or
+    over a skipped class default giving `LayerAbsent`;
   - the harness log line in `ow-cli`.
 - **The slice gate** (installed Off strict, under the machine lock, base d906ee9f and this head 762bc93a, run the same
   way): 5 ok / 8 NotYet / 1 error on both.
