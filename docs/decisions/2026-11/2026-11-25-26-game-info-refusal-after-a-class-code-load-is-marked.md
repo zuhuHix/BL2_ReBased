@@ -1,7 +1,7 @@
 ## 2026-11-25: The game info's refusal after a class code load is marked
 
-AI-assisted (Claude Code, Opus 5.5). Lane GAMEINFO-COLLIDER-CODE-LOAD, stacked on #685 (decision 2026-11-25-20). The
-file number is a placeholder until the landing run numbers it. A marking fix, not a rule change: the rule is
+AI-assisted (Claude Code, Opus 5.5). Lane GAMEINFO-COLLIDER-CODE-LOAD, stacked on #685 (decision 2026-11-25-20).
+A marking fix, not a rule change: the rule is
 docs/verification/NATIVE_MAP_LOAD.md section 3's, as `ow-world` `mapload::game_info` codes it, unchanged. Synthetic
 fixtures only.
 
