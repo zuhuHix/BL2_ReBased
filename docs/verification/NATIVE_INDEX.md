@@ -327,6 +327,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowWeapon states Active/WeaponFiring/WeaponReloading (script) | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: trigger to shot, refire, burst, auto-reload | UNVERIFIED | high | |
 | Weapon.GetFireInterval (WillowWeapon override) | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: shot cadence, barrel spin-up | UNVERIFIED | high | |
 | WillowWeapon.GetBurstInterval | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: burst gap | UNVERIFIED | high | |
+| WillowWeapon.OnCreate (the kernel broadcast of `OnCreate` on the weapon's consumer: every provider, filter -1, no payload) | [NATIVE_WEAPON_ON_CREATE.md](NATIVE_WEAPON_ON_CREATE.md) | link 8: `init`, the end of `ClientInitializeFromWeaponTypeDefinition` (the Bandit AR's nine providers have no sequences: nothing fires) | UNVERIFIED | high (the exec and the kernel step read; shared with BroadcastBehaviorEventFromScript), medium (the handle slot by fit) | |
 | WillowWeapon.GetFiringModeDefinition | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: Bullet/HitScan/Rocket selection | UNVERIFIED | high | |
 | WillowWeapon.GetAmmoCount | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: ammo pool vs clip | UNVERIFIED | high | |
 | WillowWeapon.GetMaxAmmo | [NATIVE_WEAPON_TRIGGER_AMMO.md](NATIVE_WEAPON_TRIGGER_AMMO.md) | Fire: ammo cap | UNVERIFIED | high | |

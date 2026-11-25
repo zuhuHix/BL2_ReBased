@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK8-NEXT (2026-11-25, pc-hummer, docs only, on docs/native-link8-next-weapon-on-create from main
+5d20247f):** AI-assisted (Claude Code, Opus 5.5). NATIVE_WEAPON_ON_CREATE.md: link 8's path past
+`SetColorParameter`, and its first unread native, `WillowWeapon.OnCreate` (the kernel broadcast of `OnCreate`;
+nothing fires on link 8). Predicted next stop (not a run): the unbound `GetFiringModeDefinition`. No code
+changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-PICKUP-TRACE-ROWS (2026-11-25, pc-hummer, on main 4464e814):** AI-assisted (Claude Code, Opus 5.5).
 `trace_filter::ROWS` gains exact-class `Row::Actor` rows for `Engine.DroppedPickup` and `WillowGame.WillowPickup`
 (NATIVE_TOUCH_PICKUP_TRACE.md section 3.1.1, UNVERIFIED). `cargo test --workspace -j 8` 3,582 passed / 0 failed / 57
