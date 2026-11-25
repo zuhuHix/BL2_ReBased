@@ -5,6 +5,7 @@
 //! own files and never edit this `lib.rs` (architecture section 2.3).
 
 pub mod actorx;
+pub mod aim_profiles;
 pub mod animation;
 pub mod collision;
 pub mod mesh;
