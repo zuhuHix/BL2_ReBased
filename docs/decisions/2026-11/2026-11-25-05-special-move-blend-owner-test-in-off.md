@@ -1,7 +1,7 @@
 ## 2026-11-25: AnimNodeSpecialMoveBlend's owner test in Off: one outcome per case
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SPECIALMOVE-OWNER, slice link 1. The file number is a placeholder
-until the landing run numbers it. Coded from docs/verification/NATIVE_SPECIALMOVE_OWNER.md section 4.1 alone (#647,
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SPECIALMOVE-OWNER, slice link 1.
+Coded from docs/verification/NATIVE_SPECIALMOVE_OWNER.md section 4.1 alone (#647,
 decision 2026-11-19-259, with its r1 and r2 points). Clean room: this lane did not read the native and did not write
 the note. Synthetic fixtures only.
 
