@@ -1,7 +1,7 @@
 ## 2026-11-25: GetParticleEffect loads no class code
 
-AI-assisted (Claude Code, Opus 5.5). Lane PARTICLE-EFFECT-CODE-LOAD, stacked on #685 (decision 2026-11-25-20). The
-file number is a placeholder until the landing run numbers it. A loading-discipline fix, not a rule change: the rule
+AI-assisted (Claude Code, Opus 5.5). Lane PARTICLE-EFFECT-CODE-LOAD, stacked on #685 (decision 2026-11-25-20).
+A loading-discipline fix, not a rule change: the rule
 is docs/verification/NATIVE_GET_PARTICLE_EFFECT.md's, unchanged ("the native writes nothing, draws nothing and loads
 nothing of its own"). Synthetic fixtures only.
 
