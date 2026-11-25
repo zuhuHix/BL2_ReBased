@@ -7,6 +7,7 @@ main 03896e55):** AI-assisted (Claude Code, Opus 5.5). NATIVE_COMPONENT_BOUNDS.m
 mesh component's `Bounds` come from (two early returns, visibility, six sources, the per-bone step, `BoundsScale`).
 Links 6 and 7's prediction: the port's template-less component takes the no-mesh base rule (a hub ruling is asked).
 No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+Decision 2026-11-25-28.
 
 **ANALYST-SETREPLICATEDSMDATA (2026-11-25, pc-hummer, docs only, on docs/native-set-replicated-smdata from main
 373fe4b0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SET_REPLICATED_SMDATA.md: the owner's replicated
@@ -59,7 +60,7 @@ its package, to the export's last byte (fitted layout, structural oracles; UNVER
   ("the LOD info from the new mesh's LOD models"). Its log reads 1 LOD model and trailing counts [0] for
   `GestaltDef_AssaultRifle_GestaltSkeletalMesh`. The row itself (lane A's file) is unchanged.
 
-No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/skellod/`. Decision 2026-11-25-28.
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/skellod/`. Decision 2026-11-25-09.
 
 **ANALYST-SPECIALMOVE-QUEUE (2026-11-25, pc-hummer, docs only, on docs/native-specialmove-queue from main
 4b3e4df6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIAL_MOVE_QUEUE.md: `SpecialMoveComponent.Queue`,

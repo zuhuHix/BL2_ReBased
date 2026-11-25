@@ -2,9 +2,8 @@
 
 AI-assisted (Claude Code)
 
-Lane ANALYST-SKELMESH-BOUNDS-SOURCE, analyst only, with Claude Opus 5.5. The number is left for the hub to
-assign. Docs only: no code, no dependency, and no bounds check
-changed.
+Lane ANALYST-SKELMESH-BOUNDS-SOURCE, analyst only, with Claude Opus 5.5. Docs only: no code, no dependency, and no
+bounds check changed.
 
 - **Why:** after #677, links 6 and 7 stop in `touch` at "a skeletal mesh component's bounds source: not read".
 - **What:** section 9 of `docs/verification/NATIVE_COMPONENT_BOUNDS.md`, with its NATIVE_INDEX row updated. It comes
@@ -24,9 +23,11 @@ changed.
   - then come the per-poly bone boxes and `BoundsScale`, with nothing added;
   - the "stopped after partial writes" prefix is the pickup driver's, as section 2 says.
 - **On links 6 and 7:** the port's component carries class defaults, without its template's mesh, so it takes the
-  no-mesh base rule, an unbounded box. That is rule-faithful on a non-game input. A hub ruling is asked (option B
-  recommended).
+  no-mesh base rule, an unbounded box. That is rule-faithful on a non-game input. A hub ruling is asked. Option B,
+  recommended: keep the base rule for a component with no template, and refuse a component made from a template that
+  holds a mesh, as a `LayerAbsent` on the template the port's `new` ignores.
 - **Proposed Off answer:** `entry_box`'s skeletal case becomes the ordered read-only rule. Unread parts and the
-  kept-bounds cases are `NotRead`. The stored-bounds, bones and parent-bounds layers are `LayerAbsent`. The base rule
-  is answered. Tests listed.
+  kept-bounds cases are `NotRead`. The stored-bounds, physics-bodies, bones and parent-bounds layers are `LayerAbsent`.
+  The base rule is answered. A load-free accessor would expose the mesh bounds and bone count that `ow-assets` already
+  reads; after it, the world transform is the next stop. Tests listed.
 - **Clean room:** a different lane implements this note.

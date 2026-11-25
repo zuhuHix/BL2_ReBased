@@ -345,10 +345,11 @@ update.
 
 ### 9.3 The skeletal bounds update, in order
 
-1. **Early return: a sleeping rigid body.** When the component's `Owner` has `Physics` = `PHYS_RigidBody`,
-   `FramesPhysicsAsleep` is above 5, and a further physics-state test on the owner passes, the update returns and keeps
-   the previous `Bounds`. That test goes through an owner object the layout tool does not place, and it is **not named
-   here**.
+1. **Early return: a sleeping rigid body.** When the component's `Owner` has `Physics` = `PHYS_RigidBody`, the
+   **component's own** `FramesPhysicsAsleep` is above 5, and a further physics-state test on the owner passes, the
+   update returns and keeps the previous `Bounds`. That test goes through an owner object the layout tool does not
+   place, and it is **not named here**. The component's `bSkipAllUpdateWhenPhysicsAsleep` plays no part in the bounds
+   update: the update does not test it (as read).
 2. **Early return: skipped pose update.** With `bSkipUpdateSkelPose` set (by fit), it returns and keeps the previous
    `Bounds`.
 3. **Visible or not.** In the game (not the editor), the component counts as visible when **both** of these hold:
@@ -364,7 +365,9 @@ update.
    - either `SpaceBases` has as many entries as the mesh's reference skeleton, or a `ParentAnimComponent` is set and
      has a `PhysicsAsset`.
 
-   It is used only by the two physics sources below.
+   It is used only by the two physics sources below. With `SpaceBases` empty and a mesh whose reference skeleton has
+   at least a root bone, the count half is already decidable: it is false, and only the parent's `PhysicsAsset` can
+   make the last condition true.
 5. **The source**, the first that applies:
    - **a. Not visible, or `bComponentUseFixedSkelBounds` set:** the **mesh's stored bounds**. The mesh's own `Bounds`
      origin, plus `RootBoneTranslation`, goes through the component's `LocalToWorld`. The extent is, per axis, the
@@ -423,9 +426,10 @@ component is made from the weapon's `ThirdPersonMesh` template and so has a mesh
 `Engine.SkeletalMeshComponent`. Reads are loaded-only and by name, as `entry_box` already does: nothing is written,
 loaded or drawn. A required object that is not resident is the bounding cylinder's existing refusal N. A field of the
 wrong kind is a `VmError::Script` naming it. In order:
-1. **Step 1.** `Owner` set, its `Physics` = `PHYS_RigidBody` (by the enum's order, looked up by name), and
-   `FramesPhysicsAsleep` above 5: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a sleeping rigid body's
-   kept bounds (the owner's physics test is not read)". Otherwise go on;
+1. **Step 1.** `Owner` set, its `Physics` = `PHYS_RigidBody`, and the component's `FramesPhysicsAsleep` above 5: a
+   `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a sleeping rigid body's kept bounds (the owner's physics test
+   is not read)". Otherwise go on. `PHYS_RigidBody` is found by the `EPhysics` enum's order, by a lookup only: a
+   missing enum or value name is a `VmError::Script` naming it, never a class-code load;
 2. **Step 2.** `bSkipUpdateSkelPose` set: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a skeletal mesh
    component's kept bounds (bSkipUpdateSkelPose)". The port stores no previous `Bounds`;
 3. **Step 3.** `DetailMode` above 0: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: the engine's detail
@@ -434,20 +438,42 @@ wrong kind is a `VmError::Script` naming it. In order:
 4. **Source a** (not visible, or `bComponentUseFixedSkelBounds`):
    - no `SkeletalMesh`: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a hidden or fixed-bounds skeletal
      component with no mesh (the game reads it unchecked)";
-   - otherwise a `NotYet` of kind `LayerAbsent`, "Actor.GetBoundingCylinder: a skeletal mesh component's bounds", with
-     layer "a skeletal mesh's stored bounds" (the layer B.7 already names);
-5. **Source b:** the same `LayerAbsent`;
-6. **Sources c and d:** they need "can use the bones" (step 4). Its bone count compares `SpaceBases` with the mesh's
-   reference skeleton, which the port does not read. So the step is decided only as far as the port can:
-   - c with `bHasValidBodies` set: a `NotYet` of kind `LayerAbsent`, `SKELETAL_BOUNDS` with `BONES_LAYER`. A headless
-     world has no physics bodies, so `bHasValidBodies` stays clear and c is skipped;
-   - d (a parent with a `PhysicsAsset`), with uniform scale and a mesh: `bUseBoundsFromParentAnimComponent` set is
-     `LayerAbsent` with the bounding cylinder's `BOUNDS_LAYER` (the parent's stored `Bounds`). Otherwise it is
-     `SKELETAL_BOUNDS` with `BONES_LAYER`;
+   - otherwise the mesh's stored bounds, through **the mesh-bounds accessor** below. While it answers none, a `NotYet`
+     of kind `LayerAbsent`, "Actor.GetBoundingCylinder: a skeletal mesh component's bounds", with layer "a skeletal
+     mesh's stored bounds" (the layer B.7 already names). Once it answers, the next stop is the world transform (step
+     8's rule);
+5. **Source b:** the parent's mesh's stored bounds, through the same accessor, with the same two outcomes;
+6. **Sources c and d.** First decide "can use the bones" (9.3 step 4) from what the port holds:
+   - uniform scale, from the component's and the owner's scale fields;
+   - `SkeletalMesh` set;
+   - the bone count: `SpaceBases`' length (a script array) against the mesh's reference-skeleton bone count from the
+     accessor below. With `SpaceBases` empty and at least one bone, the count half is false. While the accessor
+     answers none and `SpaceBases` is not empty, the count is undecidable: a `NotYet` of kind `LayerAbsent` with the
+     stored-bounds layer above (the same reader holds both).
+
+   Only when "can use the bones" holds:
+   - **c**, own `PhysicsAsset` and `bHasValidBodies` set. It needs **two** absent layers: the physics asset's bodies
+     ("a physics asset's bodies", section 7 B.7's text, its own constant) and the current bone transforms
+     (`BONES_LAYER`). The bodies are reported first, because the transforms apply to them; the refusal names both
+     layers in its text. A headless world has no physics bodies, so `bHasValidBodies` stays clear and c is skipped;
+   - **d**, a parent with a `PhysicsAsset`: `bUseBoundsFromParentAnimComponent` set is `LayerAbsent` with the bounding
+     cylinder's `BOUNDS_LAYER` (the parent's stored `Bounds`). Otherwise it is c's two layers, bodies first;
 7. **Source e** (no `SkeletalMesh`): the box origin (0, 0, 0), extent (262144, 262144, 262144), as read. No
    `BoundsScale` is applied and no transform is needed, so this is answerable now;
-8. **Source f:** the `LayerAbsent` of step 4. The world transform is not reached while the mesh's stored bounds are
-   absent.
+8. **Source f:** the mesh's stored bounds through the accessor, as in step 4. While it answers none, step 4's
+   `LayerAbsent`. Once it answers, the world transform is the next stop. It is answerable only in the simplest case:
+   the cylinder rule's conditions (`Translation` zero, none of the three Absolute flags, `Owner` the receiver), plus a
+   zero component `Rotation`, a zero owner `Rotation`, and a unit combined scale. `LocalToWorld` is then a pure
+   translation to the owner's `Location`, and the box is (`Location` + mesh origin + `RootBoneTranslation`, mesh
+   extent), with the extent times `BoundsScale` (no per-bone step while `SpaceBases` is empty). In every other case it
+   is `WORLD_TRANSFORM`'s `NotRead`, as the cylinder case uses.
+
+**The mesh-bounds accessor.** Main already reads the data. `ow-assets`' `skeletal_lods::read_lod_count` (#673,
+landed) returns the mesh's stored bounds (`bounds_origin`, `bounds_extent`) and its bone count (`bones`), and #693
+(open) exposes the reference skeleton. Neither is exposed through the world's `SkeletalMeshes` service. Proposed: a
+read-only, load-free accessor on `SkeletonSource`, shaped like `lod_count_in`. It answers the mesh's bounds origin and
+extent, and its bone count, for an export of the definition store's in-memory package. It answers `Ok(None)` without
+a source, which gives the `LayerAbsent` above. It writes and loads nothing.
 
 **A ruling the hub should make first (9.5).** Implementing step 7 makes links 6 and 7 pass this entry with the
 unbounded box, because the port's component lacks its template's mesh. The rule is faithful, but the input is not the
@@ -462,19 +488,26 @@ game's, so a later `GetTouchTraceLocation` would raise the trace by about 262144
 
 Synthetic, with `package()` / `tag()`, on a live, recorded, attached, colliding entry of exact class
 `Engine.SkeletalMeshComponent` with `BulletListener` clear. Each refusal leaves #518's three counters and the name
-table unchanged, and carries no prefix from the cylinder itself:
+table unchanged, causes no class-code load (where #685 has landed), and carries no prefix from the cylinder itself:
 1. class defaults, no mesh: box origin 0, extent 262144 on each axis. With the pickup cylinder's box beside it, the
    union and the cylinder answer follow (`box_cylinder`). `BoundsScale` 2 changes nothing (source e returns first);
 2. a toy `SkeletalMesh` object set: source f's `LayerAbsent` (stored bounds);
 3. `HiddenGame` set (no owner): not visible → source a. With a mesh it is the `LayerAbsent`; without one, the
    "no mesh" `NotRead`. With `bCastHiddenShadow` also set it is visible again → e or f;
+3a. `HiddenGame` set, no mesh, and a `ParentAnimComponent` with a mesh and its `bComponentUseFixedSkelBounds` set:
+    still source a's "no mesh" `NotRead`, which pins a before b;
 4. an owner with `bHidden` set: not visible, unless `bIgnoreOwnerHidden` is set;
 5. `bComponentUseFixedSkelBounds` set while visible: source a;
 6. `DetailMode` 1: the detail-mode `NotRead`, before the source;
 7. owner `Physics` = `PHYS_RigidBody` with `FramesPhysicsAsleep` 6: the sleeping-body `NotRead`. With 5, or another
    `Physics`, it goes on;
 8. `bSkipUpdateSkelPose` set: the kept-bounds `NotRead`;
-9. a `PhysicsAsset` with `bHasValidBodies` clear: skipped to e or f. With `bHasValidBodies` set: `BONES_LAYER`;
+9. a `PhysicsAsset` with `bHasValidBodies` clear: skipped to e or f. With `bHasValidBodies` set, uniform scale, a
+   mesh and a matching bone count: the bodies layer first, naming the bones layer too. With `SpaceBases` empty and a
+   one-bone mesh: c is skipped (the count is false);
+9a. with a stub accessor answering a mesh's bounds: source f with the simplest transform gives `Location` + origin +
+    `RootBoneTranslation` and the extent times `BoundsScale`; a nonzero owner `Rotation` gives `WORLD_TRANSFORM`'s
+    `NotRead`;
 10. a `ParentAnimComponent` with a mesh and its `bComponentUseFixedSkelBounds` set: source b's `LayerAbsent`. A parent
     with a `PhysicsAsset` and `bUseBoundsFromParentAnimComponent` set: `BOUNDS_LAYER`. A lazy parent: refusal N;
 11. a field of the wrong kind (`DetailMode` not a byte, `bHidden` not a bool): `VmError::Script` naming it;
