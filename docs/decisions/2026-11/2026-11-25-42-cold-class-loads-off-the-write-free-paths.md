@@ -1,7 +1,7 @@
 ## 2026-11-25: Cold class loads off the write-free paths of ow-inventory and ow-world
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane COLD-LOAD-FIXES, on `fix/rust-cold-class-audit-world-inv` (#701,
-d253ffe2). It fixes the five findings #701 pinned with ignored tests, plus the case it listed as not reached. No
+AI-assisted (Claude Code, Claude Opus 5.5). Lane COLD-LOAD-FIXES, written on `fix/rust-cold-class-audit-world-inv`
+(#701, d253ffe2) and moved by the hub onto main ce76c5f8 after #701 landed. It fixes the five findings #701 pinned with ignored tests, plus the case it listed as not reached. No
 game data and no native reading; synthetic fixtures only. No rule of a native changes where its classes are warm.
 **Nothing here is verified in the running game.** Reference is unchanged.
 
@@ -22,8 +22,13 @@ answer needs its code.
    that answer needs the cold class's code, so the test now expects the refusal.
 3. **`UnlockAchievementIfConditionsMet`:** step 1 uses a new `globals::globals_definition_resident`, which takes
    `GearboxGlobalsDefinition` and `GlobalsDefinition` by path. Only a declared type and `is_child_of` use them, which
-   are layout questions. A class the table does not hold cannot match, so the refusals are the same. One text differs:
-   a missing `GearboxGlobalsDefinition` was `find_class`'s error and is now the declaration data error.
+   are layout questions. Both classes are settled first, as `globals_definition`'s `find_class` calls were (review r1
+   of #708):
+   - a path no package holds keeps `find_class`'s hard "class not found" error, which loads nothing;
+   - a class the packages hold but the table does not is answered without a load. For `GearboxGlobalsDefinition`
+     that is the declaration data error (no existing declaration can name it). For `GlobalsDefinition` it is
+     `NotYet { NotRead }`, "the class WillowGame.GlobalsDefinition, not loaded (a class load is a write)", ahead of a
+     None holder's first-load answer.
 4. **`DataStoreClient` getter (`GetDataStoreClient`):** before it takes its classes with `find_class`, a read-only
    check asks the code index for each one by path: the global stores and the client, then the settings provider class
    where a store derives from the settings store. A missing one is `find_class`'s own error for that path, which loads
@@ -38,7 +43,11 @@ answer needs its code.
    leaves `WillowPlayerPawn` cold (`fx_with(false)`), the case #701 listed as not reached.
 
 **Tests.** #701's five pinned tests are un-ignored and pass (finding 2 with the changed answer above). The warm-pawn
-targeting test now also compares the name table, and one new test covers the cold `WillowPlayerPawn`.
+targeting test now also compares the name table, and one new test covers the cold `WillowPlayerPawn`. Review r1 of
+#708 added `the_resident_definition_lookup_keeps_the_missing_class_error` (the missing and the cold `GlobalsDefinition`).
+
+**Gates** (re-run after review r1 of #708, on the head moved onto main ce76c5f8): `cargo test --workspace -j 8` 3,550
+passed / 0 failed / 54 ignored; `crate_edges_test.py` 19 OK. The slice gate was not run.
 
 **Open:**
 - the data-store plan's load-before-check (fix 4);

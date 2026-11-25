@@ -325,14 +325,18 @@ pub fn globals_definition_loaded(vm: &Vm, globals: ObjRef, what: &str) -> Result
     definition_of_class(vm, d, class)
 }
 
-/// [`globals_definition`] with no class lookup that loads (lane COLD-LOAD-FIXES), for a read-only path: both classes
-/// are taken from the class table by path, because only their identity and the class chain are used (a declared type
-/// and `is_child_of`, layout questions), not their code. A class the table does not hold cannot be one an existing
-/// declaration or object names, so the same refusals follow without a load:
-/// - no `GearboxGlobalsDefinition` in the table: the declaration names another class, a data error;
-/// - no `GlobalsDefinition`: the held definition is not one, the first-load refusal.
-pub fn globals_definition_resident(vm: &Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
-    let gearbox = vm.space.classes.by_path(GEARBOX_GLOBALS_DEFINITION);
+/// [`globals_definition`] with no class lookup that loads (lane COLD-LOAD-FIXES), for a read-only path. Both classes
+/// are settled first, as `globals_definition`'s `find_class` calls are (review r1 of #708), through
+/// [`resident_or_absent`]: the class table by path, because only their identity and the class chain are used (a
+/// declared type and `is_child_of`, layout questions), not their code. A path no package holds is `find_class`'s own
+/// error, as before. Then:
+/// - `GearboxGlobalsDefinition` in the package set but not in the table: no existing declaration can name it, so the
+///   declaration data error;
+/// - `GlobalsDefinition` in the package set but not in the table (cold): `NotYet { NotRead }`, "the class <path>, not
+///   loaded (a class load is a write)".
+pub fn globals_definition_resident(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
+    let gearbox = resident_or_absent(vm, GEARBOX_GLOBALS_DEFINITION)?;
+    let class = resident_or_absent(vm, GLOBALS_DEFINITION_CLASS)?;
     declared_reference_to(vm, globals, "TheGlobalsDefinition", gearbox, GEARBOX_GLOBALS_DEFINITION, what)?;
     if gearbox.is_none() {
         return Err(bad(
@@ -340,11 +344,29 @@ pub fn globals_definition_resident(vm: &Vm, globals: ObjRef, what: &str) -> Resu
             format!("TheGlobalsDefinition is declared as a reference to a class other than {GEARBOX_GLOBALS_DEFINITION}"),
         ));
     }
+    let Some(class) = class else {
+        return Err(NotYet::not_read(
+            format!("the class {GLOBALS_DEFINITION_CLASS}, not loaded (a class load is a write)"),
+            RECORD,
+        )
+        .into());
+    };
     let d = held_definition(vm, globals, what)?;
-    match vm.space.classes.by_path(GLOBALS_DEFINITION_CLASS) {
-        Some(class) => definition_of_class(vm, d, class),
-        None => Err(first_load()),
+    definition_of_class(vm, d, class)
+}
+
+/// The class at `path` in the class table (`Some`), or `None` when the table does not hold it but a package does (a
+/// cold class), both with no load. A path no package holds is `find_class`'s own error for it, which loads nothing
+/// since there is no class to load (lane COLD-LOAD-FIXES, review r1 of #708).
+fn resident_or_absent(vm: &mut Vm, path: &str) -> Result<Option<ClassId>, VmError> {
+    if let Some(c) = vm.space.classes.by_path(path) {
+        return Ok(Some(c));
     }
+    let present = {
+        let (code, store) = vm.defs.code_mut();
+        code.find_class(store, path).is_ok()
+    };
+    if present { Ok(None) } else { vm.find_class(path).map(Some) }
 }
 
 fn definition_of_class(vm: &Vm, d: ObjRef, class: ClassId) -> Result<ObjRef, VmError> {
