@@ -1,7 +1,7 @@
 ## 2026-11-25: The skeletal mesh data layer reads a mesh's LOD models from its own package export
 
-AI-assisted (Claude Code, Opus 5.5). Lane SKELMESH-LOD-LAYER, on main d3c7a13b. The decision number is pending from
-the hub; NNN is a placeholder. The lane started on 2026-11-20 (the LOD count) and finished on 2026-11-25 (the LOD
+AI-assisted (Claude Code, Opus 5.5). Lane SKELMESH-LOD-LAYER, on main d3c7a13b.
+The lane started on 2026-11-20 (the LOD count) and finished on 2026-11-25 (the LOD
 models).
 
 - **What was decided:** `ow-assets` gets `skeletal_lods`. `read_lod_count` reads a `SkeletalMesh` export's native
