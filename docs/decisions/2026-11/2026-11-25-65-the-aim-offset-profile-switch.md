@@ -29,4 +29,11 @@ check changed.
   - `LayerAbsent` while the profiles are not decoded;
   - the rebuild's sort and parent pass `NotRead` before any write;
   - tests listed.
+- **Review r1 (#730):**
+  - the interim rule is conservative: an empty `Profiles` on the list's owner is `LayerAbsent` until the store can
+    report "decoded and empty", because today's decoder leaves a skipped property as the empty class default;
+  - a lazy `SkelComponent` is `NotRead`, and any set mesh goes to the rebuild's `NotRead` unresolved;
+  - all declarations are checked first;
+  - the rebuild empties both arrays before its gate;
+  - the 7 entries' sizes add up to the array's bytes.
 - **Clean room:** a different lane implements this note.
