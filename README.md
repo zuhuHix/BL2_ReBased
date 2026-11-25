@@ -576,7 +576,7 @@ cargo build --workspace
 cargo test --workspace                                         # synthetic tests, no game needed
 ```
 
-The crates are skeletons for now. `ow-host --game <install folder>` only checks that it was given a Borderlands 2 install and says that the host on the chosen route (own engine on wgpu + winit) is not written yet; nothing renders yet.
+`ow-host --game <install folder>` is the host on the chosen route (own engine on wgpu + winit). It checks that it was given a Borderlands 2 install, and its other commands draw a map's scene, walk Sanctuary headless, and run a play mode in the window or headless. What each command does, and what it does not prove, is in [docs/TOOLING.md](docs/TOOLING.md), "`ow-host`: the Rust host". None of it is checked against the game.
 
 The C++ core in `src/` still builds and is the reference until each Rust crate matches it (same synthetic fixtures, same `verify_packages.py` results):
 
@@ -602,9 +602,9 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 `tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest.
 
-The Rust workspace has 22 crates in their final shape, one per layer from `ow-core` up to `ow-cli` and `ow-host`, with their allowed dependency edges, module files and owner lanes listed in [crates/README.md](crates/README.md); none of them reads a package yet, and every command of the Rust `ow-package` says it is not ported (exit 3). Until 2026-11-14 the Sanctuary slice (Maya's movement, HUD, guns, Phaselock, the gun range, the Fire mission, skills, vending and lootables) lived in the UE5 host under `host/ue5/`, with its 14-link slice gate. That host is removed; `git show 08bcf3e:<path>` recovers any of its files, and its records in [docs/verification/](docs/verification/) say what it did.
+The Rust workspace has 22 crates in their final shape, one per layer from `ow-core` up to `ow-cli` and `ow-host`, with their allowed dependency edges, module files and owner lanes listed in [crates/README.md](crates/README.md). The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines and reads the installed packages, and `ow-host` draws and walks a map: see [docs/TOOLING.md](docs/TOOLING.md), "Rust workspace" and "`ow-host`: the Rust host", and [docs/verification/GATES.md](docs/verification/GATES.md) for what each check covers. A command that meets a rule not ported yet exits 3 (`NotYet`). None of this is parity with the game. Until 2026-11-14 the Sanctuary slice (Maya's movement, HUD, guns, Phaselock, the gun range, the Fire mission, skills, vending and lootables) lived in the UE5 host under `host/ue5/`, with its 14-link slice gate. That host is removed; `git show 08bcf3e:<path>` recovers any of its files, and its records in [docs/verification/](docs/verification/) say what it did.
 
-Not implemented in the core: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and checked playback of the game's own sounds. Not started: any Rust host. (In the UE5 host, terrain and BSP were imported for Sanctuary only, and skeletal meshes came in through UModel for the slice's characters.)
+Not implemented in the core: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and checked playback of the game's own sounds. The Rust host's state is in [docs/TOOLING.md](docs/TOOLING.md), "`ow-host`: the Rust host". (In the UE5 host, terrain and BSP were imported for Sanctuary only, and skeletal meshes came in through UModel for the slice's characters.)
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 
