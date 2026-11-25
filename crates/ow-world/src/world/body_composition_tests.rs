@@ -118,6 +118,14 @@ struct Opts {
     no_third_person_menu: bool,
     /// `PrimitiveComponent`'s own `LightEnvironment` declared as an int (hook 3's planner, lane IMPL-HOOK3-ARRAY-CHECK).
     component_light_int: bool,
+    /// `SkeletalMeshComponent.ParentBoneMap` declared as an int, not an array (the `Parent` link, lane
+    /// IMPL-CUSTOMHEAD-PARENT-LINK).
+    parent_map_int: bool,
+    /// `SkeletalMeshComponent.bIsGestaltAccessoryMesh` declared as an int.
+    gestalt_flag_int: bool,
+    /// The pawn's `HeadMesh` takes only a `CylinderComponent`: the custom-head write fails in the write phase, a seam for
+    /// the write-order test.
+    head_mesh_cylinder: bool,
 }
 
 impl Default for Opts {
@@ -131,14 +139,28 @@ impl Default for Opts {
             behind_view_int: false,
             no_third_person_menu: false,
             component_light_int: false,
+            parent_map_int: false,
+            gestalt_flag_int: false,
+            head_mesh_cylinder: false,
         }
     }
 }
 
 /// [`env_with`] with [`Opts`].
 fn env_opts(opts: Opts) -> Env {
-    let Opts { reattach, head_mesh, controller_int, light_int, flags_int, behind_view_int, no_third_person_menu, component_light_int } =
-        opts;
+    let Opts {
+        reattach,
+        head_mesh,
+        controller_int,
+        light_int,
+        flags_int,
+        behind_view_int,
+        no_third_person_menu,
+        component_light_int,
+        parent_map_int,
+        gestalt_flag_int,
+        head_mesh_cylinder,
+    } = opts;
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -228,6 +250,14 @@ fn env_opts(opts: Opts) -> Env {
         t.prop("Object", skeletal, "AttachedToSkelComponent", 0, skeletal);
         // The initialisation's own gate (review r1 of #631, item 1).
         t.prop("Object", skeletal, "ParentAnimComponent", 0, skeletal);
+        // The `Parent` link's other two fields (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8.1, lane
+        // IMPL-CUSTOMHEAD-PARENT-LINK).
+        if parent_map_int {
+            t.prop("Int", skeletal, "ParentBoneMap", 0, 0);
+        } else {
+            toy_array_of(&mut t, skeletal, "ParentBoneMap", "Int", 0);
+        }
+        t.prop(if gestalt_flag_int { "Int" } else { "Bool" }, skeletal, "bIsGestaltAccessoryMesh", 0, 0);
         let skel_mesh = t.class("SkeletalMesh", object);
         toy_array_of(&mut t, skel_mesh, "Sockets", "Object", object);
         let socket = t.class("SkeletalMeshSocket", object);
@@ -360,8 +390,10 @@ fn env_opts(opts: Opts) -> Env {
         t.p.add_export(skel_mesh, "ToyBodyMesh", payload);
         let mut empty = ow_package::testkit::ints(&[0]);
         empty.extend_from_slice(&t.none);
-        let cold = t.p.add_export(socket, "Socket_Cold", empty);
+        let cold = t.p.add_export(socket, "Socket_Cold", empty.clone());
         t.p.set_outer(cold, m);
+        // A second mesh, with no sockets, for the `Parent` link (lane IMPL-CUSTOMHEAD-PARENT-LINK).
+        t.p.add_export(skel_mesh, "ToyHeadMesh", empty);
         t.build()
     };
     // The gear-likeness interface and one component that defines its function (hook 1).
@@ -492,7 +524,7 @@ fn env_opts(opts: Opts) -> Env {
         ("ReplicatedInstanceDataState", PropKind::Struct(rep)),
         ("CylinderComponent", o.clone()),
         ("Mesh", o.clone()),
-        ("HeadMesh", o.clone()),
+        ("HeadMesh", if head_mesh_cylinder { PropKind::Object { class: cylinder } } else { o.clone() }),
         ("LightEnvironment", if light_int { PropKind::Int } else { o.clone() }),
         // The rest of the made-Mesh step (NATIVE_MESH_REST.md).
         ("MeshBodyCompositionIndex", PropKind::Byte { enum_: None }),
@@ -1040,7 +1072,7 @@ fn prop_object(e: &Env, o: ObjRef, name: &str) -> ObjRef {
 /// The preflight's other refusals, each its named kind and text, write-free.
 #[test]
 fn the_named_refusals_are_write_free() {
-    for case in ["rebuild", "client", "template", "hit", "actor socket", "parent link", "other target"] {
+    for case in ["rebuild", "client", "template", "hit", "actor socket", "other target"] {
         let mut e = env();
         // The later attachments' refusals need the earlier made component past the rendering hooks.
         let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
@@ -1052,12 +1084,6 @@ fn the_named_refusals_are_write_free() {
             "template" => (vec![attachment(&mut e, A { ty: ACTOR_TEMPLATE, ..A::default() })], "NotRead", OBJECT_TEMPLATES.into()),
             "hit" => (vec![attachment(&mut e, A { template: Some(cyl), hit_region: Some(thing), ..A::default() })], "NotRead", HIT_REGION.into()),
             "actor socket" => (vec![attachment(&mut e, A { template: Some(cyl), socket: "Hips", ..A::default() })], "NotRead", ACTOR_SOCKETS.into()),
-            "parent link" => {
-                let head = make(&mut e.vm, e.skeletal, "Head_Template");
-                let a0 = attachment(&mut e, A { template: Some(skel), ..A::default() });
-                let a1 = attachment(&mut e, A { base: 0, template: Some(head), parent: PARENT_ID, ..A::default() });
-                (vec![a0, a1], "NotRead", PARENT_LINK.into())
-            }
             _ => {
                 let a0 = attachment(&mut e, A { template: Some(cyl), ..A::default() });
                 let a1 = attachment(&mut e, A { base: 0, template: Some(skel), ..A::default() });
@@ -1784,6 +1810,9 @@ fn a_scale_that_is_not_a_float_fails_before_any_write() {
 #[path = "body_composition_socket_tests.rs"]
 mod socket_tests;
 
+#[path = "body_composition_parent_tests.rs"]
+mod parent_tests;
+
 // ---------------------------------------------------------------------------------------------------------------
 // The rendering hooks (NATIVE_BODYCOMP_RENDER_HOOKS.md section 4, lane IMPL-BODYCOMP-RENDER-HOOKS). Numbers are the
 // note's test list. Each refusal goes through `refused`: no heap write, no draw, no load transition, no entry.
@@ -2485,15 +2514,24 @@ fn hook_3_a_malformed_component_declaration_is_the_planner_s_error() {
 
 /// 7.2 test 9: Maya-shaped: a skeletal attachment 0 named `Mesh` with lights accepted, then a skeletal `Parent`
 /// attachment on it. The build passes attachment 0's hooks (hook 3 plans its `LightEnvironment`) and stops at the
-/// `Parent` link's `NotRead`, write-free.
+/// `Parent` link, write-free. Since the link is answered (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8.1, lane
+/// IMPL-CUSTOMHEAD-PARENT-LINK), that stop is the link's skeleton reader: two different meshes and no skeleton source.
 #[test]
 fn hook_3_a_maya_shaped_build_stops_at_the_parent_link() {
     let mut e = env();
     let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let mesh = |e: &mut Env, leaf: &str| {
+        let m = e.vm.defs.find(&mut e.vm.space, &ObjectPath::parse(&format!("GD_ToyBody.{leaf}")).unwrap()).unwrap().unwrap();
+        e.vm.defs.ensure_loaded(&mut e.vm.space, m).unwrap();
+        m
+    };
+    let (body_mesh, head_mesh) = (mesh(&mut e, "ToyBodyMesh"), mesh(&mut e, "ToyHeadMesh"));
     let body = make(&mut e.vm, skeletal, "Body_Template");
     put(&mut e.vm, body, "bAcceptsLights", Value::Bool(true));
+    put(&mut e.vm, body, "SkeletalMesh", Value::Object(Some(body_mesh)));
     let head = make(&mut e.vm, skeletal, "Head_Template");
     put(&mut e.vm, head, "bAcceptsLights", Value::Bool(true));
+    put(&mut e.vm, head, "SkeletalMesh", Value::Object(Some(head_mesh)));
     let a0 = attachment(&mut e, A { template: Some(body), data_name: "Mesh", ..A::default() });
     let a1 = attachment(&mut e, A { base: 0, template: Some(head), parent: PARENT_ID, index: 2, ..A::default() });
     let p = pawn_with(&mut e, vec![a0, a1]);
@@ -2502,7 +2540,9 @@ fn hook_3_a_maya_shaped_build_stops_at_the_parent_link() {
     // Attachment 0 alone passes hook 3 with its one write.
     let direct = crate::world::render_hooks::light_environment(&e.vm, p, body, skeletal).unwrap();
     assert!(matches!(direct, Some(crate::world::component_setters::LightPlan::Detached(_))), "{direct:?}");
-    hooks_not_read(&mut e, p, PARENT_LINK);
+    let (missing, what) = refused(&mut e, p);
+    assert!(matches!(missing, Missing::LayerAbsent(_)), "{missing:?}");
+    assert!(what.contains("no skeleton source is installed"), "{what}");
 }
 
 /// Test 11: a template the store has not loaded, on a path that needs its values, is the not-settled `NotRead`, with

@@ -43,6 +43,7 @@ root-motion writes.
 2. A custom head or skin entry is appended and nothing is applied (section 4.3).
 3. The `Parent` refresh stays `NotRead` (it was the special-name refresh). Section 4.1 step 7 now reads it whole; the
    hub may revisit this ruling with that reading.
+   *Lifted 2026-11-25 by lane IMPL-CUSTOMHEAD-PARENT-LINK (decision 2026-11-25-NNN): the link is answered from section 8.1.*
 
 ## 1. Who calls it
 

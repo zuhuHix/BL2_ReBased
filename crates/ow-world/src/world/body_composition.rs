@@ -13,7 +13,8 @@
 //! **Hub rulings** (2026-11-19):
 //! 1. a component made from a template counts as valid (the validity check is not modelled);
 //! 2. a custom head or skin entry is appended and nothing is applied; the attachment counts as not made;
-//! 3. the `Parent` link stays `NotYet { NotRead }` ([`PARENT_LINK`]);
+//! 3. the `Parent` link stayed `NotYet { NotRead }`. Lifted (lane IMPL-CUSTOMHEAD-PARENT-LINK): the link is answered
+//!    from NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8.1 ([`parent_link_plan`]);
 //! 4. the render-side hooks of the pawn's `PostInitBodyComposition` (the gear-likeness step, the mode-0 owner-no-see
 //!    setting, the light environment) follow NATIVE_BODYCOMP_RENDER_HOOKS.md section 4 (crate::world::render_hooks,
 //!    lane IMPL-BODYCOMP-RENDER-HOOKS): each does nothing or refuses in the preflight, and none writes in Off
@@ -115,7 +116,6 @@ pub const CLIENT_APPLY: &str = "InitializeBodyComposition: the client-side apply
 pub const OBJECT_TEMPLATES: &str = "InitializeBodyComposition: object and template attachments";
 pub const HIT_REGION: &str = "InitializeBodyComposition: registering a hit region";
 pub const ACTOR_SOCKETS: &str = "InitializeBodyComposition: an actor's own named socket components";
-pub const PARENT_LINK: &str = "InitializeBodyComposition: the Parent link's parent-bone map";
 pub const SCRIPT_CALL: &str = "InitializeBodyComposition called from script (its destinations)";
 pub const ANIM_NODES: &str = "InitializeBodyComposition: the new Mesh's animation nodes (ArmBoneBlend, AimOffset, \
                               LeftHandGrip, the head look-at, WillowFootIK and the slot nodes)";
@@ -403,6 +403,81 @@ struct PostInit {
     light: Option<crate::world::component_setters::LightPlan>,
 }
 
+/// The `Parent` link's writes (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8.1, lane IMPL-CUSTOMHEAD-PARENT-LINK),
+/// decided in the preflight.
+#[derive(Debug, Clone)]
+struct ParentLink {
+    /// The parent attachment's index: its made component becomes `ParentAnimComponent`.
+    parent: usize,
+    /// `ParentBoneMap`: one slot per bone of the new component's mesh, or empty.
+    map: Vec<i32>,
+}
+
+/// The `Parent` link's preflight (section 8.1, lane IMPL-CUSTOMHEAD-PARENT-LINK; **UNVERIFIED**): reads only, loads
+/// nothing. `parent` is the parent attachment's index and `pt` its template; `template` and `class` are the new
+/// component's. In order:
+/// 1. the new class declares `ParentAnimComponent` (taking the parent), `ParentBoneMap` (an array of ints) and
+///    `bIsGestaltAccessoryMesh` (a bool), else `VmError::Script` naming it;
+/// 2. the meshes as made: the new component's `SkeletalMesh` from its template, the parent's from `pt`. Either None:
+///    the map is empty, and nothing more is read;
+/// 3. the same mesh, or `bIsGestaltAccessoryMesh` set: the identity over the new mesh's reference skeleton;
+/// 4. otherwise slot `k` is the parent mesh's bone with bone `k`'s name (`skeletal::find_bone`, which takes the first
+///    of two equal names, an UNVERIFIED choice), or -1. A name the name table does not hold is no match; nothing is
+///    interned.
+///
+/// A skeleton that cannot be read refuses with its reader's own `NotYet`, before any write.
+fn parent_link_plan(vm: &Vm, parent: usize, pt: ObjRef, template: ObjRef, class: ClassId) -> Result<ParentLink, VmError> {
+    let path = class_path(vm, class);
+    let decl = |name: &str| -> Result<PropKind, VmError> {
+        let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{path} has no {name} (the Parent link)")))?;
+        vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| script(format!("{path}.{name} has no declaration")))
+    };
+    let link_kind = decl("ParentAnimComponent")?;
+    // The parent's template stands in for the made parent, which has its class.
+    vm.space
+        .heap
+        .check_value(&vm.space.classes, &link_kind, &Value::Object(Some(pt)))
+        .map_err(|e| script(format!("{path}.ParentAnimComponent cannot take the parent: {e}")))?;
+    if !matches!(decl("ParentBoneMap")?, PropKind::Array(inner) if matches!(*inner, PropKind::Int)) {
+        return Err(script(format!("{path}.ParentBoneMap is not an array of ints")));
+    }
+    if !matches!(decl("bIsGestaltAccessoryMesh")?, PropKind::Bool) {
+        return Err(script(format!("{path}.bIsGestaltAccessoryMesh is not a bool")));
+    }
+    let mesh_of = |o: ObjRef| -> Result<Option<ObjRef>, VmError> {
+        match read_prop(vm, o, "SkeletalMesh")? {
+            Some(Value::Object(m)) => Ok(m),
+            None => Ok(None),
+            Some(other) => Err(script(format!("{}.SkeletalMesh is not an object: {other:?}", class_path(vm, vm.space.heap.get(o)?.class)))),
+        }
+    };
+    let (Some(mesh), Some(parent_mesh)) = (mesh_of(template)?, mesh_of(pt)?) else {
+        return Ok(ParentLink { parent, map: Vec::new() });
+    };
+    let flag = match read_prop(vm, template, "bIsGestaltAccessoryMesh")? {
+        Some(Value::Bool(b)) => b,
+        other => return Err(script(format!("{path}.bIsGestaltAccessoryMesh is not a bool on the template: {other:?}"))),
+    };
+    let index = |k: usize| i32::try_from(k).map_err(|_| script(format!("{path}: a bone index past the int range")));
+    let skeleton = crate::world::skeletal::reference_skeleton(vm, mesh)?;
+    if mesh == parent_mesh || flag {
+        return Ok(ParentLink { parent, map: (0..skeleton.len()).map(index).collect::<Result<_, _>>()? });
+    }
+    crate::world::skeletal::reference_skeleton(vm, parent_mesh)?;
+    let mut map = Vec::with_capacity(skeleton.len());
+    for bone in &skeleton.bones {
+        let found = match vm.space.names.find(&bone.name) {
+            Some(name) => crate::world::skeletal::find_bone(vm, parent_mesh, name)?,
+            None => None,
+        };
+        map.push(match found {
+            Some(k) => index(k)?,
+            None => -1,
+        });
+    }
+    Ok(ParentLink { parent, map })
+}
+
 /// The made `Mesh`'s writes, decided in the preflight (NATIVE_MESH_REST.md section 4).
 #[derive(Debug, Clone)]
 struct MeshRest {
@@ -437,7 +512,7 @@ struct SocketAttach {
 #[derive(Debug, Clone)]
 enum Made {
     No,
-    Component { template: ObjRef, class: ClassId, collision: u8, post: PostInit, socket: Option<SocketAttach> },
+    Component { template: ObjRef, class: ClassId, collision: u8, post: PostInit, socket: Option<SocketAttach>, link: Option<ParentLink> },
     /// A switch's record holds its own parent.
     Switch { parent: Parent },
     /// A custom head or skin: an entry, but not made.
@@ -929,9 +1004,20 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     }
                 };
                 let skeletal = is_a(vm, class, SKELETAL);
-                if name_is(vm, &a.parent_id, PARENT_ID) && skeletal_parent && skeletal {
-                    return Err(not_read(PARENT_LINK));
-                }
+                // The `Parent` link (section 8.1; hub ruling 3 lifted, lane IMPL-CUSTOMHEAD-PARENT-LINK).
+                let link = match parent {
+                    Parent::Component(b) if skeletal_parent && skeletal && name_is(vm, &a.parent_id, PARENT_ID) => {
+                        let Made::Component { template: pt, .. } = &made[b] else {
+                            unreachable!("a component parent's record is a component")
+                        };
+                        // The new component's mesh is read from its template, which must be resident.
+                        if vm.defs.is_unloaded(&vm.space, template) {
+                            return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, template))));
+                        }
+                        Some(parent_link_plan(vm, b, *pt, template, class)?)
+                    }
+                    _ => None,
+                };
                 // The pawn's PostInitBodyComposition (section 4.5), mode 0.
                 let mut post = PostInit::default();
                 // A pawn field the hook releases first (a detach and a global list) is set: refused until the note
@@ -985,7 +1071,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 }
                 post.owner_no_see = crate::world::render_hooks::owner_no_see(vm, owner, template, class)?;
                 post.light = crate::world::render_hooks::light_environment(vm, owner, template, class)?;
-                made.push(Made::Component { template, class, collision, post, socket: socket_attach });
+                made.push(Made::Component { template, class, collision, post, socket: socket_attach, link });
             }
         }
     }
@@ -1036,7 +1122,7 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                 let e = entry_from(vm, plan, &a.data, &["Name", "Type", "BodyCompositionIndex"])?;
                 append(vm, owner, &mut set, e)?;
             }
-            Made::Component { template, class, collision, post, socket } => {
+            Made::Component { template, class, collision, post, socket, link } => {
                 let made = make_component(vm, owner, *template)?;
                 if let Some(last) = made_objects.last_mut() {
                     *last = Some(made);
@@ -1068,6 +1154,16 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                         write_socket_attach(vm, parent, made, sa)?;
                     }
                     None => attach_to_actor(vm, owner, made)?,
+                }
+                // The `Parent` link (section 8.1): after the attach, before the pawn's PostInitBodyComposition writes.
+                if let Some(link) = link {
+                    let parent = made_objects
+                        .get(link.parent)
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| script("the Parent link's parent was not made".into()))?;
+                    write_prop(vm, made, "ParentAnimComponent", Value::Object(Some(parent)))?;
+                    write_prop(vm, made, "ParentBoneMap", Value::array(link.map.iter().map(|&k| Value::Int(k)).collect()))?;
                 }
                 if let Some(m) = &post.mesh {
                     write_mesh_rest(vm, owner, made, m, plan.authority)?;
