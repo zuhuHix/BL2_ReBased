@@ -556,6 +556,9 @@ fn load_async_with_a_cold_context_loads_no_code() {
     let bystander = vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap();
     let marks = |vm: &ow_vm::api::Vm| (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
     let before = marks(&x.vm);
-    assert!(not_read(&x.load_async(manager, "GearboxFramework.ToyPawn", Some(bystander), None)));
+    let r = x.load_async(manager, "GearboxFramework.ToyPawn", Some(bystander), None);
+    assert!(not_read(&r));
+    let Err(VmError::NotYet(n)) = &r else { unreachable!() };
+    assert!(n.what.contains("not implementing IStreamingDataEvent"), "the not-implementing refusal: {}", n.what);
     assert_eq!(marks(&x.vm), before, "no code load, write, draw or store load");
 }
