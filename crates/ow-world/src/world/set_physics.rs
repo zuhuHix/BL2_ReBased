@@ -22,11 +22,16 @@
 //!    `NotRead` ([`BASE_SEARCH`]); into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
 //!    ([`BASE_CLEAR`]); into or out of `PHYS_RigidBody` with a `CollisionComponent` set is `LayerAbsent`
 //!    ([`RIGID_BODY`], [`RIGID_LAYER`]);
-//! 4. every script event the commit will call is resolved now, state-aware and in loaded code only: with a
+//! 4. every script event the commit will call is resolved now, as Off event dispatch resolves it (the active state,
+//!    its parent states, then the class chain; `ow_vm::states::find_loaded_event`) and in loaded code only: with a
 //!    `PhysicsVolume`, its `PhysicsChangedFor(actor)` on the volume's class; on the `WillowPawn` layer, each of
 //!    `StoppedFalling()`, `BeganFalling(byte)`, `BeganWalking(byte)` and `StoppedWalking()` whose condition will hold
-//!    (walking is `PHYS_Walking` or `PHYS_NavMeshWalking`), on the actor's class. Code not loaded is `NotRead`
-//!    ([`code_not_loaded`]); a missing event, or one declared with other parameters, is `VmError::Script`.
+//!    (walking is `PHYS_Walking` or `PHYS_NavMeshWalking`), on the actor. Code not loaded is `NotRead`
+//!    ([`code_not_loaded`]); a missing event, or one declared with other parameters, is `VmError::Script`: each
+//!    parameter a scalar by value, and the volume event's object parameter of a class that accepts the actor.
+//!
+//! `Physics` is read after step 1, so the AI layer's answers do not depend on it. The rule is bound for `Engine`'s
+//! function only, by its package-qualified identity.
 //!
 //! The note's commit step 1 (`bForceFloorCheck` set on a transition into `PHYS_Walking`) is never reached in the port:
 //! every transition into `PHYS_Walking` is refused at step 3 (the base search), so it is not written here.
@@ -86,10 +91,15 @@ struct Layers {
     pawn: bool,
 }
 
-/// Binds the rule in Off, keep-existing by key; nothing under Reference (the caller binds in Off only).
+/// The package whose `Actor.SetPhysics` the rule is for.
+pub const PACKAGE: &str = "Engine";
+
+/// Binds the rule in Off for `Engine`'s function only (its package-qualified identity, review r1 of #696, item 3):
+/// keep-existing there, and another package's same-keyed function is neither bound nor shadowing. Nothing under
+/// Reference (the caller binds in Off only).
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
-    if !vm.has_native(KEY) {
-        vm.register_native(KEY, Rc::new(set_physics))?;
+    if !vm.is_bound_in(PACKAGE, KEY) {
+        vm.register_native_in(PACKAGE, KEY, Rc::new(set_physics))?;
     }
     Ok(())
 }
@@ -194,20 +204,26 @@ enum Shape {
     Object,
 }
 
-/// Step 4: the event `name` on `o`'s class and state, in loaded code only, with the parameters `shape`.
-fn event(vm: &Vm, o: ObjRef, name: &str, shape: Shape) -> Result<FuncId, VmError> {
-    let x = vm.space.heap.get(o)?;
+/// Step 4: the event `name` sent to `o`, in loaded code only, with the parameters `shape`. The lookup is the one Off
+/// event dispatch makes (`ow_vm::states::find_loaded_event`): the active state, its parent states, then the class
+/// chain (review r1 of #696, item 1). The `FuncId` found is the one the commit calls. Each parameter must be a scalar
+/// by value (no static array, no `out`), and an object parameter's class must accept `actor` (item 2).
+fn event(vm: &Vm, o: ObjRef, name: &str, shape: Shape, actor: ObjRef) -> Result<FuncId, VmError> {
     let class = class_path(vm, o);
-    let f = match vm.find_loaded_method(x.class, name, x.state) {
+    let f = match ow_vm::states::find_loaded_event(vm, o, name)? {
         None => return Err(NotYet::not_read(code_not_loaded(name, &class), RECORD).into()),
         Some(None) => return Err(script(format!("{class} declares no {name}"))),
         Some(Some(f)) => f,
     };
     let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
+    let actor_class = vm.space.heap.get(actor)?.class;
+    let scalar = |p: &ow_object::layout::PropertyDecl| p.array_dim == 1 && !p.is_out();
     let fits = match (shape, params.as_slice()) {
         (Shape::None, []) => true,
-        (Shape::Byte, [p]) => matches!(p.kind, PropKind::Byte { .. }),
-        (Shape::Object, [p]) => matches!(p.kind, PropKind::Object { .. }),
+        (Shape::Byte, [p]) => scalar(p) && matches!(p.kind, PropKind::Byte { .. }),
+        (Shape::Object, [p]) => {
+            scalar(p) && matches!(p.kind, PropKind::Object { class } if vm.space.classes.is_child_of(actor_class, class))
+        }
         _ => false,
     };
     if !fits {
@@ -229,8 +245,7 @@ struct Plan {
 fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> {
     resident(vm, actor)?;
     let layers = layers(vm, actor)?;
-    let old = byte(vm, actor, "Physics")?;
-    // Step 1, the AI layer.
+    // Step 1, the AI layer, before `Physics` is read (review r1 of #696, item 4).
     if layers.ai {
         if mode == PHYS_NAV_MESH_WALKING {
             return Err(NotYet::not_read(NAV_MESH, RECORD).into());
@@ -243,6 +258,7 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
         }
     }
     // Step 2.
+    let old = byte(vm, actor, "Physics")?;
     if mode == old {
         return Ok(None);
     }
@@ -266,7 +282,7 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     let volume = match object(vm, actor, "PhysicsVolume")? {
         Some(v) => {
             resident(vm, v)?;
-            Some((v, event(vm, v, "PhysicsChangedFor", Shape::Object)?))
+            Some((v, event(vm, v, "PhysicsChangedFor", Shape::Object, actor)?))
         }
         None => None,
     };
@@ -282,7 +298,7 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
         ];
         for (notify, name, transition, shape, args) in cases {
             if transition && flag(vm, actor, notify)? {
-                events.push((event(vm, actor, name, shape)?, args));
+                events.push((event(vm, actor, name, shape, actor)?, args));
             }
         }
     }

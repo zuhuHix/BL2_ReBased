@@ -43,3 +43,17 @@ unchanged): the note's tests 1 to 14 and 16 in `world/set_physics_tests.rs`, and
 Reference the stand-in).
 
 **Not verified:** anything in the running game; the event names; that `LiftTarget`'s call is link 9's stop.
+
+**Review r1** (Sol high, on #696):
+1. **Events are looked up as Off event dispatch finds them.** `ow_vm::states::find_loaded_event` walks the active
+   state, its parent states, then the class chain, loading nothing, and the commit calls the `FuncId` it returns. The
+   old lookup by the current state's name alone missed an override in a parent state. Test: a pawn in state `Landing`
+   (extends `Falling`, which overrides `StoppedFalling`) gets `Falling`'s function. The test fails with the old
+   lookup.
+2. **Parameters must be scalars by value.** No static array and no `out`. The volume event's object parameter must be
+   of a class that accepts the actor. A `BeganFalling(byte[2])` and a `PhysicsChangedFor` of an unrelated object class
+   are script errors before any write.
+3. **Bound for `Engine`'s function only**, by its package-qualified identity (`is_bound_in` and `register_native_in`
+   for `Engine`). Another package's same-keyed function is neither bound nor shadowing.
+4. **`Physics` is read after the AI layer's answers**, so a malformed `Physics` does not turn a nav-mesh request or a
+   `bHardAttach` stop into a script error.

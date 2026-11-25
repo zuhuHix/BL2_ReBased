@@ -26,7 +26,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::reflect::{ClassBodySpec, class_body};
-use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::script::{Asm, CPF_OPT, CPF_PARM, FunctionSpec, Param, ScriptToy, function_payload};
 use ow_package::testkit::{Export, ints};
 use ow_vm::api::{NativeCall, StubPolicy, Vm};
 use ow_vm::error::VmError;
@@ -36,7 +36,9 @@ use crate::world::{BalanceState, World};
 
 const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
-const IMPORTS: [&str; 6] = ["Class", "Function", "Enum", "ObjectProperty", "BoolProperty", "ByteProperty"];
+const IMPORTS: [&str; 8] =
+    ["Class", "Function", "Enum", "State", "ObjectProperty", "BoolProperty", "ByteProperty", "NameProperty"];
+const SCRIPT_FLAGS: u32 = 0x1 | 0x2 | 0x20000;
 const ROLES: [&str; 5] = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority", "ROLE_MAX"];
 const AUTHORITY: u8 = 3;
 const SIMULATED: u8 = 1;
@@ -50,6 +52,8 @@ enum Variant {
     NoStoppedFalling,
     /// `StoppedFalling(bool)`.
     WrongStoppedFalling,
+    /// `BeganFalling(byte[2])`, a static array (review r1 of #696, item 2).
+    ArrayBeganFalling,
 }
 
 fn enumeration(t: &mut ScriptToy, owner: i32, name: &str, values: &[&str]) -> i32 {
@@ -68,6 +72,42 @@ fn native(t: &mut ScriptToy, owner: i32, name: &str, params: &[Param]) {
     t.function(owner, name, params, None, &[], &FunctionSpec::new(NATIVE_FLAGS, name), |_| None);
 }
 
+/// A native `name(<kind>[dim] param)`: its one parameter a static array of `dim` (the testkit's `Param` has no
+/// dimension), the property exported first and the function after it, as `ScriptToy::function` orders them.
+fn native_array_param(t: &mut ScriptToy, owner: i32, name: &str, kind: &str, param: &str, dim: i32) {
+    let f = t.p.next_export() + 1;
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    payload.extend_from_slice(&ints(&[0, dim]));
+    payload.extend_from_slice(&CPF_PARM.to_le_bytes());
+    payload.extend_from_slice(&t.none);
+    payload.extend_from_slice(&ints(&[0, 0]));
+    let mut prop = Export::new(t.import(&format!("{kind}Property")), param, payload);
+    prop.outer = f;
+    t.p.add_export_with(prop);
+    let payload = function_payload(&mut t.p, None, &FunctionSpec::new(NATIVE_FLAGS, name));
+    let mut e = Export::new(t.import("Function"), name, payload);
+    e.outer = owner;
+    assert_eq!(t.p.add_export_with(e), f);
+}
+
+/// A State export `name` of `owner` with parent `parent` (0: none) and no code (the state body of `ow_vm::states`'
+/// own tests).
+fn state(t: &mut ScriptToy, owner: i32, name: &str, parent: i32) -> i32 {
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    payload.extend_from_slice(&ints(&[0, parent, 0, 0, 0, 0, 0]));
+    payload.extend_from_slice(&ints(&[0, 0]));
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&ow_vm::states::NO_LABEL_TABLE.to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&ints(&[0]));
+    let mut export = Export::new(t.import("State"), name, payload);
+    export.outer = owner;
+    export.super_ = parent;
+    t.p.add_export_with(export)
+}
+
 /// A script-only class `name` below `super_ref`: a decodable class body with the non-native flags, and its default.
 fn script_class(t: &mut ScriptToy, name: &str, super_ref: i32) -> i32 {
     let at = t.p.next_export();
@@ -84,6 +124,12 @@ fn script_class(t: &mut ScriptToy, name: &str, super_ref: i32) -> i32 {
 fn engine() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let object = t.class("Object", 0);
+    // Object.GotoState, the VM's native 113, to put a pawn in a state (review r1 of #696, item 1).
+    let mut goto = FunctionSpec::new(NATIVE_FLAGS, "GotoState");
+    goto.native = 113;
+    let opt = |kind: &str, name: &str| Param { flags: CPF_OPT, ..Param::new(kind, name) };
+    let params = [opt("Name", "NewState"), opt("Name", "Label"), opt("Bool", "bForceEvents"), opt("Bool", "bKeepStack")];
+    t.function(object, "GotoState", &params, None, &[], &goto, |_| None);
     let actor = t.class("Actor", object);
     let roles = enumeration(&mut t, actor, "ENetRole", &ROLES);
     t.prop("Byte", actor, "Physics", 0, 0);
@@ -103,6 +149,10 @@ fn engine() -> Vec<u8> {
     t.class("ToyNoEventVolume", actor);
     let wrong = t.class("ToyWrongVolume", actor);
     native(&mut t, wrong, "PhysicsChangedFor", &[Param::new("Byte", "Other")]);
+    // An object parameter of a class that does not accept a pawn (review r1 of #696, item 2).
+    let unrelated = t.class("ToyUnrelatedVolume", actor);
+    let other_volume = Param { type_ref: volume, ..Param::new("Object", "Other") };
+    native(&mut t, unrelated, "PhysicsChangedFor", std::slice::from_ref(&other_volume));
     let pawn = t.class("Pawn", actor);
     t.prop("Bool", pawn, "bForceFloorCheck", 0, 0);
     script_class(&mut t, "ToyPlainPawn", pawn);
@@ -140,11 +190,15 @@ fn willow(variant: Variant) -> Vec<u8> {
         t.prop("Bool", willow_pawn, f, 0, 0);
     }
     match variant {
-        Variant::Good => native(&mut t, willow_pawn, "StoppedFalling", &[]),
+        Variant::Good | Variant::ArrayBeganFalling => native(&mut t, willow_pawn, "StoppedFalling", &[]),
         Variant::NoStoppedFalling => {}
         Variant::WrongStoppedFalling => native(&mut t, willow_pawn, "StoppedFalling", &[Param::new("Bool", "bOdd")]),
     }
-    native(&mut t, willow_pawn, "BeganFalling", &[Param::new("Byte", "PreviousPhysics")]);
+    if variant == Variant::ArrayBeganFalling {
+        native_array_param(&mut t, willow_pawn, "BeganFalling", "Byte", "PreviousPhysics", 2);
+    } else {
+        native(&mut t, willow_pawn, "BeganFalling", &[Param::new("Byte", "PreviousPhysics")]);
+    }
     native(&mut t, willow_pawn, "BeganWalking", &[Param::new("Byte", "PreviousPhysics")]);
     native(&mut t, willow_pawn, "StoppedWalking", &[]);
     let ai = t.class("WillowAIPawn", willow_pawn);
@@ -152,6 +206,16 @@ fn willow(variant: Variant) -> Vec<u8> {
     script_class(&mut t, "ToyAIPawn", ai);
     script_class(&mut t, "ToyWillowPawn", willow_pawn);
     script_class(&mut t, "ToyColdWillowPawn", willow_pawn);
+    // A pawn with state A, which overrides StoppedFalling, and state B extends A (review r1 of #696, item 1).
+    let stated = script_class(&mut t, "ToyStatePawn", willow_pawn);
+    let a = state(&mut t, stated, "Falling", 0);
+    t.function(a, "StoppedFalling", &[], None, &[], &FunctionSpec::new(SCRIPT_FLAGS, "StoppedFalling"), |_| {
+        let mut asm = Asm::new();
+        asm.stmt().return_nothing();
+        asm.end();
+        Some(asm)
+    });
+    state(&mut t, stated, "Landing", a);
     t.build()
 }
 
@@ -538,7 +602,67 @@ fn off_binds_the_key_and_reference_binds_nothing() {
     let mut x = fx();
     let f = x.vm().find_function("Engine.Actor.SetPhysics").unwrap();
     assert_eq!(x.world.vm.function(f).unwrap().native_key.as_deref(), Some(KEY));
-    assert!(x.world.vm.has_native(KEY));
+    assert!(x.world.vm.is_bound(f));
     let r = fx_variant(ParityMode::Reference, Variant::Good);
     assert!(!r.world.vm.has_native(KEY));
+}
+
+/// Review r1 of #696, item 1: in state `Landing`, whose parent state `Falling` overrides `StoppedFalling`, the event the
+/// commit will call is the parent state's (as Off event dispatch finds it), not the class body's.
+#[test]
+fn an_override_in_a_parent_state_is_the_event_called() {
+    let mut x = fx();
+    // The Core natives, GotoState among them (World::new does not register them).
+    ow_vm::natives_core::register(x.vm()).unwrap();
+    let pawn = x.obj("WillowGame.ToyStatePawn");
+    let landing = Value::Name(x.vm().space.names.intern("Landing"));
+    let f = x.vm().find_function("Engine.Object.GotoState").unwrap();
+    x.vm().call(f, Some(pawn), vec![landing]).unwrap();
+    x.set(pawn, "Physics", Value::Byte(2));
+    x.set(pawn, "bNotifyStopFalling", Value::Bool(true));
+    let plan = preflight(&x.world.vm, pawn, CUSTOM).unwrap().unwrap();
+    let paths: Vec<String> =
+        plan.events.iter().map(|(f, _)| x.world.vm.function(*f).unwrap().path.as_str().to_string()).collect();
+    assert_eq!(paths, ["WillowGame.ToyStatePawn.Falling.StoppedFalling"]);
+    // The commit runs it (a script body): Physics 14 and no spy call, since the class body's spy is not the one called.
+    x.physics(pawn, CUSTOM).unwrap();
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(CUSTOM));
+    assert!(x.calls().is_empty(), "{:?}", x.calls());
+}
+
+/// Review r1 of #696, item 2: a static-array `BeganFalling(byte[2])`, and a `PhysicsChangedFor` whose object parameter
+/// does not accept the actor, are script errors before any write.
+#[test]
+fn array_and_unrelated_parameters_are_refused_before_any_write() {
+    let mut y = fx_variant(ParityMode::Off, Variant::ArrayBeganFalling);
+    let pawn = y.obj("WillowGame.ToyWillowPawn");
+    y.set(pawn, "bNotifyBeginFalling", Value::Bool(true));
+    script_error(y.same(pawn, 2), "other parameters");
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let volume = x.obj("Engine.ToyUnrelatedVolume");
+    x.put(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+    script_error(x.same(pawn, CUSTOM), "other parameters");
+}
+
+/// Review r1 of #696, item 3: the rule is bound for `Engine`'s function by its package-qualified identity, not
+/// VM-wide.
+#[test]
+fn the_rule_is_bound_for_engine_only() {
+    let x = fx();
+    assert!(x.world.vm.is_bound_in(PACKAGE, KEY));
+    assert!(!x.world.vm.native_keys().any(|k| k == KEY), "no VM-wide binding");
+    assert!(!x.world.vm.is_bound_in("SomeOtherPackage", KEY), "another package's same-keyed function stays unbound");
+}
+
+/// Review r1 of #696, item 4: the AI layer answers before `Physics` is read, so a malformed `Physics` does not turn a
+/// nav-mesh request or a `bHardAttach` stop into a script error.
+#[test]
+fn the_ai_layer_answers_before_physics_is_read() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.put(pawn, "Physics", Value::Int(0));
+    assert_eq!(not_yet(x.same(pawn, 12)), (Missing::NotRead, NAV_MESH.to_string()));
+    x.set(pawn, "bHardAttach", Value::Bool(true));
+    assert_eq!(x.same(pawn, CUSTOM).unwrap(), Value::None);
 }
