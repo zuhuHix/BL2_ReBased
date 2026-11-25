@@ -540,10 +540,9 @@ fn a_class_under_an_outer_compares_as_the_class() {
 
 /// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the not-implementing refusal of `LoadPlayerPawnDataAsync`
 /// with a context whose class has a layout and no loaded code (and the interface class never looked up): the refusal
-/// should load no class code and leave #518's counters unchanged. Ignored: two code loads happen before the refusal;
-/// by reading, the native's `find_class` of the interface class is the one step before it that loads code.
+/// loads no class code and leaves #518's counters unchanged (lane COLD-LOAD-FIXES: the interface is taken by its
+/// code-index key, not `find_class`).
 #[test]
-#[ignore = "finding: LoadPlayerPawnDataAsync's find_class(IStreamingDataEvent) loads cold class code before its refusal (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn load_async_with_a_cold_context_loads_no_code() {
     let mut x = fx(ParityMode::Off);
     let manager = x.make("WillowPlayerPawnDataManager");
