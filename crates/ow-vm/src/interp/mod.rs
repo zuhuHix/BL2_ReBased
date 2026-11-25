@@ -170,7 +170,7 @@ pub(crate) struct CodeState {
     /// Code loads so far (lane COUNTERS-MISS-CLASS-CODE-LOADS; review r1 of #685): each class whose functions and states
     /// were loaded, each package function declared (counted once declared), and each state's code declared on first use.
     /// Only grows. #518's three counters do not see these loads. Not counted: the child-declaration cache (it fills on
-    /// any script function's first run) and layout definitions (`define_layout`).
+    /// the first access to an uncached property declaration) and layout definitions (`define_layout`).
     pub(crate) code_loads: u64,
     /// Native index -> the native (or why it could not be loaded), built on first use over the code packages.
     natives: Option<Rc<FixedHashMap<u32, Result<FuncId, String>>>>,

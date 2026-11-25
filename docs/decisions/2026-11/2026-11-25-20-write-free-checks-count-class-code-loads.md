@@ -20,9 +20,10 @@ only.
   - **Tests, "nothing moved" checks:**
     - 59 test-side counter readings on a VM's store read `defs.load_transitions() + class_code_loads()`;
     - the production write marks used by tests got a sibling check: `game_info::WriteMark::still` and
-      `flag_expression::WriteCounters::still` compare the code loads too, and the 20 test sites that asserted
-      `!x.moved(..)` now assert `x.still(..)` (`mapload/game_info/tests.rs`, `mapload/player/tests.rs`,
-      `bridge/adopt_tests.rs`, `flag_expression_tests.rs`);
+      `flag_expression::WriteCounters::still` compare the code loads too. 19 test sites that asserted `!x.moved(..)`
+      now assert `x.still(..)` (`mapload/game_info/tests.rs`, `mapload/player/tests.rs`, `bridge/adopt_tests.rs`,
+      `flag_expression_tests.rs`). One new assertion, the pinned `a_refused_spawn_loads_no_class_code`, compares
+      `class_code_loads()` directly;
     - `equip::card::load_and_code_mark` is `load_mark` plus the code loads, used at the 8 "nothing moved" sites of
       `gestalt_tests.rs` and `gestalt_data_tests.rs`.
 
@@ -46,8 +47,9 @@ only.
     evaluator dispatch loads `GearboxFramework.ExpressionEvaluator`'s and `GearboxFramework.Object`'s code (three code
     loads). Pinned by `the_effect_lookup_loads_no_class_code` (#686 fixes it).
 - **Its limit:** two kinds of write are not counted.
-  - **The child-declaration cache** (`decl_at`, which interns names and may define layouts). It fills on any script
-    function's first run, so counting it flags the interpreter's own laziness, not a native's preflight. Counting it
+  - **The child-declaration cache** (`decl_at`, which interns names and may define layouts). It fills on the first
+    access to a property declaration not yet cached, which a script function's first run usually makes, so counting
+    it flags the interpreter's own laziness, not a native's preflight. Counting it
     tripped one test, `bounding_cylinder`'s `a_bad_height_destination_leaves_the_radius_unwritten`, where only the
     test's own toy caller script ran for the first time.
   - **Layout definitions** (`layout_of` / `class_at` reaching `define_layout`). These define classes in the table and

@@ -220,10 +220,10 @@ fn a_refused_spawn_loads_no_class_code() {
         let mut f = fx_in(false, ParityMode::Off);
         let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
         actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
-        let mark = WriteMark::now(&f.w.vm);
+        let code = f.w.vm.class_code_loads();
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
-        assert!(e.is_err());
-        assert!(mark.still(&f.w.vm), "no class code loaded before the refusal");
+        unmarked(e.unwrap_err(), Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));
+        assert_eq!(f.w.vm.class_code_loads(), code, "no class code loaded before the collision refusal");
     });
 }
 
