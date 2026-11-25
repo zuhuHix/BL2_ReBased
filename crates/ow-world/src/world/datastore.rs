@@ -56,7 +56,11 @@
 //!   the declarations alone (the provider class, every field the fill reads or writes and its kind), then the class
 //!   defaults' values (the list's classes, the provider class) through a read that publishes nothing
 //!   (`DefStore::with_class_default`), then that every write's value is assignable to its field. A refusal there
-//!   leaves nothing, not even the class default object.
+//!   leaves nothing, not even the class default object. Before any class is taken (lane COLD-LOAD-FIXES), the getter
+//!   asks the code index, read only, whether every class it needs is in the package set: the global stores and the
+//!   client, then the settings provider class for a store that derives from the settings store. A missing one is
+//!   `find_class`'s own error for it, with no class code loaded. The rest of the plan needs the classes' layouts, so
+//!   it still follows `find_class`, which loads their code (a class load is a write; open).
 //!
 //! The installed `GetOnlineGameSettingsViaDatastore` script is no longer overridden: it reads the filled entry
 //! (`GameSettingsCfgList[0].GameSettings`) as installed.
@@ -271,6 +275,7 @@ pub fn data_store_client(vm: &mut Vm) -> Result<ObjRef, VmError> {
     if let Some(client) = s.client {
         return Ok(client);
     }
+    classes_present(vm)?;
     let mut classes: Vec<ClassId> = Vec::with_capacity(GLOBAL_DATA_STORES.len());
     for path in GLOBAL_DATA_STORES {
         classes.push(vm.find_class(path)?);
@@ -299,6 +304,39 @@ pub fn data_store_client(vm: &mut Vm) -> Result<ObjRef, VmError> {
         *mark = true;
     }
     Ok(client)
+}
+
+/// The getter's presence check (module documentation, "Preflight"; lane COLD-LOAD-FIXES): every class it takes, in
+/// its order, then the settings provider class where a store derives from the settings store, each looked up in the
+/// code index by path, read only. The first one no package holds is `find_class`'s own error for it, which loads no
+/// class code, since there is no class to load.
+fn classes_present(vm: &mut Vm) -> Result<(), VmError> {
+    let missing = {
+        let (code, store) = vm.defs.code_mut();
+        let mut missing = None;
+        let mut keys = Vec::with_capacity(GLOBAL_DATA_STORES.len());
+        for path in GLOBAL_DATA_STORES.iter().copied().chain([CLIENT_CLASS]) {
+            match code.find_class(store, path) {
+                Ok(k) => keys.push(k),
+                Err(_) => {
+                    missing = Some(path);
+                    break;
+                }
+            }
+        }
+        if missing.is_none()
+            && let Ok(settings) = code.find_class(store, SETTINGS_STORE_CLASS)
+            && keys.iter().take(GLOBAL_DATA_STORES.len()).any(|&k| code.is_child_of(k, settings))
+            && code.find_class(store, PROVIDER_CLASS).is_err()
+        {
+            missing = Some(PROVIDER_CLASS);
+        }
+        missing
+    };
+    match missing {
+        Some(path) => vm.find_class(path).map(|_| ()),
+        None => Ok(()),
+    }
 }
 
 fn get_data_store_client(c: &mut NativeCall<'_>) -> Result<Value, VmError> {

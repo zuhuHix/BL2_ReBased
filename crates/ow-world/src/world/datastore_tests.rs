@@ -926,10 +926,9 @@ fn a_wrapped_body_runs_only_on_its_own_vm_with_no_service_borrowed() {
 /// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the client getter's preflight on the fill world, refused
 /// because the provider class is absent. That world is not wholly cold: `fill_cold` loads `Core.Object` and, through
 /// `find_function`, `WillowPlayerController`, and `register`'s bind loads `UIInteraction`; the store classes stay cold.
-/// Ignored: the preflight takes every store class with `find_class` before anything is made, which loads their cold
-/// code.
+/// The missing provider class is found by the read-only presence check before any store class is taken (lane
+/// COLD-LOAD-FIXES), so no class code is loaded.
 #[test]
-#[ignore = "finding: GetDataStoreClient's preflight find_class of the store classes loads cold class code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn a_fill_that_cannot_be_planned_loads_no_class_code() {
     let mut t = fill_cold(false);
     let before = t.vm.class_code_loads();
