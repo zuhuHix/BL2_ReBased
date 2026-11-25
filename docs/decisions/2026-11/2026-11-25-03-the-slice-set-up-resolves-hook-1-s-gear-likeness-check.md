@@ -1,7 +1,7 @@
-## 2026-11-19: The slice set-up resolves hook 1's gear-likeness check
+## 2026-11-25: The slice set-up resolves hook 1's gear-likeness check
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane HARNESS-GEARLIKENESS-SETUP (the hub's call on #657's two local
-probes). The decision number is pending from the hub (three digits); NNN is a placeholder.
+probes).
 
 - **Base:** first stacked on #657 (fix/rust-bodycomp-render-hooks at a53c54a; parked 2026-11-20). #657 and
   IMPL-TREE-INIT-OWNER-EVENT have since landed, so on 2026-11-25 the lane's own commits were brought onto main
