@@ -70,6 +70,8 @@ pub mod particle_effect;
 pub mod value;
 // Lane IMPL-STATIC-GET-WEAPON-DAMAGE-TYPE: WillowWeapon.StaticGetWeaponDamageType in Off.
 pub mod damage_type;
+/// `WillowWeapon.BuildWeaponMaterial` in Off (lane IMPL-BUILDWEAPONMATERIAL).
+pub mod weapon_material;
 
 /// The records this module reads.
 pub const RECORD: &str = "NATIVE_ATTRIBUTES.md sections 7 and 9; NATIVE_INVENTORY_EQUIP.md (equip); script read 2026-11-16";

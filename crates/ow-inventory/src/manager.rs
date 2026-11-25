@@ -436,7 +436,8 @@ impl NativePack for Pack {
 pub(crate) fn register_equip_keys(vm: &mut Vm) -> Result<(), VmError> {
     crate::equip::slots::register(vm)?;
     crate::equip::internal_slots::register(vm)?;
-    crate::equip::damage_type::register(vm)
+    crate::equip::damage_type::register(vm)?;
+    crate::equip::weapon_material::register(vm)
 }
 
 #[cfg(test)]
