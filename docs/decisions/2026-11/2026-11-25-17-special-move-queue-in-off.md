@@ -1,7 +1,7 @@
 ## 2026-11-25: SpecialMoveComponent.Queue in Off
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SPECIALMOVE-QUEUE, slice link 9. The file number is a placeholder
-until the landing run numbers it. Coded from docs/verification/NATIVE_SPECIAL_MOVE_QUEUE.md section 5 alone (#680 @
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SPECIALMOVE-QUEUE, slice link 9.
+Coded from docs/verification/NATIVE_SPECIAL_MOVE_QUEUE.md section 5 alone (#680 @
 8e954320, decision 2026-11-25-15, still in review when this was written). Clean room: this lane did not read the
 native, Ghidra or REA output, or `local/analysis/`. Synthetic fixtures only.
 
