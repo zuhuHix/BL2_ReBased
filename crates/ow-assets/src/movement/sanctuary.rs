@@ -20,7 +20,7 @@ use super::collide::CollisionWorld;
 use super::level::{self, CollisionCensus, LevelCollision};
 use super::mover::{MovementParams, Mover, Physics};
 use super::walk::{self, SANCTUARY_SCRIPT, WalkReport};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::scene::{Scene, SceneAssets};
 
@@ -60,25 +60,43 @@ pub struct Loaded {
 /// The package a map name means in the install's cooked folder `cooked`: the name itself when it has `<name>.upk`,
 /// else `<name>_P` when it has that (so `Sanctuary` is `Sanctuary_P`), else the name as given (the load then reports
 /// it missing). Each file is found in its own case (`ow_core::install::resolve`, review r1 of #675); two that differ
-/// only in case are an error.
-pub fn resolve_map(cooked: &Path, name: &str) -> Result<String, ow_core::install::PathCaseError> {
-    let has = |n: &str| -> Result<bool, ow_core::install::PathCaseError> {
-        Ok(ow_core::install::resolve(cooked, &format!("{n}.upk"))?.is_some_and(|p| p.is_file()))
+/// only in case are an error. The file found is returned with the name (review r2 of #675), so the scene's first load
+/// opens that file rather than looking the name up again ([`Scene::load_at`]); `None` when neither file exists.
+pub fn resolve_map(cooked: &Path, name: &str) -> Result<(String, Option<PathBuf>), ow_core::install::PathCaseError> {
+    let found = |n: &str| -> Result<Option<PathBuf>, ow_core::install::PathCaseError> {
+        let Some(path) = ow_core::install::resolve(cooked, &format!("{n}.upk"))? else { return Ok(None) };
+        // A metadata failure other than absence is an error, not "no such file" (review r2 of #675).
+        match std::fs::metadata(&path) {
+            Ok(m) => Ok(m.is_file().then_some(path)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(ow_core::install::PathCaseError::Io { path, message: e.to_string() }),
+        }
     };
+    if let Some(path) = found(name)? {
+        return Ok((name.to_string(), Some(path)));
+    }
     let p = format!("{name}_P");
-    Ok(if !has(name)? && has(&p)? { p } else { name.to_string() })
+    Ok(match found(&p)? {
+        Some(path) => (p, Some(path)),
+        None => (name.to_string(), None),
+    })
 }
 
 /// Loads map `map` from the install's cooked folder `cooked` (ParityMode::Off, as every host run) and builds its
 /// collision.
 pub fn load(cooked: &Path, map: &str) -> Result<Loaded, String> {
+    load_at(cooked, map, None)
+}
+
+/// [`load`] with the persistent level read from `file` when given (the file [`resolve_map`] selected).
+pub fn load_at(cooked: &Path, map: &str, file: Option<&Path>) -> Result<Loaded, String> {
     let started = Instant::now();
     let mut defs = DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .map_err(|e| format!("definition store: {e}"))?;
     let mut space = ObjectSpace::new();
     let assets = SceneAssets::new(cooked.to_path_buf());
     let name = PackageName::parse(map).map_err(|e| format!("{map}: {e:?}"))?;
-    let scene = Scene::load(&mut defs, &mut space, &assets, &name).map_err(|e| format!("scene: {e}"))?;
+    let scene = Scene::load_at(&mut defs, &mut space, &assets, &name, file).map_err(|e| format!("scene: {e}"))?;
     let scene_time = started.elapsed();
     let built = Instant::now();
     let collision = level::build(&scene, &mut defs, &mut space);
