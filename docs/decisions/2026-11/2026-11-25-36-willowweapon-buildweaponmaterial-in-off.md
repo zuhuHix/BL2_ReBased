@@ -46,3 +46,20 @@ gives the setter's `NotRead`. The installed `MaterialClass` must be ready, with 
 
 **Not verified:** anything in the running game; the parent setter's other effects; whether the installed material
 class's default object is resident when link 8 gets there.
+
+**Review r1** (Opus high, on #702):
+- **`MaterialClass`'s readiness before the family check.** A declared-only class has no super chain, so it now gets
+  `class_not_ready` instead of `outside_family`. The order is readiness (layout and code), then the family, then the
+  default object, so a class outside the family is still named as such without a default object being required.
+  Test 10 gains the declared-only case. It fails with the old order.
+- **The default-object check.** The store exposes no load-free query of its class-default cache, so the heap scan
+  stays. A comment records why it agrees with that cache: outside tests only `ow_object::cdo`'s builder allocates
+  `Origin::Default`, and it records each object it builds there.
+- **Test 2** also asserts that the store's load count is unchanged and that the default object is the same handle.
+  The tests file and this decision both say tests 1 to 12.
+
+**Link 8 on the runner (JOB 21)** stops at this native's not-loaded refusal for the Material part's `Material`
+(`Mati_BanditCommonAR`); the refusal stays. SLICE_NPC_ASSETS.md records a `Common_GunMaterials` material as an export
+of the `Startup` package, which the game loads at boot. So in the game the material is resident before any weapon is
+built. In the port, the matching stand-in is a harness preload of the definition's Material-part material at link 8's
+set-up, like the muzzle-flash and gestalt preloads in `ow-cli` `equip_run.rs`. That is not part of this native.

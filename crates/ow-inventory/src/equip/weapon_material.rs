@@ -109,7 +109,10 @@ fn object_of(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> 
 }
 
 /// Whether `c` is ready with no load: a defined layout, loaded code, and (for a class the commit constructs) its
-/// default object already built in the heap.
+/// default object already built in the heap. The store exposes no load-free query of its class-default cache (the
+/// decoder's `class_defaults`, which the commit's `class_default` reads), so the heap is scanned for an object of
+/// `Origin::Default` of exactly `c`. The two agree: outside tests, only `ow_object::cdo`'s default builder allocates
+/// `Origin::Default`, and it records each object it builds in that cache (review r1 of #702).
 fn ready(vm: &Vm, c: ClassId, needs_default: bool) -> Result<(), VmError> {
     let defined = vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined());
     let built = !needs_default
@@ -170,6 +173,9 @@ fn preflight(vm: &Vm, weapon: Option<ObjRef>, mesh: Option<ObjRef>, data: &Value
     };
     let family = crate::globals::ready_class(vm, MATERIAL_INSTANCE_CONSTANT)
         .map_err(|_| VmError::from(NotYet::not_read(class_not_ready(MATERIAL_INSTANCE_CONSTANT), RECORD)))?;
+    // The class's readiness first (a declared-only class has no super chain to test; review r1 of #702), then the
+    // family, then its default object.
+    ready(vm, class, false)?;
     if !vm.space.classes.is_child_of(class, family) {
         return Err(NotYet::not_read(outside_family(&class_path(vm, class)), RECORD).into());
     }
