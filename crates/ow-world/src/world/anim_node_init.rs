@@ -24,9 +24,9 @@
 //!    IMPL-PER-BONE-WEIGHTS): a null mesh skips the build; #569's layer refusals pass through; more than 256 bones is
 //!    `NotYet { NotRead }`; a missing or mistyped field is a `VmError::Script`;
 //! 6. H with an `AnimParameters` entry past the first naming a `CustomAnimDef` (after its step 7): [`ENTRY_WEIGHTS`];
-//! 7. H with an owner: the owner's class must be known, without side effects, to implement
-//!    `GearboxFramework.SpecialMoveInterface` ([`owner_implements`]: answered only when the owner class's interface
-//!    entries are already resolved); otherwise [`OWNER_NOT_SMI`]. No owner leaves `SMI` as it is.
+//! 7. H with an owner: the owner test, read-only, one outcome per case of NATIVE_SPECIALMOVE_OWNER.md section 4.1
+//!    ([`owner_implements`], lane IMPL-SPECIALMOVE-OWNER): a yes writes `SMI`, a settled no leaves it as it is, and
+//!    each other case is its own refusal. No owner leaves `SMI` as it is.
 //!
 //! Every declared field an implementation reads or writes is checked there too (a missing one is a `VmError::Script`).
 //!
@@ -55,7 +55,6 @@ pub const ON_INIT: &str = "the node's OnInit script event (the event's name was 
 pub const SEQUENCE_CHANGE: &str = "AnimNodeSequence: the steps after its sequence changes";
 pub const CAMERA: &str = "AnimNodeSequence: stopping its camera animation";
 pub const ENTRY_WEIGHTS: &str = "AnimNodeSpecialMoveBlend: the per-bone weight build of an entry";
-pub const OWNER_NOT_SMI: &str = "AnimNodeSpecialMoveBlend: an owner that does not implement SpecialMoveInterface";
 /// The interface H's owner test names.
 pub const SPECIAL_MOVE_INTERFACE: &str = "GearboxFramework.SpecialMoveInterface";
 
@@ -159,23 +158,89 @@ fn first_weight(vm: &Vm, slots: &[Value]) -> Result<f32, VmError> {
     Ok(1.0 - others.clamp(0.0, 1.0))
 }
 
-/// Rule 7's check, without side effects: `Some(true)` only when the owner's class is known to implement
-/// [`SPECIAL_MOVE_INTERFACE`] by interface entries already resolved; `None` when that cannot be told without resolving
-/// or loading (a class or the interface not in the code index, an entry not resolved yet).
-pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<Option<bool>, VmError> {
+/// The record of the owner test's cases (lane IMPL-SPECIALMOVE-OWNER).
+pub const OWNER_RECORD: &str = "docs/verification/NATIVE_SPECIALMOVE_OWNER.md";
+
+/// O1's text.
+pub const OWNER_INTERFACE_NOT_LOADED: &str = "AnimNodeSpecialMoveBlend: the interface class \
+    GearboxFramework.SpecialMoveInterface is not loaded (a load is a write)";
+/// O3''s text.
+pub const OWNER_INTERFACE_NO_KEY: &str = "AnimNodeSpecialMoveBlend: the interface \
+    GearboxFramework.SpecialMoveInterface has no code key (its table cannot be read)";
+
+/// O4's text.
+pub fn owner_not_decoded(class: &str) -> String {
+    format!(
+        "AnimNodeSpecialMoveBlend: the class chain of {class} did not decode (the structural fallback is not \
+         taken)"
+    )
+}
+
+/// O5's text.
+pub fn owner_not_resolved(class: &str) -> String {
+    format!(
+        "AnimNodeSpecialMoveBlend: the interface table of {class} has an entry not resolved at set-up (resolving it is \
+         a load)"
+    )
+}
+
+fn owner_not_read(what: String) -> VmError {
+    NotYet::not_read(what, OWNER_RECORD).into()
+}
+
+/// Rule 7's owner test, read-only (NATIVE_SPECIALMOVE_OWNER.md section 4.1; lane IMPL-SPECIALMOVE-OWNER): whether the
+/// owner's class implements [`SPECIAL_MOVE_INTERFACE`], one outcome per case, in the note's order. Nothing is
+/// written, loaded, drawn or interned, and no interface entry is resolved.
+/// - **O1**, the interface class not loaded: `NotRead` ([`OWNER_INTERFACE_NOT_LOADED`]);
+/// - a class that is the interface or derives from it in the class table: yes (a port choice: the note names this yes
+///   under O3 only; it is taken first here, as `Vm::plain_interface_read_only` takes it, since the class table alone
+///   proves it read-only; a package class never derives from an interface class, so only hand classes meet it);
+/// - **O2**, no code layer: `LayerAbsent`, as `Vm::plain_interface_read_only` gives it;
+/// - **O3**, the owner's class has no code key: a hand-defined class implements nothing, so no, unless the chain meets
+///   an engine-native stand-in (its `NotYet`), through `Vm::plain_interface_read_only`;
+/// - **O3'**, only the interface has no code key: `NotRead` ([`OWNER_INTERFACE_NO_KEY`]);
+/// - **O4**, a body on the owner's chain or the interface's not decoded, tested directly: `NotRead`
+///   ([`owner_not_decoded`]); the structural fallback is not taken;
+/// - then `implements_resolved_chain` alone: **O5**, an unresolved entry and no resolved yes, `NotRead`
+///   ([`owner_not_resolved`], naming the class it names); **O6**, a resolved yes; **O7**, a resolved no, the stand-in
+///   check through `Vm::plain_interface_read_only`.
+///
+/// `Ok(true)` is a yes (O6, or the class table); `Ok(false)` a settled no (O3, O7). Every outcome is UNVERIFIED in
+/// the running game.
+pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
     #[cfg(test)]
     if let Some(answer) = OWNER_ANSWER.with(std::cell::Cell::get) {
-        return Ok(Some(answer));
+        return Ok(answer);
     }
     let class = class_of(vm, owner)?;
     let Some(iface) = vm.space.classes.by_path(SPECIAL_MOVE_INTERFACE) else {
-        return Ok(None);
+        return Err(owner_not_read(OWNER_INTERFACE_NOT_LOADED.to_string()));
     };
+    if vm.space.classes.is_child_of(class, iface) {
+        return Ok(true);
+    }
     let code = vm.defs.code();
-    Ok(match (code.key_of(class), code.key_of(iface)) {
-        (Some(c), Some(i)) => code.implements_resolved(c, i),
-        _ => None,
-    })
+    if code.classes().next().is_none() {
+        // O2: the read-only plain answer's own refusal.
+        return vm.plain_interface_read_only(owner, iface).map(|a| a.is_some());
+    }
+    let Some(c) = code.key_of(class) else {
+        // O3: a hand-defined class; its stand-in check is the plain answer's.
+        return vm.plain_interface_read_only(owner, iface).map(|a| a.is_some());
+    };
+    let Some(i) = code.key_of(iface) else {
+        return Err(owner_not_read(OWNER_INTERFACE_NO_KEY.to_string()));
+    };
+    let decoded = code.class(i).body_decoded() && code.super_chain(c).all(|k| code.class(k).body_decoded());
+    if !decoded {
+        return Err(owner_not_read(owner_not_decoded(&class_path(vm, class))));
+    }
+    match code.implements_resolved_chain(c, i) {
+        Ok(true) => Ok(true),
+        // O7: the stand-in check is the plain answer's (it reads the same resolved chain, and answers no).
+        Ok(false) => vm.plain_interface_read_only(owner, iface).map(|a| a.is_some()),
+        Err(at) => Err(owner_not_read(owner_not_resolved(code.class(at).path.as_str()))),
+    }
 }
 
 #[cfg(test)]
@@ -183,8 +248,8 @@ thread_local! {
     static OWNER_ANSWER: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// For the tests only: answer [`owner_implements`] with `answer` on this thread (hand-built classes are not in the
-/// code index, so the real query answers `None` for them).
+/// For the tests only: answer [`owner_implements`] with `answer` on this thread (a yes or a settled no), for the
+/// hand-built fixtures that test H's other parts; `None` runs the real test (its cases have their own tests).
 #[cfg(test)]
 pub(crate) fn answer_owner_for_tests(answer: Option<bool>) {
     OWNER_ANSWER.with(|c| c.set(answer));
@@ -275,10 +340,9 @@ fn check_node(vm: &Vm, component: ObjRef, node: ObjRef) -> Result<(), VmError> {
                         }
                     }
                 }
-                if let Some(owner) = object_of(&read(vm, component, "Owner")?)
-                    && owner_implements(vm, owner)? != Some(true)
-                {
-                    return Err(not_read(OWNER_NOT_SMI));
+                if let Some(owner) = object_of(&read(vm, component, "Owner")?) {
+                    // The owner test's refusals (O1, O2, O3', O4, O5, a stand-in); a settled no leaves `SMI`.
+                    owner_implements(vm, owner)?;
                 }
             }
         }
@@ -526,8 +590,10 @@ pub fn write_tail(vm: &mut Vm, component: ObjRef, node: ObjRef) -> Result<(), Vm
                     let zero = parameters_element(vm, node)?;
                     write(vm, node, "AnimParameters", Value::array(vec![zero; n]))?;
                 }
-                if let Some(owner) = object_of(&read(vm, component, "Owner")?) {
-                    // The preflight answered yes (rule 7).
+                if let Some(owner) = object_of(&read(vm, component, "Owner")?)
+                    && owner_implements(vm, owner)?
+                {
+                    // The preflight answered the test (rule 7); a settled no leaves `SMI` as it is.
                     let class = class_of(vm, node)?;
                     let interface = vm
                         .space
