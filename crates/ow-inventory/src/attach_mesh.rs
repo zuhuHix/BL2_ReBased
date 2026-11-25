@@ -6,9 +6,12 @@
 //!
 //! **The deferred reattach** (the note's section 2), shared by `SetForceRefPose`, `SetHidden` and `SetOwnerNoSee`.
 //! Its preflight runs before the calling native writes anything:
-//! - `Owner` set: [`REATTACH_OWNER`], `NotYet { NotRead }`;
+//! - `Owner` set: the owner rule (section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER,
+//!   `ow_world::world::component_setters::owner_rule`): an owner not loaded is [`REATTACH_OWNER_NOT_LOADED`]; one
+//!   with `bStatic` or `bTickIsDisabled` set and `bDeleteMe` clear (read from the instance) is [`REATTACH_OWNER`];
+//!   both `NotYet { NotRead }`. Any other owner passes;
 //! - no `Owner`, and `Scene` not zero: [`REATTACH_SCENE`], `NotYet { NotRead }`;
-//! - otherwise (the slice's case) its only write is `bNeedsReattach` = true, after the native's own write.
+//! - otherwise its only write is `bNeedsReattach` = true, after the native's own write.
 //!
 //! **The natives** (section 3):
 //! - `SkeletalMeshComponent.SetForceRefPose(bool)`: the deferred reattach's preflight, then `bForceRefpose` = 1 or 0
@@ -64,7 +67,7 @@ use ow_vm::error::VmError;
 use crate::equip::{bad, object_of, required, write};
 // The setters' planning and apply sides live in ow-world (lane IMPL-BODYCOMP-RENDER-HOOKS, review r1 of #622, item 1),
 // so the body composition's rendering hooks share them; the bindings below stay here.
-pub use ow_world::world::component_setters::{REATTACH_OWNER, REATTACH_SCENE, set_flag, set_light_environment};
+pub use ow_world::world::component_setters::{REATTACH_OWNER, REATTACH_OWNER_NOT_LOADED, REATTACH_SCENE, set_flag, set_light_environment};
 use ow_world::world::component_setters::{REATTACH_FIELDS, Slots, Want, bool_of, declared, fits, is_zero, reattach_check, schemas};
 
 pub mod particle_activation;

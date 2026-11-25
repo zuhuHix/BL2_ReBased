@@ -450,6 +450,10 @@ fn env_opts(opts: Opts) -> Env {
         ("bPushedByEncroachers", PropKind::Bool),
         ("CollisionComponent", o.clone()),
         ("Components", PropKind::Array(Box::new(o.clone()))),
+        // The deferred reattach's owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1).
+        ("bStatic", PropKind::Bool),
+        ("bTickIsDisabled", PropKind::Bool),
+        ("bDeleteMe", PropKind::Bool),
     ]);
     let body = class(&mut vm, "WillowGame.BodyClassDefinition", object, &[
         ("BodyComposition", PropKind::Struct(composition)),
@@ -1801,6 +1805,22 @@ fn hooks_not_read(e: &mut Env, p: ObjRef, want: &str) {
     assert_eq!((missing, what.as_str()), (Missing::NotRead, want));
 }
 
+/// Hook 2's plan applied (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER): with an
+/// ordinary pawn the owner rule passes, the walk runs, and the made component has `bOwnerNoSee` and `bNeedsReattach`
+/// set by the write phase.
+fn hook_2_applies(e: &mut Env, p: ObjRef) {
+    run(e, p).unwrap();
+    let made = made_of(e, &entries(e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(true), "hook 2's write");
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(true), "the setter's reattach flag");
+}
+
+/// The same pawn shape with its `bTickIsDisabled` set: the owner rule refuses, write-free.
+fn hook_2_refuses_a_tick_disabled_pawn(e: &mut Env, p: ObjRef) {
+    put(&mut e.vm, p, "bTickIsDisabled", Value::Bool(true));
+    hooks_not_read(e, p, REATTACH_OWNER);
+}
+
 /// Test 1 (and hook 1's no on the walk): Engine components do not implement the interface; nothing is written by the
 /// hooks. The made cylinder of [`a_made_component_passes_the_rendering_hooks_when_none_acts`] covers the write side.
 #[test]
@@ -1921,8 +1941,9 @@ fn hook_2_a_flag_already_set_is_nothing() {
 }
 
 /// Test 6 (section 6 of the note supersedes the pawn-test refusal): both tests pass and `bOwnerNoSee` is clear, so
-/// the setter would write; its deferred reattach refuses first (`REATTACH_OWNER`, the attach sets `Owner`), before any
-/// write.
+/// the setter writes. Its deferred reattach applies the owner rule to the pawn (NATIVE_ATTACH_MESH_TO_PICKUP.md section
+/// 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER): an ordinary pawn passes and the plan is applied in the write phase; a
+/// tick-disabled pawn is `REATTACH_OWNER`, before any write.
 #[test]
 fn hook_2_a_clear_flag_is_the_setter_s_reattach_refusal() {
     let mut e = env();
@@ -1930,7 +1951,12 @@ fn hook_2_a_clear_flag_is_the_setter_s_reattach_refusal() {
     let t = make(&mut e.vm, rc, "Cyl_Template");
     let p = one_made(&mut e, t);
     controller_for(&mut e, p);
-    hooks_not_read(&mut e, p, REATTACH_OWNER);
+    hook_2_applies(&mut e, p);
+    let mut e = env();
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p);
+    hook_2_refuses_a_tick_disabled_pawn(&mut e, p);
 }
 
 /// Test 7: no controller, a plain `Engine.Controller` (its `bIsPlayer` clear fails the pawn test), and a made object
@@ -1989,6 +2015,11 @@ fn controller_of(e: &mut Env, p: ObjRef, class: ClassId, is_player: bool) -> Obj
 
 /// Hook 2 called directly on `pawn` for `template`: its answer, with no write, draw, load, class-code load or intern.
 fn hook_2_direct(e: &Env, pawn: ObjRef, template: ObjRef) -> Result<(), VmError> {
+    hook_2_plan(e, pawn, template).map(|_| ())
+}
+
+/// The same, with hook 2's plan: `true` when the write phase applies `bOwnerNoSee` (lane IMPL-DEFERRED-REATTACH-OWNER).
+fn hook_2_plan(e: &Env, pawn: ObjRef, template: ObjRef) -> Result<bool, VmError> {
     let (before, names) = (Counters::read(&e.vm), e.vm.space.names.len());
     let class = e.vm.space.heap.get(template).unwrap().class;
     let r = crate::world::render_hooks::owner_no_see(&e.vm, pawn, template, class);
@@ -2013,7 +2044,7 @@ fn unlisted_pawn(e: &mut Env) -> ObjRef {
 }
 
 /// 6.2 test 1: a pawn below `WillowPlayerPawn` passes the pawn test whatever its controller's `bIsPlayer` (the class
-/// rule), so a clear flag reaches the setter's reattach refusal.
+/// rule), so a clear flag reaches the setter, whose owner rule passes for an ordinary pawn: the plan is applied.
 #[test]
 fn hook_2_a_player_pawn_passes_the_pawn_test_by_its_class() {
     let mut e = env();
@@ -2024,11 +2055,11 @@ fn hook_2_a_player_pawn_passes_the_pawn_test_by_its_class() {
     let p = pawn_of(&mut e, toy, vec![a]);
     let wpc = e.willow_pc;
     controller_of(&mut e, p, wpc, false);
-    hooks_not_read(&mut e, p, REATTACH_OWNER);
+    hook_2_applies(&mut e, p);
 }
 
-/// 6.2 test 2: a pawn below `WillowPawn` reads `Controller.bIsPlayer`: clear fails (nothing), set passes, and a None
-/// `Controller` fails.
+/// 6.2 test 2: a pawn below `WillowPawn` reads `Controller.bIsPlayer`: clear fails (nothing), set passes (the plan is
+/// applied), and a None `Controller` fails.
 #[test]
 fn hook_2_a_willow_pawn_s_pawn_test_reads_bis_player() {
     let toy_pawn = |e: &mut Env| {
@@ -2044,7 +2075,7 @@ fn hook_2_a_willow_pawn_s_pawn_test_reads_bis_player() {
         let wpc = e.willow_pc;
         controller_of(&mut e, p, wpc, is_player);
         if refuses {
-            hooks_not_read(&mut e, p, REATTACH_OWNER);
+            hook_2_applies(&mut e, p);
         } else {
             run(&mut e, p).unwrap();
             let made = made_of(&e, &entries(&e, p)[0]);
@@ -2071,7 +2102,7 @@ fn hook_2_the_controller_test_reads_the_two_camera_bits() {
         } else {
             let player = make(&mut e.vm, e.object, "Player_Test");
             put(&mut e.vm, pc, "Player", Value::Object(Some(player)));
-            hooks_not_read(&mut e, p, REATTACH_OWNER);
+            hook_2_applies(&mut e, p);
         }
     }
 }
@@ -2102,7 +2133,8 @@ fn hook_2_a_controller_that_is_not_a_player_controller_is_nothing() {
 }
 
 /// 6.2 test 6: both tests pass: `bOwnerNoSee` already true is nothing (the made component keeps it, no setter ran);
-/// clear is the setter's `REATTACH_OWNER` ([`hook_2_a_clear_flag_is_the_setter_s_reattach_refusal`]).
+/// clear is the setter's write with an ordinary pawn, applied in the write phase, and `REATTACH_OWNER` with a
+/// tick-disabled one ([`hook_2_a_clear_flag_is_the_setter_s_reattach_refusal`]).
 #[test]
 fn hook_2_both_tests_pass_and_the_setter_decides() {
     let mut e = env();
@@ -2116,7 +2148,12 @@ fn hook_2_both_tests_pass_and_the_setter_decides() {
     let t = owner_no_see_template(&mut e, false);
     let p = one_made(&mut e, t);
     controller_for(&mut e, p);
-    hooks_not_read(&mut e, p, REATTACH_OWNER);
+    hook_2_applies(&mut e, p);
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p);
+    hook_2_refuses_a_tick_disabled_pawn(&mut e, p);
 }
 
 /// 6.2 test 7: a pawn of an unlisted first native class is the pawn test's `NotRead` naming it, raised only when every
@@ -2377,7 +2414,7 @@ fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
         let VmError::NotYet(n) = r.unwrap_err() else { panic!() };
         assert_eq!((n.missing, &*n.what), (Missing::NotRead, NOT_SETTLED));
     };
-    not_settled(owner_no_see(&e.vm, p, cycle, class));
+    not_settled(owner_no_see(&e.vm, p, cycle, class).map(|_| ()));
     // Hook 3 needs a mesh class: the same failed handle asked as one (its class is a cylinder, so the mesh test is
     // the hand-picked skeletal class here).
     let skeletal = e.skeletal;

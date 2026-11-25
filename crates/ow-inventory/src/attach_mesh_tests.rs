@@ -71,6 +71,9 @@ fn engine() -> Vec<u8> {
     t.prop("Array", actor, "Components", 0, array + 1);
     t.prop("Object", array, "Components", 0, component);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
+    // The owner rule's two other flags (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1).
+    t.prop("Bool", actor, "bStatic", 0, 0);
+    t.prop("Bool", actor, "bTickIsDisabled", 0, 0);
     let new_component = Param { type_ref: component, ..Param::new("Object", "NewComponent") };
     t.function(actor, "AttachComponent", &[new_component], None, &[], &FunctionSpec::new(NATIVE, "AttachComponent"), |_| None);
     t.prop("Struct", component, "Scene", 0, pointer);
@@ -124,6 +127,11 @@ fn engine() -> Vec<u8> {
     let bad_actor = t.class("BadActor", object);
     t.prop("Int", bad_actor, "Components", 0, 0);
     t.prop("Bool", bad_actor, "bDeleteMe", 0, 0);
+    // An owner whose bStatic is an int (the owner rule's declaration check, lane IMPL-DEFERRED-REATTACH-OWNER).
+    let odd_owner = t.class("OddOwnerActor", object);
+    t.prop("Int", odd_owner, "bStatic", 0, 0);
+    t.prop("Bool", odd_owner, "bTickIsDisabled", 0, 0);
+    t.prop("Bool", odd_owner, "bDeleteMe", 0, 0);
     let ints_actor = t.class("IntsActor", object);
     let ints = t.p.next_export();
     t.prop("Array", ints_actor, "Components", 0, ints + 1);
@@ -257,20 +265,39 @@ fn set_force_ref_pose_writes_the_int_then_the_reattach_flag() {
     assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(true), "written again: no unchanged short cut");
 }
 
-/// The deferred reattach's preflight, for each of its three natives: an `Owner`, then a non-zero `Scene`, each a
-/// `NotRead` before any write.
+/// The deferred reattach's preflight, for each of its three natives (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1,
+/// lane IMPL-DEFERRED-REATTACH-OWNER): an ordinary `Owner` passes, and the native writes its field and
+/// `bNeedsReattach`; a `bStatic` or `bTickIsDisabled` owner is `REATTACH_OWNER` unless `bDeleteMe` is set; with no
+/// owner, a non-zero `Scene` is `REATTACH_SCENE`. Each refusal comes before any write.
 #[test]
 fn the_deferred_reattach_refuses_an_owner_or_a_scene_before_any_write() {
     let mut x = fx(ParityMode::Off, true);
-    let calls: [(&str, Value); 3] =
-        [(FORCE, Value::Bool(true)), (HIDDEN, Value::Bool(true)), (NO_SEE, Value::Bool(true))];
-    for (path, arg) in calls {
+    // Each native, its field, and the value it writes there (`bForceRefpose` is an int, written 1).
+    let calls: [(&str, &str, Value); 3] = [
+        (FORCE, "bForceRefpose", Value::Int(1)),
+        (HIDDEN, "HiddenGame", Value::Bool(true)),
+        (NO_SEE, "bOwnerNoSee", Value::Bool(true)),
+    ];
+    for (path, field, written) in calls {
+        let arg = Value::Bool(true);
         let mesh = x.obj("Engine.SkeletalMeshComponent");
         let owner = x.obj("Engine.Actor");
         x.set(mesh, "Owner", Value::Object(Some(owner)));
-        let before = x.written(mesh);
-        unmarked(&not_yet(x.call(path, mesh, vec![arg.clone()])), Missing::NotRead, REATTACH_OWNER);
-        assert_eq!(x.written(mesh), before, "{path}: nothing written");
+        x.call(path, mesh, vec![arg.clone()]).unwrap();
+        assert_eq!(x.get(mesh, field), written, "{path}: an ordinary owner passes");
+        assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(true), "{path}");
+        for owner_flag in ["bStatic", "bTickIsDisabled"] {
+            let mesh = x.obj("Engine.SkeletalMeshComponent");
+            let owner = x.obj("Engine.Actor");
+            x.set(owner, owner_flag, Value::Bool(true));
+            x.set(mesh, "Owner", Value::Object(Some(owner)));
+            let before = x.written(mesh);
+            unmarked(&not_yet(x.call(path, mesh, vec![arg.clone()])), Missing::NotRead, REATTACH_OWNER);
+            assert_eq!(x.written(mesh), before, "{path}, {owner_flag}: nothing written");
+            x.set(owner, "bDeleteMe", Value::Bool(true));
+            x.call(path, mesh, vec![arg.clone()]).unwrap();
+            assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(true), "{path}, {owner_flag} and bDeleteMe: passes");
+        }
 
         let mesh = x.obj("Engine.SkeletalMeshComponent");
         x.with_scene(mesh);
@@ -526,8 +553,9 @@ fn light_fields(x: &Fx, o: ObjRef) -> Vec<Value> {
 /// `SetLightEnvironment` (6.2): the current value is nothing, even on an attached component with an `Owner`; a
 /// component not attached gets the one write `LightEnvironment`, even with an `Owner` (the slice's case after the
 /// attach); an attached one with no `Owner` and an empty `Scene` gets `PreviousLightEnvironment`, `LightEnvironment`
-/// and `bNeedsReattach`; an attached one with an `Owner` is the deferred reattach's `NotRead`, unmarked, nothing
-/// written.
+/// and `bNeedsReattach`; an attached one with an ordinary `Owner` gets the same three writes, and one whose owner is
+/// static is the deferred reattach's `NotRead`, unmarked, nothing written (the owner rule, lane
+/// IMPL-DEFERRED-REATTACH-OWNER).
 #[test]
 fn set_light_environment_follows_the_three_cases() {
     let mut x = fx(ParityMode::Off, true);
@@ -567,9 +595,22 @@ fn set_light_environment_follows_the_three_cases() {
     x.set(owned, "LightEnvironment", Value::Object(Some(old)));
     x.set(owned, "bAttached", Value::Bool(true));
     x.set(owned, "Owner", Value::Object(Some(owner)));
-    let before = light_fields(&x, owned);
-    unmarked(&not_yet(x.call(LIGHT_FN, owned, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
-    assert_eq!(light_fields(&x, owned), before, "nothing written");
+    x.call(LIGHT_FN, owned, vec![Value::Object(Some(new))]).unwrap();
+    assert_eq!(
+        light_fields(&x, owned),
+        vec![Value::Object(Some(new)), Value::Object(Some(old)), Value::Bool(true)],
+        "attached with an ordinary owner: the three writes"
+    );
+
+    let static_owner = x.obj("Engine.Actor");
+    x.set(static_owner, "bStatic", Value::Bool(true));
+    let pinned = x.obj("Engine.SkeletalMeshComponent");
+    x.set(pinned, "LightEnvironment", Value::Object(Some(old)));
+    x.set(pinned, "bAttached", Value::Bool(true));
+    x.set(pinned, "Owner", Value::Object(Some(static_owner)));
+    let before = light_fields(&x, pinned);
+    unmarked(&not_yet(x.call(LIGHT_FN, pinned, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
+    assert_eq!(light_fields(&x, pinned), before, "nothing written");
 }
 
 /// `InitializePickupForRBPhysics` (6.3): `bUseRBPhysics` false is nothing. The set rule is lane IMPL-PICKUP-RB's
@@ -618,8 +659,10 @@ fn a_prebound_part_2_key_keeps_its_handler_and_the_others_register() {
 }
 
 /// The light environment's checks on their own paths (review r1 of #520): an equal value is nothing even with a broken
-/// `bAttached`; on an attached component with an `Owner`, the deferred reattach's `NotRead` comes before the broken
-/// `Scene` and `PreviousLightEnvironment` declarations, and nothing is written.
+/// `bAttached`; on an attached component with a static `Owner`, the deferred reattach's `NotRead` comes before the
+/// broken `Scene` and `PreviousLightEnvironment` declarations, and nothing is written. With an ordinary owner the
+/// broken `PreviousLightEnvironment` declaration is the data error, still before any write (lane
+/// IMPL-DEFERRED-REATTACH-OWNER).
 #[test]
 fn the_light_environment_checks_mask_neither_the_no_op_nor_the_refusal() {
     let mut x = fx(ParityMode::Off, true);
@@ -630,12 +673,17 @@ fn the_light_environment_checks_mask_neither_the_no_op_nor_the_refusal() {
     assert_eq!(x.call(LIGHT_FN, flag, vec![Value::Object(Some(old))]).unwrap(), Value::None, "the equal value");
     let tail = x.obj("Engine.OddTailLight");
     let owner = x.obj("Engine.Actor");
+    x.set(owner, "bStatic", Value::Bool(true));
     x.set(tail, "LightEnvironment", Value::Object(Some(old)));
     x.set(tail, "bAttached", Value::Bool(true));
     x.set(tail, "Owner", Value::Object(Some(owner)));
     unmarked(&not_yet(x.call(LIGHT_FN, tail, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
     assert_eq!(x.get(tail, "LightEnvironment"), Value::Object(Some(old)));
     assert_eq!(x.get(tail, "bNeedsReattach"), Value::Bool(false));
+    x.set(owner, "bStatic", Value::Bool(false));
+    let e = x.call(LIGHT_FN, tail, vec![Value::Object(Some(new))]).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("PreviousLightEnvironment")), "{e:?}");
+    assert_eq!(x.get(tail, "LightEnvironment"), Value::Object(Some(old)), "nothing written");
 }
 
 /// A destination slot missing from the object (review r2 of #520): an attached, ownerless component with an empty
@@ -676,4 +724,45 @@ fn the_scene_refusal_comes_before_the_destination_checks() {
     let before = light_fields(&x, odd);
     unmarked(&not_yet(x.call(LIGHT_FN, odd, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_SCENE);
     assert_eq!(light_fields(&x, odd), before, "nothing written");
+}
+
+/// NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.2, tests 1, 4 and 5 (lane IMPL-DEFERRED-REATTACH-OWNER). With an
+/// ordinary owner, `SetOwnerNoSee(true)` writes `bOwnerNoSee` and `bNeedsReattach` on the component only: the owner and
+/// its other components are unchanged. An owner the store holds as a stand-in with no slots is the "not loaded"
+/// `NotRead`, nothing written. An owner that declares `bStatic` as an int, or not at all, is a data error naming it.
+#[test]
+fn the_owner_rule_touches_only_the_component_and_checks_the_owner_first() {
+    let mut x = fx(ParityMode::Off, true);
+    let owner = x.obj("Engine.Actor");
+    let other = x.obj("Engine.SkeletalMeshComponent");
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(mesh, "Owner", Value::Object(Some(owner)));
+    x.set(other, "Owner", Value::Object(Some(owner)));
+    let owner_slots = x.vm.space.heap.get(owner).unwrap().slots.clone();
+    let other_before = x.written(other);
+    x.call(NO_SEE, mesh, vec![Value::Bool(true)]).unwrap();
+    assert_eq!((x.get(mesh, "bOwnerNoSee"), x.get(mesh, "bNeedsReattach")), (Value::Bool(true), Value::Bool(true)));
+    assert_eq!(x.vm.space.heap.get(owner).unwrap().slots, owner_slots, "the owner is unchanged");
+    assert_eq!(x.written(other), other_before, "the owner's other component is unchanged");
+
+    let class = x.vm.find_class("Engine.Actor").unwrap();
+    let stand_in = x.vm.space.alloc_stand_in(class, "Owner_StandIn", ow_object::heap::Origin::Default { class }).unwrap();
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(mesh, "Owner", Value::Object(Some(stand_in)));
+    let before = x.written(mesh);
+    unmarked(&not_yet(x.call(NO_SEE, mesh, vec![Value::Bool(true)])), Missing::NotRead, REATTACH_OWNER_NOT_LOADED);
+    assert_eq!(x.written(mesh), before, "nothing written");
+
+    for (owner_class, field) in [("Engine.OddOwnerActor", "bStatic"), ("Engine.BadActor", "bStatic")] {
+        let owner = x.obj(owner_class);
+        let mesh = x.obj("Engine.SkeletalMeshComponent");
+        // Past the heap's write check (the owner is not an `Actor`): the rule's own declaration check is the test.
+        let class = x.vm.space.heap.get(mesh).unwrap().class;
+        let p = x.vm.space.prop(class, "Owner").unwrap();
+        *x.vm.space.slot_mut(mesh, PropAddr::scalar(p)).unwrap() = Value::Object(Some(owner));
+        let before = x.written(mesh);
+        let e = x.call(NO_SEE, mesh, vec![Value::Bool(true)]).unwrap_err();
+        assert!(matches!(&e, VmError::Script { message, .. } if message.contains(field)), "{owner_class}: {e:?}");
+        assert_eq!(x.written(mesh), before, "{owner_class}: nothing written");
+    }
 }

@@ -87,6 +87,8 @@ fn engine() -> Vec<u8> {
         "bCollideActors",
         "bNetTemporary",
         "bShouldBaseAtStartup",
+        // The deferred reattach's owner rule reads it with bStatic and bDeleteMe (lane IMPL-DEFERRED-REATTACH-OWNER).
+        "bTickIsDisabled",
     ] {
         t.prop("Bool", actor, b, 0, 0);
     }
@@ -290,10 +292,11 @@ impl Fx {
     }
 }
 
-/// The deferred reattach (`ow-inventory` `attach_mesh`, review r1 of #610 item 1): its preflight refuses whenever the
-/// component's `Owner` is set, whatever `bAttached` holds. A world-spawned primitive component's copy now has the actor
-/// as `Owner` (and `bAttached` false), so `SetForceRefPose` on it refuses with `REATTACH_OWNER`, before any write; the
-/// template component, with no `Owner`, takes the write.
+/// The deferred reattach (`ow-inventory` `attach_mesh`) on a world-spawned primitive component's copy, which has the
+/// actor as `Owner` (and `bAttached` false). Its owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1, lane
+/// IMPL-DEFERRED-REATTACH-OWNER): with an ordinary owner `SetForceRefPose` writes `bForceRefpose` and
+/// `bNeedsReattach`; with the actor's `bStatic` set it refuses with `REATTACH_OWNER`, before any write. The template
+/// component, with no `Owner`, takes the write.
 #[test]
 fn set_force_ref_pose_on_a_spawned_copy_meets_the_owner_refusal() {
     let mut x = fx(true, true);
@@ -303,13 +306,22 @@ fn set_force_ref_pose_on_a_spawned_copy_meets_the_owner_refusal() {
     assert_eq!(x.get(copy, "Owner"), Value::Object(Some(actor)));
     assert_eq!(x.get(copy, "bAttached"), Value::Bool(false));
     let before = x.get(copy, "bForceRefpose");
-    match ow_inventory::attach_mesh::set_force_ref_pose(&mut x.vm, copy, true) {
+    ow_inventory::attach_mesh::set_force_ref_pose(&mut x.vm, copy, true).unwrap();
+    assert_ne!(x.get(copy, "bForceRefpose"), before, "an ordinary owner: bForceRefpose written");
+    assert_eq!(x.get(copy, "bNeedsReattach"), Value::Bool(true));
+    let actor2 = x.spawn(archetype).unwrap().unwrap();
+    let copy2 = x.copy(actor2);
+    let class = x.vm.space.heap.get(actor2).unwrap().class;
+    let p = x.vm.space.prop(class, "bStatic").unwrap();
+    x.vm.space.write(actor2, ow_object::ids::PropAddr::scalar(p), Value::Bool(true)).unwrap();
+    let before = x.get(copy2, "bForceRefpose");
+    match ow_inventory::attach_mesh::set_force_ref_pose(&mut x.vm, copy2, true) {
         Err(VmError::NotYet(n)) => {
             assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, ow_inventory::attach_mesh::REATTACH_OWNER))
         }
         other => panic!("expected REATTACH_OWNER, got {other:?}"),
     }
-    assert_eq!(x.get(copy, "bForceRefpose"), before, "nothing written");
+    assert_eq!(x.get(copy2, "bForceRefpose"), before, "a static owner: nothing written");
     ow_inventory::attach_mesh::set_force_ref_pose(&mut x.vm, template.unwrap(), true).unwrap();
 }
 

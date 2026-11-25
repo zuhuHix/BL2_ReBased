@@ -3,9 +3,8 @@
 //! preflight (crate::world::body_composition). The note is NATIVE_BODYCOMP_RENDER_HOOKS.md, section 4. Every rule is
 //! **UNVERIFIED** in the running game. AI-assisted (Claude Code).
 //!
-//! Each hook either does nothing or refuses, read only and before any write. Under today's rules none of them writes:
-//! hook 2 would write only past the setter's deferred reattach, and hook 3 only past its unidentified array check,
-//! and both are refused there. So the body composition's writes are unchanged.
+//! Each hook's preflight is read only and comes before any write. Hook 2 writes in the write phase once its plan
+//! passes (lane IMPL-DEFERRED-REATTACH-OWNER); hook 3 writes only past its unidentified array check, which refuses.
 //!
 //! 1. **The gear-likeness step** ([`gear_likeness`]), before the custom-head step. The made component's class is asked
 //!    whether it implements `WillowGame.IGearLikenessConsumer`, read only, in `implements`' own order: only interface
@@ -28,7 +27,10 @@
 //!    ([`NOT_SETTLED`]), and `SetOwnerNoSee(true)`'s planner runs on the slots the attach produces: a flag already true
 //!    is nothing. **A decided failing test answers nothing, and an undecided one is raised (`NotRead`, the first in
 //!    gate order) only when every other part passes and the setter would write.** Where everything passes, the setter's
-//!    deferred reattach refuses first, `REATTACH_OWNER` (the attach sets `Owner`), so hook 2 still never writes.
+//!    deferred reattach applies the owner rule to the attach's `Owner`, the pawn (NATIVE_ATTACH_MESH_TO_PICKUP.md
+//!    section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER): a static or tick-disabled pawn is `REATTACH_OWNER`; an
+//!    ordinary one passes, and hook 2's plan (`bOwnerNoSee`, then `bNeedsReattach`) is applied in the body
+//!    composition's write phase, after the custom head and before hook 3.
 //! 3. **The light environment** ([`light_environment`]): the pawn's `LightEnvironment` (declared as an object) None,
 //!    or a made class that is not a `MeshComponent`: nothing. Then the template must be settled, and its
 //!    `bAcceptsLights` (fitted) clear is nothing; set reaches the unidentified array check, [`ARRAY_CHECK`] (`NotRead`).
@@ -62,7 +64,7 @@ pub const NOT_LOADED: &str = "the rendering hooks: an object the store has not l
 pub const ARRAY_CHECK: &str = "the light-environment step's array check (not identified)";
 
 const WHAT: &str = "InitializeBodyComposition";
-const OWNER_NO_SEE: &str = "PrimitiveComponent.SetOwnerNoSee(bool)";
+pub(crate) const OWNER_NO_SEE: &str = "PrimitiveComponent.SetOwnerNoSee(bool)";
 const PRIMITIVE: &str = "Engine.PrimitiveComponent";
 const MESH: &str = "Engine.MeshComponent";
 const PLAYER_CONTROLLER: &str = "Engine.PlayerController";
@@ -245,27 +247,29 @@ fn camera_test(vm: &Vm, pc: ObjRef) -> Result<Test, VmError> {
     Ok(Test::Undecided(NotYet::not_read(format!("{CAMERA_TEST}{named})"), RECORD).into()))
 }
 
-/// Hook 2 (module documentation) for the component `template` of `class`, made on `pawn`.
-pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> Result<(), VmError> {
+/// Hook 2 (module documentation) for the component `template` of `class`, made on `pawn`: `true` when its plan is to
+/// be applied in the body composition's write phase (`bOwnerNoSee` = true, then `bNeedsReattach` = true on the made
+/// component), `false` for nothing.
+pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> Result<bool, VmError> {
     if !is_a(vm, class, PRIMITIVE) {
-        return Ok(());
+        return Ok(false);
     }
     // The first undecided test, raised only once every other part has passed and the setter would write.
     let mut undecided = None;
     match pawn_test(vm, pawn)? {
-        Test::Fail => return Ok(()),
+        Test::Fail => return Ok(false),
         Test::Undecided(e) => undecided = Some(e),
         Test::Pass => {}
     }
     // The `PlayerController` cast, judged by the class the handle carries, so a lazy handle is judged too.
     let Some(c) = object_field(vm, pawn, "Controller")? else {
-        return Ok(());
+        return Ok(false);
     };
     if !is_a(vm, vm.space.heap.get(c)?.class, PLAYER_CONTROLLER) {
-        return Ok(());
+        return Ok(false);
     }
     match camera_test(vm, c)? {
-        Test::Fail => return Ok(()),
+        Test::Fail => return Ok(false),
         Test::Undecided(e) => {
             undecided.get_or_insert(e);
         }
@@ -277,15 +281,16 @@ pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> 
         [("Owner", Value::Object(Some(pawn))), ("bNeedsReattach", Value::Bool(false)), ("bNeedsUpdateTransform", Value::Bool(false))];
     let slots = Slots { object: template, overrides: &overrides };
     if !component_setters::plan_flag(vm, slots, "bOwnerNoSee", true, OWNER_NO_SEE)? {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(e) = undecided {
         return Err(e);
     }
-    // The setter's deferred reattach: the attach sets `Owner`, so this is its `REATTACH_OWNER` refusal. The fallback
-    // after it keeps hook 2 write-free should that check ever pass.
+    // The setter's deferred reattach, with the attach's `Owner` (the pawn): the owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md
+    // section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER). An ordinary pawn passes, and the plan is applied in the write
+    // phase; the unconditional fallback refusal is gone.
     component_setters::reattach_check(vm, slots, OWNER_NO_SEE)?;
-    Err(NotYet::not_read(component_setters::REATTACH_OWNER, component_setters::RECORD).into())
+    Ok(true)
 }
 
 /// Hook 3 (module documentation) for the component `template` of `class`, made on `pawn`.
