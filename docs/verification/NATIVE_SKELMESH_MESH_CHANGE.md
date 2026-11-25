@@ -281,7 +281,7 @@ room for the mesh's LOD count, then appends that many entries. Each new entry is
 | `bNeedsInstanceWeightUpdate` | false | false |
 | `bAlwaysUseInstanceWeights` | false | false |
 | `InstanceWeightUsage` | the byte **0** = `IWU_PartialSwap` (the enum's names are `IWU_PartialSwap`, `IWU_FullSwap`, `IWU_MAX`) | 0 (`IWU_PartialSwap`) |
-| `InstanceWeightIdx` | **-1** (confirmed) | 0 |
+| `InstanceWeightIdx` | **-1** (as the native was read; UNVERIFIED in game) | 0 |
 
 So the constructed entry differs from the script default in **one member only, `InstanceWeightIdx`: -1, not 0**.
 
@@ -294,10 +294,15 @@ a LOD whose model has the unidentified data, it overwrites `InstanceWeightUsage`
 `SkelMeshComponentLODInfo`'s struct default from the packages: that would give index 0. Row 15's refusals are
 unchanged.
 
-**Test.** A synthetic component whose `LODInfo` is shorter than a known LOD count of 2, with no per-LOD data, gets two
-entries, each with empty `HiddenMaterials`, both flags false, `InstanceWeightUsage` 0 and `InstanceWeightIdx` -1. The
-same fixture with the struct default present in the synthetic package still gives -1, which proves the default is not
-copied.
+**Tests.** Row 15 answers `LayerAbsent` for every positive LOD count today, because the skeletal-mesh data layer gives
+no LOD models. So an integration test through `SetSkeletalMesh` cannot reach the refill yet. Two ways to test it:
+- **a unit test of entry construction** (the port's function that builds one refill entry): it gives empty
+  `HiddenMaterials`, both flags false, `InstanceWeightUsage` 0 and `InstanceWeightIdx` -1. It gives -1 even when the
+  synthetic package declares `SkelMeshComponentLODInfo` with a struct default of index 0, which shows the default is not
+  copied;
+- **an integration test, once a LOD provider exists:** a synthetic provider supplies a LOD count of 2 and reports that
+  neither LOD has the per-LOD override data. A component whose `LODInfo` is shorter then gets two entries with those
+  values. Until the provider exists, this test is not written.
 
 ## Open questions
 
