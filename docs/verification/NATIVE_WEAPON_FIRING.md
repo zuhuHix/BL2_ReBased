@@ -50,7 +50,8 @@ the end.
 `InstantFire`, which switches on the firing mode's `FireType` (`FiringModeDefinition.EWillowWeaponFireType`, decoded:
 0 `EWWFT_Bullet`, 1 `EWWFT_Beam`, 2 `EWWFT_Rocket`, 3 `EWWFT_HitScan`). Bullet, Beam and HitScan go to
 `FiringModeDefinitionFire`; Rocket goes to `ProjectileDefinitionFire`. The firing mode comes from
-`GetFiringModeDefinition` (the barrel's or the type's `DefaultFiringModeDefinition`).
+`GetFiringModeDefinition` (the barrel's or the type's `DefaultFiringModeDefinition`; the elemental part's comes
+between them, NATIVE_WEAPON_GET_FIRING_MODE.md, 2026-11-25).
 
 After the shot, still in `FireAmmunition`:
 

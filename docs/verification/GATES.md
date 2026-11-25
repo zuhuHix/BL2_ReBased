@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-GETFIRINGMODEDEFINITION (2026-11-25, pc-hummer, docs only, on docs/native-getfiringmodedefinition from main
+5fb7e097):** AI-assisted (Claude Code, Opus 5.5). NATIVE_WEAPON_GET_FIRING_MODE.md: the barrel part's mode, else the
+elemental part's, else the weapon type's default; read only, no subclass override. Link 8's Bandit AR gets
+`Bullet_Assault_Default`. No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game (the barrel and type steps OBSERVED by lane L7). Decision 2026-11-25-NNN.
+
 **ANALYST-LINK1-AFTER-HOLD (2026-11-25, pc-hummer, docs only, on docs/native-link1-after-hold-aimoffset-profile from
 main 5fb7e097):** AI-assisted (Claude Code, Opus 5.5). NATIVE_AIMOFFSET_SET_PROFILE.md: the first unread native past
 `GetWeaponHoldDef`. It switches the aim-offset node's profile through its template node's `Profiles`, which hold 7
