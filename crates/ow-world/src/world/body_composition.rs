@@ -398,6 +398,9 @@ struct PostInit {
     /// Hook 2's plan (`render_hooks::owner_no_see`): `bOwnerNoSee` = true, then `bNeedsReattach` = true, on the made
     /// component, after the custom head (lane IMPL-DEFERRED-REATTACH-OWNER).
     owner_no_see: bool,
+    /// Hook 3's plan (`render_hooks::light_environment`, section 7.1): `SetLightEnvironment`'s apply side on the made
+    /// component, after hook 2's (lane IMPL-HOOK3-ARRAY-CHECK).
+    light: Option<crate::world::component_setters::LightPlan>,
 }
 
 /// The made `Mesh`'s writes, decided in the preflight (NATIVE_MESH_REST.md section 4).
@@ -981,7 +984,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     post.head = true;
                 }
                 post.owner_no_see = crate::world::render_hooks::owner_no_see(vm, owner, template, class)?;
-                crate::world::render_hooks::light_environment(vm, owner, template, class)?;
+                post.light = crate::world::render_hooks::light_environment(vm, owner, template, class)?;
                 made.push(Made::Component { template, class, collision, post, socket: socket_attach });
             }
         }
@@ -1084,6 +1087,9 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                 // IMPL-DEFERRED-REATTACH-OWNER): the setter's apply side on the made component.
                 if post.owner_no_see {
                     crate::world::component_setters::apply_flag(vm, made, "bOwnerNoSee", true, crate::world::render_hooks::OWNER_NO_SEE)?;
+                }
+                if let Some(light) = &post.light {
+                    crate::world::component_setters::apply_light_environment(vm, made, light)?;
                 }
             }
         }
