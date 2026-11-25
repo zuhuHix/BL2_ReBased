@@ -222,6 +222,41 @@ fn the_parent_lookup() {
     assert_eq!(x.ask(child, "A", None, true, false).unwrap(), None);
 }
 
+/// Review of #728: the parent's "exact match" is how its lookup matched, as the recursion reports it (the hub's
+/// interim ruling), not a re-read of the returned hold.
+/// - F passed on (no own default), an own candidate, and a parent whose **default** has the asked name and tag: the
+///   own candidate (the default is a default answer, not an exact one; under a re-read it would be the parent's);
+/// - F passed on, no own default and no match anywhere: the parent's default;
+/// - F passed on, no own default, an own candidate and a parent answering its default: the candidate.
+#[test]
+fn the_parent_s_match_kind_is_reported_not_re_read() {
+    let mut x = fx();
+    let [tx, tz] = ["X", "Z"].map(|n| x.tag(n));
+    let look_alike = x.hold("ParentDefaultAZ", "A", Some(tz));
+    let parent = x.body("Parent", &[], Some(look_alike), None);
+    let own = x.hold("OwnAX", "A", Some(tx));
+    let child = x.body("Child", &[Some(own)], None, Some(parent));
+    assert_eq!(x.ask(child, "A", Some(tz), true, true).unwrap(), Some(own), "a default answer is not exact");
+
+    let plain_default = x.hold("ParentDefault", "None", None);
+    let parent = x.body("Parent2", &[], Some(plain_default), None);
+    let empty = x.body("Child2", &[], None, Some(parent));
+    assert_eq!(x.ask(empty, "A", Some(tz), true, true).unwrap(), Some(plain_default), "no match: the parent's default");
+    let child = x.body("Child3", &[Some(own)], None, Some(parent));
+    assert_eq!(x.ask(child, "A", Some(tz), true, true).unwrap(), Some(own), "an own candidate: the candidate");
+}
+
+/// Review of #728: (`A`, None) asked against [(`A`, X)]: the tagged entry is the candidate, ahead of the default.
+#[test]
+fn a_none_tag_asked_against_a_tagged_entry_is_the_candidate() {
+    let mut x = fx();
+    let tx = x.tag("X");
+    let ax = x.hold("AX", "A", Some(tx));
+    let default = x.hold("Default", "None", None);
+    let b = x.body("Body", &[Some(ax)], Some(default), None);
+    assert_eq!(x.ask(b, "A", None, false, true).unwrap(), Some(ax));
+}
+
 /// Test 7: None entries are skipped.
 #[test]
 fn none_entries_are_skipped() {
