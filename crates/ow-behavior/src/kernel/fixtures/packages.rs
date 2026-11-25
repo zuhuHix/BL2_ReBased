@@ -116,6 +116,9 @@ fn willowgame() -> Vec<u8> {
     d.prop("Struct", compare, "Context", context);
     d.cls("Behavior_ToySame", object);
     d.cls("Behavior_ToyDifferent", object);
+    // WillowWeapon.OnCreate's toy behaviors (lane IMPL-WEAPON-ONCREATE): one writes, one refuses.
+    d.cls("Behavior_ToyWrite", object);
+    d.cls("Behavior_ToyRefuse", object);
     let data = d.struct_("ToyBehaviorContextData", None);
     d.prop("Object", data, "ContextObject", object);
     d.prop("Byte", data, "BehaviorContext", 0);

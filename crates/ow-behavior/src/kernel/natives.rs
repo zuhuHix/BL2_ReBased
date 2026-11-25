@@ -45,6 +45,7 @@
 //! | `IntializeBehaviorProviderForConsumer` | routed; kernel: decode, pass 1, refuse pass 2 | Off | UNVERIFIED (NATIVE_BEHAVIOR_POPULATION.md section C) |
 //! | `ChangeBehaviorSequenceActivationStatus` | routed; kernel: Enable / Disable / Toggle through the provider | Off | UNVERIFIED (section C) |
 //! | `BeginNondeterministicProviderRegistration` | nothing a script sees; the handle is not written | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 2, 4) |
+//! | `WillowWeapon.OnCreate` | the weapon's own `ConsumerHandle`; kernel: `OnCreate` fired on every provider (the broadcast's shared step); a crate: its route body or the stub; unowned or released: nothing; a `Providers` array `NotRead` | Off | UNVERIFIED (NATIVE_WEAPON_ON_CREATE.md) |
 //! | `ForceUnregisterBehaviorConsumer` | kernel: the process goes (its providers, so their threads and pending work, with it) and its `PID` is kept out of the allocator; a crate's handle `NotYet`; the handle always comes back -1 | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 3, 4) |
 //!
 //! **Reference mode** binds only what the C++ reference binds (the first five rows); the last five stay unbound
@@ -103,6 +104,12 @@ pub const BEGIN_NONDETERMINISTIC: &str =
     "GearboxFramework.BehaviorKernel.BeginNondeterministicProviderRegistration";
 pub const FORCE_UNREGISTER: &str = "GearboxFramework.BehaviorKernel.ForceUnregisterBehaviorConsumer";
 pub const RECORD_PROVIDERS: &str = "docs/verification/NATIVE_BEHAVIOR_PROVIDERS.md";
+/// `WillowWeapon.OnCreate` (lane IMPL-WEAPON-ONCREATE, NATIVE_WEAPON_ON_CREATE.md section 4).
+pub const ON_CREATE: &str = "WillowGame.WillowWeapon.OnCreate";
+pub const RECORD_ON_CREATE: &str = "docs/verification/NATIVE_WEAPON_ON_CREATE.md";
+/// `OnCreate` given a `Providers` array.
+pub const ON_CREATE_PROVIDERS: &str =
+    "WillowWeapon.OnCreate with a Providers argument (how a non-variable argument is passed is not read)";
 
 /// The natives that take a consumer handle first and go to its owner (module documentation).
 pub const ROUTED: [&str; 5] = [
@@ -114,13 +121,14 @@ pub const ROUTED: [&str; 5] = [
 ];
 
 /// The natives a crate may give a body for ([`route`], [`fallback`]).
-pub const ROUTABLE: [&str; 6] = [
+pub const ROUTABLE: [&str; 7] = [
     IS_SEQUENCE_ENABLED,
     EVENT_FROM_SCRIPT,
     BROADCAST_FROM_SCRIPT,
     INITIALIZE_PROVIDER,
     CHANGE_SEQUENCE,
     CONSUMER_HANDLE,
+    ON_CREATE,
 ];
 
 /// The invalid consumer handle's `PID` (NATIVE_BEHAVIOR_CONTEXT.md: the constructor's value, all bits set).
@@ -207,6 +215,8 @@ impl NativePack for Pack {
             }
             bind(vm, BEGIN_NONDETERMINISTIC, Rc::new(begin_nondeterministic))?;
             bind(vm, FORCE_UNREGISTER, Rc::new(force_unregister))?;
+            // WillowWeapon.OnCreate (NATIVE_WEAPON_ON_CREATE.md; lane IMPL-WEAPON-ONCREATE).
+            bind(vm, ON_CREATE, Rc::new(on_create))?;
             // Running behavior lists outside the kernel (NATIVE_RUN_BEHAVIORS.md; decision 2026-11-19-54).
             super::run::register(vm)?;
             // The behavior-variable setters (NATIVE_SET_BEHAVIOR_VARIABLE.md; decision 2026-11-19-159).
@@ -588,22 +598,89 @@ fn kernel_rule(c: &mut NativeCall<'_>, native: &'static str, pid: i32) -> Result
         }
         BROADCAST_FROM_SCRIPT => {
             let name = text(c.vm, c.arg(1)?);
-            let count = {
-                let k = kernel(c.vm)?;
-                let k = borrow(&k)?;
-                k.processes.get(&pid).map_or(0, |p| p.providers.len())
-            };
-            for slot in 0..count {
-                lend(c.vm, pid, slot, |vm, p| {
-                    p.fire_event(vm, &name, &DetMap::new(), -1, &[])
-                        .map_err(to_vm)
-                })?;
-            }
+            broadcast_every_provider(c.vm, pid, &name)?;
             Ok(Value::None)
         }
         INITIALIZE_PROVIDER => initialize_provider(c, pid),
         CHANGE_SEQUENCE => change_sequence(c, pid),
         _ => Err(error(format!("{native} is not a routed kernel native"))),
+    }
+}
+
+/// The kernel step `BroadcastBehaviorEventFromScript` and `WillowWeapon.OnCreate` share (NATIVE_WEAPON_ON_CREATE.md
+/// section 4, step 3): `name` fired with filter -1 and no payload on every provider slot of process `pid`, in
+/// registration order. Each provider runs in turn; nothing is checked across providers first.
+fn broadcast_every_provider(vm: &mut Vm, pid: i32, name: &str) -> Result<(), VmError> {
+    let count = {
+        let k = kernel(vm)?;
+        let k = borrow(&k)?;
+        k.processes.get(&pid).map_or(0, |p| p.providers.len())
+    };
+    for slot in 0..count {
+        lend(vm, pid, slot, |vm, p| p.fire_event(vm, name, &DetMap::new(), -1, &[]).map_err(to_vm))?;
+    }
+    Ok(())
+}
+
+/// `WillowWeapon.OnCreate(optional array Providers)` in Off (NATIVE_WEAPON_ON_CREATE.md section 4, lane
+/// IMPL-WEAPON-ONCREATE). **UNVERIFIED in the running game.**
+/// 1. a supplied `Providers` array: [`ON_CREATE_PROVIDERS`] (`NotRead`), before anything fires;
+/// 2. the handle: the weapon's own `ConsumerHandle`, a plain read, as the pawn's handle getter reads it (not argument
+///    0, so not through `routed`); missing, or not a handle struct with a `PID`, is `VmError::Script`;
+/// 3. no kernel service: `kernel()`'s `NotYet { LayerAbsent }`, "the behavior kernel natives";
+/// 4. the handle's owner, one rule each:
+///    - `Kernel`: the shared step ([`broadcast_every_provider`]) with the event name `OnCreate`;
+///    - `Crate`: that crate's route body for this native, else the stub policy's answer, as `dispatch` does;
+///    - no owner, or `Released`: nothing;
+/// 5. the firing inherits the broadcast's non-atomicity (UNVERIFIED): providers run one by one, so a refusal from a
+///    later provider comes after an earlier one's writes, and is then marked "stopped after partial writes" (by
+///    #518's counters), its kind and record kept.
+///
+/// The native writes nothing itself.
+fn on_create(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let Some(me) = c.this else {
+        return Err(error("WillowWeapon.OnCreate called without a weapon".to_string()));
+    };
+    if c.has(0) {
+        return Err(NotYet::not_read(ON_CREATE_PROVIDERS, RECORD_ON_CREATE).into());
+    }
+    let class = c.vm.space.heap.get(me)?.class;
+    let Some(p) = c.vm.space.prop(class, "ConsumerHandle") else {
+        return Err(error(format!(
+            "{} has no property ConsumerHandle",
+            provider::class_path_of(c.vm, me).map_err(to_vm)?
+        )));
+    };
+    let handle = c.vm.space.read(me, PropAddr::scalar(p))?.clone();
+    let pid = match (&handle, handle_pid(c.vm, &handle)) {
+        (Value::Struct(_), Some(pid)) => pid,
+        _ => {
+            return Err(error(format!(
+                "WillowWeapon.OnCreate: ConsumerHandle holds {}, not a consumer handle with a PID",
+                handle.kind_name()
+            )));
+        }
+    };
+    let k = kernel(c.vm)?;
+    let owner = borrow(&k)?.owners.get(&pid).copied();
+    match owner {
+        Some(Owner::Kernel) => {
+            let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+            let before = marks(c.vm);
+            match broadcast_every_provider(c.vm, pid, "OnCreate") {
+                Ok(()) => Ok(Value::None),
+                Err(VmError::NotYet(n)) if marks(c.vm) != before => Err(n.after_partial_writes().into()),
+                Err(e) => Err(e),
+            }
+        }
+        Some(Owner::Crate(name)) => {
+            let body = borrow(&k)?.routes.get(&(name, ON_CREATE)).cloned();
+            match body {
+                Some(body) => body(c),
+                None => unbound(c),
+            }
+        }
+        _ => Ok(Value::None),
     }
 }
 
