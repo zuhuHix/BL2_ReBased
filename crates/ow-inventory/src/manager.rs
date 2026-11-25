@@ -25,6 +25,10 @@
 //!   does not say what the walk does there). The VM's iterator takes the whole list when the loop starts, so a body
 //!   that changes the chain during the loop does not change what is visited (as `AllParts`; UNVERIFIED). Reference
 //!   leaves it unbound (rule R3: the C++ has no reading).
+//! - `Engine.InventoryManager.InventoryActors(BaseClass, out Inv, optional bOnlyReadied)`, an iterator over the
+//!   weapon chain (`InventoryChain`), in `ParityMode::Off` only: [`inventory_actors`] (lane IMPL-INVENTORY-ACTORS,
+//!   NATIVE_INVENTORY_ACTORS.md). A None `BaseClass` is `Engine.Inventory`, the walk examines at most 100 entries, and
+//!   a looping chain is not refused.
 //! - Not registered, so a gameplay run stops at them (`UnboundNative`): `FindLeastValuableWeapon` / `Item` (the
 //!   per-class eligibility virtual is not read), the holster natives (presentation).
 //!
@@ -320,19 +324,19 @@ fn item_actors_iterator() -> IteratorFn {
     })
 }
 
-/// Binds `ItemActors` in `ParityMode::Off` under its declaration's own native key (a VM without the declaration binds
+/// Binds `ItemActors` and [`inventory_actors`]'s `InventoryActors` in `ParityMode::Off` under its declaration's own native key (a VM without the declaration binds
 /// nothing); Reference binds nothing (module documentation).
 pub fn register_iterators(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
     let Ok(id) = vm.find_function(ITEM_ACTORS) else {
-        return Ok(());
+        return inventory_actors::register(vm);
     };
     if let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) {
         vm.register_iterator(&key, item_actors_iterator())?;
     }
-    Ok(())
+    inventory_actors::register(vm)
 }
 
 /// The `EquippedInventory` query (module documentation).
@@ -442,6 +446,8 @@ pub(crate) fn register_equip_keys(vm: &mut Vm) -> Result<(), VmError> {
     crate::equip::material_natives::register(vm)?;
     crate::equip::firing_mode::register(vm)
 }
+
+pub mod inventory_actors;
 
 #[cfg(test)]
 mod tests;
