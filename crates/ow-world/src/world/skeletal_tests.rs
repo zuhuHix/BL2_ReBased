@@ -407,3 +407,32 @@ fn the_lod_count_prefers_the_in_package_answer() {
     }
 }
 
+
+/// Lane SKELMESH-LOD-LAYER: the LOD models' trailing counts come only from the in-package method, with the mesh's own
+/// export; a source that does not read them (the default) gives `None`, and so does an uninstalled layer. Nothing is
+/// written.
+#[test]
+fn the_lod_trailing_counts_come_from_the_package() {
+    struct Trailing(Option<Vec<usize>>);
+    impl SkeletonSource for Trailing {
+        fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+            Ok(None)
+        }
+        fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
+            let leaf = package.object(index).map_err(|e| e.to_string())?.name.clone();
+            assert_eq!((package.name.as_str(), leaf.as_str()), ("GD_ToyMesh", "Mesh_A"), "the mesh's own export");
+            Ok(self.0.clone())
+        }
+    }
+    let mut e = env();
+    let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+    assert_eq!(lod_trailing_counts(&e.vm, mesh).unwrap(), None, "no layer");
+    for answer in [Some(vec![0, 0]), None] {
+        let mut e = env();
+        let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+        SkeletalMeshes::install(&mut e.vm, Box::new(Trailing(answer.clone()))).unwrap();
+        let heap = format!("{:?}", e.vm.space.heap);
+        assert_eq!(lod_trailing_counts(&e.vm, mesh).unwrap(), answer);
+        assert_eq!(format!("{:?}", e.vm.space.heap), heap, "nothing written");
+    }
+}

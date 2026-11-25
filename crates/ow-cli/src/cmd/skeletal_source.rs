@@ -94,8 +94,17 @@ impl SkeletonSource for PskExports {
     /// structural oracles, UNVERIFIED). Not a UModel export: the count needs no `.psk`.
     fn lod_count_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
         let typer = ow_package::schema::SchemaTyper::new_empty();
-        ow_assets::skeletal_lods::read_lod_count(package, index, EXPORT_PROPERTY_OFFSET, &typer)
-            .map(|l| Some(l.lod_count))
+        ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer)
+            .map(|l| Some(l.prefix.lod_count))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Each LOD model's trailing count from the same full read (`ow_assets::skeletal_lods::read_lod_models`, fitted,
+    /// UNVERIFIED). A read that succeeds has every count at zero; a non-zero one is refused by the reader.
+    fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer)
+            .map(|l| Some(l.models.iter().map(|m| m.trailing).collect()))
             .map_err(|e| e.to_string())
     }
 }
@@ -159,9 +168,9 @@ mod tests {
         assert_eq!(on_bones, after.len(), "every socket names a bone of the skeleton");
     }
 
-    /// The installed LOD-count census (needs the game, so ignored): `OPENWILLOW_BL2` the install, `OW_LOD_PACKAGES` a
-    /// `;`-separated list of file packages. Every `SkeletalMesh` export is read with the fitted prefix and its checks;
-    /// counts only are printed (lane SKELMESH-LOD-LAYER's structural oracle, decision 2026-11-19-NNN).
+    /// The installed LOD census (needs the game, so ignored): `OPENWILLOW_BL2` the install, `OW_LOD_PACKAGES` a
+    /// `;`-separated list of file packages. Every `SkeletalMesh` export is read to its end with the fitted layout and
+    /// its checks; counts only are printed (lane SKELMESH-LOD-LAYER's structural oracle, decision 2026-11-25-NNN).
     #[test]
     #[ignore = "needs the installed game"]
     fn installed_lod_count_census() {
@@ -173,21 +182,27 @@ mod tests {
         for name in list.split(';').filter(|n| !n.is_empty()) {
             let pkg = ow_package::package::Package::load(&cooked.join(name)).unwrap();
             let mut by_count = std::collections::BTreeMap::new();
-            let mut refused = 0;
+            let (mut refused, mut models, mut coloured) = (0, 0, 0);
             for i in 1..=pkg.exports.len() as i32 {
                 let class = pkg.object(i).ok().filter(|o| o.class != 0).and_then(|o| pkg.object(o.class).ok()).map(|c| c.name.clone());
                 if class.as_deref() != Some("SkeletalMesh") {
                     continue;
                 }
-                match ow_assets::skeletal_lods::read_lod_count(&pkg, i, EXPORT_PROPERTY_OFFSET, &typer) {
-                    Ok(l) => *by_count.entry(l.lod_count).or_insert(0) += 1,
+                match ow_assets::skeletal_lods::read_lod_models(&pkg, i, EXPORT_PROPERTY_OFFSET, &typer) {
+                    Ok(l) => {
+                        *by_count.entry(l.prefix.lod_count).or_insert(0) += 1;
+                        models += l.models.len();
+                        coloured += l.models.iter().filter(|m| m.vertex_colors).count();
+                    }
                     Err(e) => {
                         refused += 1;
                         println!("CENSUS {name} refused: {e}");
                     }
                 }
             }
-            println!("CENSUS {name}: read {by_count:?} (LOD count: meshes), refused {refused}");
+            println!(
+                "CENSUS {name}: read {by_count:?} (LOD count: meshes), {models} LOD models ({coloured} with colours), refused {refused}"
+            );
         }
     }
 
@@ -263,3 +278,4 @@ mod tests {
         }
     }
 }
+

@@ -132,6 +132,14 @@ pub trait SkeletonSource {
         let _ = (package, index);
         Ok(None)
     }
+
+    /// Each LOD model's trailing count, one entry per LOD, of export `index` of `package`, when the source reads the
+    /// LOD models from the package itself (lane SKELMESH-LOD-LAYER). The trailing count is the one LOD-model field
+    /// whose meaning is not identified (fitted, UNVERIFIED). The default, `Ok(None)`, is "not read". Reads only.
+    fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
+        let _ = (package, index);
+        Ok(None)
+    }
 }
 
 /// The layer's service: the installed source and the cache by mesh identity.
@@ -722,6 +730,28 @@ pub fn lod_count(vm: &Vm, mesh: ObjRef) -> Result<Option<usize>, VmError> {
     }
     let read = layer.source.lod_count(&package, &path, &leaf);
     read.map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))
+}
+
+/// `mesh`'s LOD models' trailing counts, one per LOD (lane SKELMESH-LOD-LAYER; the source's
+/// [`SkeletonSource::lod_trailing_in`], fitted and UNVERIFIED): `Ok(None)` with no source installed, for an object
+/// the layer cannot place in a package export, or when the source does not read the LOD models. Reads only; a
+/// source's parse failure is `VmError::Script`. `mesh` must be a resident `SkeletalMesh` ([`check_mesh`]).
+pub fn lod_trailing_counts(vm: &Vm, mesh: ObjRef) -> Result<Option<Vec<usize>>, VmError> {
+    check_mesh(vm, mesh)?;
+    let Some(cell) = vm.service::<SkeletalMeshes>() else {
+        return Ok(None);
+    };
+    let path = match identity(vm, mesh) {
+        Ok((_, path, _)) => path,
+        Err(VmError::NotYet(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
+    let (Origin::Export { package: at, index } | Origin::Resource { package: at, index }) = vm.space.heap.get(mesh)?.origin else {
+        return Ok(None);
+    };
+    let pkg = vm.defs.packages().get(at);
+    layer.source.lod_trailing_in(pkg, index).map_err(|e| script(format!("the LOD models of {path} failed to parse: {e}")))
 }
 
 /// A `Sockets` entry as the socket object it names, refused as the module documentation says: a None entry is
