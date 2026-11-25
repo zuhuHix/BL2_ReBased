@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINUX-CAUSE-A (DRAFT, 2026-11-25, zuhuPC Linux, on fix/linux-package-name-case stacked on #675 699b1bf3):**
+AI-assisted (Claude Code, Opus 5.5). A package found by name takes the requested spelling when its file stem is
+lower-cased (`Package::load_as`, `PackageStore::load_path_named`). `cargo test --workspace --no-fail-fast`: 3372 passed
+/ 4 failed / 52 ignored (the 4 expected N1 failures on Linux); `crate_edges_test.py` OK. Aspyr install, installed Off
+strict `--slice-gate` under the machine lock with `OPENWILLOW_PSK_EXPORTS` set: 4 ok / 9 NotYet / 1 error. Links 2
+and 10-12 are ok. Link 8's error is Aspyr's different `GestaltDataContainer` members, not case. pc-hummer's Windows
+main reading is 4/10/0. UNVERIFIED in game.
+
 **LINUX-PATHS (2026-11-25, zuhuPC Linux, on fix/linux-install-paths from main faa3bbc):** AI-assisted (Claude Code,
 Opus 5.5). Windows-cased file joins resolve ignoring case (`ow_core::install`), and `ow-host` accepts Aspyr's
 `steamassets/willowgame/cookedpcconsole` layout. `cargo test --workspace --no-fail-fast`: 3366 passed / 4 failed / 52

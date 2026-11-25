@@ -808,7 +808,8 @@ impl Loader<'_> {
             })?;
             let store = self.defs.code_mut().1;
             let package = match file {
-                Some(path) if self.scene.levels.is_empty() => store.load_path(path)?,
+                // Named as the caller spells the map (lane LINUX-CAUSE-A), as a load by name would name it.
+                Some(path) if self.scene.levels.is_empty() => store.load_path_named(path, parsed.as_str())?,
                 _ => store.load(&parsed)?,
             };
             self.scene.levels.push(SceneLevel {

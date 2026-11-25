@@ -115,12 +115,19 @@ pub struct Package {
 impl Package {
     /// Reads, decodes and parses the package file at `path` (C++ `Package::load`).
     pub fn load(path: &Path) -> Result<Arc<Package>, PackageError> {
-        let raw = std::fs::read(path).map_err(|_| PackageError::Open)?;
-        let source = lexically_normal(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+        Package::load_as(path, name)
+    }
+
+    /// [`Package::load`] with the package named `name` instead of the file stem (lane LINUX-CAUSE-A: a store that
+    /// found the file by a name spelled as the game spells it, where the file name is lower-cased). The bytes, the
+    /// decoding and every check are [`Package::load`]'s; only [`Package::name`] differs.
+    pub fn load_as(path: &Path, name: String) -> Result<Arc<Package>, PackageError> {
+        let raw = std::fs::read(path).map_err(|_| PackageError::Open)?;
+        let source = lexically_normal(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
         Package::from_bytes(source, name, &raw).map(Arc::new)
     }
 

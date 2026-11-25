@@ -35,7 +35,13 @@ impl PskExports {
         safe_component(leaf)?;
         for root in &self.roots {
             for ext in ["psk", "pskx"] {
-                let candidate = root.join(package).join("SkeletalMesh3").join(format!("{leaf}.{ext}"));
+                // Each component exact first, then ignoring case (lane LINUX-CAUSE-A, `ow_core::install`): the file
+                // package comes from a lower-cased file name on Aspyr's Linux build, the export folder from UModel's.
+                // Two that differ only in case are an error. The path-safety checks above and below are unchanged.
+                let rel = format!("{package}/SkeletalMesh3/{leaf}.{ext}");
+                let Some(candidate) = ow_core::install::resolve(root, &rel).map_err(|e| e.to_string())? else {
+                    continue;
+                };
                 if !candidate.is_file() {
                     continue;
                 }
@@ -163,6 +169,20 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("Mesh.psk"), b"not an ActorX file").unwrap();
         assert!(exports.skeleton("Toy", "Toy.Mesh", "Mesh").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Lane LINUX-CAUSE-A: a file package named from a lower-cased file (Aspyr's Linux build) finds UModel's
+    /// mixed-case export folder.
+    #[test]
+    fn a_lower_case_package_finds_the_export_folder() {
+        let root = temp("case");
+        let folder = root.join("Toy_Package").join("SkeletalMesh3");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("Mesh.psk"), b"x").unwrap();
+        let exports = PskExports::new(vec![root.clone()]);
+        let found = exports.file("toy_package", "Mesh").unwrap().expect("found ignoring case");
+        assert!(found.is_file(), "{found:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
