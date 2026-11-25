@@ -356,6 +356,10 @@ fn the_definition_query_on_a_cold_inventory_loads_no_code() {
     let (item, _) = cold(&mut x, "Engine.ToyInheritingInventory");
     x.set(pickup, "Inventory", Value::Object(Some(item)));
     let before = marks(&x.vm);
-    let _ = x.call(DEFINITION_OF, pickup, vec![]);
+    // As the sibling test: nothing is registered under the native's key, so the inherited query is unbound.
+    match x.call(DEFINITION_OF, pickup, vec![]) {
+        Err(VmError::UnboundNative(k)) => assert!(k.contains("GetInventoryDefinition"), "{k}"),
+        other => panic!("{other:?}"),
+    }
     assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
 }

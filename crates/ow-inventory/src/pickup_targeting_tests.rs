@@ -835,8 +835,10 @@ fn a_definition_store_not_yet_keeps_its_variant() {
 }
 
 /// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the pawn test's refusal with a pawn whose class has a
-/// layout and no loaded code (the fixture's own classes are warm, as the HUD's world has them): it reads fields only,
-/// so it loads no class code, and leaves #518's counters unchanged. (The name table is not compared: `suspended`
+/// layout and no loaded code. It passes only with `WillowPlayerPawn` warm (the fixture's `make` looks it up):
+/// `suspended`'s `find_class(PLAYER_PAWN)` is finding 1's pattern and would load that class's code were it cold (review
+/// r1 of #701; that case is under the decision's "not reached"). With it warm, the refusal loads no class code and
+/// leaves #518's counters unchanged. (The name table is not compared: `suspended`
 /// interns "Dead" on each pass, a side finding of the audit, reported apart from the code loads.)
 #[test]
 fn the_pawn_test_on_a_cold_pawn_class_loads_no_code() {

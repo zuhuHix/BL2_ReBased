@@ -923,14 +923,17 @@ fn a_wrapped_body_runs_only_on_its_own_vm_with_no_service_borrowed() {
 
 
 
-/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the client getter's preflight on the cold fill world (no
-/// class's code loaded), refused because the provider class is absent. Ignored: the preflight takes every store class
-/// with `find_class` before anything is made, which loads their cold code.
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the client getter's preflight on the fill world, refused
+/// because the provider class is absent. That world is not wholly cold: `fill_cold` loads `Core.Object` and, through
+/// `find_function`, `WillowPlayerController`, and `register`'s bind loads `UIInteraction`; the store classes stay cold.
+/// Ignored: the preflight takes every store class with `find_class` before anything is made, which loads their cold
+/// code.
 #[test]
 #[ignore = "finding: GetDataStoreClient's preflight find_class of the store classes loads cold class code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn a_fill_that_cannot_be_planned_loads_no_class_code() {
     let mut t = fill_cold(false);
     let before = t.vm.class_code_loads();
-    assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err(), "no UIDataProvider_Settings class");
+    let e = t.call(GET_DATA_STORE_CLIENT, None, vec![]).unwrap_err();
+    assert!(e.to_string().contains("class not found: Engine.UIDataProvider_Settings"), "{e}");
     assert_eq!(t.vm.class_code_loads(), before, "no class code loaded by the refused preflight");
 }
