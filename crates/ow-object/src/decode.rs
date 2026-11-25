@@ -427,11 +427,6 @@ pub struct DecodeState {
     /// Tags dropped because the class does not declare their property, though the C++ VM would have decoded them
     /// into its bag (`<Class>.<Property> (<Type>)`, module documentation). Not printed.
     pub dropped: Vec<String>,
-    /// The top-level properties whose tag [`ValueCx::apply_tags`] skipped (a value it could not decode or store), by
-    /// the export (package, export index) and the declared property (lane IMPL-AIMOFFSET-SET-PROFILE): a record only,
-    /// so a native can tell a property that was skipped from one that is empty. Keyed by the export, not the object, so
-    /// a freed and reused object handle never inherits an entry. Decoding is unchanged.
-    pub skipped: FixedHashSet<(PackageId, i32, PropId)>,
     /// The engine-native classes defined for stand-ins, by path, in order ([`ValueCx::resource`]).
     pub native_classes: Vec<String>,
     /// How many [`ReferenceResolver`] calls are under way ([`MAX_RESOLVE_DEPTH`]).
@@ -474,7 +469,6 @@ impl Default for DecodeState {
             class_defaults: FixedHashMap::default(),
             log: Vec::new(),
             dropped: Vec::new(),
-            skipped: FixedHashSet::default(),
             native_classes: Vec::new(),
             resolve_depth: 0,
             resolve_budget: MAX_RESOLVES_PER_LOAD,
@@ -881,9 +875,6 @@ impl<'a> ValueCx<'a> {
                 return Err(e.clone());
             }
             if outcome.is_err() {
-                if let Some(prop) = prop {
-                    self.state.skipped.insert((package, export, prop));
-                }
                 self.state.log.push(format!(
                     "defaults: skipped {class_name}.{} ({})",
                     h.name, h.ty

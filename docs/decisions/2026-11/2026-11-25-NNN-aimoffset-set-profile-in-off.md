@@ -1,45 +1,41 @@
-## 2026-11-25: AnimNodeAimOffset.SetActiveProfileByName / ByIndex in Off, and the store's skipped-property record
+## 2026-11-25: AnimNodeAimOffset.SetActiveProfileByName / ByIndex in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-AIMOFFSET-SET-PROFILE, stacked on `fix/rust-getweaponholddef`
-(2910cde2). It implements docs/verification/NATIVE_AIMOFFSET_SET_PROFILE.md section 3 (lane F's note, branch
-`docs/native-link1-after-hold-aimoffset-profile` at 46a470ec, not yet reviewed). Clean room: this lane did not read
-the executable. No real-game session was run. **Every rule is UNVERIFIED in the running game.** Reference keeps the
-stub policy.
+(2910cde2). It implements docs/verification/NATIVE_AIMOFFSET_SET_PROFILE.md section 3 (lane F's note, #730 at its
+review r1 fix bff35b46). Clean room: this lane did not read the executable. No real-game session was run. **Every
+rule is UNVERIFIED in the running game.** Reference keeps the stub policy.
 
 **Where.** `ow-world` `world::aim_offset`, both keys bound keep-existing in the world pack's Off block.
 
-**The rule**, preflight first, load-free:
-1. the receiver is resident and an `Engine.AnimNodeAimOffset` or below it, declaring `TemplateNode`, `Profiles` (an
-   array of a struct) and `CurrentProfileIndex` (an int); otherwise `VmError::Script`;
+**The rule**, preflight first, load-free, all or nothing:
+1. the receiver is resident and an `Engine.AnimNodeAimOffset` or below it, declaring `TemplateNode` and
+   `SkelComponent` (object references), `Profiles` (an array of a struct), `CurrentProfileIndex` (an int), and
+   `RequiredBones` and `AimCpntIndexLUT` (arrays of bytes); otherwise `VmError::Script`, all checked before anything
+   else;
 2. the list's owner is `TemplateNode` when set (not loaded: `NotYet { NotRead }`), else the receiver;
-3. an owner whose `Profiles` tag the store skipped: `NotYet { LayerAbsent }`, "AnimNodeAimOffset: the profiles (a
-   binary-serialized struct array)", layer "a reader for AnimNodeAimOffset.Profiles". A `Profiles` that was read,
-   empty included, answers by the rules;
+3. **the interim rule (#730's review):** the store leaves a skipped `Profiles` as the class default, an empty array,
+   so an empty list cannot be told from a skipped one. An empty `Profiles` on the list's owner is
+   `NotYet { LayerAbsent }`, "AnimNodeAimOffset: the profiles (a binary-serialized struct array)", layer "a reader for
+   AnimNodeAimOffset.Profiles", never "no match";
 4. by name, the first `ProfileName` match (none: nothing); by index, in range only; the current index is nothing;
-5. the rebuild: with no `SkelComponent` or no mesh on it, `RequiredBones` and `AimCpntIndexLUT` are left empty; with
-   a mesh, `NotYet { NotRead }`, "AnimNodeAimOffset: the required-bones rebuild's sort and parent pass", before any
-   write.
+5. the rebuild empties the two arrays first (the note's fix). A `SkelComponent` not loaded is `NotYet { NotRead }`;
+   any `SkeletalMesh` set, not resolved, is `NotYet { NotRead }`, "AnimNodeAimOffset: the required-bones rebuild's
+   sort and parent pass"; both before any write.
 
-Then `CurrentProfileIndex` := the index, and the two arrays emptied where they are not empty already.
+Then `CurrentProfileIndex` := the index, and `RequiredBones` and `AimCpntIndexLUT` emptied.
 
-**The skipped-property record (the note leaves its shape to the hub).** The refusal in step 3 must know that the
-owner's `Profiles` was skipped, not empty. The decoder now records each top-level property whose tag
-`ValueCx::apply_tags` skipped, keyed by (package, export index, property): `DecodeState::skipped`, read through
-`DefStore::skipped_property(space, object, prop)`. It is keyed by the export, not the object handle, so a freed and
-reused handle never inherits an entry. **Decoding is unchanged**: the same values, objects and log lines. It is only
-a record. This changes the decoder's state in `ow-object` (`decode.rs`) and adds a read accessor in `ow-defs`
-(`store.rs`). Neither is on the sensitive list, but the hub may want another shape.
+The first push of this lane (91287e8f) also added a store record of skipped properties, so that an empty list could be
+told from a skipped one. Under the interim rule it is not needed, and it was taken out again: decoding and the store
+are as on main. The accessor that would report "decoded and empty" stays the hub's call.
 
 **Tests.** `aim_offset_tests.rs`, over an invented `Engine.upk`: the note's section 4, 1 to 9, in 10 tests, plus the
-declarations' keys. Test 5 is a package export whose `Profiles` tag the store genuinely skips. Test 8 runs through a
-toy pawn script `SetAimOffsetProfile(N) { AimOffset.SetActiveProfileByName(N); }`. `ow-defs` store tests: the record
-reports a skipped tag and not a read one, nor a runtime object.
+declarations' keys. Test 5 is both an export whose `Profiles` tag the store skips and a node with a simply empty list,
+as receiver and as a copy's template. Test 7 covers every declaration and a lazy `SkelComponent`. Test 8 runs through
+a toy pawn script `SetAimOffsetProfile(N) { AimOffset.SetActiveProfileByName(N); }`.
 
 **The slice gate** (installed Off strict, release build, under the machine lock): 5 ok / 8 NotYet / 1 error, `links
 ok 5/14`, `step share X = 5.783/14 = 41.3%`. Links 1, 3, 4, 5, 13 and 14 stop at `maya:8` with the profiles'
-**`NotYet { LayerAbsent }`** (the note's predicted stop): Maya's template node's `Profiles` was skipped by the store.
-They were errors at the unbound native before.
+**`NotYet { LayerAbsent }`** (the note's expected stop): Maya's template node's `Profiles` slot is empty. They were
+errors at the unbound native before.
 
-**Gates.** `cargo test --workspace -j 8`: 3,679 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK. `ctest` and
-`tools/verify_packages.py --reader` were not run (no C++ build in this worktree); the decoder change adds a record
-only and changes no decoded value.
+**Gates.** `cargo test --workspace -j 8`: 3,678 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.

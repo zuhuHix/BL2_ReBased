@@ -45,6 +45,7 @@ fn package() -> Vec<u8> {
         "IntProperty",
         "ArrayProperty",
         "StructProperty",
+        "ByteProperty",
     ]);
     let object = t.class("Object", 0);
     let node = t.class("AnimNode", object);
@@ -58,8 +59,8 @@ fn package() -> Vec<u8> {
     t.prop("Object", aim, "TemplateNode", 0, aim);
     toy_array_of(&mut t, aim, "Profiles", "Struct", profile);
     t.prop("Int", aim, "CurrentProfileIndex", 0, 0);
-    toy_array_of(&mut t, aim, "RequiredBones", "Int", 0);
-    toy_array_of(&mut t, aim, "AimCpntIndexLUT", "Int", 0);
+    toy_array_of(&mut t, aim, "RequiredBones", "Byte", 0);
+    toy_array_of(&mut t, aim, "AimCpntIndexLUT", "Byte", 0);
     let by_name = t
         .function(aim, "SetActiveProfileByName", &[Param::new("Name", "ProfileName")], None, &[],
             &FunctionSpec::new(NATIVE, "SetActiveProfileByName"), |_| None)
@@ -167,8 +168,8 @@ impl Fx {
         let PropKind::Struct(ty) = *inner else { panic!() };
         let items = names.iter().map(|s| Value::structure(ty, vec![Value::Name(self.vm.space.names.intern(s))])).collect();
         self.set(n, "Profiles", Value::array(items));
-        self.set(n, "RequiredBones", Value::array(vec![Value::Int(1)]));
-        self.set(n, "AimCpntIndexLUT", Value::array(vec![Value::Int(2)]));
+        self.set(n, "RequiredBones", Value::array(vec![Value::Byte(1)]));
+        self.set(n, "AimCpntIndexLUT", Value::array(vec![Value::Byte(2)]));
         n
     }
 
@@ -231,8 +232,8 @@ fn the_declarations_give_the_bound_keys() {
     }
 }
 
-/// Test 1: own profiles `A`, `B`, `C`, no `TemplateNode`, no `SkelComponent`: by name `C` gives 2 and empties the two
-/// run-time arrays; by name `Z` does nothing.
+/// Test 1: own profiles `A`, `B`, `C`, no `TemplateNode`, no `SkelComponent`, the two run-time arrays seeded non-empty:
+/// by name `C` gives 2 and empties them; by name `Z` does nothing.
 #[test]
 fn by_name_on_the_node_s_own_profiles() {
     let mut x = fx();
@@ -289,27 +290,34 @@ fn a_change_with_a_mesh_is_the_rebuild_s_not_read() {
     assert_eq!(x.current(n), 1);
     // A change that is no change is still nothing, mesh or not.
     x.nothing(|x| x.by_index(n, 1));
+    // Any mesh set, not resident included, is the rebuild's NotRead without being resolved.
+    let class = x.vm.space.classes.by_path("Engine.ToyMesh").unwrap();
+    let lazy_mesh = x.vm.space.alloc_stand_in(class, "LazyMesh", Origin::Resource { package: 0, index: 1 }).unwrap();
+    x.set(comp, "SkeletalMesh", Value::Object(Some(lazy_mesh)));
+    let e = x.refusal(|x| x.by_name(n, "A"));
+    assert_eq!((e.missing, &*e.what), (Missing::NotRead, REBUILD));
 }
 
-/// Test 5: a list owner whose `Profiles` the store skipped: the profiles' `LayerAbsent`, nothing written; as the
-/// receiver itself, or as the template of a copy.
+/// Test 5, today's store behaviour (the interim rule): an empty `Profiles` on the list's owner is the profiles'
+/// `LayerAbsent`, nothing written, never "no match". Both the export whose `Profiles` tag the store skipped (the class
+/// default's empty array is left) and a node whose list is simply empty; as the receiver or as a copy's template.
 #[test]
-fn skipped_profiles_are_layer_absent() {
+fn an_empty_profile_list_is_layer_absent() {
     let mut x = fx();
     let skipped = x.export("Skipped_0");
+    assert!(x.vm.defs.take_log().iter().any(|l| l.contains("defaults: skipped") && l.contains("Profiles")));
+    let empty = x.node("Empty_0", &[]);
     x.vm.space.names.intern("Unarmed");
-    for receiver in [None, Some("Node_4")] {
-        let n = match receiver {
-            None => skipped,
-            Some(label) => {
-                let n = x.node(label, &[]);
-                x.set(n, "TemplateNode", Value::Object(Some(skipped)));
-                n
-            }
-        };
-        let e = x.refusal(|x| x.by_name(n, "Unarmed"));
-        assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
-        assert_eq!(&*e.what, PROFILES);
+    for owner in [skipped, empty] {
+        let copy = x.node("Copy_N", &["Own"]);
+        x.set(copy, "TemplateNode", Value::Object(Some(owner)));
+        for n in [owner, copy] {
+            let e = x.refusal(|x| x.by_name(n, "Unarmed"));
+            assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
+            assert_eq!(&*e.what, PROFILES);
+            let e = x.refusal(|x| x.by_index(n, 0));
+            assert_eq!(&*e.what, PROFILES, "by index too");
+        }
     }
 }
 
@@ -326,21 +334,31 @@ fn a_lazy_template_is_not_read() {
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "nothing loaded");
 }
 
-/// Test 7: malformed declarations (`CurrentProfileIndex` not an int, `Profiles` not an array) and a receiver that is no
-/// aim-offset node: `VmError::Script`.
+/// Test 7: malformed declarations (`CurrentProfileIndex` not an int, `Profiles` not an array, `SkelComponent` not an
+/// object reference, `RequiredBones` or `AimCpntIndexLUT` not a byte array) and a receiver that is no aim-offset node:
+/// `VmError::Script`, nothing written. A lazy `SkelComponent` on a change: the not-loaded `NotRead`.
 #[test]
 fn malformed_declarations_are_script_errors() {
     let mut x = fx();
     let aim = x.vm.space.classes.by_path("Engine.AnimNodeAimOffset").unwrap();
     let object = x.vm.space.classes.by_path("Engine.Object").unwrap();
-    for (field, kind) in [("CurrentProfileIndex", PropKind::Float), ("Profiles", PropKind::Int)] {
+    let cases = [
+        ("CurrentProfileIndex", PropKind::Float),
+        ("Profiles", PropKind::Int),
+        ("SkelComponent", PropKind::Int),
+        ("RequiredBones", PropKind::Array(Box::new(PropKind::Int))),
+        ("AimCpntIndexLUT", PropKind::Int),
+    ];
+    for (field, kind) in cases {
         let decl = PropertyDecl::new(x.vm.space.names.intern(field), kind);
         let class = x.vm.space.classes.define(&format!("Test.Odd{field}"), Some(aim), vec![decl]).unwrap();
         let n = x.vm.space.alloc(class, "Odd", None, Origin::Runtime).unwrap();
+        let before = x.marks();
         match x.by_index(n, 1) {
             Err(VmError::Script { message, .. }) => assert!(message.contains(field), "{message}"),
             other => panic!("{other:?}"),
         }
+        assert_eq!(x.marks(), before, "nothing written");
     }
     let class = x.vm.space.classes.define("Test.NotANode", Some(object), vec![]).unwrap();
     let stray = x.vm.space.alloc(class, "Stray", None, Origin::Runtime).unwrap();
@@ -348,6 +366,13 @@ fn malformed_declarations_are_script_errors() {
         Err(VmError::Script { message, .. }) => assert!(message.contains("is not an Engine.AnimNodeAimOffset"), "{message}"),
         other => panic!("{other:?}"),
     }
+    let n = x.node("Node_7", &["A", "B"]);
+    let comp_class = x.vm.space.classes.by_path("Engine.ToyMeshComponent").unwrap();
+    let lazy = x.vm.space.alloc_stand_in(comp_class, "LazyComp", Origin::Resource { package: 0, index: 1 }).unwrap();
+    x.set(n, "SkelComponent", Value::Object(Some(lazy)));
+    let e = x.refusal(|x| x.by_index(n, 1));
+    assert_eq!((e.missing, &*e.what), (Missing::NotRead, COMPONENT_NOT_LOADED));
+    x.nothing(|x| x.by_index(n, 0));
 }
 
 /// Test 8, maya:8's shape: a `WillowAnimNodeAimOffset` copy (its own `Profiles` empty, as the copy fix-up leaves it)

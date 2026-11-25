@@ -4,30 +4,31 @@
 //! `WillowAnimNodeAimOffset` keeps both bodies, so the keys cover it. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_AIMOFFSET_SET_PROFILE.md section 3 alone (lane
-//! ANALYST-LINK1-AFTER-HOLD, branch docs/native-link1-after-hold-aimoffset-profile at 46a470ec, not yet reviewed);
-//! this lane did not read the executable. **Every rule is UNVERIFIED in the running game.** Reference keeps the stub
-//! policy.
+//! ANALYST-LINK1-AFTER-HOLD, #730 at its review r1 fix bff35b46); this lane did not read the executable. **Every rule
+//! is UNVERIFIED in the running game.** Reference keeps the stub policy.
 //!
 //! **Preflight, then the writes;** load-free (no load, no class-code load, nothing interned):
-//! 1. **the receiver** is resident ([`NODE_NOT_LOADED`], `NotRead`) and an `Engine.AnimNodeAimOffset` or below it (found load-free), declaring
-//!    `TemplateNode` (an object reference), `Profiles` (an array of a struct) and `CurrentProfileIndex` (an int);
-//!    otherwise `VmError::Script` naming the field;
+//! 1. **the receiver** is resident ([`NODE_NOT_LOADED`], `NotRead`) and an `Engine.AnimNodeAimOffset` or below it
+//!    (found load-free), declaring `TemplateNode` and `SkelComponent` (object references), `Profiles` (an array of a
+//!    struct), `CurrentProfileIndex` (an int), and `RequiredBones` and `AimCpntIndexLUT` (arrays of bytes); otherwise
+//!    `VmError::Script` naming the field. All are checked before anything else, so the write is all or nothing;
 //! 2. **the list's owner** is `TemplateNode` when set, else the receiver. A `TemplateNode` the store has not loaded is
 //!    [`TEMPLATE_NOT_LOADED`] (`NotRead`), before any field of it is read. The owner declares `Profiles` too;
-//! 3. **the profiles.** When the store skipped the owner's `Profiles` tag (`DefStore::skipped_property`: the port has
-//!    no reader for the binary-serialized elements), [`PROFILES`] (`LayerAbsent`, [`PROFILES_LAYER`]). A `Profiles`
-//!    that was read, empty included, answers by the rules below. Each element read is a struct with a `ProfileName`
+//! 3. **the profiles, the interim rule** (the note's, conservative): the port has no reader for the binary-serialized
+//!    elements, and the store leaves a skipped `Profiles` as the class default, an empty array, so an empty list
+//!    cannot be told from a skipped one. **An empty `Profiles` on the list's owner is [`PROFILES`]** (`LayerAbsent`,
+//!    [`PROFILES_LAYER`]), never "no match". A non-empty list goes on. Each element is a struct with a `ProfileName`
 //!    (a name), else `VmError::Script`;
 //! 4. **the index:** by name, the first element whose `ProfileName` is the name (by id), and no match is nothing; by
 //!    index, the argument, and negative or not below the list's length is nothing. The same index as
 //!    `CurrentProfileIndex` is nothing;
-//! 5. **the rebuild,** planned before the write: with no `SkelComponent`, or none with a `SkeletalMesh`, it leaves
-//!    `RequiredBones` and `AimCpntIndexLUT` empty (the routine's own gate); both must be declared arrays, else
-//!    `VmError::Script`. With a mesh, [`REBUILD`] (`NotRead`: the sort and parent pass are not read), before any write.
-//!    A `SkelComponent` the store has not loaded is [`COMPONENT_NOT_LOADED`] (`NotRead`).
+//! 5. **the rebuild,** planned before the write. It empties the two arrays first, before its own gate. A
+//!    `SkelComponent` the store has not loaded is [`COMPONENT_NOT_LOADED`] (`NotRead`). Any `SkeletalMesh` set on it,
+//!    resident or not (it is not resolved), is [`REBUILD`] (`NotRead`: the sort and parent pass are not read). With no
+//!    component, or a resident one with no mesh, the rebuild ends with the arrays empty: answerable.
 //!
-//! **Writes** (only on a change with no mesh): `CurrentProfileIndex` := the index, then `RequiredBones` and
-//! `AimCpntIndexLUT` := empty where they are not empty already. Nothing else: not the tree, the component or the pawn.
+//! **Writes** (only on a change, with no mesh): `CurrentProfileIndex` := the index, then `RequiredBones` and
+//! `AimCpntIndexLUT` := empty. Nothing else: not the tree, the component or the pawn.
 
 use std::rc::Rc;
 
@@ -50,8 +51,7 @@ pub const TEMPLATE_NOT_LOADED: &str =
 pub const NODE_NOT_LOADED: &str =
     "SetActiveProfileByName: an aim-offset node not loaded at set-up (a load is a write)";
 /// A `SkelComponent` the store has not loaded.
-pub const COMPONENT_NOT_LOADED: &str =
-    "SetActiveProfileByName: the aim-offset node's SkelComponent not loaded at set-up (a load is a write)";
+pub const COMPONENT_NOT_LOADED: &str = "AnimNodeAimOffset: the skeletal component not loaded at set-up (a load is a write)";
 /// The profiles the store skipped.
 pub const PROFILES: &str = "AnimNodeAimOffset: the profiles (a binary-serialized struct array)";
 /// The layer [`PROFILES`] names.
@@ -93,8 +93,8 @@ fn is_object(k: &PropKind) -> bool {
     matches!(k, PropKind::Object { .. })
 }
 
-fn is_array(k: &PropKind) -> bool {
-    matches!(k, PropKind::Array(_))
+fn is_byte_array(k: &PropKind) -> bool {
+    matches!(k, PropKind::Array(inner) if matches!(**inner, PropKind::Byte { .. }))
 }
 
 fn is_struct_array(k: &PropKind) -> bool {
@@ -108,13 +108,13 @@ fn object(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
     }
 }
 
-/// The profile names of `owner`'s `Profiles`, or [`PROFILES`] when the store skipped them.
+/// The profile names of `owner`'s `Profiles`; an empty list is [`PROFILES`] (the interim rule, step 3).
 fn profile_names(vm: &Vm, owner: ObjRef) -> Result<Vec<NameId>, VmError> {
-    let (prop, list) = field(vm, owner, "Profiles", "an array of a struct", is_struct_array)?;
-    if vm.defs.skipped_property(&vm.space, owner, prop) {
+    let (_, list) = field(vm, owner, "Profiles", "an array of a struct", is_struct_array)?;
+    let items = list.elements().ok_or_else(|| script(format!("Profiles holds {}, not an array", list.kind_name())))?;
+    if items.is_empty() {
         return Err(NotYet::layer_absent(PROFILES, PROFILES_LAYER, RECORD).into());
     }
-    let items = list.elements().ok_or_else(|| script(format!("Profiles holds {}, not an array", list.kind_name())))?;
     let key = vm.space.names.find("ProfileName");
     items
         .iter()
@@ -139,7 +139,7 @@ enum Ask {
 }
 
 /// The preflight (module documentation, steps 1 to 5): the writes to make, `None` for nothing.
-fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<(i32, Vec<&'static str>)>, VmError> {
+fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<i32>, VmError> {
     if !resident(vm, node)? {
         return Err(NotYet::not_read(NODE_NOT_LOADED, RECORD).into());
     }
@@ -150,7 +150,11 @@ fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<(i32, Vec<&'static str
         return Err(script(format!("{path} is not an {AIM_OFFSET}")));
     }
     let template = object(vm, node, "TemplateNode")?;
+    let component = object(vm, node, "SkelComponent")?;
     field(vm, node, "Profiles", "an array of a struct", is_struct_array)?;
+    for name in ["RequiredBones", "AimCpntIndexLUT"] {
+        field(vm, node, name, "an array of bytes", is_byte_array)?;
+    }
     let current = match field(vm, node, "CurrentProfileIndex", "an int", |k| matches!(k, PropKind::Int))?.1 {
         Value::Int(i) => *i,
         other => return Err(script(format!("CurrentProfileIndex holds {}, not an int", other.kind_name()))),
@@ -176,8 +180,8 @@ fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<(i32, Vec<&'static str
     if index == current {
         return Ok(None);
     }
-    // The rebuild (step 5).
-    let mesh = match object(vm, node, "SkelComponent")? {
+    // The rebuild (step 5): the mesh is only tested for being set, never resolved.
+    let mesh = match component {
         None => None,
         Some(c) if !resident(vm, c)? => return Err(NotYet::not_read(COMPONENT_NOT_LOADED, RECORD).into()),
         Some(c) => object(vm, c, "SkeletalMesh")?,
@@ -185,14 +189,7 @@ fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<(i32, Vec<&'static str
     if mesh.is_some() {
         return Err(NotYet::not_read(REBUILD, RECORD).into());
     }
-    let mut clear = Vec::new();
-    for name in ["RequiredBones", "AimCpntIndexLUT"] {
-        let (_, v) = field(vm, node, name, "an array", is_array)?;
-        if v.elements().is_some_and(|e| !e.is_empty()) {
-            clear.push(name);
-        }
-    }
-    Ok(Some((index, clear)))
+    Ok(Some(index))
 }
 
 fn write(vm: &mut Vm, node: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
@@ -204,9 +201,9 @@ fn write(vm: &mut Vm, node: ObjRef, name: &str, v: Value) -> Result<(), VmError>
 
 fn run(c: &mut NativeCall<'_>, ask: Ask) -> Result<Value, VmError> {
     let node = c.this.ok_or_else(|| script("called without an aim-offset node".to_string()))?;
-    if let Some((index, clear)) = plan(c.vm, node, ask)? {
+    if let Some(index) = plan(c.vm, node, ask)? {
         write(c.vm, node, "CurrentProfileIndex", Value::Int(index))?;
-        for name in clear {
+        for name in ["RequiredBones", "AimCpntIndexLUT"] {
             write(c.vm, node, name, Value::array(Vec::new()))?;
         }
     }
