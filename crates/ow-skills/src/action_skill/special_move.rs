@@ -23,6 +23,8 @@
 //!   - an owner with no `Mesh`, or a mesh with no `Animations`, is `NotYet { LayerAbsent }` naming the missing anim
 //!     tree: the host's animation state is unavailable. The game's pawns always have a tree; the headless world has
 //!     none, and the game's None here would make `Play` start nothing silently (the hub's decision for this lane);
+//!   - the class test reads the class table only (lane GETSMNODE-CODE-LOAD): the blend class is looked up by path,
+//!     never loaded (a load is a write); with no layout for it, no node can be one, and the answer is None;
 //!   - with a tree, the node named `SpecialMoveBlend` (compared without case, as names are) is looked for from the
 //!     tree's root down: each node, then its `Children` entries' `Anim` nodes in order, each node once, at most
 //!     [`NODE_LIMIT`] nodes (more is a data error). The first node of that name answers when it is an
@@ -297,6 +299,9 @@ fn is_playing_class(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Bool(c.vm.space.classes.is_child_of(own, class)))
 }
 
+/// The class `GetSMNode`'s answer must be (section 3).
+const BLEND_CLASS: &str = "GearboxFramework.AnimNodeSpecialMoveBlend";
+
 /// The most nodes the `SpecialMoveBlend` search visits (module documentation): an invented bound, far above a pawn's
 /// tree, so a malformed tree is a data error rather than a long walk.
 pub const NODE_LIMIT: usize = 4096;
@@ -359,9 +364,17 @@ fn get_sm_node(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     };
-    let blend = c.vm.find_class("GearboxFramework.AnimNodeSpecialMoveBlend")?;
-    match find_node(c.vm, tree, "SpecialMoveBlend", WHAT)? {
-        Some(node) if c.vm.space.classes.is_child_of(c.vm.space.heap.get(node)?.class, blend) => {
+    // The class test needs the class table only (lane GETSMNODE-CODE-LOAD): `find_class` would load the blend class's
+    // code when it is cold, and a load is a write. With no layout for the class, no node can be one, so the answer is
+    // the note's None.
+    let blend = c.vm.space.classes.by_path(BLEND_CLASS);
+    let node = find_node(c.vm, tree, "SpecialMoveBlend", WHAT)?;
+    let is_blend = match (node, blend) {
+        (Some(n), Some(b)) => c.vm.space.classes.is_child_of(c.vm.space.heap.get(n)?.class, b),
+        _ => false,
+    };
+    match node {
+        Some(node) if is_blend => {
             if !defer_cache(c.vm, component, node)? {
                 write(c.vm, component, "SMBlendNode", Value::Object(Some(node)), WHAT)?;
             }
