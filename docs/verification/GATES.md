@@ -3,7 +3,7 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **ANALYST-INITMESHES-SETMATERIAL-GLOW (2026-11-25, pc-hummer, docs only, on docs/native-initmeshes-setmaterial-glow
-from main 6dad61ff):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITMESHES_MATERIAL_GLOW.md: `SetMaterial` and
+from main a3b548d3):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITMESHES_MATERIAL_GLOW.md: `SetMaterial` and
 `GetScalarParameterValue`, link 8's stops after `BuildWeaponMaterial`. No code changed, so no measured number
 moved; the slice gate was not run for this lane. UNVERIFIED in game.
 

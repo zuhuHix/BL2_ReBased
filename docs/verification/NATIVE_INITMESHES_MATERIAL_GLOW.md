@@ -25,7 +25,8 @@ Neither native is recorded (`tools/native_index_find.py`: no rows) or bound in t
     tables were found as in NATIVE_COMPONENT_SKIP_FLAG.md section 6;
   - field names from `tools/ghidra/class_layout.py` (a local copy sizing `MapProperty` for `Material`). Every field
     the bodies read lands on a declared property of the expected kind: `Materials`, `ScalarParameterValues`, `Parent`,
-    `ReentrantFlag`, `Expressions`, `ParameterName` and `DefaultValue`. That is a structural check of the reading.
+    `ReentrantFlag`, `Expressions`, `ParameterName`, `ParameterValue` (the scalar entry's value, read at its place in
+    the entry) and `DefaultValue`. That is a structural check of the reading.
 
 ## 2. `MeshComponent.SetMaterial(int ElementIndex, MaterialInterface Material)`
 
@@ -33,8 +34,8 @@ One rule for every mesh component (the exec is `MeshComponent`'s, and it calls a
 1. a negative `ElementIndex`: nothing;
 2. an index within `Materials` whose entry is already `Material`: nothing;
 3. otherwise:
-   - when the index is past the end, `Materials` grows so that it reaches the index. By fit the new entries are empty
-     (None);
+   - when the index is past the end, `Materials` grows so that it reaches the index. **UNVERIFIED (fitted): the new
+     entries are None.** The growth routine was not read in detail;
    - `Materials[ElementIndex]` = `Material`;
    - then the **deferred reattach** that NATIVE_ATTACH_MESH_TO_PICKUP.md section 2 already reads. It sets
      `bNeedsReattach`; with an `Owner`, the owner's component update; with none, the component's own detach and
@@ -74,15 +75,31 @@ missing or of the wrong kind is a `VmError::Script` naming it. Class tests use c
 
 ### 4.1 `SetMaterial`
 
-**Preflight:**
-1. a negative index: nothing;
-2. an index within `Materials` (declared as an array of objects) whose entry is `Material`: nothing;
-3. otherwise, the deferred reattach's preflight (`component_setters::reattach_check`): `Owner` set is
+**Preflight, before any write, in this order:**
+1. **the declarations first**, as `plan_flag` does: `component_setters::schemas` on `REATTACH_FIELDS` (`Owner` an
+   object, `Scene` a struct, `bNeedsReattach` a bool), and `Materials` declared as an array of objects. Any mismatch is
+   a `VmError::Script` naming the field. So the negative-index shortcut comes **after** the declarations, like the
+   existing setters' shortcuts;
+2. a negative index: nothing;
+3. an index within `Materials` whose entry is `Material`: nothing;
+4. otherwise, the deferred reattach's preflight (`component_setters::reattach_check`): `Owner` set is
    `REATTACH_OWNER`; no `Owner` with a `Scene` set is `REATTACH_SCENE`. Both are a `NotYet` of kind `NotRead`, with
    the record NATIVE_ATTACH_MESH_TO_PICKUP.md.
 
-**Commit:** grow `Materials` with None entries to reach the index, set the entry, then `bNeedsReattach` = true (the
-deferred reattach's write with no owner and no scene).
+**Commit:** grow `Materials` to reach the index, set the entry, then `bNeedsReattach` = true (the deferred reattach's
+write with no owner and no scene). As in `apply_flag`, every write after the first goes through
+`component_setters::after_writes`, so a failure there is marked as after partial writes.
+
+**The grown entries.** Growing past the end is kept, with its new entries None, labelled **UNVERIFIED (fitted)**. The
+reason: an empty object reference is the one value that needs no stand-in. It is what a zeroed pointer reads as, and
+it is the value `Materials` entries already take when nothing overrides the mesh's own material. Refusing the growth
+instead would stop link 8 at once, because its likely call (index 0 on an empty `Materials`) grows the array.
+
+**Two calls, two natives.** `InitMeshes` calls `SetMaterial` once per mesh. Each call is its own native call, with its
+own preflight; the pair is not preflighted together. A refusal in the first call (`REATTACH_OWNER` on
+`FirstPersonMesh`) stops the script there, so the second call never runs and neither mesh is written. If the first
+call commits and the second refuses, the first mesh keeps its writes, and the second refusal carries the run's
+"stopped after partial writes" mark from the runner's layer.
 
 ### 4.2 `GetScalarParameterValue`
 
@@ -91,8 +108,11 @@ deferred reattach's write with no owner and no scene).
 - `Engine.MaterialInstanceConstant`: section 3's steps. The guard is kept **without writing**: the port walks the
   parent chain with a visited set, and a chain that returns to an instance already being asked answers false, as the
   flag would. An instance whose `ReentrantFlag` is already set answers false;
-- `Engine.Material`: section 3's expression walk. Each `Expressions` entry must be resident. The scalar-parameter
-  test is an `IsA` against a ready `Engine.MaterialExpressionScalarParameter`;
+- `Engine.Material`: section 3's expression walk. A None `Expressions` entry is skipped. Each other entry must be
+  resident. Its scalar-parameter test is an `IsA` against `Engine.MaterialExpressionScalarParameter`, which must pass
+  `ready_class`. That check is made only when a non-None entry must be tested; a class that is not ready is a
+  `NotYet` of kind `NotRead`, "GetScalarParameterValue: the class Engine.MaterialExpressionScalarParameter, not loaded
+  (a class load is a write)";
 - any other first native class (for example `MaterialInstanceTimeVarying`, not read): a `NotYet` of kind `NotRead`,
   "GetScalarParameterValue: the scalar lookup of <class>".
 
@@ -116,10 +136,19 @@ unchanged, and causes no class-code load (where #685 has landed):
 1. `SetMaterial(-1, M)`: nothing;
 2. `SetMaterial(0, M)` with `Materials[0]` already `M`: nothing, and no reattach refusal even with `Owner` set;
 3. `SetMaterial(2, M)` on a component with an empty `Materials`, no `Owner` and no `Scene`: `Materials` is
-   (None, None, `M`), and `bNeedsReattach` is true;
+   (None, None, `M`) (the grown entries are the UNVERIFIED (fitted) None), and `bNeedsReattach` is true;
 4. `SetMaterial(0, M)` with an `Owner`: `REATTACH_OWNER`, nothing written. With no `Owner` and a `Scene` set:
    `REATTACH_SCENE`;
-5. `Materials` not declared as an array of objects: `VmError::Script` naming it;
+5. `Materials` not declared as an array of objects, or `bNeedsReattach` not a bool, `Owner` not an object, `Scene`
+   not a struct: `VmError::Script` naming it, even for a negative index (the declarations come first);
+5a. **link 8's call shape:** a toy weapon with two meshes, `SetMaterial(0, MIC)` on `FirstPersonMesh` and then on
+    `ThirdPersonMesh` with the same instance, then `GetScalarParameterValue` on that instance. The instance has no
+    entries of its own; its `Parent` has one, and a second run has no `Parent`:
+    - (i) both meshes without an `Owner` or `Scene`: both hold the instance at index 0, and both have `bNeedsReattach`
+      true. The glow read answers the parent's value and true; with no `Parent`, false, and the out variable keeps its
+      value;
+    - (ii) the first mesh with an `Owner`: the first call's `REATTACH_OWNER`. Neither mesh is written, and the second
+      call is not reached;
 6. `GetScalarParameterValue` on a toy `MaterialInstanceConstant` with an entry for the name: true, and the out
    variable is written. With two entries of the same name, the first wins. A name with a different number does not
    match;
@@ -129,6 +158,8 @@ unchanged, and causes no class-code load (where #685 has landed):
 9. `ReentrantFlag` already set on the receiver: false;
 10. a toy `Material` whose `Expressions` holds a scalar-parameter expression with that name: its `DefaultValue` and
     true. A non-scalar expression with the same name is skipped;
+    A None entry before the match is skipped. With `Engine.MaterialExpressionScalarParameter` not ready and a
+    non-None entry to test: the class `NotRead`. With only None entries, false, and no class check;
 11. no match anywhere: false, and the out variable keeps its prior value;
 12. a lazy `Parent`, or a lazy expression: the "not loaded" `NotRead`, nothing loaded;
 13. a receiver of an unlisted native class: the class `NotRead`;

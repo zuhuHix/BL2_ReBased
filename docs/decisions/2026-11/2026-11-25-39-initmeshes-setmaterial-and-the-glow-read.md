@@ -22,4 +22,10 @@ no bounds check changed.
   - unlisted classes and unloaded objects are a `NotRead`;
   - Reference unchanged; tests listed.
 - **On link 8 (a prediction):** with the mesh's `Owner` set, `SetMaterial` meets `REATTACH_OWNER` first.
+- **Review r1 (#705):**
+  - `SetMaterial`'s preflight checks its declarations first, and its later writes go through `after_writes`;
+  - the grown entries are UNVERIFIED (fitted) None, with the reason;
+  - each of the two calls is its own native call, with tests for link 8's call shape;
+  - None expressions are skipped, and the scalar expression class is checked as ready only when needed;
+  - `ParameterValue` is in the structural check, and the GATES base is a3b548d3.
 - **Clean room:** a different lane implements this note.
