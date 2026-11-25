@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK-8-STARTUP-MATERIAL-PRELOAD (2026-11-25, pc-hummer, on main ce76c5f8):** AI-assisted (Claude Code, Opus 5.5).
+Link 8's set-up preloads the Material part's material (`Mati_BanditCommonAR`, a Startup export; harness input,
+UNVERIFIED stand-in). `cargo test --workspace -j 8` 3,547 passed / 0 failed / 59 ignored; `crate_edges_test.py` 19 OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock): 5 ok / 9 NotYet / 0 error, `links ok
+5/14`, `step share X = 5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`: BuildWeaponMaterial's class check, "the class
+Engine.MaterialInstanceConstant, not loaded (a class load is a write)". No real-game run.
+
 **ANALYST-CUSTOMHEAD-PARENT-FLAG (2026-11-25, pc-hummer, docs only, on docs/native-customhead-parent-flag from
 main 258a7335):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8: the
 `Parent` link's identity-map flag is `bIsGestaltAccessoryMesh` (by fit). Maya's head template has it false, on a

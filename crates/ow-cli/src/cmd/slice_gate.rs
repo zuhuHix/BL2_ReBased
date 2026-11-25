@@ -971,12 +971,14 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let log_before = vm.log.len();
     let made = make_marked(vm, |vm, wrote| {
         // The equip run's own preparation (prepare, then the muzzle-flash preload of #573, the gestalt preload of
-        // lane HARNESS-LINK8-GESTALT-PRELOAD and the new-mesh preload of lane LINK8-NEWMESH-PRELOAD), inside #506's
-        // mark.
+        // lane HARNESS-LINK8-GESTALT-PRELOAD, the new-mesh preload of lane LINK8-NEWMESH-PRELOAD and the material
+        // preload of lane LINK-8-STARTUP-MATERIAL-PRELOAD), inside #506's mark.
         let weapon = crate::cmd::inventory::equip_run::prepare_link8_typed(vm, EQUIP_WEAPON, wrote)?;
         crate::cmd::inventory::equip_run::preload_muzzle_flashes(vm, weapon)?;
         crate::cmd::inventory::equip_run::preload_gestalt_mesh(vm, weapon)?;
         crate::cmd::inventory::equip_run::preload_gestalt_skeletal_mesh(vm, weapon)?;
+        // Lane LINK-8-STARTUP-MATERIAL-PRELOAD: the Material part's material, a Startup export the game has resident.
+        crate::cmd::inventory::equip_run::preload_material_part_material(vm, weapon)?;
         // Lane SKELMESH-LOD-LAYER: the skeletal mesh data layer, whose LOD count the LOD row asks for.
         crate::cmd::inventory::equip_run::install_mesh_layer(vm, weapon)?;
         Ok(weapon)

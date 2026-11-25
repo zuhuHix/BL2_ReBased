@@ -28,8 +28,11 @@
 //!   refuses a cold gestalt definition, so the harness loads it, an UNVERIFIED stand-in for the game keeping it
 //!   resident. Then that definition's `GestaltSkeletalMesh` ([`preload_gestalt_skeletal_mesh`], lane
 //!   LINK8-NEWMESH-PRELOAD): `SetSkeletalMesh` refuses an unloaded new mesh, so the harness loads it, an UNVERIFIED
-//!   stand-in for the mesh being resident with its definition. Each preload logs its line before it runs and its
-//!   outcome after (": loaded", or ": failed (...)" with the error kept).
+//!   stand-in for the mesh being resident with its definition. Then the Material part's `Material`
+//!   ([`preload_material_part_material`], lane LINK-8-STARTUP-MATERIAL-PRELOAD): `BuildWeaponMaterial` refuses a parent
+//!   material that is not resident, and the game loads those materials at boot (Startup exports, SLICE_NPC_ASSETS.md),
+//!   so the harness loads it, an UNVERIFIED stand-in. Each preload logs its line before it runs and its outcome after
+//!   (": loaded", or ": failed (...)" with the error kept).
 //! - **init**: the installed `WillowWeapon.InitializeInternal(false)`, the spawn's script (bases, ammo, the attribute
 //!   slots, the weapon's own effects and slot modifiers, the card).
 //! - **bases**: `CalculateWeaponBaseValues` (the crate's override), so the equip phases start from computed bases
@@ -832,17 +835,63 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -
     Ok(weapon)
 }
 
-/// [`prepare`] and then the equip run's three Off harness preloads, in order: the muzzle flashes
-/// ([`preload_muzzle_flashes`]), the gestalt definition ([`preload_gestalt_mesh`]) and its skeletal mesh
-/// ([`preload_gestalt_skeletal_mesh`]). The equip run's own (`--equip-run`; review r1 of #573, item 3); link 8's driver
-/// in the slice gate calls the same three itself. The pickup links prepare their weapons with [`prepare`] alone.
+/// [`prepare`] and then the equip run's four Off harness preloads, in order: the muzzle flashes
+/// ([`preload_muzzle_flashes`]), the gestalt definition ([`preload_gestalt_mesh`]), its skeletal mesh
+/// ([`preload_gestalt_skeletal_mesh`]) and the Material part's material ([`preload_material_part_material`]). The
+/// equip run's own (`--equip-run`; review r1 of #573, item 3); link 8's driver in the slice gate calls the same four
+/// itself. The pickup links prepare their weapons with [`prepare`] alone.
 fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
     preload_gestalt_mesh(vm, weapon)?;
     preload_gestalt_skeletal_mesh(vm, weapon)?;
+    preload_material_part_material(vm, weapon)?;
     install_mesh_layer(vm, weapon)?;
     Ok(weapon)
+}
+
+/// The text of [`preload_material_part_material`]'s harness lines.
+pub(crate) const MATERIAL_INPUT: &str = "harness input: preload the Material part's Material";
+
+/// The Off harness preload of lane LINK-8-STARTUP-MATERIAL-PRELOAD: the weapon's `DefinitionData.MaterialPartDefinition`'s
+/// `Material`, when the part is set and resident and the material is one of the store's unloaded handles, is loaded
+/// through the store. `BuildWeaponMaterial`'s preflight (NATIVE_WEAPON_VISUALS.md section 1.1, step 3) refuses a parent
+/// material that is not resident, because a lazy load is a write. The weapon materials are Startup exports, which the
+/// game loads at boot (SLICE_NPC_ASSETS.md records the `Common_GunMaterials` materials there), so in the game the
+/// material is resident before any weapon is built; this load stands in for that (**UNVERIFIED stand-in**). Only that
+/// one object: neither its parent chain nor the part is loaded here. It is logged before it runs (rule 7) and its
+/// outcome after; a failed load keeps its error. No part, a cold part, no material, or one already loaded: nothing.
+/// Outside Off, nothing. `BuildWeaponMaterial`'s own refusal is unchanged.
+pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    let Ok(Value::Object(Some(part))) = ow_attr::eval::field(&vm.space, &data, "MaterialPartDefinition").cloned() else {
+        return Ok(());
+    };
+    if vm.defs.is_unloaded(&vm.space, part) {
+        return Ok(());
+    }
+    let Some(Value::Object(Some(material))) = ow_inventory::equip::read_prop(vm, part, "Material") else {
+        return Ok(());
+    };
+    if !vm.defs.is_unloaded(&vm.space, material) {
+        return Ok(());
+    }
+    let name = ow_vm::path_name::path_name(vm, material).unwrap_or_else(|_| format!("{material:?}"));
+    vm.log.push(format!(
+        "{MATERIAL_INPUT} {name} (BuildWeaponMaterial loads nothing; the game loads the weapon materials at boot as Startup \
+         exports: UNVERIFIED stand-in)"
+    ));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, material);
+    vm.log.extend(vm.defs.take_log());
+    match &loaded {
+        Ok(()) => vm.log.push(format!("{MATERIAL_INPUT} {name}: loaded")),
+        Err(e) => vm.log.push(format!("{MATERIAL_INPUT} {name}: failed ({e})")),
+    }
+    loaded.map_err(VmError::from)
 }
 
 /// The text of [`install_mesh_layer`]'s line.
@@ -1142,6 +1191,10 @@ mod gestalt_tests;
 #[cfg(test)]
 #[path = "equip_run_game_info_tests.rs"]
 mod game_info_tests;
+
+#[cfg(test)]
+#[path = "equip_run_material_tests.rs"]
+mod material_tests;
 
 #[cfg(test)]
 mod tests {
