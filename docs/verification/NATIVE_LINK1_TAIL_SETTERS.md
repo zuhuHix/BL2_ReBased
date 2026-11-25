@@ -64,17 +64,22 @@ tick list when it is filled and its tree is this one, else the node class's own 
 as the name lookup in NATIVE_ANIM_NODE_LOOKUP.md section 1. It then **appends every node whose `NodeName` equals the
 name**, in that list's order, to `Nodes`. `Nodes` is not cleared first. It writes nothing else.
 
-**Off answer.**
-- The same list as the port's name lookup (`anim_node_lookup`), keeping every match instead of the first;
-- a lookup that the port's name lookup would refuse refuses the same way;
+**Off answer.** The list is read from the **live** component, not from the attach plan that `anim_node_lookup` uses:
+- the receiver's `SkelComponent` set, its `AnimTickArray` filled, and its `Animations` the receiver: that
+  `AnimTickArray`, in order, keeping every node whose `NodeName` equals the name;
+- otherwise, including a receiver whose `SkelComponent` is None: the gather step, which NATIVE_ANIM_NODE_LOOKUP.md
+  section 1 marks "not read; by fit". So **`NotYet { NotRead }`**, with `anim_node_lookup::NO_TICK_LIST`'s text;
+- a `SkelComponent` that is a store handle not loaded yet: `NotYet { NotRead }` (a load is a write);
 - a None receiver is the script's null context;
-- the out array's declaration is checked (an array of object references), else `VmError::Script`.
+- the out array's declaration is checked (an array of object references), and so are `SkelComponent`,
+  `AnimTickArray` and `Animations`. Otherwise `VmError::Script`.
 
 **Tests:**
 1. a toy tree with three nodes named `X`, `Y`, `X`: two nodes, in list order;
 2. no match: `Nodes` unchanged;
 3. a pre-filled `Nodes`: the matches are appended;
-4. the tick-list branch and the gather branch, each giving the same result as the name lookup's list.
+4. a component whose `AnimTickArray` is empty, or whose `Animations` is another tree, or a receiver with no
+   `SkelComponent`: the `NO_TICK_LIST` `NotRead`, and `Nodes` unchanged.
 
 ### 2.B `AnimNodeBlend.SetBlendTarget(float BlendTarget, float BlendTime)`
 
@@ -95,7 +100,11 @@ name**, in that list's order, to `Nodes`. `Nodes` is not cleared first. It write
 **Off answer.**
 - **Preflight:** the receiver's class declares `Child2Weight`, `Child2WeightTarget`, `BlendTimeToGo` (floats),
   `bSkipBlendWhenNotRendered` (a bool) and `Children` (an array of the child struct, with a float `Weight`), else
-  `VmError::Script`;
+  `VmError::Script`. Only on the path with `bSkipBlendWhenNotRendered` set and `BlendTime` above 0, it also checks
+  `SkelComponent` (an object reference) and that component's `bRecentlyRendered` (a bool). A `SkelComponent` that is
+  None on that path is `NotYet { NotRead }`, because the game would read through it;
+- **the class dispatch** (`AnimNodeBlend`'s body, the feather blend's extra step, or an unread subclass) is a class
+  test by name on loaded classes. No class code is loaded;
 - the immediate path needs `Children` to hold at least two entries. Fewer is the engine's array check, so the port
   answers `VmError::Script`;
 - `BlendTime` above 0 with `bSkipBlendWhenNotRendered` set and `bRecentlyRendered` clear needs the unidentified engine
@@ -133,15 +142,29 @@ the filter data and applies it to the shapes of the component's physics bodies:
 
 With no body, the update touches nothing.
 
+**Which field means "bodies present"** (for 2.D, 2.E and 2.H):
+- on a `SkeletalMeshComponent`: its `PhysicsAssetInstance` set;
+- on any other `PrimitiveComponent`: its `BodyInstance` set. `PhysicsAssetInstance` is not declared there.
+
+Each is checked by its declaration (an object reference, else `VmError::Script`) and read as a handle. It is never
+followed, and no field of the body is read.
+
 **Off answer:**
 - the `RBChannel` write (a byte; the declaration checked);
-- the filter update acts only on physics bodies. With the component's body instance and `PhysicsAssetInstance` both
-  None (the port makes none), it does nothing, by the game's own gate. With either set: `NotYet { LayerAbsent }`,
-  "the rigid-body collision filter update", layer "a physics layer (rigid bodies)". #574's at-rest ruling
-  (NATIVE_PICKUP_RB_MINIMAL.md) already leaves the filter update out for the pickup.
+- the filter update acts only on physics bodies. With none present (the port makes none), it does nothing, by the
+  game's own gate. With them present: `NotYet { LayerAbsent }`, "the rigid-body collision filter update", layer "a
+  physics layer (rigid bodies)". #574's at-rest ruling (NATIVE_PICKUP_RB_MINIMAL.md) already leaves the filter update
+  out for the pickup;
+- **this replaces a bound no-op in Off.** `SetRBChannel` is bound on main as a no-op in both modes
+  (`ow-combat` `death.rs`, `PRESENTATION_NO_OPS`). In Off that binding is skipped, as `DROP_COMBAT_PERCH` is skipped
+  there, and this rule is bound instead. Reference keeps the no-op.
 
-**Tests:** a component with no bodies: `RBChannel` written, nothing else. With a toy `PhysicsAssetInstance` set: the
-`LayerAbsent`, nothing written.
+**Tests:**
+- a component with no bodies: `RBChannel` written, nothing else;
+- a `SkeletalMeshComponent` with a toy `PhysicsAssetInstance` set: the `LayerAbsent`, nothing written;
+- a plain `PrimitiveComponent` with a toy `BodyInstance` set: the `LayerAbsent`, nothing written;
+- **with deaths enabled** (the combat world's `death.rs` registration): in Off, `SetRBChannel` is this rule, not the
+  no-op. In Reference, the no-op is unchanged.
 
 ### 2.E `PrimitiveComponent.SetBlockRigidBody(bool bNewBlockRigidBody)`
 
@@ -152,7 +175,10 @@ With no body, the update touches nothing.
 
 **Off answer:** the bit write. Physics bodies present: the same `LayerAbsent` as 2.D. None: the write only.
 
-**Tests:** the bit set and cleared on a component with no bodies; the `LayerAbsent` with a toy `PhysicsAssetInstance`.
+**Tests:**
+- the bit set and cleared on a component with no bodies;
+- the `LayerAbsent` with a toy `PhysicsAssetInstance` on a `SkeletalMeshComponent`;
+- the `LayerAbsent` with a toy `BodyInstance` on a plain `PrimitiveComponent`.
 
 ### 2.F `PrimitiveComponent.SetActorCollision(NewCollideActors, NewBlockActors, optional NewAlwaysCheckCollision)`
 
@@ -161,15 +187,18 @@ With no body, the update touches nothing.
 2. when `CollideActors` differs from the first argument: `CollideActors` := it, then **the deferred reattach**
    (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2 and its 2.1 owner rule). Then, when `CollideActors` and
    `AlwaysCheckCollision` are both set and the component has an `Owner`, one more engine step (**not read**; by fit,
-   the owner's touch update);
+   the owner's touch update). **That step runs only on a change of `CollideActors`**;
 3. `BlockActors` := the second argument.
 
 The three bits are the ones NATIVE_COMPONENT_SKIP_FLAG.md section 1 anchors.
 
 **Off answer:**
 - **preflight:** the three bools and the deferred reattach's fields declared. On the reattach path, the 2.1.1 owner
-  rule's own refusals. The unread owner step when it would run: `NotYet { NotRead }`,
-  "PrimitiveComponent.SetActorCollision: the owner step when CollideActors and AlwaysCheckCollision are set";
+  rule's own refusals: `REATTACH_OWNER` (an owner that is `bStatic` or `bTickIsDisabled` and not `bDeleteMe`) and,
+  with no owner, `REATTACH_SCENE` (a non-zero `Scene`). Reuse the `attach_mesh` helpers as `pickup_rb.rs` does for
+  its own `CollideActors` change. The unread owner step when it would run (a change, both bits set, an owner):
+  `NotYet { NotRead }`, "PrimitiveComponent.SetActorCollision: the owner step when CollideActors and
+  AlwaysCheckCollision are set";
 - **writes:** `AlwaysCheckCollision`; then, on a change, `CollideActors` and the reattach's writes; then
   `BlockActors`. All-or-nothing by the preflight.
 
@@ -180,7 +209,11 @@ reattach (her pawn is an ordinary owner: `bNeedsReattach`); `BlockActors` := fal
 1. no change of `CollideActors`: the two plain writes, no reattach;
 2. a change with an ordinary owner: `bNeedsReattach` too;
 3. a change with all three set and an owner: the owner step's `NotRead`, nothing written;
-4. the third argument omitted: `AlwaysCheckCollision` false.
+4. the third argument omitted: `AlwaysCheckCollision` false;
+5. **no change** of `CollideActors`, with all three bits set and an owner: the two plain writes, and no owner step
+   (it runs only on a change);
+6. **all or nothing:** a change with a `bStatic` owner: `REATTACH_OWNER`, and `AlwaysCheckCollision` is not written;
+7. a change with no owner and a non-zero `Scene`: `REATTACH_SCENE`, nothing written.
 
 ### 2.G `PrimitiveComponent.SetTraceBlocking(bool NewBlockZeroExtent, bool NewBlockNonZeroExtent)`
 
@@ -199,7 +232,7 @@ reattach (her pawn is an ordinary owner: `bNeedsReattach`); `BlockActors` := fal
 
 **Off answer:** as 2.E: the bit write, and `LayerAbsent` only with physics bodies present.
 
-**Tests:** as 2.E.
+**Tests:** as 2.E, with the `BodyInstance` case on a plain `PrimitiveComponent`.
 
 ## 3. What link 1 would meet (a prediction, not a run)
 

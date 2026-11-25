@@ -30,4 +30,13 @@ changed.
   - unread parts are `NotRead`;
   - tests listed.
 - **Next** (a prediction, not a run): the pawn's `InitializeRBPhysics`.
+- **Review r1 (#734):**
+  - `SetRBChannel`'s Off rule replaces the both-modes no-op in `death.rs` in Off, as `DROP_COMBAT_PERCH` does;
+  - `FindAllAnimNodes` reads the live component's `AnimTickArray`, else the `NO_TICK_LIST` `NotRead`, a None
+    `SkelComponent` included;
+  - `SetBlendTarget` checks the render fields only on the path that reads them, and its dispatch loads no class code;
+  - "bodies present" is named per class;
+  - `SetActorCollision` names both reattach refusals and the helper to reuse, and its owner step runs only on a
+    change;
+  - tests added for each.
 - **Clean room:** a different lane implements this note.
