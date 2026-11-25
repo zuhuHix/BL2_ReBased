@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SKELMESH-BOUNDS-SOURCE (decision 2026-11-25-NNN). The bounds of a live
+//! Owner: lane IMPL-SKELMESH-BOUNDS-SOURCE (decision 2026-11-25-41). The bounds of a live
 //! `Engine.SkeletalMeshComponent` entry for `Actor.GetBoundingCylinder`, in Off. AI-assisted (Claude Code).
 //!
 //! Coded from NATIVE_COMPONENT_BOUNDS.md section 9 alone, as landed on main 6dad61f (#694, analyst lane
