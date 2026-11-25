@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SPECIALMOVE-OWNER (2026-11-25, zuhuPC Linux, on main faa3bbc):** AI-assisted (Claude Code, Opus 5.5).
+`AnimNodeSpecialMoveBlend`'s owner test (rule 7) answers one outcome per case O1 to O7 and O3'
+(NATIVE_SPECIALMOVE_OWNER.md section 4.1, #647). `cargo test --workspace`: 3,368 passed / 4 failed (the expected
+Linux N1 float-table tests) / 52 ignored; `crate_edges_test.py` OK. Not run: `ctest` and `verify_packages.py --reader` (no cmake on this machine), and the installed `--slice-gate`
+(no install yet). Route (a), link 1's set-up, is not in this change, so link 1 is expected to stop at O5 (an entry
+not resolved at set-up) rather than at the old blanket refusal; not measured. UNVERIFIED in game.
+
 **IMPL-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-25, zuhu desktop (Linux), on fix/rust-unlock-class-achievement from
 main):** AI-assisted (Claude Code, Opus 5.5). `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet` in
 Off from NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md (#662), bound keep-existing by the inventory globals and the action-skill
