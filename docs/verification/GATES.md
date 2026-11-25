@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-INVENTORY-ACTORS (2026-11-25, pc-hummer, docs only, on docs/native-inventory-actors from main a3ac4c13):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_INVENTORY_ACTORS.md: link 6's next native walks `InventoryChain` with a
+class filter and a cap of 100 examined entries; `ItemActors`'s None-class fallback is `Engine.Inventory` too. No
+code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-PSC-SETCOLORPARAMETER (2026-11-25, pc-hummer, on fix/rust-setmaterial-glow a3ac4c13):** AI-assisted (Claude
 Code, Opus 5.5). `ParticleSystemComponent.SetColorParameter` in Off, from NATIVE_PSC_SET_COLOR_PARAMETER.md section 3.
 `cargo test --workspace -j 8` 3,625 passed / 0 failed / 57 ignored; `crate_edges_test.py` 19 OK. Installed Off strict
