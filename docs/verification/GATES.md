@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-CUSTOMHEAD-PARENT-LINK (2026-11-25, pc-hummer, on fix/rust-customhead-parent-link from #717 85687ab6):**
+AI-assisted (Claude Code, Opus 5.5). The body composition's `Parent` link from the two reference skeletons
+(NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8); hub ruling 3 lifted.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,591 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock), this change at 807231fd against the
+  base reading of 9ca895aa (85687ab6 changes only tests and docs): 5 ok / 9 NotYet / 0 errors on both. Link 1 moves
+  in `maya:8` from "InitializeBodyComposition: the Parent link's parent-bone map" to "the skeletal mesh data layer: the
+  unloaded skeletal mesh CubeForCode"; links 3, 4, 5, 13 and 14 report the same. Every other row is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/parentlink/` and `local/p2/hook3/`.
+Decision 2026-11-25-NNN.
+
 **ANALYST-HOOK1-INTERFACE (2026-11-25, pc-hummer, docs only, on docs/native-hook1-interface from main e4d383f2):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 8: hook 1 is the simple-anim cache
 (`ISimpleAnimPlayer`, asked of the owner by fit), not a gear-likeness step. For Maya it writes nothing, as the
