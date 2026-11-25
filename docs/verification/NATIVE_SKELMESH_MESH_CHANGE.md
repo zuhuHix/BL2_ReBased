@@ -259,7 +259,7 @@ Synthetic packages through `package()`/`tag()`. Each refusal leaves the heap wri
 
 ## Amendment (2026-11-25): the entry the LOD-info refill constructs
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LODINFO-CONSTRUCTED-ENTRY (decision 2026-11-25-19),
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LODINFO-CONSTRUCTED-ENTRY (decision 2026-11-25-22),
 analyst only: **lane A implements it.** Raw output stays under ignored `local/analysis/lodinfo/`. **UNVERIFIED in the
 running game.**
 
