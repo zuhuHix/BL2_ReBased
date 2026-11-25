@@ -45,7 +45,7 @@ The repository hook refuses writes of the database and asset file types it knows
 
 ## Tooling
 
-Ghidra 12.1.4 (Apache 2.0) with Temurin JDK 21 is the chosen tool (maintainer decision 2026-10-01; versions,
+Ghidra 12.1.4 (Apache 2.0) with Temurin JDK 21 (on the Linux desktop 12.2 with OpenJDK 27, see THIRD_PARTY.md) is the chosen tool (maintainer decision 2026-10-01; versions,
 sources, checksums and license in [THIRD_PARTY.md](../THIRD_PARTY.md)). Both live outside the repository, for
 example `C:\Users\<you>\Tools\ghidra_12.1.4_PUBLIC` and `...\jdk-21.0.12.1+1` (set `OPENWILLOW_GHIDRA` and
 `OPENWILLOW_JDK` if yours differ; the JDK is only put on `PATH` by the script, not installed system-wide).

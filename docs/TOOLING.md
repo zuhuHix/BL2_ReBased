@@ -23,7 +23,7 @@ still applies.
 |---|---|---|
 | A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, the way the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor works (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, `openwillow_realgame` SDK mod); see "Driving the real game" below |
 | Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
-| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1` |
+| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 (Linux desktop: 12.2 + OpenJDK 27, see THIRD_PARTY.md) | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1` |
 | Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
 | Package identity, properties, scene records | `ow-package` (ours; the C++ build is the reference, the Rust port is not started) | "`ow-package`: the package reader" below |
 | UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |

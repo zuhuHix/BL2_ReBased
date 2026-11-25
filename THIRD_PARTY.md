@@ -219,9 +219,16 @@ decision before implementation.
 - **Linux desktop: Ghidra 12.2** (maintainer decision 2026-11-25). On the desktop (CachyOS Linux since 2026-11-22) the
   maintainer uses Ghidra **12.2** instead of 12.1.4: the distribution package `ghidra 12.2-1.1` from the CachyOS
   repository `cachyos-extra-v3` (upstream https://ghidra-sre.org/, Apache License 2.0; package built 2026-11-11,
-  installed 2026-11-22 under `/opt/ghidra`). It requires Java 25 or newer and runs on the distribution's
-  **OpenJDK 27** (`jdk-openjdk 27.0.1.1.u4-1`, Arch Linux `extra`, GPL-2.0 with the Classpath Exception), installed
-  system-wide by the package manager. The Windows machines keep 12.1.4 and Temurin 21 as above. Same use and the same
+  installed 2026-11-22 under `/opt/ghidra`). Package file `ghidra-12.2-1.1-x86_64_v3.pkg.tar.zst`, SHA-256
+  `8443169850b02ec484f671ffec51a09b46333d8d37f1ace33a1669af07d9db1f` (matches the repository database's entry;
+  pacman also checked the package signature). Like upstream, it ships a `GPL/` directory (`/opt/ghidra/GPL`, the GNU
+  demangler and others); nothing from it is copied (rule 3). It requires Java 25 or newer and runs on **OpenJDK 27**
+  (`jdk-openjdk 27.0.1.1.u4-1`, CachyOS repository `cachyos-v3`, a rebuild of the Arch Linux `extra` package;
+  package file `jdk-openjdk-27.0.1.1.u4-1-x86_64_v3.pkg.tar.zst`, SHA-256
+  `7731ae90e38e8aeb9f55ff68d1faa8ca093c0b9bd48350707f189a07cc1411f3`, matching the repository database), GPL-2.0
+  with the Classpath Exception (package licence field `LicenseRef-Java`; licence text in
+  `/usr/share/licenses/jdk-openjdk/java.base/`), installed system-wide by the package manager as the default Java.
+  The Windows machines keep 12.1.4 and Temurin 21 as above. Same use and the same
   rules: local analysis only, nothing of Ghidra, the JDK or their output in the repository. `tools/ghidra_import.ps1`
   is PowerShell and does not run on the Linux desktop. Whether a project saved by 12.2 opens in 12.1.4 was not
   tested, so analysis databases are not moved from the desktop to the Windows machines.
