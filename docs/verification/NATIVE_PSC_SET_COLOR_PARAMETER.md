@@ -64,14 +64,15 @@ tracers take their parameters from it later.
 key the stop names. Reference keeps the stub policy.
 
 **Preflight** (read only, no load, nothing interned):
-1. **The receiver:** None is the script's usual null-context answer, as for any native call on None. A receiver that
-   is a store handle not loaded yet is `NotYet { NotRead }`, "SetColorParameter on a component not loaded at set-up (a
-   load is a write)".
-2. **The name:** None (the name table's `None`): nothing, and no other read.
-3. **The declaration:** the receiver's class declares `InstanceParameters` as an array of a struct with `Name` (a
+1. **The receiver None:** the script's usual null-context answer, as for any native call on None.
+2. **The name:** None (the name table's `None`): nothing, and no other read. This comes before the receiver's load
+   check, because the game does nothing with a None name and reads nothing of the receiver.
+3. **A lazy receiver:** a store handle not loaded yet is `NotYet { NotRead }`, "SetColorParameter on a component not
+   loaded at set-up (a load is a write)".
+4. **The declaration:** the receiver's class declares `InstanceParameters` as an array of a struct with `Name` (a
    name), `ParamType` (a byte) and `Color` (a `Color` struct). Otherwise `VmError::Script` naming the field. Each
    element read must hold those kinds, else `VmError::Script`.
-4. **The plan:** the index of the first element with that `Name` and `ParamType` 5, or an append. An appended element
+5. **The plan:** the index of the first element with that `Name` and `ParamType` 5, or an append. An appended element
    is the struct's zero value with the three fields set. Build the whole new array value in the plan, as
    `pickup_particles.rs` does for `SetVectorParameter`, and check it fits the declaration.
 
@@ -105,7 +106,8 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
 5. a None name: nothing written;
 6. `InstanceParameters` missing, not an array, or with an element missing `Color` or holding a wrong kind:
    `VmError::Script` naming it, nothing written;
-7. a lazy receiver: the not-loaded `NotRead`, nothing loaded;
+7. a lazy receiver: the not-loaded `NotRead`, nothing loaded. With a None name and a lazy receiver: nothing, no
+   refusal;
 8. the colour's four channels (B, G, R and A) copied as given, alpha included;
 9. no other field of the component changes (`bNeedsReattach`, `bNeedsUpdateTransform` and `Template` included);
 10. a toy weapon whose `InitEffects` runs on its own instanced parameter component: the class default's component is

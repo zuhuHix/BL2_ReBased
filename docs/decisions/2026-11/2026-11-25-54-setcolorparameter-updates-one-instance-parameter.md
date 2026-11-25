@@ -27,4 +27,6 @@ bounds check changed.
   - a lazy receiver is `NotRead`;
   - malformed data is `VmError::Script`;
   - tests listed.
+- **Review r1 (#719):** the None-name check now comes before the lazy-receiver `NotRead`, and test 7 covers the
+  pair.
 - **Clean room:** a different lane implements this note.
