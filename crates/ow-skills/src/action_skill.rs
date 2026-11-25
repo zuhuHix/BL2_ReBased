@@ -695,6 +695,7 @@ impl NativePack for Pack {
         register_cast_resolve_context(vm)?;
         register_attach_component(vm)?;
         register_cast_trace(vm)?;
+        register_cast_class_achievement(vm)?;
         register_cast_add_modifier(vm)
     }
 }
@@ -710,6 +711,16 @@ impl NativePack for Pack {
 /// Reference: unbound, as before.
 fn register_attach_component(vm: &mut Vm) -> Result<(), VmError> {
     ow_inventory::attach_mesh::bind_engine_attach(vm)
+}
+
+/// `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet` for the cast's worlds (lane
+/// IMPL-UNLOCKPLAYERCLASSACHIEVEMENT): `LiftActionSkill.BeginLifting` reaches it through
+/// `NotifyTargetedActionSkillImpact`. The one rule is `ow_inventory::globals::class_achievement`'s
+/// (NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md), bound here because the cast's worlds do not register the inventory pack,
+/// through the same keep-existing `register`, so whichever pack registers first binds the one function. Off only;
+/// Reference binds nothing.
+fn register_cast_class_achievement(vm: &mut Vm) -> Result<(), VmError> {
+    ow_inventory::globals::class_achievement::register(vm)
 }
 
 /// `Actor.Trace` for the cast's worlds (lane IMPL-ACTOR-TRACE): `LiftActionSkill.BeginLifting` traces for the floor
@@ -1224,3 +1235,5 @@ mod sm_component_tests;
 
 #[cfg(test)]
 mod attach_component_tests;
+#[cfg(test)]
+mod class_achievement_tests;
