@@ -28,8 +28,9 @@
 //!   `SkeletalMeshLODInfo` struct, and the entries must fill the tag's size exactly, so a declared count with a body
 //!   that does not hold that many entries is refused (review r1 of #673, item 1).
 //!
-//! The child counts are not checked. In the census they sum to the bone count less one for every mesh but one
-//! composite (gestalt) mesh, so their meaning there is not settled.
+//! The child counts are not checked. In the census each bone's stored count equals its actual children in 104 of 106
+//! meshes; the other two (one composite gestalt mesh, one prop) each hold one bone whose count differs, so their
+//! meaning there is not settled.
 //!
 //! [`read_lod_count`] reads nothing past the count.
 //!
@@ -88,6 +89,9 @@ use crate::texture::{AssetError, check, class_name, count, read_u16, real};
 
 /// The bytes of one reference-skeleton bone (module documentation, item 4).
 pub const BONE_BYTES: usize = 52;
+/// The most bytes the bones' names may take as text, together (review r1 of #693, item 1). The census' largest
+/// skeleton needs a few kilobytes; a name-table entry repeated across many bones is refused before any is built.
+pub const MAX_SKELETON_NAME_BYTES: usize = 1 << 20;
 /// The highest LOD count the reader accepts.
 pub const MAX_LODS: usize = 32;
 /// The bytes of one LOD-model section: material (2), chunk (2), first index (4), triangle count (4), a sort byte.
@@ -144,6 +148,8 @@ pub enum LodCountError {
     Parent { bone: usize, parent: i32 },
     /// A negative child count.
     Children { bone: usize, children: i32 },
+    /// The bones' names would take more than [`MAX_SKELETON_NAME_BYTES`] as text.
+    NamesTooLong { bytes: usize },
     /// A bone's flags word is not zero (the only value seen; its bits are not decoded).
     BoneFlags { bone: usize, flags: u32 },
     /// A bone's rotation is not a unit quaternion.
@@ -179,6 +185,9 @@ impl fmt::Display for LodCountError {
             LodCountError::Parent { bone, parent } => write!(f, "bone {bone} names parent {parent}"),
             LodCountError::Children { bone, children } => write!(f, "bone {bone} holds a child count of {children}"),
             LodCountError::BoneFlags { bone, flags } => write!(f, "bone {bone} holds flags {flags:#x}, not decoded"),
+            LodCountError::NamesTooLong { bytes } => {
+                write!(f, "the bone names would take {bytes} bytes as text (at most {MAX_SKELETON_NAME_BYTES})")
+            }
             LodCountError::NotUnit { bone } => write!(f, "bone {bone}'s rotation is not a unit quaternion"),
             LodCountError::Depth { stored, computed } => {
                 write!(f, "the stored skeletal depth {stored} differs from the bones' {computed}")
@@ -221,24 +230,26 @@ pub fn read_lod_count(
     read_prefix(package, index, property_offset, typer).map(|p| p.lods)
 }
 
-/// What the prefix read leaves for the LOD-model read: the counts, each bone's name-table entry, and the tagged
-/// `bHasVertexColors`.
+/// What the prefix read leaves for the LOD-model read: the counts, the tagged `bHasVertexColors`, and the bones with
+/// their names still as validated name-table references (review r1 of #693, item 1: no name text is built until the
+/// whole export has passed every check).
 struct Prefix {
     lods: SkeletalLods,
-    bone_names: Vec<(i32, i32)>,
     vertex_colors: bool,
-    skeleton: Vec<RefBone>,
+    skeleton: Vec<RefBone<(i32, i32)>>,
 }
 
 /// One bone of the reference skeleton (module documentation, item 4), as the package stores it. Fitted and
 /// UNVERIFIED in meaning: the rotation and position equal, bone for bone, what the project's `.psk` reader gives for
 /// UModel's export of the same mesh (decision 2026-11-25-NNN), and that is the evidence for their convention: the
 /// bone's transform relative to its parent, `p_parent = q p q* + t` (Hamilton, `(x, y, z, w)`), in the game's frame.
+///
+/// `N` is the name: its text (`name_<number - 1>` for a numbered name) in what [`read_lod_models`] returns; inside
+/// the reader, the validated name-table reference until every check has held.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct RefBone {
-    /// The name's text (`name_<number - 1>` for a numbered name).
-    pub name: String,
+pub struct RefBone<N = String> {
+    pub name: N,
     /// `None` for the root (bone 0, stored as its own parent).
     pub parent: Option<usize>,
     /// A unit quaternion `(x, y, z, w)`.
@@ -311,12 +322,9 @@ fn read_prefix(
     check(bones > 0, AssetError::NegativeCount)?;
     let names = i32::try_from(package.names.len()).unwrap_or(i32::MAX);
     let mut level = Vec::with_capacity(bones);
-    let mut bone_names = Vec::with_capacity(bones);
     let mut skeleton = Vec::with_capacity(bones);
     for bone in 0..bones {
-        let (name_index, number) = r.name(names)?;
-        bone_names.push((name_index, number));
-        let name = ow_package::tables::name_text(&package.names, name_index, number)?;
+        let name = r.name(names)?;
         let flags = r.u32()?;
         if flags != 0 {
             return Err(LodCountError::BoneFlags { bone, flags });
@@ -364,7 +372,7 @@ fn read_prefix(
         return Err(LodCountError::LodInfo { native: lod_count, tagged });
     }
     let lods = SkeletalLods { materials, bones, depth: computed, lod_count, lods_at: r.pos(), object_end, bounds_origin, bounds_extent };
-    Ok(Prefix { lods, bone_names, vertex_colors, skeleton })
+    Ok(Prefix { lods, vertex_colors, skeleton })
 }
 
 /// One LOD model's counts (module documentation, "The LOD models").
@@ -409,7 +417,7 @@ pub fn read_lod_models(
     property_offset: usize,
     typer: &dyn ArrayTyper,
 ) -> Result<SkeletalLodModels, LodCountError> {
-    let Prefix { lods: prefix, bone_names, vertex_colors, skeleton } = read_prefix(package, index, property_offset, typer)?;
+    let Prefix { lods: prefix, vertex_colors, skeleton } = read_prefix(package, index, property_offset, typer)?;
     let mut r = package.reader();
     r.set_pos(prefix.lods_at);
     r.set_limit(prefix.object_end);
@@ -427,7 +435,7 @@ pub fn read_lod_models(
     for entry in 0..entries {
         let name = r.name(names)?;
         match usize::try_from(r.i32()?).ok().filter(|&b| b < prefix.bones && !seen[b]) {
-            Some(b) if bone_names[b] == name => seen[b] = true,
+            Some(b) if skeleton[b].name == name => seen[b] = true,
             _ => return Err(LodCountError::NameMap { entry }),
         }
     }
@@ -460,7 +468,40 @@ pub fn read_lod_models(
     if r.pos() != prefix.object_end {
         return Err(LodCountError::Leftover { bytes: prefix.object_end.saturating_sub(r.pos()) });
     }
+    let skeleton = name_bones(package, skeleton)?;
     Ok(SkeletalLodModels { prefix, models, skeleton })
+}
+
+/// The text length of name-table entry `(index, number)`: the entry's own, plus `_` and the digits of `number - 1`
+/// for a numbered name. The reference was checked by `Reader::name`.
+fn name_bytes(package: &Package, (index, number): (i32, i32)) -> usize {
+    let base = usize::try_from(index).ok().and_then(|i| package.names.get(i)).map_or(0, String::len);
+    if number == 0 {
+        return base;
+    }
+    let (mut digits, mut rest) = (1, number - 1);
+    while rest >= 10 {
+        digits += 1;
+        rest /= 10;
+    }
+    base + 1 + digits
+}
+
+/// The bones with their names as text, built only after every check of the export has held, and only when the
+/// names' total length stays within [`MAX_SKELETON_NAME_BYTES`] (checked arithmetic, before anything is built;
+/// review r1 of #693, item 1).
+fn name_bones(package: &Package, raw: Vec<RefBone<(i32, i32)>>) -> Result<Vec<RefBone>, LodCountError> {
+    let total = raw.iter().try_fold(0usize, |sum, b| sum.checked_add(name_bytes(package, b.name)));
+    match total {
+        Some(bytes) if bytes <= MAX_SKELETON_NAME_BYTES => {}
+        _ => return Err(LodCountError::NamesTooLong { bytes: total.unwrap_or(usize::MAX) }),
+    }
+    raw.into_iter()
+        .map(|b| {
+            let name = ow_package::tables::name_text(&package.names, b.name.0, b.name.1)?;
+            Ok(RefBone { name, parent: b.parent, rotation: b.rotation, position: b.position, children: b.children, colour: b.colour })
+        })
+        .collect()
 }
 
 /// A byte at the cursor.

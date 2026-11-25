@@ -531,3 +531,25 @@ fn the_reference_skeleton_is_read_bone_by_bone() {
     near.rotation_w = 1.0005;
     assert!(models(&near).is_ok(), "within a thousandth: {:?}", models(&near));
 }
+
+/// Review r1 of #693, item 1: many bones naming one long name-table entry. Every structural check holds, but the
+/// names would take more than `MAX_SKELETON_NAME_BYTES` as text, so the full read refuses before building any name;
+/// the prefix read, which builds no names, still gives the counts. Under the limit the same layout reads.
+#[test]
+fn many_bones_naming_one_long_entry_are_refused_before_any_name_is_built() {
+    let long = "ToyLongName".repeat(3000);
+    let bones = 40;
+    let mut m = mesh();
+    m.bones = std::iter::once((long.as_str(), bones - 1, 0)).chain((1..bones).map(|_| (long.as_str(), 0, 0))).collect();
+    m.depth = 2;
+    let total = long.len() * bones as usize;
+    assert!(total > MAX_SKELETON_NAME_BYTES, "the fixture is over the limit");
+    assert_eq!(models(&m), Err(LodCountError::NamesTooLong { bytes: total }));
+    assert_eq!(read(&m).unwrap().bones, bones as usize, "the prefix read builds no names");
+    let mut few = mesh();
+    few.bones = vec![(long.as_str(), 1, 0), (long.as_str(), 0, 0)];
+    few.depth = 2;
+    let got = models(&few).unwrap();
+    assert_eq!(got.skeleton.len(), 2);
+    assert_eq!(got.skeleton[1].name, long);
+}

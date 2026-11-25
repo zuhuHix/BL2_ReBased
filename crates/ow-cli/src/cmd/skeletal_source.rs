@@ -36,7 +36,7 @@ impl PskExports {
         for root in &self.roots {
             for ext in ["psk", "pskx"] {
                 let candidate = root.join(package).join("SkeletalMesh3").join(format!("{leaf}.{ext}"));
-                if !candidate.is_file() {
+                if !is_export(std::fs::metadata(&candidate).map(|m| m.is_file()), &candidate)? {
                     continue;
                 }
                 let base = root.canonicalize().map_err(|e| format!("the export root {}: {e}", root.display()))?;
@@ -48,6 +48,18 @@ impl PskExports {
             }
         }
         Ok(None)
+    }
+}
+
+/// Whether a candidate file is an export, from its metadata lookup (`Ok(is a file)`). Review r1 of #693, item 2: only
+/// "not found" or "not a file" moves on to the next candidate. Any other lookup error (permissions, an unreadable
+/// folder) is an error naming the path, so a preferred export that cannot be seen never silently gives way to the
+/// package source.
+fn is_export(found: std::io::Result<bool>, path: &Path) -> Result<bool, String> {
+    match found {
+        Ok(is_file) => Ok(is_file),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
 
@@ -295,7 +307,23 @@ mod tests {
              {agree} agree, {differ} differ, {without} without an export; {child_misfits} meshes whose stored child \
              counts differ from their bones' children"
         );
-        assert_eq!(differ, 0);
+        // Review r1 of #693, item 3: the documented census compares every mesh; nothing refused, nothing missing.
+        assert!(agree + differ > 0, "no comparison ran");
+        assert_eq!((differ, refused, without), (0, 0, 0), "every mesh read, exported and equal");
+    }
+
+    /// Review r1 of #693, item 2: a candidate lookup that is not "not found" is an error naming the path, never a
+    /// silent miss.
+    #[test]
+    fn a_lookup_error_is_not_a_miss() {
+        let path = Path::new("root/GD_Toy/SkeletalMesh3/Toy.psk");
+        assert_eq!(is_export(Ok(true), path), Ok(true));
+        assert_eq!(is_export(Ok(false), path), Ok(false), "a folder of that name is not an export");
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(is_export(Err(missing), path), Ok(false));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let e = is_export(Err(denied), path).unwrap_err();
+        assert!(e.contains("Toy.psk"), "{e}");
     }
 
     fn temp(name: &str) -> PathBuf {
