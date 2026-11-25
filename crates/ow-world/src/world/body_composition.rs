@@ -929,9 +929,16 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         return Err(not_read(MESH_NOT_SKELETAL));
                     }
                     // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
-                    // The plan's owner event goes to the pawn the component is attached to (lane
-                    // IMPL-TREE-INIT-OWNER-EVENT).
-                    let copy = crate::world::anim_tree_copy::attach_plan(vm, template, Some(owner))?;
+                    // The plan's owner event and H's owner test (lanes IMPL-TREE-INIT-OWNER-EVENT and
+                    // IMPL-SPECIALMOVE-OWNER) ask the owner the made component will have when the tree is copied: the
+                    // pawn for an actor attach (it writes `Owner`); for a socket attach, which leaves `Owner` alone,
+                    // the template's own `Owner`, which the made component keeps (review r2 of #667).
+                    let tree_owner = if socket_attach.is_some() {
+                        read_prop(vm, template, "Owner")?.and_then(|v| object_of(&v))
+                    } else {
+                        Some(owner)
+                    };
+                    let copy = crate::world::anim_tree_copy::attach_plan(vm, template, tree_owner)?;
                     // NATIVE_ANIM_NODE_LOOKUP.md sections 1 and 2, over the planned copy (lane
                     // FIX-BODY-COMPOSITION-LOOKUP-STALE), with nothing loaded.
                     let settled = crate::world::anim_node_lookup::check(vm, template, body_class, copy.as_ref())?;
