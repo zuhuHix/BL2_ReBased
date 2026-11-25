@@ -107,7 +107,8 @@ pub const NATIVE_STAND_IN_CLASS: &str = "a Components entry whose class runs thr
                                          (decision 2026-11-15-08), so whether it is a primitive is not known:";
 
 /// Whether `class` is `primitive` or derives from it, for a `Components` walk (lane UNDECLARED-COMPONENT-CLASS,
-/// decision 2026-11-25-NNN-undeclared-component-class.md; a port policy, UNVERIFIED in game). The chain is walked from
+/// decision 2026-11-25-16-undeclared-component-class.md; a port policy, UNVERIFIED in game). The chain walk is
+/// `trace_filter::part_class`'s, the one stand-in rule the live collision walks use too (lane UNIFY-STANDIN-RULE). The chain is walked from
 /// `class` up: reaching `primitive` is yes. Reaching an engine-native stand-in class first (a class with no package
 /// export, which the definition store defines directly under `Core.Object`, decision 2026-11-15-08) is
 /// `NotYet { NotRead }` with `prefix`, the class and `record`: its real super chain is not known, so the game might
@@ -123,21 +124,13 @@ pub fn primitive_class(
     prefix: &str,
     record: &'static str,
 ) -> Result<bool, VmError> {
-    let mut cursor = Some(class);
-    while let Some(c) = cursor {
-        if Some(c) == primitive {
-            return Ok(true);
+    match crate::trace_filter::part_class(space, class, primitive) {
+        crate::trace_filter::PartClass::Primitive => Ok(true),
+        crate::trace_filter::PartClass::Other => Ok(false),
+        crate::trace_filter::PartClass::Uncertain(path) => {
+            Err(NotYet::not_read(format!("{prefix}: {NATIVE_STAND_IN_CLASS} {path}"), record).into())
         }
-        let Some(layout) = space.classes.get_layout(c) else {
-            return Ok(false);
-        };
-        if space.classes.is_native(c) {
-            let what = format!("{prefix}: {NATIVE_STAND_IN_CLASS} {}", layout.path().as_str());
-            return Err(NotYet::not_read(what, record).into());
-        }
-        cursor = layout.super_class();
     }
-    Ok(false)
 }
 /// The native's name in its errors.
 const NATIVE: &str = "Actor.GetBoundingCylinder";
