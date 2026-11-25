@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**GETSMNODE-FIND-NODE-LAZY (2026-11-25, zuhu desktop (Linux), on fix/rust-getsmnode-lazy-node stacked on
+fix/rust-getsmnode-no-code-load 9147b0f):** AI-assisted (Claude Code, Opus 5.5). `GetSMNode` refuses, write-free, an
+object it reads (component, owner, mesh, cached node, each tree node) that the store has not loaded; not reached on
+today's Off slice paths (the tree copy's nodes are resident). `cargo test -p ow-skills -j 4`: 163 passed / 0 failed / 3
+ignored; `crate_edges_test.py` OK. No real-game run; UNVERIFIED in game.
+
 **GETSMNODE-CODE-LOAD (2026-11-25, zuhu desktop (Linux), on fix/rust-getsmnode-no-code-load stacked on
 fix/rust-cold-class-audit-skills 01016c1):** AI-assisted (Claude Code, Opus 5.5). `GetSMNode`'s class test reads the
 class table (`by_path`), not `find_class`, so a cold blend class's code is never loaded; the answer is the note's,

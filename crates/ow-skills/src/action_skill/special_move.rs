@@ -23,6 +23,9 @@
 //!   - an owner with no `Mesh`, or a mesh with no `Animations`, is `NotYet { LayerAbsent }` naming the missing anim
 //!     tree: the host's animation state is unavailable. The game's pawns always have a tree; the headless world has
 //!     none, and the game's None here would make `Play` start nothing silently (the hub's decision for this lane);
+//!   - every object whose fields it reads (the component, the owner, the mesh, a cached node, each tree node) must be
+//!     resident: a store handle not loaded is `NotYet { NotRead }` ([`SM_NODE_NOT_LOADED`]), before any write (lane
+//!     GETSMNODE-FIND-NODE-LAZY);
 //!   - the class test reads the class table only (lane GETSMNODE-CODE-LOAD): the blend class is looked up by path,
 //!     never loaded (a load is a write); with no layout for it, no node can be one, and the answer is None;
 //!   - with a tree, the node named `SpecialMoveBlend` (compared without case, as names are) is looked for from the
@@ -299,6 +302,20 @@ fn is_playing_class(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Bool(c.vm.space.classes.is_child_of(own, class)))
 }
 
+/// `GetSMNode`'s refusal of an object the store has not loaded (lane GETSMNODE-FIND-NODE-LAZY).
+pub const SM_NODE_NOT_LOADED: &str = "SpecialMoveComponent.GetSMNode: an object the store has not loaded (a load is a write)";
+
+/// `NotYet { NotRead }` ([`SM_NODE_NOT_LOADED`]) unless `o` is resident: not a store handle still unloaded (or failed),
+/// and not a stand-in with fewer slots than its class.
+fn sm_node_resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        return Err(NotYet::not_read(SM_NODE_NOT_LOADED, RECORD).into());
+    }
+    Ok(())
+}
+
 /// The class `GetSMNode`'s answer must be (section 3).
 const BLEND_CLASS: &str = "GearboxFramework.AnimNodeSpecialMoveBlend";
 
@@ -317,6 +334,8 @@ fn find_node(vm: &mut Vm, root: ObjRef, name: &str, what: &str) -> Result<Option
         if seen.len() > NODE_LIMIT {
             return Err(script_error(what, format!("the anim tree has more than {NODE_LIMIT} nodes")));
         }
+        // A node the store has not loaded is refused before its fields are read (lane GETSMNODE-FIND-NODE-LAZY).
+        sm_node_resident(vm, node)?;
         if let Some(Value::Name(n)) = super::get(vm, node, "NodeName")?
             && vm.space.names.text(n).eq_ignore_ascii_case(name)
         {
@@ -341,15 +360,24 @@ fn find_node(vm: &mut Vm, root: ObjRef, name: &str, what: &str) -> Result<Option
 fn get_sm_node(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "SpecialMoveComponent.GetSMNode";
     let component = this(c, WHAT)?;
+    // Every object whose fields are read must be resident: the loading reads below would load a store handle, and a
+    // load is a write (lane GETSMNODE-FIND-NODE-LAZY).
+    sm_node_resident(c.vm, component)?;
     let Some(owner) = owner_of(c.vm, component, WHAT)? else {
         return Ok(Value::Object(None));
     };
+    sm_node_resident(c.vm, owner)?;
     let mesh = object(&need(c.vm, owner, "Mesh")?, WHAT)?;
+    if let Some(m) = mesh {
+        sm_node_resident(c.vm, m)?;
+    }
     if let Some(cached) = object(&need(c.vm, component, "SMBlendNode")?, WHAT)?
         && mesh.is_some()
-        && object(&need(c.vm, cached, "SkelComponent")?, WHAT)? == mesh
     {
-        return Ok(Value::Object(Some(cached)));
+        sm_node_resident(c.vm, cached)?;
+        if object(&need(c.vm, cached, "SkelComponent")?, WHAT)? == mesh {
+            return Ok(Value::Object(Some(cached)));
+        }
     }
     let tree = match mesh {
         Some(m) => object(&need(c.vm, m, "Animations")?, WHAT)?,

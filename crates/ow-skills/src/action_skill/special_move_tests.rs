@@ -180,6 +180,16 @@ fn engine(variant: Variant) -> Vec<u8> {
     t.prop("Name", child, "Name", 0, 0);
     t.prop("Object", child, "Anim", 0, node);
     toy_array_of(&mut t, blend, "Children", "Struct", child);
+    // Lane GETSMNODE-FIND-NODE-LAZY: an anim node export the store leaves as a handle, held by a holder export.
+    let node_holder = t.class("ToyNodeHolder", object);
+    t.prop("Object", node_holder, "Node", 0, node);
+    let mut empty = ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let stored_node = t.p.add_export(node, "ToyStoredNode", empty);
+    let mut h = ints(&[0]);
+    h.extend(t.p.object_tag("Node", stored_node));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(node_holder, "ToyNodeHolderObject", h);
     let skill = t.class("ToyLiftSkill", object);
     let caster = t.prop("Object", skill, "Caster", 0, pawn);
     let hit = t.prop("Object", skill, "Hit", 0, object);
@@ -1944,4 +1954,58 @@ fn a_cold_blend_class_node_is_answered_without_a_code_load() {
     assert_eq!(x.world.vm.class_code_loads(), before, "no class code loaded");
     assert!(!x.world.vm.class_code_loaded(class), "the blend class is still cold");
     assert_eq!(x.get(component, "SMBlendNode"), Value::Object(Some(node)), "cached, as when warm");
+}
+
+/// Lane GETSMNODE-FIND-NODE-LAZY: an anim node the store has not loaded, as the tree's root and as a blend node's
+/// child, is the residency `NotRead` before any field of it is read: the handle stays unloaded, and nothing is written
+/// (no cache, no load, no name).
+#[test]
+fn a_lazy_anim_node_is_not_read() {
+    let mut x = fx(ParityMode::Off);
+    let path = ow_core::ObjectPath::parse("Engine.ToyNodeHolderObject").unwrap();
+    let vm = x.vm();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let lazy = match x.get(holder, "Node") {
+        Value::Object(Some(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy));
+    let marks = |x: &Fx| {
+        let vm = &x.world.vm;
+        (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+    };
+    let (pawn, component) = x.owner(AUTONOMOUS);
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(pawn, "Mesh", Value::Object(Some(mesh)));
+    // The root itself lazy.
+    x.set(mesh, "Animations", Value::Object(Some(lazy)));
+    let before = marks(&x);
+    let (missing, text) = not_yet(x.call(PATHS[4], component, vec![]));
+    assert_eq!((missing, text.contains(SM_NODE_NOT_LOADED)), (Missing::NotRead, true), "{text}");
+    assert_eq!(marks(&x), before, "nothing written, loaded or named");
+    // A resident blend root whose only child is the lazy node.
+    let root = x.obj("Engine.AnimNodeBlendBase");
+    let children = x.get(root, "Children");
+    let ty = {
+        let class = x.world.vm.space.heap.get(root).unwrap().class;
+        let p = x.world.vm.space.prop(class, "Children").unwrap();
+        match &x.world.vm.space.classes.decl(p).unwrap().kind {
+            ow_object::layout::PropKind::Array(inner) => match **inner {
+                ow_object::layout::PropKind::Struct(ty) => ty,
+                ref k => panic!("{k:?}"),
+            },
+            k => panic!("{k:?}"),
+        }
+    };
+    assert_eq!(children, Value::array(vec![]));
+    let entry = x.world.vm.space.classes.struct_defaults(ty).unwrap();
+    let entry = with_field(&x.world.vm, entry, "Anim", Value::Object(Some(lazy)), "test").unwrap();
+    x.set(root, "Children", Value::array(vec![entry]));
+    x.set(mesh, "Animations", Value::Object(Some(root)));
+    let before = marks(&x);
+    let (missing, text) = not_yet(x.call(PATHS[4], component, vec![]));
+    assert_eq!((missing, text.contains(SM_NODE_NOT_LOADED)), (Missing::NotRead, true), "{text}");
+    assert_eq!(marks(&x), before, "nothing written, loaded or named");
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy), "still unloaded");
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(None), "no cache");
 }
