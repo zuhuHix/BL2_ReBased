@@ -38,7 +38,7 @@
 //! never writes, so no refusal can follow a write. `ComputeMonetaryValue` keeps its own choice (the first field its
 //! `DefinitionData` declares), unchanged.
 //!
-//! **`GetInventorySpaceRequirement()`** (lane IMPL-GETINVENTORYSPACEREQUIREMENT, decision 2026-11-25-NNN, from
+//! **`GetInventorySpaceRequirement()`** (lane IMPL-GETINVENTORYSPACEREQUIREMENT, decision 2026-11-25-48, from
 //! NATIVE_INVENTORY_EQUIP.md's "Inventory space" row alone; UNVERIFIED in the running game). The inventory "asks the
 //! definition" ([`inventory_definition_of`], so every refusal of `GetInventoryDefinition` comes first), and the
 //! answer goes by that definition's exact class, as the row reads it:
