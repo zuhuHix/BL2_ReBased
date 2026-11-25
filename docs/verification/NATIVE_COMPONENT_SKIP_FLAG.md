@@ -207,7 +207,7 @@ name table unchanged:
 
 ## 6. Amendment (2026-11-25): the component check, read for every component class
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-COMPONENT-CHECK (decision 2026-11-25-03),
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-COMPONENT-CHECK (decision 2026-11-25-11),
 analyst only: **another lane implements this section.** Raw output stays under ignored `local/analysis/skelcheck/`.
 **Every rule here is UNVERIFIED in the running game.**
 
