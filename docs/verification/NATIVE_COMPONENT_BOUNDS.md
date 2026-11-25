@@ -309,7 +309,7 @@ The future cases of B.7 get their tests when S is answered.
 
 ## 9. Amendment (2026-11-25): where a skeletal mesh component's bounds come from
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-BOUNDS-SOURCE (decision 2026-11-25-NNN),
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-BOUNDS-SOURCE (decision 2026-11-25-28),
 analyst only: **another lane implements this section.** Raw output stays under ignored `local/analysis/skelbounds/`.
 **Every rule here is UNVERIFIED in the running game.**
 
