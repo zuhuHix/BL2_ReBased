@@ -1,7 +1,7 @@
 ## 2026-11-25: Write-free checks also count class code loads
 
-AI-assisted (Claude Code, Opus 5.5). Lane COUNTERS-MISS-CLASS-CODE-LOADS, a verification-rule change. The file
-number is a placeholder until the landing run numbers it. No game data and no native reading; synthetic fixtures
+AI-assisted (Claude Code, Opus 5.5). Lane COUNTERS-MISS-CLASS-CODE-LOADS, a verification-rule change.
+No game data and no native reading; synthetic fixtures
 only.
 
 - **The gap (found on #682):** loading a cold class's code registers functions and can intern names, so in Off it is
