@@ -33,8 +33,8 @@ pub fn special_move_owner_setup(vm: &mut Vm, pawn: Option<ClassId>) -> Result<()
     outcome
 }
 
-/// Resolves every interface entry on `pawn`'s class chain ([`Vm::resolve_interface_tables`], a load) and says where
-/// the owner test's answer will come from:
+/// Resolves every interface entry on `pawn`'s class chain, not only the one naming the interface
+/// ([`Vm::resolve_interface_tables`], a load), and says where the owner test's answer will come from:
 /// - **interface not loaded, or a class without a code key, or a chain whose bodies did not all decode:** nothing is
 ///   resolved, and the owner test then answers that case itself (O1, O3 or O3', O4). No structural fallback is taken
 ///   here, as the owner test takes none;
@@ -43,10 +43,13 @@ pub fn special_move_owner_setup(vm: &mut Vm, pawn: Option<ClassId>) -> Result<()
 /// - **unresolved:** `Vm::resolve_interface_tables` keeps an entry whose lookup failed as "resolved to nothing", which
 ///   the owner test would read as a settled answer (O7). So the answer is checked against the strict
 ///   `CodeIndex::implements_declared` (as review r1 of #665 asked of its own set-up): when that has no answer (an entry
-///   resolves to no class, an incomplete chain), fails, or disagrees with the resolved entries, the line says so and
-///   the set-up answers `NotYet` (`NotRead`).
+///   or a class chain did not resolve), fails, or disagrees with the resolved entries, the line says so and the
+///   set-up answers `NotYet` (`NotRead`).
 ///
-/// Every load the step makes (the resolve, the strict read) is a write, which the line names.
+/// The entries resolved are counted on every line that resolves, the refusal's included. A load of code the lookups
+/// make (a class the code index did not hold, or a package the store had not loaded) is a write, which the line names
+/// (review r1 of #670: measured on the code index's class count and the store's loaded-package count, since the
+/// store's handle counter does not move for a class load).
 pub fn owner_tables(vm: &mut Vm, pawn: ClassId) -> (String, Result<(), VmError>) {
     let class = vm.space.classes.get_layout(pawn).map_or_else(|| format!("{pawn:?}"), |l| l.path().to_string());
     let head = format!("{OWNER_TABLES_INPUT} of {class} for {SPECIAL_MOVE_INTERFACE}");
@@ -66,18 +69,27 @@ pub fn owner_tables(vm: &mut Vm, pawn: ClassId) -> (String, Result<(), VmError>)
             Ok(()),
         );
     }
-    let loads = vm.defs.load_transitions();
+    let marks = |vm: &mut Vm| {
+        let (code, store) = vm.defs.code_mut();
+        (code.classes().count(), store.loaded_count())
+    };
+    let before = marks(vm);
     let resolved = vm.resolve_interface_tables(pawn);
     let strict = {
         let (code, store) = vm.defs.code_mut();
         code.implements_declared(store, ck, ik)
     };
     let read = vm.defs.code().implements_resolved_chain(ck, ik);
-    let loaded = if vm.defs.load_transitions() != loads { " (the lookups loaded code: a write)" } else { "" };
+    let loaded = if marks(vm) != before { " (the lookups loaded code: a write)" } else { "" };
     let entries = match resolved {
-        0 => "every entry already resolved".to_string(),
-        1 => "1 entry resolved at set-up (a load; UNVERIFIED stand-in for the game having it resolved)".to_string(),
-        n => format!("{n} entries resolved at set-up (a load; UNVERIFIED stand-in for the game having them resolved)"),
+        0 => "every entry on the chain already resolved".to_string(),
+        1 => "1 entry (every entry on the chain) resolved at set-up (a load; UNVERIFIED stand-in for the game having \
+              it resolved)"
+            .to_string(),
+        n => format!(
+            "{n} entries (every entry on the chain) resolved at set-up (a load; UNVERIFIED stand-in for the game \
+             having them resolved)"
+        ),
     };
     match (strict, read) {
         (Ok(Some(answer)), Ok(read)) if answer == read => {
@@ -87,11 +99,12 @@ pub fn owner_tables(vm: &mut Vm, pawn: ClassId) -> (String, Result<(), VmError>)
         (strict, read) => {
             let why = match (&strict, &read) {
                 (Err(e), _) => format!("an entry's lookup failed ({e})"),
-                (Ok(None), _) => "an entry did not resolve to a class, or the chain is incomplete".to_string(),
+                (Ok(None), _) => "the strict reading has no answer (an entry or a class chain did not resolve)".to_string(),
                 (_, Err(_)) => "an entry is still unresolved".to_string(),
                 (Ok(Some(_)), Ok(_)) => "the strict reading disagrees with the resolved entries".to_string(),
             };
-            let line = format!("{head}{loaded}: unresolved, {why}; no answer from the packages' interface lists");
+            let line =
+                format!("{head}{loaded}: unresolved, {why}; no answer from the packages' interface lists; {entries}");
             let what = format!("the set-up interface tables of {class} for {SPECIAL_MOVE_INTERFACE}: {why}");
             (line, Err(NotYet::not_read(what, OWNER_RECORD).into()))
         }
