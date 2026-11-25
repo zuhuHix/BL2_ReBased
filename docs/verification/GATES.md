@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-ACTOR-SETPHYSICS (2026-11-25, pc-hummer, docs only, on docs/native-actor-setphysics from main 03896e55):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_ACTOR_SET_PHYSICS.md: `Actor.SetPhysics`, link 9's stop (`LiftTarget` asks
+for `PHYS_Custom`). No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game.
+
 **IMPL-SPECIALMOVE-QUEUE (2026-11-25, zuhuPC Linux, on main 373fe4b):** AI-assisted (Claude Code, Opus 5.5).
 `SpecialMoveComponent.Queue` bound in Off from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 (#680 @ 7dcb5cd, its r1
 text: residency first, the Owner/SMI mismatch, the delegation seam; the note's section 6 tests 1 to 8, 2a and 2b, 6a

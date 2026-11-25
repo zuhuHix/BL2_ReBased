@@ -53,6 +53,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | ItemPool.ToggleAllItemTypesDebug / IsAllItemTypesDebugEnabled | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Debug only | UNVERIFIED | medium | |
 | InteractiveObjectBalanceDefinition.SetupInteractiveObjectLoot | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Chests and lockers (summary) | UNVERIFIED | low | |
 | WillowItem.ChooseRandomParts (weight rule only) | [NATIVE_LOOT.md](NATIVE_LOOT.md) | Shields, grenade mods, class mods | UNVERIFIED | low-medium | |
+| Actor.SetPhysics (the layered physics change: WillowAIPawn, WillowPawn's falling/walking events, Pawn's floor check, Actor's mode write, base, velocity, volume event, rigid body) | [NATIVE_ACTOR_SET_PHYSICS.md](NATIVE_ACTOR_SET_PHYSICS.md) | link 9: `LiftActionSkill.LiftTarget` asks the target for `PHYS_Custom` | UNVERIFIED | high (layer order and the Actor base), medium-high (event names by fit), not read (nav-mesh check, base search, rigid-body virtuals) | |
 | Actor.SetTimer | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | Fire mission: UI/save/HUD timers (41 WillowGame sites), mover | UNVERIFIED | high (data model), medium (firing) | |
 | Actor.ClearTimer | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 30 WillowGame sites | UNVERIFIED | high | |
 | Actor.ClearAllTimers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 1 site | UNVERIFIED | high | |
