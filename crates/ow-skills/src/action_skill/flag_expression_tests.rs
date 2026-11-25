@@ -581,7 +581,7 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
         let start = WriteCounters::of(&x.vm);
         let text = not_read(x.eval(e, Some(mind)), &format!("the interface class {missing} is not loaded (a load is a write)"));
         assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-        assert!(!start.moved(&x.vm), "{missing}: write-free");
+        assert!(start.still(&x.vm), "{missing}: write-free");
         assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap().len(), 0, "{missing}: the store untouched");
         // With no context no interface question is reached: false, as before.
         assert!(!x.eval(e, None).unwrap(), "{missing}: no context");
@@ -601,7 +601,7 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
             // loaded the bare definition (one pass-through resolver) is refused before it runs.
             let text = not_read(r, MUTABLE_PATH);
             assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-            assert!(!before.moved(&x.vm), "{missing}: the mutable-path refusal is write-free");
+            assert!(before.still(&x.vm), "{missing}: the mutable-path refusal is write-free");
             // Review r1 of #630, item 1: an And whose first conditional is IsTrue on a loaded definition with no
             // context resolver and neither field is false with nothing run, so the second (a store flag) is never
             // reached and asks for nothing.
@@ -609,14 +609,14 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
             let and = x.evaluator(&[(0, Some(quiet)), (0, Some(f))], 1);
             let start = WriteCounters::of(&x.vm);
             assert!(!x.eval(and, Some(mind)).unwrap(), "the And stops at the proven false");
-            assert!(!start.moved(&x.vm), "nothing ran");
+            assert!(start.still(&x.vm), "nothing ran");
             // The same definition answering IsFalse is the loop's own refusal, not the provider's.
             let and = x.evaluator(&[(1, Some(quiet)), (0, Some(f))], 1);
             not_read(x.eval(and, Some(mind)), "IsFalse with neither an EvaluationExpression nor a ValueResolver");
         } else {
             // The rule engine search asks for IRuleEngineOwner before the definition's load.
             not_read(r, "is not loaded (a load is a write)");
-            assert!(!before.moved(&x.vm), "{missing}: the bare refusal is write-free");
+            assert!(before.still(&x.vm), "{missing}: the bare refusal is write-free");
         }
     }
 }
@@ -633,7 +633,7 @@ fn a_cold_receiver_stays_unloaded_on_an_interface_refusal() {
         let start = WriteCounters::of(&x.vm);
         let text = not_read(x.eval(cold, Some(mind)), &format!("the interface class {missing} is not loaded"));
         assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-        assert!(!start.moved(&x.vm), "{missing}: write-free");
+        assert!(start.still(&x.vm), "{missing}: write-free");
         assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "{missing}: the receiver was not loaded");
     }
     // With every interface loaded, the guard passes and the handle is loaded; the invented class declares no
@@ -902,7 +902,7 @@ fn the_provider_refusal_comes_before_an_earlier_conditionals_resolver() {
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(e, Some(pawn)), "the interface class GearboxFramework.IFlagProvider is not loaded");
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-    assert!(!start.moved(&x.vm), "no counter moved");
+    assert!(start.still(&x.vm), "no counter moved");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the cold answer stays cold");
     // A chain that refuses at its first conditional with no side effect (a timed test) reports that, not the provider.
     let timed = x.evaluator(&[(2, Some(first)), (0, Some(second))], 0);
@@ -927,7 +927,7 @@ fn a_reached_context_resolver_needs_the_provider_before_it_runs() {
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(e, Some(pawn)), MUTABLE_PATH);
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-    assert!(!start.moved(&x.vm), "no counter moved");
+    assert!(start.still(&x.vm), "no counter moved");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the resolver never ran");
 
     let mut x = fx();
@@ -955,13 +955,13 @@ fn an_unbound_first_resolver_is_the_registrys_refusal() {
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(e, Some(pawn)), "context resolver class Toy.UnboundContextResolver");
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-    assert!(!start.moved(&x.vm), "write-free");
+    assert!(start.still(&x.vm), "write-free");
     let g = x.obj("GearboxFramework.FlagDefinition", "Bound");
     x.set(g, "ContextResolverChain", Value::array(vec![Value::Object(Some(pass)), Value::Object(Some(unbound))]));
     let e = x.evaluator(&[(0, Some(g)), (0, Some(second))], 0);
     let start = WriteCounters::of(&x.vm);
     not_read(x.eval(e, Some(pawn)), MUTABLE_PATH);
-    assert!(!start.moved(&x.vm), "write-free");
+    assert!(start.still(&x.vm), "write-free");
 }
 
 /// Review r2 of #630, item 2: both interface classes loaded, a cold receiver, and a context whose interface table has
@@ -976,11 +976,11 @@ fn a_cold_receiver_waits_for_the_rule_engine_search() {
     assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry starts unresolved");
     let context = x.vm.space.alloc(context_class, "Context", None, Origin::Runtime).unwrap();
     let cold = x.cold_evaluator();
-    let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
+    let loads = x.vm.defs.load_transitions() + x.vm.class_code_loads();
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(cold, Some(context)), "has an entry not resolved (resolving it is a load)");
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-    assert!(!start.moved(&x.vm), "write-free");
+    assert!(start.still(&x.vm), "write-free");
     assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), loads, "no load transition");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the receiver was not loaded");
     assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry stays cold");
@@ -1004,7 +1004,7 @@ fn the_store_path_is_reported_before_the_provider_guard() {
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(e, Some(mind)), "a rule engine's own flag store");
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
-    assert!(!start.moved(&x.vm), "write-free");
+    assert!(start.still(&x.vm), "write-free");
 }
 
 // ---------------------------------------------------------------------------------------------------------------

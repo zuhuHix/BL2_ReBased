@@ -1177,6 +1177,13 @@ pub fn load_mark(vm: &Vm) -> (u64, u64, u64) {
     (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
 }
 
+/// [`load_mark`] with the VM's code loads added (lane COUNTERS-MISS-CLASS-CODE-LOADS), for the tests' write-free
+/// checks; [`marked_after_loads`] still reads only [`load_mark`]'s three.
+pub fn load_and_code_mark(vm: &Vm) -> (u64, u64, u64, u64) {
+    let (w, d, l) = load_mark(vm);
+    (w, d, l, vm.class_code_loads())
+}
+
 /// `f`'s result, a failure marked "stopped after partial writes" when any of the three counts of [`load_mark`] moved
 /// before it (review r2 of #521, item 1): a heap write, a random draw (an effect's variance, for one) or a definition
 /// load, the ones attribute evaluation makes included.

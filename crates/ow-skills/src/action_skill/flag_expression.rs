@@ -121,22 +121,37 @@ fn not_read(what: String) -> VmError {
 
 /// The canonical write counters (#518's tracker): heap writes, generator draws and definition-store load
 /// transitions. Each only grows, so a refusal is after a write exactly when one moved since the snapshot.
+///
+/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS) for [`WriteCounters::still`], the tests'
+/// "nothing moved" check; [`WriteCounters::moved`], which marks a runtime refusal, still reads only #518's three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteCounters {
     heap: u64,
     draws: u64,
     loads: u64,
+    code_loads: u64,
 }
 
 impl WriteCounters {
     /// The counters now.
     pub fn of(vm: &Vm) -> Self {
-        WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+        WriteCounters {
+            heap: vm.space.heap.committed_writes(),
+            draws: vm.rng.draws(),
+            loads: vm.defs.load_transitions(),
+            code_loads: vm.class_code_loads(),
+        }
     }
 
-    /// Whether a counter moved since `self`.
+    /// Whether one of #518's three counters moved since `self` (not the code loads: see the type).
     pub fn moved(&self, vm: &Vm) -> bool {
-        WriteCounters::of(vm) != *self
+        let now = WriteCounters::of(vm);
+        (now.heap, now.draws, now.loads) != (self.heap, self.draws, self.loads)
+    }
+
+    /// Whether nothing moved since `self`, the code loads included: the tests' write-free check.
+    pub fn still(&self, vm: &Vm) -> bool {
+        WriteCounters::of(vm) == *self
     }
 
     /// `e`, marked "stopped after partial writes: " when it is a `NotYet` and a counter moved since `self`.

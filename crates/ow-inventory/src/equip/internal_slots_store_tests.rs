@@ -387,13 +387,13 @@ fn a_cached_load_failure_is_not_a_new_load() {
     let slots = x.at(item, "AttributeSlots");
     x.vm.space.write(item, slots, slot).unwrap();
     let args = || vec![Value::Bool(true), Value::Int(2), Value::array(vec![])];
-    let n = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
+    let n = x.vm.defs.load_transitions();
     let e = x.vm.call(f, Some(item), args()).unwrap_err();
     assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "{e:?}");
-    assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), n + 1, "the fresh failure");
+    assert_eq!(x.vm.defs.load_transitions(), n + 1, "the fresh failure");
     let e = x.vm.call(f, Some(item), args()).unwrap_err();
     assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "{e:?}");
-    assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), n + 1, "the cached retry is no load");
+    assert_eq!(x.vm.defs.load_transitions(), n + 1, "the cached retry is no load");
 }
 
 /// Item 2: a load only P9 makes. A removal's attribute is resident and goes through a noun resolver (run-time objects,
@@ -465,7 +465,7 @@ fn a_refusal_after_a_load_only_p9_makes_is_marked() {
 fn a_cold_modifier_class_is_refused_without_a_lookup() {
     let mut x = fx();
     let (item, f) = x.item_and_native();
-    let n = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
+    let n = x.vm.defs.load_transitions() + x.vm.class_code_loads();
     let e = x.vm.call(f, Some(item), vec![Value::Bool(true), Value::Int(0), Value::array(vec![])]).unwrap_err();
     assert!(matches!(&e, VmError::Script { message, .. } if message.contains(MODIFIER_CLASS)), "{e:?}");
     assert!(x.vm.space.classes.by_path(MODIFIER_CLASS).is_none(), "no class set up by the call");

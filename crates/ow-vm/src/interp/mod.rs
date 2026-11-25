@@ -167,8 +167,10 @@ pub(crate) struct CodeState {
     code: FixedHashMap<FuncId, Rc<FuncCode>>,
     /// Classes whose functions and states are loaded.
     classes: FixedHashMap<ClassId, Rc<ClassCode>>,
-    /// Code loads so far: each class whose functions and states were loaded, and each package function declared (lane
-    /// COUNTERS-MISS-CLASS-CODE-LOADS). Only grows. #518's three counters do not see these loads.
+    /// Code loads so far (lane COUNTERS-MISS-CLASS-CODE-LOADS; review r1 of #685): each class whose functions and states
+    /// were loaded, each package function declared (counted once declared), and each state's code declared on first use.
+    /// Only grows. #518's three counters do not see these loads. Not counted: the child-declaration cache (it fills on
+    /// any script function's first run) and layout definitions (`define_layout`).
     pub(crate) code_loads: u64,
     /// Native index -> the native (or why it could not be loaded), built on first use over the code packages.
     natives: Option<Rc<FixedHashMap<u32, Result<FuncId, String>>>>,

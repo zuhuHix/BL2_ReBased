@@ -335,7 +335,6 @@ fn declare_package_function(
     if let Some(&f) = vm.code.functions.get(&(package, export)) {
         return Ok(f);
     }
-    vm.code.code_loads += 1;
     let (name, path, info, decls, failure) = {
         let (code, store) = vm.defs.code_mut();
         let pkg = store.shared(package);
@@ -419,6 +418,8 @@ fn declare_package_function(
     }
     let id = vm.declare_function(decl)?;
     vm.code.functions.insert((package, export), id);
+    // Counted once the function is declared, so a failed attempt and its retry are not counted (review r1 of #685).
+    vm.code.code_loads += 1;
     vm.code.code.insert(
         id,
         Rc::new(FuncCode {
@@ -468,6 +469,8 @@ pub(crate) fn declare_state_code(
             state_code: true,
         }),
     );
+    // A state's code declared on first use is a code load too (review r1 of #685).
+    vm.code.code_loads += 1;
     Ok(id)
 }
 
@@ -570,6 +573,8 @@ pub(crate) fn decl_at(
             )
             .map(Rc::new)
             .map_err(|e| chain_text(&e));
+        // Not counted as a code load (review r1 of #685, the decision's limit): this cache fills on any script
+        // function's first run, so counting it flags the interpreter's own laziness, not a native's preflight.
         vm.code.children.insert(key, typed);
     }
     match &vm.code.children[&key] {
