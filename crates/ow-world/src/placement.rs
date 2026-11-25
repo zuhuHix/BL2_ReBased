@@ -336,7 +336,9 @@ pub fn extent(vm: &Vm, template: ObjRef) -> Result<[f32; 3], VmError> {
 /// 5. `CollideActors` clear: skipped;
 /// 6. the skip check (lane IMPL-SKIP-FLAG, NATIVE_COMPONENT_SKIP_FLAG.md section 5): `BulletListener` set skips the
 ///    entry; clear goes on. The field's name is UNVERIFIED;
-/// 7. the per-component check (`world::bounding_cylinder`'s, the same rule): pass, or `NotYet { NotRead }`;
+/// 7. the per-component check (`world::bounding_cylinder`'s, the same rule): it passes for a primitive component's
+///    resident class chain (an UNVERIFIED extrapolation, NATIVE_COMPONENT_SKIP_FLAG.md section 6.1), and is
+///    `NotYet { NotRead }` for a chain not resident;
 /// 8. the bounds: the port computes none for a template's components, so `NotYet { LayerAbsent }` with the bounding
 ///    cylinder's refusal L text and layer, on [`EXTENT_RECORD`].
 ///

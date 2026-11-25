@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-COMPONENT-CHECK (2026-11-25, zuhu desktop (Linux), on fix/rust-component-check from main 3ad1b86):**
+AI-assisted (Claude Code, Opus 5.5). The bounding cylinder's per-component check passes for a primitive component's
+class chain (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, #676 at e6ac5e9). Passing every descendant rests on the note's
+two UNVERIFIED extrapolations, and a chain not read as primitive is a guarded `NotRead`. `cargo test --workspace -j 4`:
+3,368 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 52 ignored; `crate_edges_test.py` OK.
+Slice gate: not run (no install on this PC). Predicted, not run: links 6 and 7 stop in `touch` at "a skeletal mesh
+component's bounds source". No real-game run; UNVERIFIED in game.
+
 **UNDECLARED-COMPONENT-CLASS (2026-11-25, zuhuPC Linux, on fix/rust-undeclared-component-class, rebased onto main
 4b3e4df):** AI-assisted (Claude Code, Opus 5.5). A `Components` entry whose class runs through an engine-native
 stand-in is `NotRead` in `Actor.GetBoundingCylinder` and the spawn extent, not skipped. `cargo test --workspace

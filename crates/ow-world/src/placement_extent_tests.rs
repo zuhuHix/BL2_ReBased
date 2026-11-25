@@ -14,7 +14,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
 use super::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, box_cylinder, extent};
-use crate::world::bounding_cylinder::{BOUNDS_LAYER, COMPONENT_CHECK_OF, REFUSAL_L, SKIP_RECORD};
+use crate::world::bounding_cylinder::{BOUNDS_LAYER, REFUSAL_L};
 
 struct Fx {
     vm: Vm,
@@ -168,12 +168,12 @@ fn an_attached_colliding_primitive_reads_the_skip_flag() {
     x.components(t, vec![Some(skel)]);
     let before = marks(&x);
     match extent(&x.vm, t).unwrap_err() {
+        // IMPL-COMPONENT-CHECK (section 6.1 test 5): the skeletal entry passes the check and meets step 8's L.
         VmError::NotYet(n) => {
-            assert_eq!(n.missing, Missing::NotRead, "{n}");
-            assert_eq!(n.what, format!("{COMPONENT_CHECK_OF} Engine.SkeletalMeshComponent (not read)"));
-            assert_eq!(n.record, SKIP_RECORD);
+            assert_eq!(n.missing, Missing::LayerAbsent(BOUNDS_LAYER), "{n}");
+            assert_eq!((n.what.as_ref(), n.record), (REFUSAL_L, EXTENT_RECORD));
         }
-        other => panic!("expected the component check, got {other:?}"),
+        other => panic!("expected L, got {other:?}"),
     }
     assert_eq!(marks(&x), before);
     for c in [p, skel] {

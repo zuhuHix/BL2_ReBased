@@ -50,9 +50,11 @@
 //! - **the skip check**, where S stood: `BulletListener` (the bool the note reads as bit 10 of the collision word; the
 //!   name is a structural fit, UNVERIFIED) set skips the entry, clear goes on;
 //! - **the per-component check** ([`component_check`]), asked last, only of an entry every other test would count,
-//!   right before its box: an entry whose exact class is one of [`COMPONENT_CHECK_PASSES`] passes (read). Any other
-//!   class, the skeletal, static-mesh and particle components among them, is `NotYet { NotRead }`
-//!   ([`COMPONENT_CHECK_OF`]);
+//!   right before its box. Lane IMPL-COMPONENT-CHECK (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, recommended answer;
+//!   clean room): it passes for an entry whose class chain, resident and defined, reaches `Engine.PrimitiveComponent`.
+//!   The note read the check's answer (true) for the native primitive classes it examined, the skeletal,
+//!   static-mesh and particle components among them; passing every descendant is an **UNVERIFIED extrapolation**
+//!   beyond those classes. A chain that is not resident is `NotYet { NotRead }` ([`CHAIN_NOT_READ`]);
 //! - **the box:** [`entry_box`] on a live receiver, refusal L on a template (#595's bounds step).
 //!
 //! Every refusal comes before the native's only write, so none carries the "stopped after partial writes: " prefix
@@ -89,11 +91,12 @@ pub const REFUSAL_N: &str = "Actor.GetBoundingCylinder: a component the store ha
 /// Refusal L's text and layer (the pickup targeting's layer text).
 pub const REFUSAL_L: &str = "Actor.GetBoundingCylinder: the colliding components' bounds";
 pub const BOUNDS_LAYER: &str = "component bounds (the headless world has none)";
-/// The exact classes whose per-component check passes (NATIVE_COMPONENT_SKIP_FLAG.md section 3; UNVERIFIED in game).
-pub const COMPONENT_CHECK_PASSES: [&str; 3] =
-    ["Engine.PrimitiveComponent", "Engine.CylinderComponent", "WillowGame.BulletListenerComponent"];
-/// The refusal of an entry whose per-component check was not read (followed by its class path).
-pub const COMPONENT_CHECK_OF: &str = "Actor.GetBoundingCylinder: the component check of";
+/// The class whose descendants pass the per-component check (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1).
+pub const PRIMITIVE_COMPONENT: &str = "Engine.PrimitiveComponent";
+/// The per-component check's refusal when the entry's class chain is not resident or not defined, or does not reach
+/// [`PRIMITIVE_COMPONENT`] (followed by the entry's class path).
+pub const CHAIN_NOT_READ: &str =
+    "Actor.GetBoundingCylinder: the per-component check, on a class chain not read as a primitive component's:";
 /// The skip check's field (bit 10 of the collision bool word by the note; the name is UNVERIFIED).
 pub const SKIP_FIELD: &str = "BulletListener";
 /// The record of the per-component check and the skip check.
@@ -297,16 +300,27 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
     Ok((radius, height))
 }
 
-/// The per-component check (NATIVE_COMPONENT_SKIP_FLAG.md section 3): it passes for the exact classes of
-/// [`COMPONENT_CHECK_PASSES`] (read: they always pass). Every other class's answer was not read, so it is
-/// `NotYet { NotRead }` ([`COMPONENT_CHECK_OF`]), the hub's ruling. Classes are looked up through `by_path` only. The
-/// virtual is taken as a pure predicate (UNVERIFIED: only its answers were read), so it is asked last.
+/// The per-component check (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, the recommended answer; lane
+/// IMPL-COMPONENT-CHECK). It passes when the entry's class chain, walked up through resident, defined layouts,
+/// reaches [`PRIMITIVE_COMPONENT`]. The note read the check as true, reading and writing nothing, for the native
+/// primitive classes it examined (all 93 the packages and the executable register). Passing every descendant rests on
+/// the note's two **UNVERIFIED extrapolations**: a script-only class takes its native parent's answer, and no native
+/// primitive class lies outside the 93 (both engine conventions, not read). A chain with a layout
+/// missing or not defined before that class, or one that never reaches it, is `NotYet { NotRead }`
+/// ([`CHAIN_NOT_READ`]). Every path asks only of an entry its class test already found to be a primitive component,
+/// so that refusal is a guard. Reads only; the place in the order (last, before the box) is kept.
 pub(crate) fn component_check(space: &ObjectSpace, c: ObjRef) -> Result<(), VmError> {
-    let class = space.heap.get(c)?.class;
-    if COMPONENT_CHECK_PASSES.iter().any(|p| space.classes.by_path(p) == Some(class)) {
-        return Ok(());
+    let refuse = || -> VmError { NotYet::not_read(format!("{CHAIN_NOT_READ} {}", class_path(space, c)), SKIP_RECORD).into() };
+    let primitive = space.classes.by_path(PRIMITIVE_COMPONENT).ok_or_else(refuse)?;
+    let mut cursor = Some(space.heap.get(c)?.class);
+    while let Some(class) = cursor {
+        let layout = space.classes.get_layout(class).filter(|l| l.is_defined()).ok_or_else(refuse)?;
+        if class == primitive {
+            return Ok(());
+        }
+        cursor = layout.super_class();
     }
-    Err(NotYet::not_read(format!("{COMPONENT_CHECK_OF} {} (not read)", class_path(space, c)), SKIP_RECORD).into())
+    Err(refuse())
 }
 
 /// The cylinder entry's refusal when its world position is not the owner's `Location` by the note's rule.
