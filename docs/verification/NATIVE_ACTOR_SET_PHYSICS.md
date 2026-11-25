@@ -1,6 +1,6 @@
 # Actor.SetPhysics: changing an actor's physics mode (2026-11-25)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETPHYSICS (decision 2026-11-25-21), the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETPHYSICS (decision 2026-11-25-23), the
 analyst half of the clean room: **another lane implements this note.** Raw output stays under ignored
 `local/analysis/setphys/`. This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or
 listing structure. **Every rule here is UNVERIFIED in the running game.**
