@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-PICKUP-TRACE-ROWS (2026-11-25, pc-hummer, on main 4464e814):** AI-assisted (Claude Code, Opus 5.5).
+`trace_filter::ROWS` gains exact-class `Row::Actor` rows for `Engine.DroppedPickup` and `WillowGame.WillowPickup`
+(NATIVE_TOUCH_PICKUP_TRACE.md section 3.1.1, UNVERIFIED). `cargo test --workspace -j 8` 3,582 passed / 0 failed / 57
+ignored; `crate_edges_test.py` 19 OK. Installed Off strict `--slice-gate` (release build, under the machine lock):
+5 ok / 9 NotYet / 0 error, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`. Links 6 and 7 stop earlier, at `touch`
+on #707's template `NotRead`, so the rows cannot show there yet. No real-game run.
+
 **IMPL-CUSTOMHEAD-PARENT-LINK (2026-11-25, pc-hummer, on fix/rust-customhead-parent-link from #717 85687ab6):**
 AI-assisted (Claude Code, Opus 5.5). The body composition's `Parent` link from the two reference skeletons
 (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8); hub ruling 3 lifted.

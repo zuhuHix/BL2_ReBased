@@ -219,7 +219,7 @@ pub enum Row {
 
 /// The classes whose filter was read. Only these have a row. The four controller classes run `Actor`'s body
 /// (NATIVE_SPAWN_TRACE_FILTER.md section 1).
-const ROWS: [(&str, Row); 12] = [
+const ROWS: [(&str, Row); 14] = [
     ("Engine.Actor", Row::Actor),
     ("Engine.StaticMeshActor", Row::Actor),
     ("Engine.Brush", Row::Actor),
@@ -233,6 +233,10 @@ const ROWS: [(&str, Row); 12] = [
     // The installed packages hold it in GameFramework (decision 2026-11-15-23 census; review r1 of #514).
     ("GameFramework.GamePlayerController", Row::Actor),
     ("WillowGame.WillowPlayerController", Row::Actor),
+    // The pickup classes keep `Actor`'s filter body (NATIVE_TOUCH_PICKUP_TRACE.md section 3.1, lane
+    // IMPL-PICKUP-TRACE-ROWS; UNVERIFIED). Exact-class: a subclass is still unread.
+    ("Engine.DroppedPickup", Row::Actor),
+    ("WillowGame.WillowPickup", Row::Actor),
 ];
 
 /// The row of `class` when its filter was read; `None` for any other class (a subclass of a read class included,
