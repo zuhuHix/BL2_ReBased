@@ -58,3 +58,7 @@ analyst note is another lane's; the rule is unchanged here.
 **Review r1 of #665, also folded in:** the not-settled check drops its dead `is_failed` clause (`DefStore::is_unloaded`
 already covers a failed handle; the comment says so, and the direct-call test stays), and test 12
 (`a_malformed_controller_field_is_a_script_error`) also checks the name table's length, as the other refusals do.
+
+*Superseded in part on 2026-11-25 (decision 2026-11-25-55, review r1 of #720): hook 1 is the simple-anim cache
+and asks the pawn for `ISimpleAnimPlayer`. This set-up's `IGearLikenessConsumer` lines are replaced by a preload of
+`WillowGame.ISimpleAnimPlayer` and a resolve of `implements(WillowGame.WillowPlayerPawn, ISimpleAnimPlayer)`.*

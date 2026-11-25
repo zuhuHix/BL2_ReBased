@@ -552,6 +552,8 @@ name table unchanged, with nothing loaded:
 
    Hook 1 and decision 2026-11-25-03 are unchanged by this note until a separate analyst lane reads it
    (ANALYST-HOOK1-INTERFACE, NATIVE_BODYCOMP_RENDER_HOOKS.md section 8).
+   *Read 2026-11-25 in NATIVE_BODYCOMP_RENDER_HOOKS.md section 8 (decision 2026-11-25-55): hook 1 is the simple-anim
+   cache, `CacheSimpleAnims(the pawn, the made skeletal component)`, the pawn by fit.*
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

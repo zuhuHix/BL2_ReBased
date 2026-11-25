@@ -27,4 +27,19 @@ check changed.
   - an implementer with no node and an empty list: nothing;
   - otherwise `NotRead`;
   - the `GEAR_*` refusals go. Tests listed.
+- **Review r1 (#720):**
+  - the pawn's interface answer is the packages' strict interface table only. `gear_likeness`'s stand-ins are not
+    reused, because a stand-in can never say yes to `ISimpleAnimPlayer`;
+  - the harness must preload the interface and resolve `implements(WillowPlayerPawn, ISimpleAnimPlayer)`. That
+    replaces decision 2026-11-25-03's `IGearLikenessConsumer` set-up, which is marked superseded there (the `Edits:`
+    line below);
+  - the object read is named: the pawn running the hook, by fit. The component's `Owner` field stays an open question;
+  - tests on decoded-body fixtures, a stand-in-only test, a None-`Owner` test;
+  - `WillowAnimNode_Simple.CachedAnimPlayer` is listed among the fields not read;
+  - the index row is renamed;
+  - NATIVE_INITIALIZE_BODY_COMPOSITION.md open question 9 now points here.
 - **Clean room:** a different lane implements this note.
+
+Edits: docs/decisions/2026-11/2026-11-25-03-the-slice-set-up-resolves-hook-1-s-gear-likeness-check.md
+
+The edit marks decision 2026-11-25-03's `IGearLikenessConsumer` set-up superseded by this decision's set-up.

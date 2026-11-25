@@ -534,7 +534,11 @@ name by fit. This section reads the name, the object asked and what the routine 
 **Which object is asked** (by fit, high). The made object is first cast to `SkeletalMeshComponent`, and that cast is
 the routine's mesh argument. No `SkeletalMeshComponent` class carries the `ISimpleAnimPlayer` table, so the player
 must be the **owner**: the pawn, whose class implements it. The register that carries the asked object was lost in the
-decompile, so this is a fit, not a read. It is the only reading under which the call can do anything.
+decompile, so this is a fit, not a read. It is the only reading under which the call can do anything. **The object
+the port reads is the pawn running `PostInitBodyComposition`** (the body composition's owner input), by fit. Whether
+the game reads that pawn or the made component's own `Owner` field is not read (open question 6). The two are the same
+object after an actor attach, but not after a socket attach, which leaves the component's `Owner` as its template has
+it.
 
 **Hook 1, in order** (this replaces section 1's "Hook 1: the gear-likeness step"):
 1. **Gate:** the two engine-wide flags, still not identified, taken as allowing (the hub's ruling on #529);
@@ -569,8 +573,17 @@ hook 1). It is read only, before any write, with no load.
 1. The engine flags: taken as allowing (unchanged).
 2. The made class is not a `SkeletalMeshComponent`: nothing.
 3. `WillowGame.ISimpleAnimPlayer` resolved read-only, else `NotYet { NotRead }`, "the simple-anim interface not
-   resolved at set-up". Then whether the **owner's** class implements it, with the same read-only interface reading and
-   stand-ins that `gear_likeness` uses today. An unresolved entry is `NotYet { NotRead }`. No: nothing.
+   resolved at set-up". Then whether **the pawn's** class implements it. This reading must be the packages' real
+   interface table only: **do not reuse `gear_likeness`'s stand-ins.** NATIVE_CLASS_SERIAL_LAYOUT.md's stand-in
+   comparison names `ISimpleAnimPlayer` among the interfaces a stand-in can never say yes to, because it declares no
+   function of its own. So:
+   - the strict reading, `CodeIndex::implements_declared`'s rules (decoded bodies on the whole chain, every entry
+     resolved), over the entries resolved at set-up. Nothing is resolved here, because a load is a write;
+   - **yes or no from that reading:** the answer. No: nothing;
+   - **no answer from it** (an undecoded body, an entry not resolved, a chain that did not resolve, a class the code
+     index does not hold) **or an error:** `NotYet { NotRead }`, "the simple-anim interface on <class>: only a
+     stand-in could answer (the packages' interface table is not resolved)". Neither the structural fallback nor the
+     nearest-indexed-parent stand-in answers.
 4. **An implementer:**
    - **the nodes:** the `WillowAnimNode_Simple` nodes of the tree the attach will give the component, as the
      tree-copy plan lists them. A component with no tree has none. A node list the plan cannot give without a load is
@@ -581,14 +594,28 @@ hook 1). It is read only, before any write, with no load.
      not reads.
 5. Each field read is declared with its kind (`SimpleAnimInfo` an array of structs), else `VmError::Script`.
 
-**What link 1 would meet** (a prediction, not a run): no change. Attachment 0 passes hook 1 with "nothing", as now.
+**The harness set-up this needs.** On the installed game, the strict reading has an answer only for entries already
+resolved. So the slice harness's Maya set-up must:
+- preload `WillowGame.ISimpleAnimPlayer`;
+- resolve the entries `implements(<Maya's pawn class>, ISimpleAnimPlayer)` reads. Her pawn class is
+  `WillowGame.WillowPlayerPawn`, the class of `GD_Siren_Streaming.Pawn_Siren`.
+
+Each is a labelled harness input, as decision 2026-11-25-03 labels its lines ("a write; UNVERIFIED stand-in for the
+game having it loaded" and "for when the game resolves them"). **That decision's `IGearLikenessConsumer` set-up (the
+interface and `implements(Engine.SkeletalMeshComponent, IGearLikenessConsumer)`) is superseded by this one:** hook 1 no
+longer asks that question.
+
+**What link 1 would meet** (a prediction, not a run): no change, **but only once that set-up exists.** With it,
+attachment 0 passes hook 1 with "nothing", as now. Without it, hook 1 is the strict reading's `NotRead` on
+`WillowPlayerPawn`.
 
 ### 8.2 Tests for the implementer
 
 Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged:
 1. a made `SkeletalMeshComponent` on a toy `WillowPawn` with no tree and an empty `SimpleAnimInfo`: nothing;
-2. the same with a tree holding a toy `WillowAnimNode_Simple` node: the cache's `NotRead`, before any write;
-3. the same with no node but one `SimpleAnimInfo` entry: the cache's `NotRead`;
+2. the same with a tree holding a toy `WillowAnimNode_Simple` node: the cache's `NotRead`, before any write. On a
+   decoded-body fixture (as `decoded_gear_vm` in `slice_gate_driver_tests.rs`), so the strict reading answers "yes";
+3. the same with no node but one `SimpleAnimInfo` entry: the cache's `NotRead`, on a decoded-body fixture as in test 2;
 4. an owner class that does not implement `ISimpleAnimPlayer` (a toy `Engine.Actor`), with a `WillowAnimNode_Simple`
    node: nothing;
 5. a made component that is not a `SkeletalMeshComponent` (a `CylinderComponent`), on a `WillowPawn` with a non-empty
@@ -599,7 +626,13 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
 8. `SimpleAnimInfo` declared with the wrong kind: `VmError::Script`;
 9. a Maya-shaped fixture (a `WillowPlayerPawn` owner, a skeletal `Mesh` whose tree has no simple node): hook 1 gives
    nothing, and the build reaches hook 2;
-10. Reference: unchanged.
+10. **stand-in only:** a fixture whose bodies did not decode (or whose pawn class the code index does not hold), where
+    only the structural fallback or the nearest-indexed-parent stand-in could answer: the strict reading's `NotRead`,
+    never "yes" or "no";
+11. **the component's own `Owner` None:** a socket-attached skeletal component whose template's `Owner` is None, on a
+    pawn whose class implements `ISimpleAnimPlayer` and whose list is not empty: the cache's `NotRead`. The pawn
+    running the hook is asked, not the component's `Owner` field;
+12. Reference: unchanged.
 
 ## Open questions
 
@@ -611,10 +644,13 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
    replaces the fitted `IGearLikenessConsumer`), hook 2's controller test (corrected in section 6:
    it is `UsingFirstPersonCamera`, by its exec),
    and hook 3's `bAcceptsLights` and `LightingChannels` fields (the constant shift of #598).
-4. **Not read:** in the simple-anim cache, the node key's fields, the start virtual and the dominance field (fits,
-   section 8), and hook 3's lighting-channel virtual (static mesh components only).
+4. **Not read:** in the simple-anim cache, the node key's fields, the start virtual, the dominance field, and whether
+   it writes `WillowAnimNode_Simple.CachedAnimPlayer` (fits, section 8); and hook 3's lighting-channel virtual (static
+   mesh components only).
 5. **Read for Maya (section 7):** her made mesh templates have `bAcceptsLights` true. **Not read:** whether her
    spawned pawn's `LightEnvironment` is the archetype's component or an instanced copy.
+6. **By fit:** the object hook 1 asks. The port reads the pawn running `PostInitBodyComposition`. Whether the game
+   reads that pawn or the made component's own `Owner` field was not read (section 8).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
