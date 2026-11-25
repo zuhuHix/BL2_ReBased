@@ -71,11 +71,13 @@ UNVERIFIED in the running game)
 - **The reader:** the Rust container decoder and package reader are ported
   ([container](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md),
   [reader](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)). In lane
-  FIX-FIRE-TO-HIT, on main 86c28d00 (pc-hummer, 2026-11-19), `tools/verify_packages.py` read the 9 code packages with 3,339 of 3,339 class bodies exact, with the
-  C++ reader and with the Rust reader ([gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). The C++ code in
-  `src/` is still the reference; none of it has retired yet.
-- **The crates:** the 22 crates of [crates/README.md](crates/README.md) hold the ported reader, object model,
-  definition store, script VM and the game rules ported so far. Rules are ported one native at a time in
+  FIX-FIRE-TO-HIT (pc-hummer, 2026-11-19), a run of main 86c28d00 plus that lane's branch, `tools/verify_packages.py`
+  read the 9 code packages with 3,339 of 3,339 class bodies exact, with the C++ reader and with the Rust reader
+  ([gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). On current main: <JOB 22 row>. The C++ code in `src/` is
+  still the reference; none of it has retired yet.
+- **The crates:** the 22 crates of [crates/README.md](crates/README.md) hold the ported reader, object model and
+  definition store, a script VM in progress (most of the slice's script runs in Reference only,
+  [SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md)), and the game rules ported so far. Rules are ported one native at a time in
   `ParityMode::Off`, each from an own-words note, and answer a typed `NotYet` where a rule is not read yet. The
   workspace test counts are in [gates](docs/verification/GATES.md) (the top rows). Float-oracle tests whose bit
   parity is gated on Windows (rule N1 in `crates/ow-core/src/num.rs`) are not expected to pass on Linux.
@@ -89,11 +91,11 @@ UNVERIFIED in the running game)
   actors, and it still halts at tick 1, since H-MATINEE (2026-11-19) on the level-load event that starts a Matinee
   op binding a `WillowSpectatorPoint`; the window drew 1 of 11 pawns (H-WORLD baseline)
   ([gates](docs/verification/GATES.md), the three host sections).
-- **The slice gate**, headless (`ow-package --slice-gate`, installed data, Off, strict; the hub's run on main
-  d3c7a13, pc-hummer, 2026-11-25): 4 links ok, 10 NotYet, 0 errors. The mean per-link share of slice steps passed is
-  37.7%. Links 2, 10, 11 and 12 pass; each of the others stops at a rule the port has not read or built yet
-  ([gates](docs/verification/GATES.md), row SLICE-GATE-READING; per link in
-  [SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md), section 2). `ow-host --play` does not count slice links
+- **The slice gate**, headless (`ow-package --slice-gate`, installed data, Off, strict): the reading is the
+  runner's, in [gates](docs/verification/GATES.md), row SLICE-GATE-READING (per link in
+  [SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md), section 2). Links that do not pass stop at a rule the port
+  has not read or built yet. Link 1's first stop depends on whether a UModel export is present
+  (`OPENWILLOW_PSK_EXPORTS`). `ow-host --play` does not count slice links
   yet, and the gate counts only there ([plan](docs/rust-port/SLICE_RUN_PLAN.md), section 1), so the Phase 4 gate is
   not met.
 
@@ -384,7 +386,7 @@ prototypes, so the repository's clock started a little after the work did.
   exited cleanly)
   ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md), "Suites").
 
-No phase after Phase 0 has passed its gate.
+No phase after Phase 0 and Phase 0R has passed its gate (Phase 0R: 2026-11-25, by its wording; see Phase 0R).
 
 ---
 
@@ -396,15 +398,17 @@ check or a decision, not parity, and nothing here is verified in the running gam
 
 - [x] Port `ow-container` (LZO1X and the chunk container) to Rust; the same
       synthetic fixtures as the C++ tests give the same results
-      ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md)).
+      ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md);
+      <JOB 22 row>).
 - [x] Port `ow-package` (header, name, import and export tables, tagged
       properties), reusing the offsets the C++ reader already recovered and
       checked; nothing about 832/46 is re-derived
-      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)).
+      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); <JOB 22 row>).
 - [x] `tools/verify_packages.py --reader <the Rust reader>` gives the same
-      counts and exact class bodies as the C++ reader: 9 packages, 3,339 of
-      3,339 class bodies exact with both readers (lane FIX-FIRE-TO-HIT on main
-      86c28d00, pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md)). Only then does the
+      counts and exact class bodies as the C++ reader (<JOB 22 row>; an earlier
+      run: 9 packages, 3,339 of 3,339 class bodies exact with both readers, lane
+      FIX-FIRE-TO-HIT, main 86c28d00 plus that lane's branch, pc-hummer,
+      2026-11-19; [gates](docs/verification/GATES.md)). Only then does the
       matching part of `src/` retire. *Status:* nothing in `src/` has retired yet.
 - [x] Engine benchmark: Bevy and an own engine on wgpu + winit, the same
       small scene in each, prototypes under ignored `local/bench/`
@@ -425,9 +429,8 @@ check or a decision, not parity, and nothing here is verified in the running gam
       progress. The VM runs parts of the slice's script headless, most of it in
       Reference only; in Off each link stops early
       ([SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md), section 2). The
-      rules are ported native by native in Off. The slice gate reads 4 ok / 10 NotYet /
-      0 errors (2026-11-25; [gates](docs/verification/GATES.md), row
-      SLICE-GATE-READING).
+      rules are ported native by native in Off. The slice gate's reading is the runner's
+      ([gates](docs/verification/GATES.md), row SLICE-GATE-READING).
 - [ ] Rebuild Sanctuary in the Rust host (Phase 1), then Maya (Phases 3-4),
       with the retired UE5 host's records as the behaviour target. *Status:*
       started. The host walks Sanctuary in a window and loads it as a world,
@@ -484,7 +487,7 @@ the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 
 ---
 
-## Phase 0R: Rust core and engine benchmark <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 0R: Rust core and engine benchmark <img src=".github/assets/icons/done.svg" width="22" align="absmiddle" alt="">
 
 *Added 2026-11-14 with the switch to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)).*
 
@@ -497,12 +500,14 @@ engine route picked from measurements.
       *Caveat:* skeletons at the time; the crates have filled since (Now / next),
       and wgpu and winit joined `ow-host` on 2026-11-16.
 - [x] `ow-container` ported; same results as the C++ code on the same
-      synthetic fixtures ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md))
+      synthetic fixtures ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md);
+      <JOB 22 row>)
 - [x] `ow-package` ported; same results on the same synthetic fixtures
-      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md))
+      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); <JOB 22 row>)
 - [x] `tools/verify_packages.py --reader` on the Rust reader: same counts and
-      exact class bodies as the C++ reader (3,339 of 3,339; lane FIX-FIRE-TO-HIT
-      on main 86c28d00, pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md))
+      exact class bodies as the C++ reader (<JOB 22 row>; an earlier run: 3,339 of
+      3,339, lane FIX-FIRE-TO-HIT, main 86c28d00 plus that lane's branch,
+      pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md))
 - [x] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox, the
       optional one, not built) and recorded in
       [ENGINE_BENCHMARK.md](docs/verification/ENGINE_BENCHMARK.md). *Caveat:*
@@ -513,7 +518,9 @@ engine route picked from measurements.
 **Gate:** the Rust reader matches `verify_packages.py`, the benchmark is
 recorded, and the maintainer has picked the route.
 
-*Whether this gate is passed is the maintainer's call; not marked.*
+*Gate: met 2026-11-25 by its wording; a reader check and a decision, not parity; the VM and rules carry into Phases
+2-4* (design agent, maintainer-delegated; [decision](docs/decisions/2026-11/2026-11-25-NNN-phase-0r-gate-read-as-met.md)).
+It is not a verified result in the running game.
 
 ---
 
@@ -661,7 +668,7 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 2: UnrealScript VM (M2) (C++ prototype, in progress; Rust port pending) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 2: UnrealScript VM (M2) (C++ prototype; Rust port in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
 
 *The VM prototype is C++ core work in `src/` and stays valid; it is the
 reference the `ow-vm` crate is ported against (Phase 0R). Its host
