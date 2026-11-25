@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-BUILDWEAPONMATERIAL (2026-11-25, zuhu desktop (Linux), on fix/rust-build-weapon-material from
+integration/2026-11-25-c15 25425bb):** AI-assisted (Claude Code, Opus 5.5). `WillowWeapon.BuildWeaponMaterial` in
+Off from NATIVE_WEAPON_VISUALS.md section 1.1 (#698 at 5797b5a). `cargo test --workspace -j 4`: 3,499 passed / 4 failed
+(the expected N1 float-oracle failures on Linux) / 55 ignored, 12 new in `ow-inventory`; `crate_edges_test.py` OK.
+Slice gate: not run (no install on this PC). Predicted, not run: link 8 gets past `BuildWeaponMaterial` and meets
+`SetMaterial`. No real-game run; UNVERIFIED in game.
+
 **COLD-CLASS-AUDIT-WORLD-INVENTORY (2026-11-25, zuhuPC Linux, on integration/2026-11-25-c15 25425bb):** AI-assisted
 (Claude Code, Opus 5.5). Tests only. 6 cold-class tests: 1 passes (`pickup_targeting`'s pawn test), 5 are `#[ignore]`d
 findings where a write-free path loads cold code (`GetInventoryPawn`, `GetPickupableInventoryDefinition`,
