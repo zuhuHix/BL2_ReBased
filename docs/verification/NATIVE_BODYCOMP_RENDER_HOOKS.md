@@ -246,7 +246,7 @@ the skeletal mesh data reader), attachment 1's socket attach. The branch was del
 
 ## 6. Amendment (2026-11-25): hook 2's pawn test and controller test, identified
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BODYCOMP-HOOK2-PAWN-TEST (decision 2026-11-25-NNN), analyst only:
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BODYCOMP-HOOK2-PAWN-TEST (decision 2026-11-25-33), analyst only:
 **another lane implements this section.** Raw output stays under ignored `local/analysis/bcpawn/`. **Every rule here
 is UNVERIFIED in the running game.**
 
