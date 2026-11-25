@@ -623,7 +623,9 @@ pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 ///   registry walk finds nothing (the hub's ruling on NATIVE_SET_ANIM_TREE_TEMPLATE.md section 5, UNVERIFIED);
 /// - an empty scene layer (`ow_inventory::attach_mesh::SceneLayer`), so `Actor.AttachComponent` makes only its
 ///   script-visible writes and registers nothing (the hub's ruling on NATIVE_ATTACH_MESH_TO_PICKUP.md section 5, a port
-///   Off answer, UNVERIFIED).
+///   Off answer, UNVERIFIED);
+/// - a game info ([`pickup_game_info`], lane LINK-6-PICKUP-GAMEINFO), so `DroppedPickup.Pickup.ValidTouch`'s
+///   `WorldInfo.Game.PickupQuery` runs instead of reading through None.
 ///
 /// The other links' worlds are unchanged.
 pub(crate) fn pickup_world(
@@ -641,7 +643,44 @@ pub(crate) fn pickup_world(
     ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
     particle_preload(&mut world.vm, definition)?;
+    pickup_game_info(&mut world)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
+}
+
+/// The game-info class of [`pickup_game_info`].
+pub(crate) const GAME_INFO_CLASS: &str = "WillowGame.WillowGameInfo";
+/// The log line of [`pickup_game_info`].
+pub(crate) const GAME_INFO_INPUT: &str = "harness input: the pickup world's WorldInfo.Game is a class-default \
+     WillowGame.WillowGameInfo with authority (an UNVERIFIED stand-in, as the combat run's deaths install one: this \
+     world spawns no game info)";
+
+/// The pickup world's game info (lane LINK-6-PICKUP-GAMEINFO), world set-up before the run writes anything and
+/// logged as a harness input. The world spawns no game info, so its `WorldInfo.Game` was None and
+/// `DroppedPickup.Pickup.ValidTouch`'s last test, `WorldInfo.Game.PickupQuery(Other, self)`, read through None and
+/// answered false silently: no touch registered (decision 2026-11-25-41, lane LINK-6-OWNER-CHECK). Like the combat
+/// run's deaths (`ow_combat::death::enable_deaths`), the world gets a plain class-default `WillowGameInfo` with
+/// `Role` authority and its `WorldInfo`, written into the `WorldInfo`'s `Game`. In the game, the level's game mode
+/// spawns its own game info; this one is a stand-in, UNVERIFIED as the game's. A world whose `Game` is set already
+/// is left as it is.
+pub(crate) fn pickup_game_info(world: &mut ow_world::world::World) -> Result<(), VmError> {
+    let info = world
+        .actors()
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("Actors"))?
+        .world_info()
+        .ok_or_else(|| script("the pickup world has no WorldInfo for its game info".to_string()))?;
+    let vm = &mut world.vm;
+    let class = vm.space.heap.get(info)?.class;
+    let game_prop = vm.space.prop(class, "Game").ok_or_else(|| script("the WorldInfo declares no Game".to_string()))?;
+    if !matches!(vm.space.read(info, PropAddr::scalar(game_prop))?, Value::Object(None)) {
+        return Ok(());
+    }
+    let game = make_t(vm, GAME_INFO_CLASS)?;
+    write_t(vm, game, "Role", Value::Byte(ow_world::actors::ROLE_AUTHORITY))?;
+    write_t(vm, game, "WorldInfo", Value::Object(Some(info)))?;
+    write_t(vm, info, "Game", Value::Object(Some(game)))?;
+    vm.log.push(GAME_INFO_INPUT.to_string());
+    Ok(())
 }
 
 /// The allowed preload of NATIVE_WILLOW_GLOBALS.md section 6.1, step 2, for a world's set-up, before the run writes
@@ -1099,6 +1138,10 @@ fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute)
 #[cfg(test)]
 #[path = "equip_run_gestalt_tests.rs"]
 mod gestalt_tests;
+
+#[cfg(test)]
+#[path = "equip_run_game_info_tests.rs"]
+mod game_info_tests;
 
 #[cfg(test)]
 mod tests {

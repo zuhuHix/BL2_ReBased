@@ -2,6 +2,19 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK-6-PICKUP-GAMEINFO (2026-11-25, pc-hummer, on fix/rust-pickup-world-gameinfo from main 5168bb63):**
+AI-assisted (Claude Code, Opus 5.5). The pickup world gets a class-default `WillowGameInfo` stand-in for
+`WorldInfo.Game`, so `ValidTouch`'s `PickupQuery` runs instead of reading through None.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,494 passed / 0 failed / 55 ignored. `crate_edges_test.py`: 19 OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock): 5 ok / 8 NotYet / 1 error. Every row
+  is as on main: links 6 and 7 stop at `GetBoundingCylinder`'s skeletal bounds, before `PickupQuery`. Their harness
+  lines now list the game info.
+- A throwaway local stack with #707's first version (the box answered): link 6 stops at the unbound
+  `WillowInventory.GetInventorySpaceRequirement()`, the next lane.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/gameinfo/` and `local/p2/gameinfo-optionA/`.
+Decision 2026-11-25-NNN.
+
 **IMPL-SKELMESH-BOUNDS-SOURCE (2026-11-25, pc-hummer, on fix/rust-skelmesh-bounds-source from
 integration/2026-11-25-c15 25425bb9):** AI-assisted (Claude Code, Opus 5.5). A live skeletal mesh component's bounds
 in `Actor.GetBoundingCylinder`, from NATIVE_COMPONENT_BOUNDS.md section 9.6, plus the mesh-bounds accessor. Source e
