@@ -2,14 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-ROW15 (2026-11-25, zuhu desktop (Linux), on fix/rust-setskeletalmesh-row15: main bf9eea7 plus #673's four
-commits):** AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off, on the hub's rulings: zero trailing
-counts mean no per-LOD data; an equal `LODInfo` length needs no write; a refill refuses `NotRead` on the natively
-constructed entry's unread usage byte (ruling 2 as corrected, after the runner's read of the installed struct). `cargo
-test --workspace -j 4` (r0): 3,389 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored;
-after the last round `cargo test -p ow-world` 593 / 0 / 7 and `-p ow-cli` 163 / 0 / 5; `crate_edges_test.py` OK.
-Installed (runner JOB 10, before the correction): link 8 stopped at the default check. Predicted, not run: link 8
-stops at "the LOD info entry's usage byte". No real-game run; UNVERIFIED in game.
+**IMPL-ROW15 (2026-11-25, zuhu desktop (Linux), on fix/rust-setskeletalmesh-row15 rebased onto main 84b6d99):**
+AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off. Zero trailing counts mean no per-LOD data (the
+hub's ruling); an equal `LODInfo` length needs no write; a differing length is a fifth write, `LODInfo` = N natively
+constructed entries (empty `HiddenMaterials`, both bools false, usage byte 0, index -1; #687's amendment). `cargo test
+--workspace -j 4`: 3,426 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored; `cargo test -p
+ow-world` 607 / 0 / 7; `crate_edges_test.py` OK. Installed (runner JOB 10, before the refill): link 8 stopped at row
+15's entry check. Predicted, not run: link 8 passes row 15. No real-game run; UNVERIFIED in game.
 
 **IMPL-COMPONENT-CHECK (2026-11-25, zuhu desktop (Linux), on fix/rust-component-check from main 3ad1b86):**
 AI-assisted (Claude Code, Opus 5.5). The bounding cylinder's per-component check passes for a primitive component's
