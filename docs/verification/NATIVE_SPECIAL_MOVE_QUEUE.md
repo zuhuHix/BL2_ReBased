@@ -99,13 +99,17 @@ The hub's probe record names the native, not its caller. A static reading of the
 So the caller is most likely **the target's AI following a path with a special-move node**. That is the probe's
 target pawn and its mind, which link 9 spawns (lane IMPL-LINK9-TARGET-MIND). The probe's call stack would settle it.
 
-**What link 9 would meet next** (a prediction, not a run). Since `StopAny` stopped nothing, the target's component has
-no current move, so the first `Queue` takes case 3a: `Play`'s path in the port (`ow-skills`
-`action_skill::special_move`). For an authority owner that path refuses before any write, with its existing `NotYet` of
-kind `NotRead` on "the record the owner keeps of the current move for replication". That refusal comes before
-`AuthorityCanPlay`, and so before `GetSMNode`'s missing-tree `LayerAbsent`. With no write before it, no "stopped after
-partial writes" prefix is expected. If instead the target already had a current move, every entry takes case 3b.
-`SetSpecialMoves` then asks `IsPlayingAny`, which is unbound in Off.
+**What link 9 would meet next** (a prediction, not a run). It depends on whether the target's `CurrentSMData.SMD`
+is already None when `Queue` is called. Off's `StopAny` is a no-op, so whatever was current stays current:
+- **if `CurrentSMData.SMD` is None** (nothing was ever started on the target, the likely case), the first `Queue` takes
+  case 3a, `Play`'s path in the port (`ow-skills` `action_skill::special_move`). For an authority owner that path
+  refuses with its existing `NotYet` of kind `NotRead` on "the record the owner keeps of the current move for
+  replication". It does so before `ClientStarted`, before `CurrentSMData` or the queue is touched, and before
+  `AuthorityCanPlay`, so also before `GetSMNode`'s missing-tree `LayerAbsent`. **So link 9's predicted next stop after
+  `Queue` is `Play`'s replication refusal.** Queue writes nothing before delegating, so no "stopped after partial
+  writes" prefix comes from Queue (one the runner adds for its own earlier writes is the runner's);
+- **if a move is already current**, every entry takes case 3b, and `SetSpecialMoves` then asks `IsPlayingAny`, which is
+  unbound in Off.
 
 ## 5. The Off answer (for a separate implementer)
 
@@ -114,18 +118,39 @@ partial writes" prefix is expected. If instead the target already had a current 
 (`docs/verification/NATIVE_SPECIAL_MOVE_QUEUE.md`). Reference is unchanged: the C++ reference binds no `Queue`, so it
 stays with the stub policy.
 
+**Loaded-only reads.** A load is a write, so Queue's preflight reads only objects the store already holds, by name
+lookup on resident objects (as `bounding_cylinder`'s refusal N does). It never goes through the loading helpers
+(`action_skill::get` / `need`, which load their object first). The objects it touches are the component, the `SMI`
+actor, the component's `Owner` and `NewSMD`. Any of them not resident (a lazy handle, or a stand-in with no slots) is
+a `NotYet` of kind `NotRead`, "SpecialMoveComponent.Queue: an object the store has not loaded (a load is a write)",
+raised before anything else reads it. The existing `IsLocalAuthority` helper and `Play`'s path read the same objects
+through loading helpers. So Queue checks all four for residency **first**, and only then calls them; on a resident
+object those helpers load nothing. `GetSMDToPlay`, which `Play`'s path calls, answers the definition itself in the
+port, so it touches no further object.
+
+**The interface value.** In the VM, `SMI` is one optional object reference (`Value::Interface`). There is no separate
+native part to be unset, so "`SMI` unset" means that reference is None.
+
+**One owner, two reads.** The game's forward test reads the **component's `Owner`**. Its `IsLocalAuthority` reads the
+**actor `SMI` holds**. Nothing in the port guarantees that the two are the same actor: they agree in every fixture so
+far, but no rule ties them. So the preflight checks it.
+
 **The preflight, write-free, in the game's order.** Every refusal is decided before any write:
-1. `NewSMD` None, or `SMI` unset: return, and nothing changes;
-2. `Owner` None, with `SMI` set: a `NotYet` of kind `NotRead`, "SpecialMoveComponent.Queue: a component with an owner
+1. `NewSMD` None, or `SMI` None: return, and nothing changes;
+2. residency, as above: the `NotYet` "an object the store has not loaded";
+3. `Owner` None, with `SMI` set: a `NotYet` of kind `NotRead`, "SpecialMoveComponent.Queue: a component with an owner
    interface and no Owner (the game reads its Role unchecked)". The port must not guess what a null read does;
-3. the `Owner`'s `Role` below `ROLE_Authority` (by the `Role` enum's order, as `IsLocalAuthority` already does): a
+4. `Owner` not the actor `SMI` holds: a `NotYet` of kind `NotRead`, "SpecialMoveComponent.Queue: a component whose
+   Owner is not its owner interface's actor (the forward reads Owner, the gate reads SMI)". The game would test two
+   different actors; which one wins in practice is not read;
+5. the `Owner`'s `Role` below `ROLE_Authority` (by the `Role` enum's order, as `IsLocalAuthority` already does): a
    `NotYet` of kind `NotRead`, "SpecialMoveComponent.Queue: the forward to the server (ServerSpecialMove_Queue) on an
-   owner below authority". Network play is not ported. The game does steps 2 and 3 first, so this differs only on a
-   path that is refused anyway;
-4. `IsLocalAuthority(NewSMD)` by the existing port. False: return, and nothing changes. After step 3 only owners at
-   `ROLE_Authority` get here, and they always pass it, so this step cannot answer false in the port today. It stays,
-   so that a later network port keeps the game's order;
-5. `CurrentSMData` must be a `SpecialMoveData` struct and `SMDQueue` an array of it, else a `VmError::Script` naming
+   owner below authority". Network play is not ported. The game does the authority gate and the commit first, so this
+   differs only on a path that is refused anyway;
+6. `IsLocalAuthority(NewSMD)` by the existing port, on resident objects only (step 2). False: return, and nothing
+   changes. After steps 4 and 5, only an `SMI` actor at `ROLE_Authority` gets here, and it always passes, so this step
+   cannot answer false in the port today. It stays so that a later network port keeps the game's order;
+7. `CurrentSMData` must be a `SpecialMoveData` struct and `SMDQueue` an array of it, else a `VmError::Script` naming
    the field. Then read `CurrentSMData.SMD`.
 
 **Commit:**
@@ -148,17 +173,29 @@ lane.
 ## 6. Tests for the implementer
 
 Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged:
-1. `NewSMD` None, and `SMI` unset (object None, and interface part None): nothing changes, no refusal, no event;
+1. `NewSMD` None, and `SMI` None (one test each; the VM's interface value is a single optional reference, so there is
+   no separate native part to unset): nothing changes, no refusal, no event;
 2. an owner with `SMI` set and no `Owner`: the `Owner` `NotRead`, nothing written;
+2a. unloaded input: the component's `Owner`, the `SMI` actor, or `NewSMD` as a lazy handle (one test each): the
+    "an object the store has not loaded" `NotYet`. #518's three write counters and the name table are unchanged,
+    nothing is loaded, and the text carries no "stopped after partial writes" prefix;
+2b. `Owner` and the `SMI` actor two different resident actors, both at `ROLE_Authority`: the mismatch `NotRead`,
+    nothing written;
 3. an owner below `ROLE_Authority`: the forward `NotRead`, nothing written, even when a move is current;
 4. an owner at `ROLE_AutonomousProxy` with a definition that sets `bClientHasAuthority`: test 3's forward `NotRead`
    comes first, and nothing is queued. This pins the order of preflight steps 3 and 4;
 5. a current move, authority: one entry appended with all six fields as given, `Data` included. A second `Queue` of the
    same definition appends a second entry after the first. `CurrentSMData`, `StartTime` and the existing entries are
    unchanged, and no definition event runs;
-6. no current move, authority: the port's `Play` path runs with `Data` None (spy on what `ClientStarted` receives, or
-   on what `CurrentSMData.Data` holds after a start). The queue is emptied by that path, and `Play`'s own refusals pass
-   through unchanged (for the slice: the replication-record `NotRead`, with no "stopped after partial writes" prefix);
+6. no current move, authority, split in two because Off's `Play` refuses every authority start before
+   `ClientStarted`, `CurrentSMData` or the queue clear, so no successful immediate start can be observed today:
+   - **6a, integration:** `Queue` on an authority owner with `CurrentSMData.SMD` None and one entry already in
+     `SMDQueue` answers `Play`'s replication-record `NotRead` unchanged (its text and record), with no "stopped after
+     partial writes" prefix. `SMDQueue` still holds that entry, `CurrentSMData` is unchanged, and the three counters
+     and the name table are unchanged;
+   - **6b, delegation:** a focused test of the seam Queue uses to delegate (for example an inner function taking the
+     request) captures the arguments `Play`'s path receives: the five as given, and `Data` None even when the caller
+     passed a `Data` object;
 7. `CurrentSMData` not a struct, or `SMDQueue` of another element type: `VmError::Script` naming it, nothing written;
 8. Reference: unchanged (unbound).
 
