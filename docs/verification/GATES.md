@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SPECIALMOVE-QUEUE (2026-11-25, zuhuPC Linux, on main 4b3e4df):** AI-assisted (Claude Code, Opus 5.5).
+`SpecialMoveComponent.Queue` bound in Off from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 (#680 @ 8e954320, in review).
+`cargo test --workspace`: 3,385 passed / 4 failed (the expected Linux N1 float-table tests) / 52 ignored;
+`crate_edges_test.py` OK. Not run: `ctest` and `verify_packages.py --reader` (no cmake on this machine), and the
+installed `--slice-gate` (no install yet). By the note, link 9's next stop is `Play`'s replication-record refusal
+(case 3a), not a pass; not measured. UNVERIFIED in game.
+
 **ROUTE-A (2026-11-25, zuhuPC Linux, on #667 d5fb0c48 over main faa3bbc):** AI-assisted (Claude Code, Opus 5.5).
 Link 1's `maya` set-up loads `SpecialMoveInterface` and resolves the interface tables on the pawn archetype's class,
 cross-checked against the strict `implements_declared`, so the owner test answers from resolved entries instead of O5
