@@ -1,0 +1,544 @@
+//! Tests of `Actor.SetPhysics` in Off (lane IMPL-ACTOR-SETPHYSICS, NATIVE_ACTOR_SET_PHYSICS.md section 4) on three
+//! invented packages built with `ow_package::testkit` (AGENTS.md rule 9):
+//! - `Engine`: `Actor` (`Physics`, `Role` with an `ENetRole` enum, `Base`, `PhysicsVolume`, `CollisionComponent`, the
+//!   AI flags, the native `SetPhysics(byte)`), `Pawn` (`bForceFloorCheck`), `PhysicsVolume` (a spy
+//!   `PhysicsChangedFor(Actor)`) and two volume lookalikes;
+//! - `GearboxFramework`: `GearboxPawn`, and `ToyNativePawn`, a native class below it whose physics change was not read;
+//! - `WillowGame`: `WillowPawn` (the four notify flags and spy events), `WillowAIPawn`, `WillowPlayerPawn`, and three
+//!   script-only subclasses with decodable, non-native class bodies (`ToyAIPawn`, `ToyWillowPawn`, `ToyPlainPawn`).
+//!
+//! The native classes' toy bodies do not decode, which the native walk counts as native. Every value is invented; every
+//! call goes through the VM. The test with `ow-combat`'s hit pack is in `ow-combat` (this crate cannot depend on it).
+
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use ow_attr::AttributeSystem;
+use ow_balance::types::{
+    AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount, Playthrough,
+};
+use ow_core::{Missing, NotYet, ObjectPath, ParityMode};
+use ow_defs::DefStore;
+use ow_defs::identity::IdentityPolicy;
+use ow_object::heap::{ObjectSpace, Origin};
+use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::value::Value;
+use ow_package::testkit::reflect::{ClassBodySpec, class_body};
+use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::{Export, ints};
+use ow_vm::api::{NativeCall, StubPolicy, Vm};
+use ow_vm::error::VmError;
+
+use super::*;
+use crate::world::{BalanceState, World};
+
+const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
+static NEXT: AtomicU32 = AtomicU32::new(0);
+const IMPORTS: [&str; 6] = ["Class", "Function", "Enum", "ObjectProperty", "BoolProperty", "ByteProperty"];
+const ROLES: [&str; 5] = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority", "ROLE_MAX"];
+const AUTHORITY: u8 = 3;
+const SIMULATED: u8 = 1;
+const CUSTOM: u8 = 14;
+
+/// How `WillowPawn`'s `StoppedFalling` is declared (the note's test 10).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Variant {
+    Good,
+    /// `WillowPawn` declares no `StoppedFalling`.
+    NoStoppedFalling,
+    /// `StoppedFalling(bool)`.
+    WrongStoppedFalling,
+}
+
+fn enumeration(t: &mut ScriptToy, owner: i32, name: &str, values: &[&str]) -> i32 {
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    payload.extend(ints(&[0, i32::try_from(values.len()).unwrap()]));
+    for v in values {
+        payload.extend_from_slice(&t.p.fname(v, 0));
+    }
+    let mut e = Export::new(t.import("Enum"), name, payload);
+    e.outer = owner;
+    t.p.add_export_with(e)
+}
+
+fn native(t: &mut ScriptToy, owner: i32, name: &str, params: &[Param]) {
+    t.function(owner, name, params, None, &[], &FunctionSpec::new(NATIVE_FLAGS, name), |_| None);
+}
+
+/// A script-only class `name` below `super_ref`: a decodable class body with the non-native flags, and its default.
+fn script_class(t: &mut ScriptToy, name: &str, super_ref: i32) -> i32 {
+    let at = t.p.next_export();
+    let body = class_body(&mut t.p, &ClassBodySpec { flags: 2, ..ClassBodySpec::new(super_ref, 0, at + 1) });
+    let mut export = Export::new(0, name, body);
+    export.super_ = super_ref;
+    assert_eq!(t.p.add_export_with(export), at);
+    let mut default = ints(&[0]);
+    default.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(at, &format!("Default__{name}"), default));
+    at
+}
+
+fn engine() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&IMPORTS);
+    let object = t.class("Object", 0);
+    let actor = t.class("Actor", object);
+    let roles = enumeration(&mut t, actor, "ENetRole", &ROLES);
+    t.prop("Byte", actor, "Physics", 0, 0);
+    t.prop("Byte", actor, "Role", 0, roles);
+    t.prop("Object", actor, "Base", 0, actor);
+    let volume = t.class("PhysicsVolume", actor);
+    t.prop("Object", actor, "PhysicsVolume", 0, volume);
+    t.prop("Object", actor, "CollisionComponent", 0, object);
+    t.prop("Bool", actor, "bTearOff", 0, 0);
+    t.prop("Bool", actor, "bHardAttach", 0, 0);
+    native(&mut t, actor, "SetPhysics", &[Param::new("Byte", "NewPhysics")]);
+    let other = Param { type_ref: actor, ..Param::new("Object", "Other") };
+    native(&mut t, volume, "PhysicsChangedFor", std::slice::from_ref(&other));
+    // A volume subclass whose code a test leaves unloaded, one class that declares no PhysicsChangedFor, and one that
+    // declares it with an int.
+    t.class("ToyColdVolume", volume);
+    t.class("ToyNoEventVolume", actor);
+    let wrong = t.class("ToyWrongVolume", actor);
+    native(&mut t, wrong, "PhysicsChangedFor", &[Param::new("Byte", "Other")]);
+    let pawn = t.class("Pawn", actor);
+    t.prop("Bool", pawn, "bForceFloorCheck", 0, 0);
+    script_class(&mut t, "ToyPlainPawn", pawn);
+    // A lazy volume and a lazy base, held by a holder export.
+    let holder = t.class("ToyHolder", object);
+    t.prop("Object", holder, "Volume", 0, volume);
+    t.prop("Object", holder, "Thing", 0, actor);
+    let mut empty = ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let stored_volume = t.p.add_export(volume, "ToyStoredVolume", empty.clone());
+    let stored_thing = t.p.add_export(actor, "ToyStoredThing", empty);
+    let mut h = ints(&[0]);
+    h.extend(t.p.object_tag("Volume", stored_volume));
+    h.extend(t.p.object_tag("Thing", stored_thing));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "ToyHolderObject", h);
+    t.build()
+}
+
+fn gearbox() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&IMPORTS);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
+    let gearbox_pawn = t.class("GearboxPawn", pawn);
+    t.class("ToyNativePawn", gearbox_pawn);
+    t.build()
+}
+
+fn willow(variant: Variant) -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&IMPORTS);
+    let gbx = t.p.add_import("Core", "Package", 0, "GearboxFramework");
+    let gearbox_pawn = t.p.add_import("Core", "Class", gbx, "GearboxPawn");
+    let willow_pawn = t.class("WillowPawn", gearbox_pawn);
+    for f in ["bNotifyStopFalling", "bNotifyBeginFalling", "bNotifyBeginWalking", "bNotifyStopWalking"] {
+        t.prop("Bool", willow_pawn, f, 0, 0);
+    }
+    match variant {
+        Variant::Good => native(&mut t, willow_pawn, "StoppedFalling", &[]),
+        Variant::NoStoppedFalling => {}
+        Variant::WrongStoppedFalling => native(&mut t, willow_pawn, "StoppedFalling", &[Param::new("Bool", "bOdd")]),
+    }
+    native(&mut t, willow_pawn, "BeganFalling", &[Param::new("Byte", "PreviousPhysics")]);
+    native(&mut t, willow_pawn, "BeganWalking", &[Param::new("Byte", "PreviousPhysics")]);
+    native(&mut t, willow_pawn, "StoppedWalking", &[]);
+    let ai = t.class("WillowAIPawn", willow_pawn);
+    t.class("WillowPlayerPawn", willow_pawn);
+    script_class(&mut t, "ToyAIPawn", ai);
+    script_class(&mut t, "ToyWillowPawn", willow_pawn);
+    script_class(&mut t, "ToyColdWillowPawn", willow_pawn);
+    t.build()
+}
+
+/// The spy events, by function path: what they saw, in order.
+const SPIES: [&str; 5] = [
+    "Engine.PhysicsVolume.PhysicsChangedFor",
+    "WillowGame.WillowPawn.StoppedFalling",
+    "WillowGame.WillowPawn.BeganFalling",
+    "WillowGame.WillowPawn.BeganWalking",
+    "WillowGame.WillowPawn.StoppedWalking",
+];
+
+struct Fx {
+    world: World,
+    calls: Rc<RefCell<Vec<String>>>,
+    /// The volume event answers a typed NotYet (the note's test 14).
+    fail_volume: Rc<RefCell<bool>>,
+    dir: PathBuf,
+}
+
+impl Drop for Fx {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn fx_variant(mode: ParityMode, variant: Variant) -> Fx {
+    let dir = std::env::temp_dir().join(format!("ow-world-setphys-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (e, g, w) = (engine(), gearbox(), willow(variant));
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("Engine.upk", e.as_slice()), ("GearboxFramework.upk", g.as_slice()), ("WillowGame.upk", w.as_slice())],
+        IdentityPolicy::FirstInScanOrder,
+        mode,
+    )
+    .unwrap();
+    let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode)
+        .with_stub_policy(StubPolicy::refuse_all());
+    let snapshot = BalanceSnapshot::new(
+        Playthrough::NORMAL,
+        OpLevel::NONE,
+        PlayerCount::SINGLE,
+        ExpLevel::new(1),
+        GameStage(1),
+        AwesomeLevel::new(0),
+        LevelCapUpgrades::ALL,
+    )
+    .unwrap();
+    let mut world = World::new(vm, BalanceState::new(snapshot), &[]).unwrap();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let fail_volume = Rc::new(RefCell::new(false));
+    for path in SPIES {
+        let Ok(f) = world.vm.find_function(path) else { continue };
+        let key = world.vm.function(f).unwrap().native_key.clone().unwrap();
+        let name = path.rsplit('.').next().unwrap();
+        let (seen, fail) = (calls.clone(), fail_volume.clone());
+        world
+            .vm
+            .register_native(
+                &key,
+                Rc::new(move |c: &mut NativeCall<'_>| {
+                    let args: Vec<String> = (0..c.arg_count())
+                        .map(|i| match c.arg(i).unwrap() {
+                            Value::Byte(b) => format!("{b}"),
+                            Value::Object(Some(_)) => "actor".into(),
+                            other => format!("{other:?}"),
+                        })
+                        .collect();
+                    // What Physics holds when the event runs (the actor is the receiver, or the volume's argument).
+                    let actor = match c.arg_count() {
+                        1 if matches!(c.arg(0).unwrap(), Value::Object(Some(_))) => match c.arg(0).unwrap() {
+                            Value::Object(Some(o)) => *o,
+                            _ => unreachable!(),
+                        },
+                        _ => c.this.unwrap(),
+                    };
+                    let class = c.vm.space.heap.get(actor)?.class;
+                    let p = c.vm.space.prop(class, "Physics").unwrap();
+                    let physics = c.vm.space.read(actor, PropAddr::scalar(p))?.clone();
+                    seen.borrow_mut().push(format!("{name}({}) physics={physics:?}", args.join(",")));
+                    if name == "PhysicsChangedFor" && *fail.borrow() {
+                        return Err(NotYet::not_read("a toy native the volume event reaches", "test").into());
+                    }
+                    Ok(Value::None)
+                }),
+            )
+            .unwrap();
+    }
+    Fx { world, calls, fail_volume, dir }
+}
+
+fn fx() -> Fx {
+    fx_variant(ParityMode::Off, Variant::Good)
+}
+
+impl Fx {
+    fn vm(&mut self) -> &mut Vm {
+        &mut self.world.vm
+    }
+
+    fn obj(&mut self, class: &str) -> ObjRef {
+        let vm = self.vm();
+        let c = vm.find_class(class).unwrap();
+        ow_vm::interp::instantiate_from_defaults(vm, c).unwrap()
+    }
+
+    /// An object of `class` with its layout defined and its code not loaded.
+    fn cold(&mut self, class: &str) -> ObjRef {
+        let vm = self.vm();
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, class).unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        assert!(!vm.class_code_loaded(c), "{class} starts cold");
+        vm.space.alloc(c, "Cold", None, Origin::Runtime).unwrap()
+    }
+
+    fn set(&mut self, o: ObjRef, name: &str, v: Value) {
+        let vm = self.vm();
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        vm.space.write(o, PropAddr::scalar(p), v).unwrap();
+    }
+
+    /// `o.name := v`, past the heap's checks (a fixture value of another class).
+    fn put(&mut self, o: ObjRef, name: &str, v: Value) {
+        let vm = self.vm();
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        *vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+    }
+
+    fn get(&mut self, o: ObjRef, name: &str) -> Value {
+        let vm = self.vm();
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        vm.space.read(o, PropAddr::scalar(p)).unwrap().clone()
+    }
+
+    fn physics(&mut self, o: ObjRef, mode: u8) -> Result<Value, VmError> {
+        let vm = self.vm();
+        let f = vm.find_function("Engine.Actor.SetPhysics").unwrap();
+        Ok(vm.call(f, Some(o), vec![Value::Byte(mode)])?.ret)
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.borrow().clone()
+    }
+
+    /// The holder export's field `n`: a store handle not yet loaded.
+    fn held(&mut self, n: &str) -> ObjRef {
+        let path = ObjectPath::parse("Engine.ToyHolderObject").unwrap();
+        let vm = self.vm();
+        let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        match self.get(holder, n) {
+            Value::Object(Some(o)) => {
+                assert!(self.world.vm.defs.is_unloaded(&self.world.vm.space, o));
+                o
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The code loads (where on main), #518's counters and the name table's length, and the heap.
+    fn state(&self) -> (u64, u64, u64, usize, String) {
+        let vm = &self.world.vm;
+        (
+            vm.space.heap.committed_writes(),
+            vm.rng.draws(),
+            vm.defs.load_transitions(),
+            vm.space.names.len(),
+            format!("{:?}", vm.space.heap),
+        )
+    }
+
+    /// A preflight refusal, or an answer that changes nothing: the result, with the state and the events unchanged.
+    fn same(&mut self, o: ObjRef, mode: u8) -> Result<Value, VmError> {
+        let before = (self.state(), self.calls());
+        let r = self.physics(o, mode);
+        assert_eq!((self.state(), self.calls()), before, "nothing changed: {r:?}");
+        r
+    }
+}
+
+fn not_yet(r: Result<Value, VmError>) -> (Missing, String) {
+    match r {
+        Err(VmError::NotYet(n)) => (n.missing, n.what.to_string()),
+        other => panic!("expected NotYet, got {other:?}"),
+    }
+}
+
+fn script_error(r: Result<Value, VmError>, needle: &str) {
+    match r {
+        Err(VmError::Script { message, .. }) => assert!(message.contains(needle), "{message}"),
+        other => panic!("expected a script error naming {needle}, got {other:?}"),
+    }
+}
+
+/// The note's test 1: a script-only `WillowAIPawn` subclass with defaults, asked for `PHYS_Custom`: `Physics` 14,
+/// exactly one write, no event.
+#[test]
+fn link_9_s_custom_mode_writes_only_physics() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "Role", Value::Byte(AUTHORITY));
+    let writes = x.world.vm.space.heap.committed_writes();
+    assert_eq!(x.physics(pawn, CUSTOM).unwrap(), Value::None);
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(CUSTOM));
+    assert_eq!(x.world.vm.space.heap.committed_writes(), writes + 1, "only Physics");
+    assert!(x.calls().is_empty());
+}
+
+/// The note's test 2: the same mode as now changes nothing, even with every notify flag set.
+#[test]
+fn the_same_mode_changes_nothing() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    for f in ["bNotifyStopFalling", "bNotifyBeginFalling", "bNotifyBeginWalking", "bNotifyStopWalking"] {
+        x.set(pawn, f, Value::Bool(true));
+    }
+    assert_eq!(x.same(pawn, 2).unwrap(), Value::None);
+}
+
+/// The note's test 3: `bHardAttach` drops 14 with `Physics` unchanged; `PHYS_Interpolating` (7) goes through.
+#[test]
+fn hard_attach_drops_all_but_interpolating() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "bHardAttach", Value::Bool(true));
+    assert_eq!(x.same(pawn, CUSTOM).unwrap(), Value::None);
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(0));
+    x.physics(pawn, 7).unwrap();
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(7));
+}
+
+/// The note's tests 4 and 5: the falling and walking events, after the write, each with its flag.
+#[test]
+fn the_falling_and_walking_events_follow_the_transition() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    x.set(pawn, "bNotifyStopFalling", Value::Bool(true));
+    x.physics(pawn, CUSTOM).unwrap();
+    assert_eq!(x.calls(), vec!["StoppedFalling() physics=Byte(14)"]);
+    x.calls.borrow_mut().clear();
+    x.set(pawn, "bNotifyBeginFalling", Value::Bool(true));
+    x.physics(pawn, 2).unwrap();
+    assert_eq!(x.calls(), vec!["BeganFalling(14) physics=Byte(2)"]);
+    x.calls.borrow_mut().clear();
+    // Walking is 1 or 12: from 12 to 14 with bNotifyStopWalking.
+    let walker = x.obj("WillowGame.ToyWillowPawn");
+    x.set(walker, "Physics", Value::Byte(12));
+    x.set(walker, "bNotifyStopWalking", Value::Bool(true));
+    x.physics(walker, CUSTOM).unwrap();
+    assert_eq!(x.calls(), vec!["StoppedWalking() physics=Byte(14)"]);
+    // Without the flag, no event.
+    x.calls.borrow_mut().clear();
+    let quiet = x.obj("WillowGame.ToyWillowPawn");
+    x.set(quiet, "Physics", Value::Byte(2));
+    x.physics(quiet, CUSTOM).unwrap();
+    assert!(x.calls().is_empty());
+}
+
+/// The note's tests 6, 7 and 8: the transition refusals, before any write.
+#[test]
+fn the_transition_refusals_come_before_any_write() {
+    let mut x = fx();
+    let plain = x.obj("Engine.ToyPlainPawn");
+    x.set(plain, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(plain, 1)), (Missing::NotRead, BASE_SEARCH.to_string()));
+    assert_eq!(x.get(plain, "bForceFloorCheck"), Value::Bool(false));
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let base = x.obj("Engine.Actor");
+    x.set(pawn, "Base", Value::Object(Some(base)));
+    assert_eq!(not_yet(x.same(pawn, CUSTOM)), (Missing::NotRead, BASE_CLEAR.to_string()));
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "Role", Value::Byte(AUTHORITY));
+    let component = x.obj("Engine.Actor");
+    x.set(pawn, "CollisionComponent", Value::Object(Some(component)));
+    assert_eq!(not_yet(x.same(pawn, 10)), (Missing::LayerAbsent(RIGID_LAYER), RIGID_BODY.to_string()));
+    let below = x.obj("WillowGame.ToyAIPawn");
+    x.set(below, "Role", Value::Byte(SIMULATED));
+    assert_eq!(not_yet(x.same(below, 10)), (Missing::NotRead, RIGID_EVENT.to_string()));
+    assert_eq!(not_yet(x.same(below, 12)), (Missing::NotRead, NAV_MESH.to_string()));
+}
+
+/// The note's test 9: a resident `PhysicsVolume`'s spy event runs with the actor, after `Physics` is written.
+#[test]
+fn the_volume_event_runs_after_the_write() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let volume = x.obj("Engine.PhysicsVolume");
+    x.set(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+    x.physics(pawn, CUSTOM).unwrap();
+    assert_eq!(x.calls(), vec!["PhysicsChangedFor(actor) physics=Byte(14)"]);
+}
+
+/// The note's test 10: the event boundaries, each with `Physics` unchanged.
+#[test]
+fn the_event_boundaries_refuse_before_any_write() {
+    let mut x = fx();
+    for (class, needle) in [("Engine.ToyNoEventVolume", "declares no PhysicsChangedFor"), ("Engine.ToyWrongVolume", "other parameters")] {
+        let pawn = x.obj("WillowGame.ToyAIPawn");
+        let volume = x.obj(class);
+        x.put(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+        script_error(x.same(pawn, CUSTOM), needle);
+    }
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let cold = x.cold("Engine.ToyColdVolume");
+    x.set(pawn, "PhysicsVolume", Value::Object(Some(cold)));
+    let (missing, text) = not_yet(x.same(pawn, CUSTOM));
+    assert_eq!((missing, text), (Missing::NotRead, code_not_loaded("PhysicsChangedFor", "Engine.ToyColdVolume")));
+    // The same two for StoppedFalling, on a WillowPawn whose condition holds.
+    for (variant, needle) in [(Variant::NoStoppedFalling, "declares no StoppedFalling"), (Variant::WrongStoppedFalling, "other parameters")] {
+        let mut y = fx_variant(ParityMode::Off, variant);
+        let pawn = y.obj("WillowGame.ToyWillowPawn");
+        y.set(pawn, "Physics", Value::Byte(2));
+        y.set(pawn, "bNotifyStopFalling", Value::Bool(true));
+        script_error(y.same(pawn, CUSTOM), needle);
+    }
+    let cold_pawn = x.cold("WillowGame.ToyColdWillowPawn");
+    x.set(cold_pawn, "Physics", Value::Byte(2));
+    x.set(cold_pawn, "bNotifyStopFalling", Value::Bool(true));
+    let (missing, text) = not_yet(x.same(cold_pawn, CUSTOM));
+    assert_eq!((missing, text), (Missing::NotRead, code_not_loaded("StoppedFalling", "WillowGame.ToyColdWillowPawn")));
+}
+
+/// The note's test 11: residency only on a path that uses the object.
+#[test]
+fn residency_is_checked_only_where_used() {
+    let mut x = fx();
+    let (volume, thing) = (x.held("Volume"), x.held("Thing"));
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+    let (missing, text) = not_yet(x.same(pawn, CUSTOM));
+    assert_eq!((missing, text), (Missing::NotRead, NOT_LOADED.to_string()));
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, volume), "nothing loaded");
+    // A same-mode request, and a bHardAttach stop, with a lazy volume and a lazy base: success, nothing loaded.
+    x.set(pawn, "Base", Value::Object(Some(thing)));
+    assert_eq!(x.same(pawn, 0).unwrap(), Value::None);
+    x.set(pawn, "bHardAttach", Value::Bool(true));
+    assert_eq!(x.same(pawn, CUSTOM).unwrap(), Value::None);
+    for o in [volume, thing] {
+        assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, o), "nothing loaded");
+    }
+}
+
+/// The note's tests 12 and 13: an unlisted native class (and `WillowPlayerPawn`, not read) is the class `NotRead`;
+/// `Physics` of another kind is a script error naming it.
+#[test]
+fn unlisted_classes_and_a_wrong_physics_kind_are_refused() {
+    let mut x = fx();
+    for class in ["GearboxFramework.ToyNativePawn", "WillowGame.WillowPlayerPawn"] {
+        let pawn = x.obj(class);
+        let (missing, text) = not_yet(x.same(pawn, CUSTOM));
+        assert_eq!((missing, text), (Missing::NotRead, format!("Actor.SetPhysics: the physics change of {class}")));
+    }
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let class = x.world.vm.space.heap.get(pawn).unwrap().class;
+    let p = x.world.vm.space.prop(class, "Physics").unwrap();
+    *x.vm().space.slot_mut(pawn, PropAddr::scalar(p)).unwrap() = Value::Int(0);
+    script_error(x.same(pawn, CUSTOM), "Physics");
+}
+
+/// The note's test 14: a volume event that answers a typed `NotYet` after the write: "stopped after partial writes",
+/// with `Physics` keeping the new mode.
+#[test]
+fn a_refusal_after_the_write_is_marked() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    let volume = x.obj("Engine.PhysicsVolume");
+    x.set(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+    *x.fail_volume.borrow_mut() = true;
+    let (missing, text) = not_yet(x.physics(pawn, CUSTOM));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.starts_with("stopped after partial writes: a toy native the volume event reaches"), "{text}");
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(CUSTOM));
+}
+
+/// The native's key and the note's test 16 in this crate: Reference binds nothing here.
+#[test]
+fn off_binds_the_key_and_reference_binds_nothing() {
+    let mut x = fx();
+    let f = x.vm().find_function("Engine.Actor.SetPhysics").unwrap();
+    assert_eq!(x.world.vm.function(f).unwrap().native_key.as_deref(), Some(KEY));
+    assert!(x.world.vm.has_native(KEY));
+    let r = fx_variant(ParityMode::Reference, Variant::Good);
+    assert!(!r.world.vm.has_native(KEY));
+}

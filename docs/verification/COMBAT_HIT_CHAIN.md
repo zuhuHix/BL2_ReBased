@@ -28,7 +28,7 @@ damage at `health - 1` and `Pawn.TakeDamage` sets health to exactly 1.0 when a d
 | `WillowPawn.GetHitRegionForTakenDamage` | DD 1 stage 6 | UNVERIFIED; bone name against the body class's region list, else `DefaultHitRegion` |
 | `AIComponent.HoldDemigod / ReleaseDemigod / DemigodOnHold`, `WillowMind.GetAIDemigod / SetAIDemigod`, `GearboxMind.GetAIComponent` | none (bodies unread) | UNVERIFIED; holds kept per reason, `DemigodOnHold` = any hold |
 | `SetupImpactsForPlayHit`, `UpdatePlayHitEffectCounters`, `UpdatePlayHitInfo`, `StartCringe`, `InterpRotation`, `SpecialMoveComponent.Play / IsPlayingAny / IsPlayingClass`, `NotifyInstinctSkillAction`, `NotifyShotStatus` | presentation | bound as documented no-ops |
-| `Actor.SetPhysics` | none (stand-in) | not a no-op: the stand-in writes the actor's `Physics` byte. Its read rule is NATIVE_ACTOR_SET_PHYSICS.md (2026-11-25), which proposes the stand-in for Reference only |
+| `Actor.SetPhysics` | none (stand-in, Reference only) | not a no-op: in Reference only, the hit pack's stand-in writes the actor's `Physics` byte. Off has NATIVE_ACTOR_SET_PHYSICS.md's rule (2026-11-25; lane IMPL-ACTOR-SETPHYSICS) |
 
 Still logged stubs on this chain (visible in the run's `stubs`): `WillowAIPawn.CheckInjured`, `AddHitLocation`, `GetParent`, `WillowMind.NotifyAttackedBy`, `AIComponent.GetTargetRecordFor`,
 `StatusEffectsComponent.RollChanceForStatusEffect` (the incendiary roll), `WillowDamageSource.GetAmmoTheftAmounts`, `Pawn.IsDead / InGodMode / GetController / IsUsingWalkingPhysics /
