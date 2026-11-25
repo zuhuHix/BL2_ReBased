@@ -359,6 +359,8 @@ prototypes stay under ignored `local/bench/`. Any further engine crate needs its
 `ow-host` (`crates/ow-host`, binary `target/<profile>/ow-host`, `.exe` on Windows) is the host on that route: a winit
 window, a wgpu device, and a frame loop that steps a simulation through the host boundary (`crates/ow-host/src/sim.rs`).
 `ow-host` with no arguments, or with a wrong one, prints its usage line (from `crates/ow-host/src/args.rs`) and exits 2.
+It also exits 2 for a play script or weapon file it cannot parse, an unknown `--pawn` kind, or a `--map` value that is
+not a package name.
 What follows is what the host does today. It is the host doing it, not parity with the game: the movement, the world,
 the weapon numbers and the lighting are all `UNVERIFIED` in the running game, and the scene is drawn with the host's
 own materials and lights.
@@ -374,24 +376,30 @@ UModel exports).
 | `ow-host --game <install>` | The install check only, then stops (exit 0). |
 | `ow-host --headless-probe` | Prints the GPU adapter, backend, device type and driver, with no window and no install check. Exit 4 means no adapter on that machine (no GPU or driver), not a fault of the build. |
 | `ow-host --game <install> --window` or `--frames N [--time-limit S]` | The bare window and frame loop: it clears and presents and draws nothing from the game. `--frames` stops after N presented frames; a run that has not presented them by its deadline (`--time-limit S`, or a default from N) exits 1. |
-| `... --map <package> --window` or `--frames N` | Draws that map's scene (its levels and placements, with the host's materials and lighting) from the first player start, 100 uu up, with a fly camera. Prints a load report (counts only). `--size WxH` sets the window in physical pixels; `--screenshot <png>` writes frame 30, so `--frames` must be at least 30. |
+| `... --map <package> --window` or `--frames N` | Draws that map's scene (its levels and placements, with the host's materials and lighting) from the first player start, 100 uu up, with a fly camera. Prints a load report (counts and timings, and the paths of the sun light and the player start it used). `--size WxH` sets the window in physical pixels; `--screenshot <png>` writes frame 30, so `--frames` must be at least 30. |
 | `ow-host --game <install> --walk` | The scripted Sanctuary walk, headless: the H4 mover against the scene's collision at the fixed 1/60 s step, with its two checks (it does not fall through, it does not stick). It prints `result: PASS` and exits 0, or exits 1. A stall at a wall is reported by name and is not a failure. |
 | `... --map <package> --play-script <file>` | The play mode headless: the script drives the same mover one input per step, on the map loaded as a world (`ow-world`) unless `--no-world` is given. It prints per-segment path digests, an end digest and the world's digest, so runs can be compared bit for bit. `--weapon <file>` adds the held weapon. |
-| `... --map <package> --play [--play-script <file>]` | The play mode in the window, first person: WASD, mouse and space, Escape releases the cursor, a left click takes it back, F1 toggles the fly camera. With a script it replays that script, giving the same digests as the headless run. It also takes `--weapon <file>`, `--arms <dir>` (first-person arms from a UModel export), `--pawn NAME DIR X Y Z YAW` (repeatable, a third-person pawn), `--world-pawns <dir>` (repeatable, folders to draw the world's placed pawns from), `--no-world`, `--size`, `--screenshot` and `--no-vsync`. |
+| `... --map <package> --play [--play-script <file>]` | The play mode in the window, first person: WASD, mouse and space; E and Q (up and down) and Shift (faster) are held keys too; the left mouse button fires; Escape releases the cursor, and a left click with the cursor released takes it back; F1 toggles the fly camera. With a script it replays that script, giving the same digests as the headless run. It also takes `--weapon <file>`, `--arms <dir>` (first-person arms from a UModel export), `--pawn NAME DIR X Y Z YAW` (repeatable, a third-person pawn), `--world-pawns <dir>` (repeatable, folders to draw the world's placed pawns from; refused with `--no-world`), `--no-world`, `--size`, `--screenshot` and `--no-vsync`. `--screenshot <png>` writes presented frame 30, or the last frame of a shorter scripted run, and a scripted run also writes `<stem>_end.png` at its end. |
 
 Notes:
 - **Play script format** (`crates/ow-assets/src/movement/walk.rs`): one segment per line, `seconds forward strafe
-  actions yaw name...`. The actions are `0`, `1` or `j` for a jump on the first tick, `f` for the trigger held, `jf`
-  for both. Yaw is in rotator units per tick. Empty lines and lines starting with `#` are skipped. A script that names a
+  actions yaw name...`. `seconds` is 0 or more; `forward` and `strafe` are in -1 to 1. The actions are `0`, `1` or `j`
+  for a jump on the first tick, `f` for the trigger held, and `jf`, `fj` or `1f` for both. Yaw is in rotator units per
+  tick. Empty lines and lines starting with `#` are skipped. A script that names a
   map's places is game-derived: keep it under ignored `local/`.
-- **Weapon file** (`crates/ow-host/src/weapon.rs`): the fields of `ow-package --item-stats --data` (definition, balance,
-  manufacturer, parts, prefix, title, level), evaluated in an `ow-world` world. Without a file the equipped weapon is
-  `NotYet` (no save or loadout is ported), and the host says so.
-- **The world halts, it does not guess.** When the world meets a rule that is not ported (a `NotYet`), it stops ticking
-  and prints the halt line; the mover and the drawing go on. The latest halt point and digests are in GATES.md, "Host
+- **Weapon file** (`parse_weapon_spec` in `crates/ow-items/src/data.rs`; `ow-host`'s `weapon.rs` re-exports it): plain
+  text, one `key value` per line, with the keys `definition`, `balance`, `manufacturer`, `part <slot> <path>`, `prefix`,
+  `title` and `level`. `definition` and `level` (1 to 80) are required. A repeated key or slot, or an unknown key or
+  slot, is refused. Empty lines and lines starting with `#` are skipped. These are the fields of
+  `ow-package --item-stats --data`'s JSON, but not its format. The same file feeds `ow-package --combat-run`'s
+  `weapon:<file>` step. The host evaluates it in an `ow-world` world. Without a file the equipped weapon is `NotYet`
+  (no save or loadout is ported), and the host says so.
+- **The world halts, it does not guess.** When a world tick meets a rule that is not ported (a `NotYet`) or a script
+  error, the world stops ticking and prints the halt line; the mover and the drawing go on. The latest halt point and digests are in GATES.md, "Host
   play mode on the loaded world".
-- **Heavy runs.** `--walk`, `--play-script` and every window run load the whole scene, so they are heavy runs: take
-  the machine's lock first ("The run lock" below). `ow-host` does not take it itself. Run the release build
+- **Heavy runs.** `--walk`, `--play-script` and every `--map` run load the whole scene, and every window run
+  (`--window`, `--frames`, `--play`) is a heavy run too (GATES.md, H1); a bare `--window` or `--frames` run without
+  `--map` draws the stand-in world and loads no scene. Take the machine's lock first ("The run lock" below). `ow-host` does not take it itself. Run the release build
   (`cargo build --release -p ow-host --locked`) for timings.
 - **The slice gate is not an `ow-host` flag.** The 14-link slice gate runs headless in the Rust `ow-package`
   (`ow-package --slice-gate --cooked <dir>`, `crates/ow-cli`). Running the same links in `ow-host --play` is planned in
@@ -407,8 +415,8 @@ and "Retired with the UE5 host (2026-11-14)" at the end of this file.
 
 `tools/ue_lock.ps1` (dot-source it) is the machine-wide run lock: one heavy run at a time per machine. Today the
 real-game helpers take it (`Enter-RunLock` in `tools/real_game/realgame.ps1`, and the record and recovery steps of
-`tools/real_game/pending.ps1`). Heavy `ow-host` runs (`--walk`, `--play-script`, and any window) are run under it by
-their caller, since the host does not take it itself. The lock is a PowerShell script and does not run on a Linux
+`tools/real_game/pending.ps1`). Heavy `ow-host` runs (`--walk`, `--play-script`, every `--map` run and every window run) are run
+under it by their caller, since the host does not take it itself. The lock is a PowerShell script and does not run on a Linux
 machine, and the tree holds no Linux equivalent yet. It is named for the retired UE5 host,
 whose launchers held it around every Unreal Editor or commandlet run (this section was "One Unreal run per machine"
 until 2026-11-14); the name stays because the real-game tools dot-source it. A script holds one lock file,
