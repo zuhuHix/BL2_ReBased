@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-WEAPON-ONCREATE (2026-11-25, pc-hummer, on fix/rust-psc-setcolorparameter d3c22f85):** AI-assisted (Claude
+Code, Opus 5.5). `WillowWeapon.OnCreate` in Off, from NATIVE_WEAPON_ON_CREATE.md section 4, sharing the broadcast's
+per-provider step. `cargo test --workspace -j 8` 3,634 passed / 0 failed / 57 ignored; `crate_edges_test.py` 19 OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock): 5 ok / 8 NotYet / 1 error, `links ok 5/14`,
+`step share X = 5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`, past `OnCreate`, an error at the unbound
+`WillowWeapon.GetFiringModeDefinition()`. No real-game run.
+
 **IMPL-PSC-SETCOLORPARAMETER (2026-11-25, pc-hummer, on fix/rust-setmaterial-glow a3ac4c13):** AI-assisted (Claude
 Code, Opus 5.5). `ParticleSystemComponent.SetColorParameter` in Off, from NATIVE_PSC_SET_COLOR_PARAMETER.md section 3.
 `cargo test --workspace -j 8` 3,625 passed / 0 failed / 57 ignored; `crate_edges_test.py` 19 OK. Installed Off strict

@@ -225,6 +225,13 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ("TestDelay", provider_package(&delayed())),
         ("TestParams", provider_package(&params())),
         ("TestRefuse", provider_package(&refusing())),
+        // WillowWeapon.OnCreate's providers (lane IMPL-WEAPON-ONCREATE).
+        ("TestCreateA", provider_package(&on_create_spec(CREATE_A, "CA", "Behavior_ToyWrite", None))),
+        ("TestCreateB", provider_package(&on_create_spec(CREATE_B, "CB", "Behavior_ToySame", None))),
+        ("TestCreateOther", provider_package(&on_create_spec(CREATE_OTHER, "CO", "Behavior_ToySame", Some("OnOther")))),
+        ("TestCreateOff", provider_package(&on_create_disabled())),
+        ("TestCreateRefuse", provider_package(&on_create_spec(CREATE_REFUSE, "CR", "Behavior_ToyRefuse", None))),
+        ("TestCreateEmpty", provider_package(&Spec::new(CREATE_EMPTY, vec![], vec![]))),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -318,6 +325,33 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
             } else {
                 Ok(Vec::new())
             }
+        }),
+    )
+    .unwrap();
+    // Lane IMPL-WEAPON-ONCREATE: a behavior that writes its consumer's ConsumerHandle back (one committed write), and
+    // one that refuses.
+    let wrote = seen.clone();
+    registry::register(
+        &mut vm,
+        "WillowGame.Behavior_ToyWrite",
+        Handler::run(move |vm, p, id, event| {
+            if let Some(c) = p.consumer() {
+                let class = vm.space.heap.get(c).map_err(|e| crate::provider::BehaviorError::Vm(e.into()))?.class;
+                if let Some(prop) = vm.space.prop(class, "ConsumerHandle") {
+                    let v = vm.space.read(c, PropAddr::scalar(prop)).map_err(|e| crate::provider::BehaviorError::Vm(e.into()))?.clone();
+                    vm.space.write(c, PropAddr::scalar(prop), v).map_err(|e| crate::provider::BehaviorError::Vm(e.into()))?;
+                }
+            }
+            wrote.borrow_mut().push(format!("{event} {} wrote", p.behavior(id).name));
+            Ok(Vec::new())
+        }),
+    )
+    .unwrap();
+    registry::register(
+        &mut vm,
+        "WillowGame.Behavior_ToyRefuse",
+        Handler::run(|_, _, _, _| {
+            Err(crate::provider::BehaviorError::Vm(ow_core::NotYet::not_read("an invented OnCreate behavior", "TOY.md").into()))
         }),
     )
     .unwrap();
@@ -1042,4 +1076,252 @@ fn refused_parameters_fire_nothing() {
     })
     .unwrap();
     assert_eq!((count, siren), (0, None), "the trigger count and the variables are untouched");
+}
+
+// ---- WillowWeapon.OnCreate (NATIVE_WEAPON_ON_CREATE.md section 5; lane IMPL-WEAPON-ONCREATE) ----------------------------
+
+const CREATE_A: &str = "ToyCreateA";
+const CREATE_B: &str = "ToyCreateB";
+const CREATE_OTHER: &str = "ToyCreateOther";
+const CREATE_OFF: &str = "ToyCreateOff";
+const CREATE_REFUSE: &str = "ToyCreateRefuse";
+const CREATE_EMPTY: &str = "ToyCreateEmpty";
+
+/// One enabled sequence whose event `event` (default `OnCreate`) runs one behavior of `class`.
+fn on_create_spec(provider: &'static str, behavior: &'static str, class: &'static str, event: Option<&'static str>) -> Spec {
+    Spec::new(
+        provider,
+        vec![Seq {
+            name: "Create",
+            enabled_on_spawn: Some(true),
+            events: vec![ev(event.unwrap_or("OnCreate"), (0, 1))],
+            behaviors: vec![beh(behavior, class, (0, 0))],
+            links: vec![(0, -1, 0.0)],
+            ..Seq::default()
+        }],
+        vec![],
+    )
+}
+
+/// An `OnCreate` entry whose enabled bit is clear (test 8).
+fn on_create_disabled() -> Spec {
+    Spec::new(
+        CREATE_OFF,
+        vec![Seq {
+            name: "Create",
+            enabled_on_spawn: Some(true),
+            events: vec![Ev { enabled: Some(false), ..ev("OnCreate", (0, 1)) }],
+            behaviors: vec![beh("CD", "Behavior_ToySame", (0, 0))],
+            links: vec![(0, -1, 0.0)],
+            ..Seq::default()
+        }],
+        vec![],
+    )
+}
+
+impl Toy {
+    /// Declares `OnCreate(optional array Providers)` on the toy pawn class (a method, not static) and binds the pack.
+    fn declare_on_create(&mut self) {
+        let providers = param(&mut self.vm, "Providers", PropKind::Array(Box::new(PropKind::Int)), true);
+        let mut decl = FunctionDecl::native(ObjectPath::parse(ON_CREATE).unwrap(), ON_CREATE).with_owner(self.pawn);
+        decl.params = vec![providers];
+        self.vm.declare_function(decl).expect("declared");
+        Pack.register(&mut self.vm).unwrap();
+    }
+
+    /// A toy weapon registered as a consumer, its `ConsumerHandle` set, with the given providers initialised.
+    fn weapon(&mut self, providers: &[(&str, &str)]) -> ObjRef {
+        let w = self.object(self.pawn, "Weapon_0");
+        let h = self.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(w))]).unwrap();
+        self.set_handle(w, h.clone());
+        for (file, path) in providers {
+            let d = self.definition(file, path);
+            self.call(INITIALIZE_PROVIDER, None, vec![h.clone(), Value::Object(Some(d))]).unwrap();
+        }
+        w
+    }
+
+    fn set_handle(&mut self, o: ObjRef, h: Value) {
+        let p = self.vm.space.prop(self.pawn, "ConsumerHandle").unwrap();
+        self.vm.space.write(o, PropAddr::scalar(p), h).unwrap();
+    }
+
+    fn get_handle(&self, o: ObjRef) -> Value {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, "ConsumerHandle").unwrap();
+        self.vm.space.read(o, PropAddr::scalar(p)).unwrap().clone()
+    }
+
+    fn on_create(&mut self, w: ObjRef) -> Result<Value, VmError> {
+        let f = self.vm.find_function(ON_CREATE)?;
+        Ok(self.vm.call(f, Some(w), vec![])?.ret)
+    }
+
+    fn marks(&self) -> (u64, u64, u64, usize) {
+        let vm = &self.vm;
+        (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+    }
+}
+
+fn on_create_toy() -> Toy {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    t.declare_on_create();
+    t
+}
+
+/// Tests 1 and 2: one provider's `OnCreate` entry runs its behavior once; with two providers both run, in registration
+/// order.
+#[test]
+fn on_create_fires_on_every_provider_in_registration_order() {
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateA", CREATE_A)]);
+    t.on_create(w).unwrap();
+    assert_eq!(t.seen(), ["OnCreate CA wrote"]);
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateB", CREATE_B), ("TestCreateA", CREATE_A)]);
+    t.on_create(w).unwrap();
+    assert_eq!(t.seen(), ["OnCreate CB consumer=Weapon_0", "OnCreate CA wrote"]);
+}
+
+/// Tests 3, 5 and 8: another event name, providers with no sequences (link 8's case) and a disabled `OnCreate` entry
+/// run nothing.
+#[test]
+fn on_create_runs_nothing_without_an_enabled_on_create_entry() {
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateOther", CREATE_OTHER), ("TestCreateEmpty", CREATE_EMPTY), ("TestCreateOff", CREATE_OFF)]);
+    let before = t.marks();
+    t.on_create(w).unwrap();
+    assert!(t.seen().is_empty());
+    assert_eq!(t.marks(), before);
+}
+
+/// Tests 4 and 4a: a handle never registered, and one released by `ForceUnregisterBehaviorConsumer`: nothing, no
+/// error, and the handle unchanged.
+#[test]
+fn on_create_on_an_unowned_or_released_handle_is_nothing() {
+    let mut t = on_create_toy();
+    let w = t.object(t.pawn, "Weapon_9");
+    let h = t.handle(9);
+    t.set_handle(w, h.clone());
+    t.on_create(w).unwrap();
+    assert_eq!(t.get_handle(w), h);
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateA", CREATE_A)]);
+    let h = t.get_handle(w);
+    let f = t.vm.find_function(FORCE_UNREGISTER).unwrap();
+    t.vm.call(f, None, vec![h.clone()]).unwrap();
+    t.on_create(w).unwrap();
+    assert!(t.seen().is_empty());
+    assert_eq!(t.get_handle(w), h, "OnCreate does not touch the handle");
+}
+
+/// Test 6: a supplied `Providers` array is the `NotRead`, before anything fires.
+#[test]
+fn on_create_with_a_providers_argument_is_not_read() {
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateA", CREATE_A)]);
+    let f = t.vm.find_function(ON_CREATE).unwrap();
+    let before = t.marks();
+    match t.vm.call(f, Some(w), vec![Value::array(vec![])]) {
+        Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, ON_CREATE_PROVIDERS)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.marks(), before);
+    assert!(t.seen().is_empty());
+}
+
+/// Test 7: `ConsumerHandle` missing or of the wrong kind: a script error.
+#[test]
+fn on_create_without_a_consumer_handle_is_a_script_error() {
+    let mut t = on_create_toy();
+    let bare = t.object(t.bare, "Bare_0");
+    assert!(matches!(t.on_create(bare), Err(VmError::Script { .. })));
+    let odd = {
+        let field = PropertyDecl::new(t.vm.space.names.intern("ConsumerHandle"), PropKind::Int);
+        let c = t.vm.space.classes.define("ToyKernel.ToyOddWeapon", None, vec![field]).unwrap();
+        t.object(c, "Odd_0")
+    };
+    match t.on_create(odd) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("ConsumerHandle"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Test 9: a crate-owned handle runs the crate's route body for `OnCreate`; with none, the stub policy's answer.
+#[test]
+fn on_create_on_a_crate_handle_takes_the_crate_s_body_or_the_stub() {
+    let mut t = on_create_toy();
+    claim(&mut t.vm, 5, "toy").unwrap();
+    let w = t.object(t.pawn, "Weapon_5");
+    let h = t.handle(5);
+    t.set_handle(w, h);
+    t.vm.stub_policy = StubPolicy::refuse_all();
+    assert!(matches!(t.on_create(w), Err(VmError::UnboundNative(_))), "no body: the stub policy");
+    route(&mut t.vm, "toy", ON_CREATE, Rc::new(|c: &mut NativeCall<'_>| {
+        c.vm.log.push("toy OnCreate".to_string());
+        Ok(Value::None)
+    }))
+    .unwrap();
+    t.on_create(w).unwrap();
+    assert_eq!(t.vm.log.last().map(String::as_str), Some("toy OnCreate"));
+}
+
+/// Test 10: two providers, the second refuses: the first's behavior ran and its write stays; the refusal is marked
+/// "stopped after partial writes", its kind and record kept.
+#[test]
+fn on_create_inherits_the_broadcast_s_non_atomicity() {
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateA", CREATE_A), ("TestCreateRefuse", CREATE_REFUSE)]);
+    let writes = t.vm.space.heap.committed_writes();
+    match t.on_create(w) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(ow_core::notyet::is_partial_writes(&n.what), "{n}");
+            assert!(n.what.contains("an invented OnCreate behavior"), "{n}");
+            assert_eq!(n.record, "TOY.md");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.seen(), ["OnCreate CA wrote"], "the first provider ran");
+    assert!(t.vm.space.heap.committed_writes() > writes, "its write stays");
+    // The refusing provider first: no write came before it, so no mark.
+    let mut t = on_create_toy();
+    let w = t.weapon(&[("TestCreateRefuse", CREATE_REFUSE), ("TestCreateA", CREATE_A)]);
+    match t.on_create(w) {
+        Err(VmError::NotYet(n)) => assert!(!ow_core::notyet::is_partial_writes(&n.what), "{n}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Test 11: no kernel service: `NotYet { LayerAbsent }`, "the behavior kernel natives", nothing written.
+#[test]
+fn on_create_without_the_kernel_service_is_layer_absent() {
+    let mut t = toy(ParityMode::Off);
+    let providers = param(&mut t.vm, "Providers", PropKind::Array(Box::new(PropKind::Int)), true);
+    let mut decl = FunctionDecl::native(ObjectPath::parse(ON_CREATE).unwrap(), ON_CREATE).with_owner(t.pawn);
+    decl.params = vec![providers];
+    t.vm.declare_function(decl).unwrap();
+    t.vm.register_native(ON_CREATE, Rc::new(on_create)).unwrap();
+    let w = t.object(t.pawn, "Weapon_0");
+    let h = t.handle(0);
+    t.set_handle(w, h);
+    let before = t.marks();
+    match t.on_create(w) {
+        Err(VmError::NotYet(n)) => {
+            assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+            assert_eq!(&*n.what, "the behavior kernel natives");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.marks(), before);
+}
+
+/// Test 12: Reference binds nothing for `OnCreate`.
+#[test]
+fn reference_does_not_bind_on_create() {
+    let mut t = toy(ParityMode::Reference);
+    Pack.register(&mut t.vm).unwrap();
+    t.declare_on_create();
+    assert!(!t.vm.has_native(ON_CREATE));
 }
