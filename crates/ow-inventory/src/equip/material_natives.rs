@@ -12,9 +12,9 @@
 //!    after the declarations;
 //! 2. a negative index: nothing;
 //! 3. an index within `Materials` whose entry is already the material: nothing;
-//! 4. otherwise the deferred reattach's preflight, today's `component_setters::reattach_check`: `Owner` set is
-//!    `REATTACH_OWNER`, no `Owner` with a `Scene` set is `REATTACH_SCENE`. PR #709 is amending that check's owner
-//!    branch; this lane builds to the check as it is on its base.
+//! 4. otherwise the deferred reattach's preflight, `component_setters::reattach_check`. With an `Owner`, that is
+//!    #714's owner rule (`REATTACH_OWNER` for a static or tick-disabled owner that is not deleted; an owner the store
+//!    has not loaded is its not-loaded refusal). With no `Owner`, a `Scene` set is `REATTACH_SCENE`.
 //!
 //! The commit grows `Materials` to reach the index (**UNVERIFIED (fitted): the new entries are None**), sets the entry,
 //! then `bNeedsReattach` = true. Every write after the first goes through `component_setters::after_writes`. A receiver
@@ -206,6 +206,14 @@ fn array_of(vm: &Vm, o: ObjRef, name: &str) -> Result<Vec<Value>, VmError> {
     }
 }
 
+/// `v` as a name, else a data error naming the field (review of #718).
+fn name_of(v: Value, field: &str) -> Result<Value, VmError> {
+    match v {
+        Value::Name(_) => Ok(v),
+        other => Err(bad(GET_WHAT, format!("{field} holds {}, not a name", other.kind_name()))),
+    }
+}
+
 fn struct_field(vm: &Vm, entry: &Value, owner: &str, name: &str) -> Result<Value, VmError> {
     ow_attr::eval::field(&vm.space, entry, name)
         .cloned()
@@ -228,7 +236,7 @@ fn scalar_of(vm: &Vm, o: ObjRef, name: &Value, asking: &mut Vec<ObjRef>) -> Resu
             return Ok(None);
         }
         for entry in array_of(vm, o, "ScalarParameterValues")? {
-            if struct_field(vm, &entry, "ScalarParameterValues", "ParameterName")? == *name {
+            if name_of(struct_field(vm, &entry, "ScalarParameterValues", "ParameterName")?, "ParameterName")? == *name {
                 return match struct_field(vm, &entry, "ScalarParameterValues", "ParameterValue")? {
                     Value::Float(f) => Ok(Some(f)),
                     other => Err(bad(GET_WHAT, format!("ParameterValue holds {}, not a float", other.kind_name()))),
@@ -264,7 +272,7 @@ fn scalar_of(vm: &Vm, o: ObjRef, name: &Value, asking: &mut Vec<ObjRef>) -> Resu
             if !vm.space.classes.is_child_of(e_class, scalar) {
                 continue;
             }
-            if field_of(vm, e, "ParameterName")?.1 == *name {
+            if name_of(field_of(vm, e, "ParameterName")?.1, "ParameterName")? == *name {
                 return match field_of(vm, e, "DefaultValue")? {
                     (PropKind::Float, Value::Float(f)) => Ok(Some(f)),
                     (k, _) => Err(bad(GET_WHAT, format!("DefaultValue is declared as {}, not a float", k.kind_name()))),

@@ -64,6 +64,9 @@ fn engine() -> Vec<u8> {
     let scalar = t.class("MaterialExpressionScalarParameter", expression);
     t.prop("Name", scalar, "ParameterName", 0, 0);
     t.prop("Float", scalar, "DefaultValue", 0, 0);
+    // A scalar-expression subclass that shadows ParameterName with an int (review of #718).
+    let int_name = t.class("ToyIntNameScalar", scalar);
+    t.prop("Int", int_name, "ParameterName", 0, 0);
     let other = t.class("MaterialExpressionToyVector", expression);
     t.prop("Name", other, "ParameterName", 0, 0);
     let material = t.class("Material", interface);
@@ -122,6 +125,10 @@ fn willow() -> Vec<u8> {
     let object = t.p.add_import("Core", "Class", engine, "Object");
     let mesh = t.p.add_import("Core", "Class", engine, "MeshComponent");
     let weapon = t.class("ToyWeapon", object);
+    // The owner rule's flags (#714, `component_setters::OWNER_FLAGS`).
+    for flag in ["bStatic", "bTickIsDisabled", "bDeleteMe"] {
+        t.prop("Bool", weapon, flag, 0, 0);
+    }
     t.prop("Object", weapon, "FirstPersonMesh", 0, mesh);
     t.prop("Object", weapon, "ThirdPersonMesh", 0, mesh);
     t.build()
@@ -312,14 +319,22 @@ fn a_past_the_end_index_grows_the_list_with_none() {
     assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(true));
 }
 
-/// Test 4: an `Owner` is `REATTACH_OWNER`; no `Owner` with a `Scene` is `REATTACH_SCENE`; nothing written.
+/// Test 4, on the deferred reattach as #714's owner rule reads it: a static `Owner` (not deleted) is `REATTACH_OWNER`;
+/// no `Owner` with a `Scene` is `REATTACH_SCENE`; nothing written. A dynamic `Owner` (the three flags clear) passes
+/// the owner rule, so the entry and `bNeedsReattach` are written.
 #[test]
 fn the_deferred_reattach_refuses_before_any_write() {
     let mut x = fx();
     let m = x.mic(&[], None);
     let owner = x.obj("WillowGame.ToyWeapon");
+    x.set(owner, "bStatic", Value::Bool(true));
     let with_owner = x.mesh(Some(owner), 0);
     refused(&mut x, |x| x.set_material(with_owner, 0, Some(m)), REATTACH_OWNER);
+    let dynamic = x.obj("WillowGame.ToyWeapon");
+    let with_dynamic = x.mesh(Some(dynamic), 0);
+    x.set_material(with_dynamic, 0, Some(m)).unwrap();
+    assert_eq!(x.get(with_dynamic, "Materials"), Value::array(vec![Value::Object(Some(m))]));
+    assert_eq!(x.get(with_dynamic, "bNeedsReattach"), Value::Bool(true));
     let with_scene = x.mesh(None, 7);
     refused(&mut x, |x| x.set_material(with_scene, 0, Some(m)), REATTACH_SCENE);
     assert_eq!(x.get(with_scene, "Materials"), Value::array(vec![]));
@@ -366,14 +381,17 @@ fn link_8_s_call_shape_two_meshes_then_the_glow() {
     assert_eq!(x.scalar(m, "p_EmissiveScale", 1.0).unwrap(), (Value::Bool(true), Value::Float(2.5)));
     let orphan = x.mic(&[], None);
     assert_eq!(x.scalar(orphan, "p_EmissiveScale", 1.0).unwrap(), (Value::Bool(false), Value::Float(1.0)));
-    // (ii) The first mesh with an Owner: the first call refuses, so neither mesh is written.
+    // (ii) The first mesh with a static Owner (#714's owner rule): the first call refuses, which stops the script, so
+    // `InitMeshes` makes no second call; the test makes only the first. Neither mesh is written: the
+    // `ThirdPersonMesh` is untouched.
     let mut x = fx();
     let m = x.mic(&[], None);
     let weapon = x.obj("WillowGame.ToyWeapon");
+    x.set(weapon, "bStatic", Value::Bool(true));
     let (first, third) = (x.mesh(Some(weapon), 0), x.mesh(None, 0));
     refused(&mut x, |x| x.set_material(first, 0, Some(m)), REATTACH_OWNER);
     assert_eq!(x.get(first, "Materials"), Value::array(vec![]));
-    assert_eq!(x.get(third, "Materials"), Value::array(vec![]), "the second call is not reached");
+    assert_eq!(x.get(third, "Materials"), Value::array(vec![]), "the ThirdPersonMesh is untouched");
 }
 
 /// Test 6: an entry for the name: true and the out value; the first of two wins; a different number does not match.
@@ -482,4 +500,22 @@ fn an_unlisted_material_class_is_not_read() {
 fn reference_binds_nothing() {
     let x = fx_in(ParityMode::Reference);
     assert!(!x.vm.has_native(SET_MATERIAL) && !x.vm.has_native(GET_SCALAR_PARAMETER_VALUE));
+}
+
+/// Review of #718: an expression whose `ParameterName` is not a name (here a scalar-expression subclass that shadows it
+/// with an int) is a script error naming the field, before any write.
+#[test]
+fn a_parameter_name_that_is_not_a_name_is_a_script_error() {
+    let mut x = fx();
+    let _ready = x.obj(SCALAR_EXPRESSION);
+    let odd = x.obj("Engine.ToyIntNameScalar");
+    let material = x.obj("Engine.Material");
+    x.set(material, "Expressions", Value::array(vec![Value::Object(Some(odd))]));
+    let _ = x.name("p_Glow"); // interned before the marks: the call's own name argument
+    let before = x.marks();
+    match x.scalar(material, "p_Glow", 0.0) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("ParameterName"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.marks(), before);
 }
