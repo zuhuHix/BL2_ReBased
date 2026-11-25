@@ -42,3 +42,9 @@ and test 11's keep-existing and Reference half). `action_skill/class_achievement
 - the event name, shared with the sibling native;
 - the port's impact count at link 9's call;
 - where link 9 stops next (the installed slice gate was not run: there is no install on this machine yet).
+
+**Review r1** (Opus high, ACCEPT; three LOW test gaps closed):
+- An unloaded handle of another class answers false and stays unloaded.
+- An earlier event that wrote nothing leaves a later refusal unmarked: the mark follows the counters.
+- A different handler bound first is kept by both registrations, in either order, with no duplicate-registration
+  error.
