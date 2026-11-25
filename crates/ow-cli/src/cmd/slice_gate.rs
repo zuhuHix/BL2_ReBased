@@ -979,6 +979,8 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         crate::cmd::inventory::equip_run::preload_gestalt_skeletal_mesh(vm, weapon)?;
         // Lane LINK-8-STARTUP-MATERIAL-PRELOAD: the Material part's material, a Startup export the game has resident.
         crate::cmd::inventory::equip_run::preload_material_part_material(vm, weapon)?;
+        // Then the material classes' code and the MaterialClass default object (boot-loaded script classes).
+        crate::cmd::inventory::equip_run::preload_material_classes(vm, weapon)?;
         // Lane SKELMESH-LOD-LAYER: the skeletal mesh data layer, whose LOD count the LOD row asks for.
         crate::cmd::inventory::equip_run::install_mesh_layer(vm, weapon)?;
         Ok(weapon)

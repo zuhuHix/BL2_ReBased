@@ -31,7 +31,9 @@
 //!   stand-in for the mesh being resident with its definition. Then the Material part's `Material`
 //!   ([`preload_material_part_material`], lane LINK-8-STARTUP-MATERIAL-PRELOAD): `BuildWeaponMaterial` refuses a parent
 //!   material that is not resident, and the game loads those materials at boot (Startup exports, SLICE_NPC_ASSETS.md),
-//!   so the harness loads it, an UNVERIFIED stand-in. Each preload logs its line before it runs and its outcome after
+//!   so the harness loads it, an UNVERIFIED stand-in; then [`preload_material_classes`] loads the material classes'
+//!   code and the `MaterialClass` default object `BuildWeaponMaterial` needs ready (boot-loaded script classes in
+//!   the game; a harness set-up load). Each preload logs its line before it runs and its outcome after
 //!   (": loaded", or ": failed (...)" with the error kept).
 //! - **init**: the installed `WillowWeapon.InitializeInternal(false)`, the spawn's script (bases, ammo, the attribute
 //!   slots, the weapon's own effects and slot modifiers, the card).
@@ -846,6 +848,7 @@ fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     preload_gestalt_mesh(vm, weapon)?;
     preload_gestalt_skeletal_mesh(vm, weapon)?;
     preload_material_part_material(vm, weapon)?;
+    preload_material_classes(vm, weapon)?;
     install_mesh_layer(vm, weapon)?;
     Ok(weapon)
 }
@@ -892,6 +895,83 @@ pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Res
         Err(e) => vm.log.push(format!("{MATERIAL_INPUT} {name}: failed ({e})")),
     }
     loaded.map_err(VmError::from)
+}
+
+/// The text of [`preload_material_classes`]'s harness lines.
+pub(crate) const MATERIAL_CLASS_INPUT: &str = "harness input: set-up load of the material classes";
+
+/// The Off harness set-up step after [`preload_material_part_material`] (lane LINK-8-STARTUP-MATERIAL-PRELOAD, the
+/// hub's extension). `BuildWeaponMaterial`'s step 4 (NATIVE_WEAPON_VISUALS.md section 1.1) asks, with no load, for
+/// `Engine.MaterialInstanceConstant` and the weapon type's `MaterialClass` to be ready (a defined layout and loaded
+/// code) and for that class's default object to be resident. Engine and WillowGame script classes are loaded at boot in
+/// the game (they live in the startup and native script packages), so the harness loads, in this order:
+/// 1. `MaterialInstanceConstant`'s class code;
+/// 2. the `MaterialClass`'s class code;
+/// 3. that class's default object (`DefStore::class_default`).
+///
+/// Each is skipped when already so. It is a harness set-up load, not a native stand-in (**UNVERIFIED** that the game
+/// has them resident at that point), and each logs its line before it runs and its outcome after; a failure keeps its
+/// error. A weapon type that is unset or not resident, or a `MaterialClass` that is None: only step 1 (the native
+/// answers those cases itself). Outside Off, nothing. `BuildWeaponMaterial`'s refusals are unchanged.
+pub(crate) fn preload_material_classes(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let mic = ow_inventory::equip::weapon_material::MATERIAL_INSTANCE_CONSTANT;
+    class_code_load(vm, mic)?;
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    let Ok(Value::Object(Some(weapon_type))) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition").cloned()
+    else {
+        return Ok(());
+    };
+    if vm.defs.is_unloaded(&vm.space, weapon_type) {
+        return Ok(());
+    }
+    let Some(Value::Class(Some(class))) = ow_inventory::equip::read_prop(vm, weapon_type, "MaterialClass") else {
+        return Ok(());
+    };
+    let path = vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string());
+    let Some(path) = path else {
+        return Ok(());
+    };
+    class_code_load(vm, &path)?;
+    let resident = vm
+        .space
+        .heap
+        .handles()
+        .into_iter()
+        .any(|o| vm.space.heap.get(o).is_ok_and(|x| x.class == class && matches!(x.origin, ow_object::heap::Origin::Default { .. })));
+    if resident {
+        return Ok(());
+    }
+    vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the default object of {path} (loaded at boot in the game: UNVERIFIED)"));
+    let built = vm.defs.class_default(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    match &built {
+        Ok(_) => vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the default object of {path}: loaded")),
+        Err(e) => vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the default object of {path}: failed ({e})")),
+    }
+    built.map(|_| ()).map_err(VmError::from)
+}
+
+/// One class-code step of [`preload_material_classes`]: `path`'s layout and code through `Vm::find_class`, logged
+/// before and after, unless the class is already defined with its code loaded.
+fn class_code_load(vm: &mut Vm, path: &str) -> Result<(), VmError> {
+    let ready = vm.space.classes.by_path(path).is_some_and(|c| {
+        vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()) && vm.class_code_loaded(c)
+    });
+    if ready {
+        return Ok(());
+    }
+    vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the class code of {path} (loaded at boot in the game: UNVERIFIED)"));
+    let found = vm.find_class(path);
+    vm.log.extend(vm.defs.take_log());
+    match &found {
+        Ok(_) => vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the class code of {path}: loaded")),
+        Err(e) => vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the class code of {path}: failed ({e})")),
+    }
+    found.map(|_| ())
 }
 
 /// The text of [`install_mesh_layer`]'s line.
