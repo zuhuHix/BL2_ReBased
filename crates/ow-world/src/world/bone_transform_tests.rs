@@ -732,7 +732,8 @@ fn keep_existing_in_off_and_nothing_in_reference() {
         );
     }
     let r = fx_with(ParityMode::Reference, true);
-    assert!(!r.vm.has_native(FORCE_SKEL_UPDATE) && !r.vm.has_native(UPDATE_ANIMATIONS));
+    assert!(!r.vm.has_native(FORCE_SKEL_UPDATE), "ForceSkelUpdate unbound under Reference");
+    assert!(!r.vm.has_native(UPDATE_ANIMATIONS), "UpdateAnimations unbound under Reference");
 }
 
 /// Lane BIND-UPDATEANIMATIONS-FORCESKELUPDATE: the world's own pack, which `World::new` registers in every slice world
@@ -743,8 +744,9 @@ fn the_world_pack_binds_both_natives_in_off_only() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let mut x = fx_with(mode, false);
         ow_vm::api::NativePack::register(&crate::world::Pack, &mut x.vm).unwrap();
-        let bound = x.vm.has_native(FORCE_SKEL_UPDATE) && x.vm.has_native(UPDATE_ANIMATIONS);
-        assert_eq!(bound, mode == ParityMode::Off, "{mode:?}");
+        let off = mode == ParityMode::Off;
+        assert_eq!(x.vm.has_native(FORCE_SKEL_UPDATE), off, "ForceSkelUpdate, {mode:?}");
+        assert_eq!(x.vm.has_native(UPDATE_ANIMATIONS), off, "UpdateAnimations, {mode:?}");
         if mode == ParityMode::Off {
             register(&mut x.vm).unwrap();
             let mesh = x.export("Mesh_Chain");

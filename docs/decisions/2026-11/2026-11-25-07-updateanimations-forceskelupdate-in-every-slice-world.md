@@ -27,16 +27,17 @@ The refusals and counters are already covered by `bone_transform_tests.rs` from 
   `WillowPawn.WeaponChanged`, `WillowPlayerPawn.OnPlayArmAnimation` and `WillowWeapon.TimeWeaponEquipping`, the equip
   paths (link 8).
 
-**Today no link reaches either** (installed Off strict `--slice-gate`, 4 ok / 10 NotYet / 0 error, as main d3c7a13):
+**No call in the instrumented run** (installed Off strict `--slice-gate`, 4 ok / 10 NotYet / 0 error, as main d3c7a13):
 - link 1 stops at `maya:8`, at the skeletal mesh data layer's missing reference skeleton, before Maya's body-class
-  step; links 3, 4, 5, 13 and 14 are blocked behind it;
+  step. Links 3, 4, 5, 13 and 14 do not run their own steps: they are blocked behind link 1;
 - link 8 stops in `init`, at `SetSkeletalMesh`'s LOD info, before any `WeaponChanged` or `TimeWeaponEquipping`;
-- a throwaway probe (an `eprintln!` at the entry of each native, reverted, never committed) counted **zero** calls of
-  either native over a second installed run, which again gave 4 ok / 10 NotYet / 0 error.
+- a throwaway probe (an `eprintln!` at the entry of each native, not committed) counted **zero** calls of either
+  native in the instrumented Off strict run on main d3c7a13, which again gave 4 ok / 10 NotYet / 0 error. That result
+  covers that run only.
 
-When those stops lift, Maya's mesh and arms have trees, so `UpdateAnimations` would answer `NotPorted` there
-(UNVERIFIED), and `ForceSkelUpdate` would answer nothing on an unattached arms mesh. This is what the host did, not
-parity.
+What the natives do once those blockers lift is not known. From section 6.4, Maya's mesh and arms would have trees
+there, so `UpdateAnimations` would answer `NotPorted`, and `ForceSkelUpdate` would answer nothing on an unattached arms
+mesh. Both are UNVERIFIED. This is what the host did, not parity.
 
 **Gates.** `cargo test --workspace -j 8`: 3,365 passed / 0 failed / 52 ignored. `crate_edges_test.py`: 19 OK. Installed
 Off strict `--slice-gate` (release build, under the machine lock): 4 ok / 10 NotYet / 0 error; link 1 is 0 of 2 at
