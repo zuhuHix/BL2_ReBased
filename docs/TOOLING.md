@@ -322,6 +322,8 @@ cargo test --workspace
 cargo run -p ow-host -- --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
 ```
 
+The host's commands are in "`ow-host`: the Rust host" below.
+
 The crates port the C++ core in `src/` one at a time; they do not wrap it. Until a crate meets its done-when rule
 (in its `lib.rs` doc comment where one is written), the C++ build stays the reference and keeps building and testing
 with CMake and ctest, and nothing about the 832/46 format is re-derived: the port reuses the offsets the C++ code
@@ -335,9 +337,6 @@ from `src/` and `tools/`, the allowed dependency edges and the Rust `ow-package`
 `python tests/crate_edges_test.py` (ctest `py-crate_edges`) fails on an edge outside the table, a third-party crate, a
 banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
 
-- `ow-host --game <install>` checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk`
-  and `WillowGame.upk` (rule 11), then says that the host on the chosen engine route is not written yet and stops
-  (exit 0; 1 when it refuses the folder, 2 for a wrong call).
 - The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; every command family is ported (decision
   2026-11-16-38). Exit code 3 means the command met a `NotYet` (a rule, layer or native not ported or read yet).
 - Since lane W3-SWITCH (2026-11-15), the Python tools whose `ow-package` flags are all ported default to the Rust
@@ -347,19 +346,70 @@ banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
   path with forward slashes does not start there). The tools that keep the C++ default, and the flag each waits for, are in decision
   2026-11-15-17 (`grep -n "waits_for=" tools/*.py`).
 
-Beyond `ow-host`'s install check and five finished `ow-core` files (`NotYet`, object paths, the key-ordered and
-insertion-ordered maps, the parity mode), every module is a stub that its owner lane fills; nothing in Rust reads a
-package yet, so every statement about the Rust route is `UNVERIFIED`. The engine route is chosen: the maintainer picked
-an own engine on wgpu + winit on 2026-11-15 from the Phase 0R benchmark
-([record](verification/ENGINE_BENCHMARK.md),
-[decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Its prototypes stay under
-ignored `local/bench/`, and no engine crate enters the workspace before its `THIRD_PARTY.md` entry is approved.
+How far each crate has come is not kept here: see `ROADMAP.md` ("How it's going") and
+[GATES.md](verification/GATES.md). Every statement about what the Rust route does in the game stays `UNVERIFIED` until
+it has been checked against the running game. The engine route is chosen: the maintainer picked an own engine on wgpu +
+winit on 2026-11-15 from the Phase 0R benchmark ([record](verification/ENGINE_BENCHMARK.md),
+[decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). `wgpu` and `winit` are the
+only engine crates, they live only in `ow-host` (`THIRD_PARTY.md`, "Engine crates: wgpu and winit"), and the benchmark's
+prototypes stay under ignored `local/bench/`. Any further engine crate needs its own `THIRD_PARTY.md` entry first.
+
+### `ow-host`: the Rust host
+
+`ow-host` (`crates/ow-host`, binary `target/<profile>/ow-host`, `.exe` on Windows) is the host on that route: a winit
+window, a wgpu device, and a frame loop that steps a simulation through the host boundary (`crates/ow-host/src/sim.rs`).
+`ow-host` with no arguments, or with a wrong one, prints its usage line (from `crates/ow-host/src/args.rs`) and exits 2.
+What follows is what the host does today. It is the host doing it, not parity with the game: the movement, the world,
+the weapon numbers and the lighting are all `UNVERIFIED` in the running game, and the scene is drawn with the host's
+own materials and lights.
+
+Every command except `--headless-probe` checks the install first (rule 11): `--game` must hold
+`WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk` and `WillowGame.upk`, or the host refuses to start (exit 1).
+The commands read the installed packages directly; none of them needs `local/` data, except that `--weapon`, `--arms`,
+`--pawn` and `--world-pawns` take files or folders you prepare under ignored `local/` (they name game objects or are
+UModel exports).
+
+| Command | What it does |
+|---|---|
+| `ow-host --game <install>` | The install check only, then stops (exit 0). |
+| `ow-host --headless-probe` | Prints the GPU adapter, backend, device type and driver, with no window and no install check. Exit 4 means no adapter on that machine (no GPU or driver), not a fault of the build. |
+| `ow-host --game <install> --window` or `--frames N [--time-limit S]` | The bare window and frame loop: it clears and presents and draws nothing from the game. `--frames` stops after N presented frames; a run that has not presented them by its deadline (`--time-limit S`, or a default from N) exits 1. |
+| `... --map <package> --window` or `--frames N` | Draws that map's scene (its levels and placements, with the host's materials and lighting) from the first player start, 100 uu up, with a fly camera. Prints a load report (counts only). `--size WxH` sets the window in physical pixels; `--screenshot <png>` writes frame 30, so `--frames` must be at least 30. |
+| `ow-host --game <install> --walk` | The scripted Sanctuary walk, headless: the H4 mover against the scene's collision at the fixed 1/60 s step, with its two checks (it does not fall through, it does not stick). It prints `result: PASS` and exits 0, or exits 1. A stall at a wall is reported by name and is not a failure. |
+| `... --map <package> --play-script <file>` | The play mode headless: the script drives the same mover one input per step, on the map loaded as a world (`ow-world`) unless `--no-world` is given. It prints per-segment path digests, an end digest and the world's digest, so runs can be compared bit for bit. `--weapon <file>` adds the held weapon. |
+| `... --map <package> --play [--play-script <file>]` | The play mode in the window, first person: WASD, mouse and space, Escape releases the cursor, a left click takes it back, F1 toggles the fly camera. With a script it replays that script, giving the same digests as the headless run. It also takes `--weapon <file>`, `--arms <dir>` (first-person arms from a UModel export), `--pawn NAME DIR X Y Z YAW` (repeatable, a third-person pawn), `--world-pawns <dir>` (repeatable, folders to draw the world's placed pawns from), `--no-world`, `--size`, `--screenshot` and `--no-vsync`. |
+
+Notes:
+- **Play script format** (`crates/ow-assets/src/movement/walk.rs`): one segment per line, `seconds forward strafe
+  actions yaw name...`. The actions are `0`, `1` or `j` for a jump on the first tick, `f` for the trigger held, `jf`
+  for both. Yaw is in rotator units per tick. Empty lines and lines starting with `#` are skipped. A script that names a
+  map's places is game-derived: keep it under ignored `local/`.
+- **Weapon file** (`crates/ow-host/src/weapon.rs`): the fields of `ow-package --item-stats --data` (definition, balance,
+  manufacturer, parts, prefix, title, level), evaluated in an `ow-world` world. Without a file the equipped weapon is
+  `NotYet` (no save or loadout is ported), and the host says so.
+- **The world halts, it does not guess.** When the world meets a rule that is not ported (a `NotYet`), it stops ticking
+  and prints the halt line; the mover and the drawing go on. The latest halt point and digests are in GATES.md, "Host
+  play mode on the loaded world".
+- **Heavy runs.** `--walk`, `--play-script` and every window run load the whole scene, so they are heavy runs: take
+  the machine's lock first ("The run lock" below). `ow-host` does not take it itself. Run the release build
+  (`cargo build --release -p ow-host --locked`) for timings.
+- **The slice gate is not an `ow-host` flag.** The 14-link slice gate runs headless in the Rust `ow-package`
+  (`ow-package --slice-gate --cooked <dir>`, `crates/ow-cli`). Running the same links in `ow-host --play` is planned in
+  [SLICE_RUN_PLAN.md](rust-port/SLICE_RUN_PLAN.md) (SLICE-GATE-HOST) and does not exist yet.
+- **Gates and baselines** for each part of the host (H1 window, H4 movement, H4-PLAY, H4-WEAPON, H-WORLD), with the exact
+  command lines and what counts as a pass, are in [GATES.md](verification/GATES.md). Copy the command lines from there,
+  not the numbers.
+
+The UE5 host these commands replace, with its launchers and suites, is history: `git show 08bcf3e:docs/TOOLING.md`
+and "Retired with the UE5 host (2026-11-14)" at the end of this file.
 
 ## The run lock: one heavy run per machine
 
 `tools/ue_lock.ps1` (dot-source it) is the machine-wide run lock: one heavy run at a time per machine. Today the
 real-game helpers take it (`Enter-RunLock` in `tools/real_game/realgame.ps1`, and the record and recovery steps of
-`tools/real_game/pending.ps1`); a run of the future Rust host is to take it too. It is named for the retired UE5 host,
+`tools/real_game/pending.ps1`). Heavy `ow-host` runs (`--walk`, `--play-script`, and any window) are run under it by
+their caller, since the host does not take it itself. The lock is a PowerShell script and does not run on a Linux
+machine, and the tree holds no Linux equivalent yet. It is named for the retired UE5 host,
 whose launchers held it around every Unreal Editor or commandlet run (this section was "One Unreal run per machine"
 until 2026-11-14); the name stays because the real-game tools dot-source it. A script holds one lock file,
 `%LOCALAPPDATA%\OpenWillow\ue_run.lock`, from before its launch until the process has exited:
