@@ -162,7 +162,9 @@ mod tests {
             fs::write(cooked.join(name.to_ascii_lowercase()), b"").unwrap();
         }
         let found = find_install(&dir).unwrap();
-        assert!(found.cooked.ends_with("steamassets/willowgame/cookedpcconsole"), "{:?}", found.cooked);
+        // Ignoring case: a case-insensitive volume (Windows CI) answers with the requested spelling (review r2 of #675).
+        assert!(ow_core::install::ends_with(&found.cooked, "steamassets/willowgame/cookedpcconsole"), "{:?}", found.cooked);
+        assert!(found.cooked.is_dir());
         assert_eq!(found.root, dir);
         fs::remove_file(cooked.join("core.upk")).unwrap();
         assert!(matches!(find_install(&dir), Err(InstallError::MissingPackage(_))), "a missing package still refuses");
