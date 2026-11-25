@@ -856,13 +856,19 @@ fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
 /// The text of [`preload_material_part_material`]'s harness lines.
 pub(crate) const MATERIAL_INPUT: &str = "harness input: preload the Material part's Material";
 
+/// The package a Material-part material must come from to be preloaded (review of #712).
+pub(crate) const STARTUP_PACKAGE: &str = "Startup";
+
 /// The Off harness preload of lane LINK-8-STARTUP-MATERIAL-PRELOAD: the weapon's `DefinitionData.MaterialPartDefinition`'s
-/// `Material`, when the part is set and resident and the material is one of the store's unloaded handles, is loaded
-/// through the store. `BuildWeaponMaterial`'s preflight (NATIVE_WEAPON_VISUALS.md section 1.1, step 3) refuses a parent
-/// material that is not resident, because a lazy load is a write. The weapon materials are Startup exports, which the
-/// game loads at boot (SLICE_NPC_ASSETS.md records the `Common_GunMaterials` materials there), so in the game the
-/// material is resident before any weapon is built; this load stands in for that (**UNVERIFIED stand-in**). Only that
-/// one object: neither its parent chain nor the part is loaded here. It is logged before it runs (rule 7) and its
+/// `Material`, when the part is set and resident, the material is one of the store's unloaded handles, **and its export
+/// is in the `Startup` package** (`DefStore::handle_source`), is loaded through the store. `BuildWeaponMaterial`'s
+/// preflight (NATIVE_WEAPON_VISUALS.md section 1.1, step 3) refuses a parent material that is not resident, because a
+/// lazy load is a write. What is recorded (review of #712): link 8's `Mati_BanditCommonAR` is Startup export 23880
+/// (read 2026-11-25 from the installed `Startup.upk`), and SLICE_NPC_ASSETS.md records the pistol's
+/// `Mati_MaliwanUncommon` as Startup export 23971. That the game loads `Startup` at boot is decision 2026-11-25-36's
+/// statement and no verification record's, so this load is an **UNVERIFIED stand-in** for the material being resident.
+/// A material from any other package is skipped with a logged line, and the native's refusal stands. Only that one
+/// object is loaded: not the part, nor the material's parent chain. It is logged before it runs (rule 7) and its
 /// outcome after; a failed load keeps its error. No part, a cold part, no material, or one already loaded: nothing.
 /// Outside Off, nothing. `BuildWeaponMaterial`'s own refusal is unchanged.
 pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
@@ -884,9 +890,19 @@ pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Res
         return Ok(());
     }
     let name = ow_vm::path_name::path_name(vm, material).unwrap_or_else(|_| format!("{material:?}"));
+    let export = match vm.defs.handle_source(material) {
+        Some((package, index)) if package.eq_ignore_ascii_case(STARTUP_PACKAGE) => index,
+        other => {
+            let from = other.map_or_else(|| "an unknown package".to_string(), |(p, i)| format!("{p} export {i}"));
+            vm.log.push(format!(
+                "{MATERIAL_INPUT} {name}: skipped ({from}, not a Startup export; BuildWeaponMaterial's refusal stands)"
+            ));
+            return Ok(());
+        }
+    };
     vm.log.push(format!(
-        "{MATERIAL_INPUT} {name} (BuildWeaponMaterial loads nothing; the game loads the weapon materials at boot as Startup \
-         exports: UNVERIFIED stand-in)"
+        "{MATERIAL_INPUT} {name} (Startup export {export}; BuildWeaponMaterial loads nothing: UNVERIFIED stand-in for \
+         the material being resident)"
     ));
     let loaded = vm.defs.ensure_loaded(&mut vm.space, material);
     vm.log.extend(vm.defs.take_log());
@@ -909,7 +925,9 @@ pub(crate) const MATERIAL_CLASS_INPUT: &str = "harness input: set-up load of the
 /// 2. the `MaterialClass`'s class code;
 /// 3. that class's default object (`DefStore::class_default`).
 ///
-/// Each is skipped when already so. It is a harness set-up load, not a native stand-in (**UNVERIFIED** that the game
+/// Steps 2 and 3 run only for a `MaterialClass` whose layout is defined and that is a child of
+/// `MaterialInstanceConstant` (review of #712); any other class is skipped with a logged line and left to the native's
+/// own refusal. Each step is skipped when already so. It is a harness set-up load, not a native stand-in (**UNVERIFIED** that the game
 /// has them resident at that point), and each logs its line before it runs and its outcome after; a failure keeps its
 /// error. A weapon type that is unset or not resident, or a `MaterialClass` that is None: only step 1 (the native
 /// answers those cases itself). Outside Off, nothing. `BuildWeaponMaterial`'s refusals are unchanged.
@@ -931,8 +949,16 @@ pub(crate) fn preload_material_classes(vm: &mut Vm, weapon: ObjRef) -> Result<()
     let Some(Value::Class(Some(class))) = ow_inventory::equip::read_prop(vm, weapon_type, "MaterialClass") else {
         return Ok(());
     };
-    let path = vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string());
-    let Some(path) = path else {
+    // Steps 2 and 3 only for a MaterialClass of the family (review of #712): its layout defined and a child of
+    // MaterialInstanceConstant. Any other class is skipped with a line and left to the native's own refusal.
+    let defined = vm.space.classes.get_layout(class).filter(|l| l.is_defined()).map(|l| l.path().as_str().to_string());
+    let in_family =
+        vm.space.classes.by_path(mic).is_some_and(|family| vm.space.classes.is_child_of(class, family));
+    let Some(path) = defined.filter(|_| in_family) else {
+        let shown = vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string());
+        vm.log.push(format!(
+            "{MATERIAL_CLASS_INPUT}: skipped {shown} (no defined layout under {mic}; BuildWeaponMaterial's own refusal stands)"
+        ));
         return Ok(());
     };
     class_code_load(vm, &path)?;

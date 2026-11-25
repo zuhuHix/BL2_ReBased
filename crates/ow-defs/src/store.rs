@@ -1851,6 +1851,19 @@ impl DefStore {
         }
     }
 
+    /// The package and export an unloaded handle will load from (lane LINK-8-STARTUP-MATERIAL-PRELOAD, review of
+    /// #712): the stem of the package file that holds its export and the export's index, read from the store's own
+    /// record without loading anything. None for any other object, and for a package whose stem is not a valid name.
+    pub fn handle_source(&self, obj: ObjRef) -> Option<(String, i32)> {
+        match self.handles.borrow().entries.get(&obj) {
+            Some(Entry::Unloaded { target: (id, index), .. }) => {
+                let name = self.packages.get(*id).package_name().ok()?;
+                Some((name.as_str().to_string(), *index))
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `obj` is one of the store's unloaded handles: [`DefStore::ensure_loaded`] would load it (or, for a
     /// handle whose load failed, return its error again). False for every other object, the stand-ins that stay
     /// stand-ins included.

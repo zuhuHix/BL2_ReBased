@@ -1,8 +1,14 @@
-//! The equip world's Material-part material preload ([`super::preload_material_part_material`], lane
-//! LINK-8-STARTUP-MATERIAL-PRELOAD) on an invented `WillowGame` package (AGENTS.md rule 9). The package has a weapon
-//! class whose `DefinitionData` names a material part, parts whose `Material` names a material export (an unloaded
-//! handle once the part is loaded), a part with none, a part whose material is cut short, and a holder that leaves a
-//! part itself unloaded. Off loads the material and logs it before and after; Reference does nothing.
+//! The equip world's Material-part material preload ([`super::preload_material_part_material`]) and material-class
+//! step ([`super::preload_material_classes`]), lane LINK-8-STARTUP-MATERIAL-PRELOAD, on invented packages (AGENTS.md
+//! rule 9):
+//! - `Engine`: the material classes;
+//! - `WillowGame`: the weapon, part and holder classes, and one part whose material is a `WillowGame` export (not
+//!   Startup);
+//! - `Startup`: parts whose `Material` names a material export (an unloaded handle once the part is loaded), a part
+//!   with none, a part whose material is cut short, and a holder that leaves a part itself unloaded.
+//!
+//! Off loads a Startup material and logs it before and after, and skips any other with a line; Reference does
+//! nothing.
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,6 +36,8 @@ fn engine() -> Vec<u8> {
     let interface = t.class("MaterialInterface", object);
     let mic = t.class("MaterialInstanceConstant", interface);
     t.class("ToyMIC", mic);
+    // Outside the family, and not an ancestor of MaterialInstanceConstant (review of #712).
+    t.class("ToyNotMIC", interface);
     t.build()
 }
 
@@ -50,6 +58,25 @@ fn package() -> Vec<u8> {
     t.prop("Object", data, "MaterialPartDefinition", 0, part);
     t.prop("Object", data, "WeaponTypeDefinition", 0, weapon_type);
     t.prop("Struct", weapon, "DefinitionData", 0, data);
+    // A part whose material is an export of this package, not of Startup (review of #712): skipped.
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Local", payload);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(material, "ToyMati_Local", payload);
+    t.p.build()
+}
+
+/// The `Startup` package: the parts and materials, their classes imported from `WillowGame`.
+fn startup() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+    let material = t.p.add_import("Core", "Class", willow, "ToyMaterialInstance");
+    let part = t.p.add_import("Core", "Class", willow, "ToyMaterialPart");
+    let holder = t.p.add_import("Core", "Class", willow, "ToyPartHolder");
     // `ToyPart_Mat` names `ToyMati_0` (the export after it).
     let next = t.p.next_export();
     let part_mat = next;
@@ -97,10 +124,10 @@ fn fx(mode: ParityMode) -> Fx {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, bytes) = (engine(), package());
+    let (e, bytes, st) = (engine(), package(), startup());
     let defs = DefStore::from_synthetic(
         &dir,
-        &[("Engine.upk", e.as_slice()), ("WillowGame.upk", bytes.as_slice())],
+        &[("Engine.upk", e.as_slice()), ("WillowGame.upk", bytes.as_slice()), ("Startup.upk", st.as_slice())],
         IdentityPolicy::FirstInScanOrder,
         mode,
     )
@@ -148,7 +175,7 @@ impl Fx {
 #[test]
 fn off_loads_the_material_part_s_material_and_logs_it() {
     let mut x = fx(ParityMode::Off);
-    let part = x.find("WillowGame.ToyPart_Mat");
+    let part = x.find("Startup.ToyPart_Mat");
     let weapon = x.weapon(Some(part));
     let material = x.material_of(part);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, material), "an unloaded handle before");
@@ -156,8 +183,8 @@ fn off_loads_the_material_part_s_material_and_logs_it() {
     assert!(!x.vm.defs.is_unloaded(&x.vm.space, material), "loaded");
     let lines = x.lines();
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].contains("WillowGame.ToyMati_0") && lines[0].contains("UNVERIFIED stand-in"), "{}", lines[0]);
-    assert!(lines[1].ends_with("WillowGame.ToyMati_0: loaded"), "{}", lines[1]);
+    assert!(lines[0].contains("Startup.ToyMati_0") && lines[0].contains("UNVERIFIED stand-in"), "{}", lines[0]);
+    assert!(lines[1].ends_with("Startup.ToyMati_0: loaded"), "{}", lines[1]);
     let (before, n) = (x.counts(), x.vm.log.len());
     preload_material_part_material(&mut x.vm, weapon).unwrap();
     assert_eq!((x.counts(), x.vm.log.len()), (before, n), "already loaded: nothing");
@@ -167,8 +194,8 @@ fn off_loads_the_material_part_s_material_and_logs_it() {
 #[test]
 fn nothing_without_a_resident_part_that_names_a_material() {
     let mut x = fx(ParityMode::Off);
-    let plain = x.find("WillowGame.ToyPart_Plain");
-    let holder = x.find("WillowGame.ToyHolder_0");
+    let plain = x.find("Startup.ToyPart_Plain");
+    let holder = x.find("Startup.ToyHolder_0");
     let cold_part = match ow_inventory::equip::read_prop(&x.vm, holder, "Part") {
         Some(Value::Object(Some(p))) => p,
         other => panic!("Part: {other:?}"),
@@ -188,19 +215,19 @@ fn nothing_without_a_resident_part_that_names_a_material() {
 #[test]
 fn a_failed_material_load_keeps_its_error() {
     let mut x = fx(ParityMode::Off);
-    let part = x.find("WillowGame.ToyPart_Broken");
+    let part = x.find("Startup.ToyPart_Broken");
     let weapon = x.weapon(Some(part));
     assert!(preload_material_part_material(&mut x.vm, weapon).is_err());
     let lines = x.lines();
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[1].contains("WillowGame.ToyMati_Cut: failed ("), "{}", lines[1]);
+    assert!(lines[1].contains("Startup.ToyMati_Cut: failed ("), "{}", lines[1]);
 }
 
 /// Reference: nothing is loaded or logged.
 #[test]
 fn reference_does_nothing() {
     let mut x = fx(ParityMode::Reference);
-    let part = x.find("WillowGame.ToyPart_Mat");
+    let part = x.find("Startup.ToyPart_Mat");
     let weapon = x.weapon(Some(part));
     let material = x.material_of(part);
     preload_material_part_material(&mut x.vm, weapon).unwrap();
@@ -280,4 +307,40 @@ fn without_a_material_class_only_the_family_class_loads_and_reference_does_nothi
     let (weapon, _) = r.typed_weapon(Some("Engine.ToyMIC"));
     preload_material_classes(&mut r.vm, weapon).unwrap();
     assert!(r.class_lines().is_empty());
+}
+
+/// Review of #712: a material that is not a Startup export is skipped with a line naming its package and export, and
+/// nothing is loaded.
+#[test]
+fn a_material_outside_startup_is_skipped_with_a_line() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("WillowGame.ToyPart_Local");
+    let weapon = x.weapon(Some(part));
+    let material = x.material_of(part);
+    let before = x.counts();
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.counts(), before, "nothing loaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, material), "still unloaded");
+    let lines = x.lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("WillowGame.ToyMati_Local: skipped (WillowGame export"), "{}", lines[0]);
+    assert!(lines[0].contains("not a Startup export"), "{}", lines[0]);
+}
+
+/// Review of #712: a `MaterialClass` outside the `MaterialInstanceConstant` family gets no class-code or default load,
+/// one skip line, and stays cold, so `BuildWeaponMaterial`'s own refusal is what the run meets (its `class_not_ready`
+/// and `outside_family` answers are tested in `ow-inventory`'s `weapon_material_tests.rs`).
+#[test]
+fn an_out_of_family_material_class_is_skipped_with_a_line() {
+    let mut x = fx(ParityMode::Off);
+    let (weapon, class) = x.typed_weapon(Some("Engine.ToyNotMIC"));
+    let class = class.unwrap();
+    preload_material_classes(&mut x.vm, weapon).unwrap();
+    assert!(!x.vm.class_code_loaded(class), "the out-of-family class stays cold");
+    assert!(!x.has_default_of(class), "no default object built");
+    let lines = x.class_lines();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[1].ends_with("the class code of Engine.MaterialInstanceConstant: loaded"), "{}", lines[1]);
+    assert!(lines[2].contains("skipped Engine.ToyNotMIC"), "{}", lines[2]);
+    assert!(lines.iter().all(|l| !l.contains("the class code of Engine.ToyNotMIC")), "{lines:?}");
 }

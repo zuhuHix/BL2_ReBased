@@ -2,12 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**LINK-8-STARTUP-MATERIAL-PRELOAD (2026-11-25, pc-hummer, on main ce76c5f8):** AI-assisted (Claude Code, Opus 5.5).
-Link 8's set-up preloads the Material part's material (`Mati_BanditCommonAR`, a Startup export), then the material
-classes' code and the `MaterialClass` default object (boot-loaded script classes): harness set-up loads, UNVERIFIED.
-`cargo test --workspace -j 8` 3,549 passed / 0 failed / 59 ignored; `crate_edges_test.py` 19 OK. Installed Off strict
-`--slice-gate` (release build, under the machine lock): 5 ok / 8 NotYet / 1 error, `links ok 5/14`, `step share X =
-5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`, an error at the unbound `MeshComponent.SetMaterial(int,object)`. No
+**LINK-8-STARTUP-MATERIAL-PRELOAD (2026-11-25, pc-hummer, on main b744f9f, after review r1 of #712):** AI-assisted
+(Claude Code, Opus 5.5). Link 8's set-up preloads the Material part's material only when it is a Startup export
+(`Mati_BanditCommonAR`, Startup export 23880, read 2026-11-25), then the material classes' code and a family
+`MaterialClass`'s default object: harness set-up loads, UNVERIFIED. `cargo test --workspace -j 8` 3,563 passed / 0
+failed / 61 ignored; `crate_edges_test.py` 19 OK. Installed Off strict `--slice-gate` (release build, under the machine
+lock): 5 ok / 8 NotYet / 1 error, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`, an
+error at the unbound `MeshComponent.SetMaterial(int,object)`; the preload's line reads "Startup export 23880". No
 real-game run.
 
 **ANALYST-CUSTOMHEAD-PARENT-FLAG (2026-11-25, pc-hummer, docs only, on docs/native-customhead-parent-flag from
