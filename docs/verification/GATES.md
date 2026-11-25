@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-SKELMESH-BOUNDS-SOURCE (2026-11-25, pc-hummer, docs only, on docs/native-skelmesh-bounds-source from
+main 03896e55):** AI-assisted (Claude Code, Opus 5.5). NATIVE_COMPONENT_BOUNDS.md section 9: where a skeletal
+mesh component's `Bounds` come from (two early returns, visibility, six sources, the per-bone step, `BoundsScale`).
+Links 6 and 7's prediction: the port's template-less component takes the no-mesh base rule (a hub ruling is asked).
+No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **ANALYST-SETREPLICATEDSMDATA (2026-11-25, pc-hummer, docs only, on docs/native-set-replicated-smdata from main
 373fe4b0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SET_REPLICATED_SMDATA.md: the owner's replicated
 special-move record that Off's `Play` refuses on the authority. No code changed, so no measured number moved; the

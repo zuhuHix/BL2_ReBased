@@ -307,13 +307,198 @@ The future cases of B.7 get their tests when S is answered.
    `BoundsScale`.
 4. On a skeletal mesh with a physics asset, compare `Bounds` with the union of its bodies' boxes at the current pose.
 
+## 9. Amendment (2026-11-25): where a skeletal mesh component's bounds come from
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-BOUNDS-SOURCE (decision 2026-11-25-NNN),
+analyst only: **another lane implements this section.** Raw output stays under ignored `local/analysis/skelbounds/`.
+**Every rule here is UNVERIFIED in the running game.**
+
+**Why.** The implementation of NATIVE_COMPONENT_SKIP_FLAG.md section 6 (#677) moved links 6 and 7. They now stop in
+`touch` at "stopped after partial writes: Actor.GetBoundingCylinder: a skeletal mesh component's bounds source: not
+read from native code or script yet" (section 7 B.7's skeletal case, record this note).
+
+### 9.1 Evidence, in the order asked
+
+- **bl-sdk live reads:** none. No session was granted, and no recorded capture holds a skeletal component's `Bounds`.
+- **The script:** nothing. The bounds update is a C++ virtual with no script face, and no script function writes
+  `Bounds`.
+- **The native** (Ghidra 12.1.4 headless, read-only, under the machine lock):
+  - the bounds update's slot was found by its base rule (section 3), and its override was read from
+    `SkeletalMeshComponent`'s primary table (found as in NATIVE_COMPONENT_SKIP_FLAG.md section 6);
+  - field names: a local copy of `tools/ghidra/class_layout.py` that gives `MapProperty` a stand-in size (the tracked
+    tool stops at one in this class). The copy's offsets sit a fixed distance from the code's for this class's own
+    fields. That distance is pinned by fields whose use the code shows unambiguously:
+    - `SkeletalMesh`, whose target holds the mesh's `Bounds` first;
+    - `SpaceBases`' count, compared with the mesh's `RefSkeleton` count;
+    - `ParentAnimComponent`, whose target holds a mesh at the same place;
+    - `RootBoneTranslation`, added to the mesh's origin.
+
+    Each flag below was named by that rule, so the names are **by fit (medium-high)**, not read from the executable.
+
+### 9.2 The answer: `GetBoundingCylinder` reads the stored `Bounds`
+
+The box routine (sections 4 and NATIVE_COMPONENT_SKIP_FLAG.md section 4) reads each counted component's **stored**
+`Bounds` field. It computes nothing at the query. So a skeletal component's box is whatever its **bounds update** last
+wrote. That update runs at attach and on transform updates (section 3). The port has no bounds update, so `entry_box`
+recomputes at the query what the update would have written, from stored fields (section 7 B). The rules below are that
+update.
+
+### 9.3 The skeletal bounds update, in order
+
+1. **Early return: a sleeping rigid body.** When the component's `Owner` has `Physics` = `PHYS_RigidBody`,
+   `FramesPhysicsAsleep` is above 5, and a further physics-state test on the owner passes, the update returns and keeps
+   the previous `Bounds`. That test goes through an owner object the layout tool does not place, and it is **not named
+   here**.
+2. **Early return: skipped pose update.** With `bSkipUpdateSkelPose` set (by fit), it returns and keeps the previous
+   `Bounds`.
+3. **Visible or not.** In the game (not the editor), the component counts as visible when **both** of these hold:
+   - its `DetailMode` is no higher than the engine's current detail mode (a global setting);
+   - it is shown, or `bCastHiddenShadow` is set. "Shown" means `HiddenGame` is clear, and either there is no `Owner`,
+     the owner's `bHidden` is clear, or `bIgnoreOwnerHidden` is set.
+
+   The editor uses `HiddenEditor` and the owner's editor-hidden flags instead.
+4. **Can it use the bones?** This is true when all of these hold:
+   - the combined scale is uniform: `Scale` × `Scale3D`, times the owner's `DrawScale` × `DrawScale3D` when there is an
+     owner, with the three axes within 0.0001 of each other;
+   - `SkeletalMesh` is set;
+   - either `SpaceBases` has as many entries as the mesh's reference skeleton, or a `ParentAnimComponent` is set and
+     has a `PhysicsAsset`.
+
+   It is used only by the two physics sources below.
+5. **The source**, the first that applies:
+   - **a. Not visible, or `bComponentUseFixedSkelBounds` set:** the **mesh's stored bounds**. The mesh's own `Bounds`
+     origin, plus `RootBoneTranslation`, goes through the component's `LocalToWorld`. The extent is, per axis, the
+     largest offset over the box's eight transformed corners; that is the sum of the absolute matrix entries weighted
+     by the mesh's extent. The sphere radius is the mesh's radius times the longest of the matrix's three axis rows.
+     This source does not check that `SkeletalMesh` is set;
+   - **b. A `ParentAnimComponent` with a `SkeletalMesh` and its own `bComponentUseFixedSkelBounds` set:** the
+     **parent's mesh's stored bounds**, through this component's `LocalToWorld` as in a. Whether the root offset is
+     added here was not checked;
+   - **c. Its own `PhysicsAsset`, "can use the bones" (step 4), and `bHasValidBodies` set:** the **physics-asset
+     bodies' box** under the current bone transforms (the routine section 3 names; not re-read in detail);
+   - **d. A `ParentAnimComponent` with a `PhysicsAsset`, and "can use the bones":**
+     - with `bUseBoundsFromParentAnimComponent` set, a **copy of the parent's stored `Bounds`**;
+     - otherwise the physics-asset box of c, computed for this component;
+   - **e. No `SkeletalMesh`:** the **base rule** (section 3: origin 0, extent 262144 on each axis, sphere radius
+     √3 × 262144). The update then **returns at once**: no per-bone step, no `BoundsScale`;
+   - **f. Otherwise:** the mesh's stored bounds, exactly as in a.
+6. **Per-bone collision boxes.** After a source other than e: when the mesh has per-poly collision bones (its
+   `PerPolyBoneKDOPs` and `PerPolyCollisionBones`) and `SpaceBases` is not empty, each such bone found in the skeleton
+   widens `Bounds` by its collision box under that bone's current transform.
+7. **`BoundsScale`:** the box extent and the sphere radius (not the origin) are multiplied by `BoundsScale`. Unlike the
+   static mesh rule, **nothing is added**. Then the scene is told.
+
+**Confidence:**
+- high for the order and the branch structure (read);
+- medium-high for the field names (by fit, 9.1);
+- not read: the unnamed physics-state test of step 1, the physics-asset box routine of c and d, and the per-bone step
+  in detail.
+
+### 9.4 The "stopped after partial writes" prefix
+
+It is expected. Section 2 still holds on main: nothing on the touch path (`Touch`, `ValidTouch`,
+`GetTouchTraceLocation`) writes before `GetBoundingCylinder`. The prefix is the pickup driver's (`ow-cli`
+`slice_pickup`, `PARTIAL_WRITES`): it marks every `NotYet` after `make`'s first write, the gun's creation. The bounding
+cylinder itself writes nothing before it refuses.
+
+### 9.5 What the slice's pickup component holds
+
+The port's `new` ignores the template (NATIVE_ATTACH_MESH_TO_PICKUP.md section 1). So the pickup's
+`SkeletalMeshComponent` holds the class defaults, read from `Engine.Default__SkeletalMeshComponent`:
+- `HiddenGame`, `bIgnoreOwnerHidden`, `bCastHiddenShadow`, `bComponentUseFixedSkelBounds`,
+  `bUseBoundsFromParentAnimComponent`, `bHasValidBodies`, `bSkipUpdateSkelPose` and `bSkipAllUpdateWhenPhysicsAsleep`
+  are clear;
+- `DetailMode` 0, `BoundsScale` 1, `Scale` 1, `Scale3D` (1, 1, 1), `RootBoneTranslation` zero;
+- no `PhysicsAsset`, no `ParentAnimComponent`, and **no `SkeletalMesh`** (unless a later lane sets one).
+
+**A prediction, not a run.** Such a component is visible (step 3) and has no fixed bounds, no parent and no physics
+asset. With no mesh it takes **source e, the base rule**: an "unbounded" box of half extent 262144 around the world
+origin. The bounding cylinder's union with the pickup cylinder's box then gives a radius near √2 × 262144 and a half
+height near 262144. **That is the game's rule applied to the port's input, not the game's answer.** In the game the
+component is made from the weapon's `ThirdPersonMesh` template and so has a mesh, and the source would be f.
+
+### 9.6 The proposed Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces `entry_box`'s `SKELETAL_SOURCE` refusal for exact class
+`Engine.SkeletalMeshComponent`. Reads are loaded-only and by name, as `entry_box` already does: nothing is written,
+loaded or drawn. A required object that is not resident is the bounding cylinder's existing refusal N. A field of the
+wrong kind is a `VmError::Script` naming it. In order:
+1. **Step 1.** `Owner` set, its `Physics` = `PHYS_RigidBody` (by the enum's order, looked up by name), and
+   `FramesPhysicsAsleep` above 5: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a sleeping rigid body's
+   kept bounds (the owner's physics test is not read)". Otherwise go on;
+2. **Step 2.** `bSkipUpdateSkelPose` set: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a skeletal mesh
+   component's kept bounds (bSkipUpdateSkelPose)". The port stores no previous `Bounds`;
+3. **Step 3.** `DetailMode` above 0: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: the engine's detail
+   mode". The global is not in the port, and `DM_Low` (0) is never above it. Otherwise visible = shown or
+   `bCastHiddenShadow`, with "shown" as in 9.3 step 3;
+4. **Source a** (not visible, or `bComponentUseFixedSkelBounds`):
+   - no `SkeletalMesh`: a `NotYet` of kind `NotRead`, "Actor.GetBoundingCylinder: a hidden or fixed-bounds skeletal
+     component with no mesh (the game reads it unchecked)";
+   - otherwise a `NotYet` of kind `LayerAbsent`, "Actor.GetBoundingCylinder: a skeletal mesh component's bounds", with
+     layer "a skeletal mesh's stored bounds" (the layer B.7 already names);
+5. **Source b:** the same `LayerAbsent`;
+6. **Sources c and d:** they need "can use the bones" (step 4). Its bone count compares `SpaceBases` with the mesh's
+   reference skeleton, which the port does not read. So the step is decided only as far as the port can:
+   - c with `bHasValidBodies` set: a `NotYet` of kind `LayerAbsent`, `SKELETAL_BOUNDS` with `BONES_LAYER`. A headless
+     world has no physics bodies, so `bHasValidBodies` stays clear and c is skipped;
+   - d (a parent with a `PhysicsAsset`), with uniform scale and a mesh: `bUseBoundsFromParentAnimComponent` set is
+     `LayerAbsent` with the bounding cylinder's `BOUNDS_LAYER` (the parent's stored `Bounds`). Otherwise it is
+     `SKELETAL_BOUNDS` with `BONES_LAYER`;
+7. **Source e** (no `SkeletalMesh`): the box origin (0, 0, 0), extent (262144, 262144, 262144), as read. No
+   `BoundsScale` is applied and no transform is needed, so this is answerable now;
+8. **Source f:** the `LayerAbsent` of step 4. The world transform is not reached while the mesh's stored bounds are
+   absent.
+
+**A ruling the hub should make first (9.5).** Implementing step 7 makes links 6 and 7 pass this entry with the
+unbounded box, because the port's component lacks its template's mesh. The rule is faithful, but the input is not the
+game's, so a later `GetTouchTraceLocation` would raise the trace by about 262144. Two options:
+- **A (rule-faithful):** step 7 as written. Label the slice result UNVERIFIED and record the template gap beside it;
+- **B (honest about the input), recommended:** keep step 7 for components with no template. When the component was
+  made from a template that holds a mesh, answer a `NotYet` of kind `LayerAbsent`, "the component's template (new
+  ignores it)". This needs the port to record a `new` component's template. If it cannot, the real fix is
+  AttachMeshToPickup's template copy (NATIVE_ATTACH_MESH_TO_PICKUP.md open question 1), before this step matters.
+
+### 9.7 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`, on a live, recorded, attached, colliding entry of exact class
+`Engine.SkeletalMeshComponent` with `BulletListener` clear. Each refusal leaves #518's three counters and the name
+table unchanged, and carries no prefix from the cylinder itself:
+1. class defaults, no mesh: box origin 0, extent 262144 on each axis. With the pickup cylinder's box beside it, the
+   union and the cylinder answer follow (`box_cylinder`). `BoundsScale` 2 changes nothing (source e returns first);
+2. a toy `SkeletalMesh` object set: source f's `LayerAbsent` (stored bounds);
+3. `HiddenGame` set (no owner): not visible → source a. With a mesh it is the `LayerAbsent`; without one, the
+   "no mesh" `NotRead`. With `bCastHiddenShadow` also set it is visible again → e or f;
+4. an owner with `bHidden` set: not visible, unless `bIgnoreOwnerHidden` is set;
+5. `bComponentUseFixedSkelBounds` set while visible: source a;
+6. `DetailMode` 1: the detail-mode `NotRead`, before the source;
+7. owner `Physics` = `PHYS_RigidBody` with `FramesPhysicsAsleep` 6: the sleeping-body `NotRead`. With 5, or another
+   `Physics`, it goes on;
+8. `bSkipUpdateSkelPose` set: the kept-bounds `NotRead`;
+9. a `PhysicsAsset` with `bHasValidBodies` clear: skipped to e or f. With `bHasValidBodies` set: `BONES_LAYER`;
+10. a `ParentAnimComponent` with a mesh and its `bComponentUseFixedSkelBounds` set: source b's `LayerAbsent`. A parent
+    with a `PhysicsAsset` and `bUseBoundsFromParentAnimComponent` set: `BOUNDS_LAYER`. A lazy parent: refusal N;
+11. a field of the wrong kind (`DetailMode` not a byte, `bHidden` not a bool): `VmError::Script` naming it;
+12. a `SkeletalMeshComponent` subclass (a toy): still "the bounds update of <class>" (`entry_box` stays exact-class);
+13. Reference: unchanged.
+
+### 9.8 Live checks that would confirm it (bl-sdk; none run, no session granted)
+
+1. On a dropped weapon pickup, read the mesh component's `Bounds`, `SkeletalMesh`, `PhysicsAsset`, `bHasValidBodies`
+   and `bComponentUseFixedSkelBounds`. Compare `Bounds` with the mesh's bounds through `LocalToWorld`, times
+   `BoundsScale` and with nothing added.
+2. Let the pickup come to rest, then move it with a script write to `Location`: while it sleeps, expect `Bounds` to
+   keep its old value (step 1).
+3. Set `HiddenGame` on a pawn's mesh and read `Bounds` after a transform update: expect the fixed mesh bounds (source
+   a), not the physics bodies' box.
+
 ## Open questions
 
 1. **Not read:**
-   - the component virtual the box routine asks first (section 4);
+   - ~~the component virtual the box routine asks first (section 4)~~: read in NATIVE_COMPONENT_SKIP_FLAG.md section 6;
    - the deferred reattach's scheduling for an owned component;
    - whether every transform update is followed by a bounds update;
-   - the two early-return flags and the source choice of the skeletal bounds;
+   - ~~the two early-return flags and the source choice of the skeletal bounds~~: read on 2026-11-25 (section 9),
+     except the owner's physics-state test of its step 1 and the physics-asset box routine;
    - the static mesh's second box;
    - which other primitive classes override the bounds update.
 2. **UNVERIFIED:**
