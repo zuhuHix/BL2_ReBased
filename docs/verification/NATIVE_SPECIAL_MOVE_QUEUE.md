@@ -88,7 +88,15 @@ A `Play` that starts empties the queue (the Play note, step 4). A stop asked wit
 
 ## 4. Which caller link 9 reaches (an inference, UNVERIFIED)
 
-The hub's probe record names the native, not its caller. A static reading of the cast's world:
+*Amended 2026-11-25 (NATIVE_ACTOR_SET_PHYSICS.md section 1).* The census in section 1 missed a fourth script caller:
+**`LiftActionSkill.LiftTarget`**. On the phaselocked target it calls `Play` (the lift animation), then `Queue` (the
+phase-lock definition's `LoopAnim`), then `SetPhysics(14)`. Since `Play` runs just before, the `Queue` call normally
+finds a current move and takes case 3b (append), unless that `Play` started nothing. Link 9's later stop at
+`Actor.SetPhysics` fits this caller. It is therefore the most likely one; the `Action_FollowPath` reading below is
+**superseded as the likely caller**, though it remains a caller. Both remain inferences: no caller stack was recorded.
+
+The original reading follows. The hub's probe record names the native, not its caller. A static reading of the
+cast's world:
 - the `Behavior_SpecialMove` objects in the Siren class package that the cast loads (two) do not set
   `bQueueIfCannotPlay`. Their path also asks `IsPlayingAny` first, which nothing binds in `ParityMode::Off`, so it
   would stop there, not at `Queue`;

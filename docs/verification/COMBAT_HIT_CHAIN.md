@@ -27,7 +27,8 @@ damage at `health - 1` and `Pawn.TakeDamage` sets health to exactly 1.0 when a d
 | `Pawn.GetOpinion / IsEnemy / IsFriendly / IsNeutral` | GROUNDWORK 6 | UNVERIFIED generic four-step rule; the player's allegiance object is not in the data the note found, so a pawn without one is Neutral to its hitter |
 | `WillowPawn.GetHitRegionForTakenDamage` | DD 1 stage 6 | UNVERIFIED; bone name against the body class's region list, else `DefaultHitRegion` |
 | `AIComponent.HoldDemigod / ReleaseDemigod / DemigodOnHold`, `WillowMind.GetAIDemigod / SetAIDemigod`, `GearboxMind.GetAIComponent` | none (bodies unread) | UNVERIFIED; holds kept per reason, `DemigodOnHold` = any hold |
-| `Actor.SetPhysics`; `SetupImpactsForPlayHit`, `UpdatePlayHitEffectCounters`, `UpdatePlayHitInfo`, `StartCringe`, `InterpRotation`, `SpecialMoveComponent.Play / IsPlayingAny / IsPlayingClass`, `NotifyInstinctSkillAction`, `NotifyShotStatus` | presentation | bound as documented no-ops |
+| `SetupImpactsForPlayHit`, `UpdatePlayHitEffectCounters`, `UpdatePlayHitInfo`, `StartCringe`, `InterpRotation`, `SpecialMoveComponent.Play / IsPlayingAny / IsPlayingClass`, `NotifyInstinctSkillAction`, `NotifyShotStatus` | presentation | bound as documented no-ops |
+| `Actor.SetPhysics` | none (stand-in) | not a no-op: the stand-in writes the actor's `Physics` byte. Its read rule is NATIVE_ACTOR_SET_PHYSICS.md (2026-11-25), which proposes the stand-in for Reference only |
 
 Still logged stubs on this chain (visible in the run's `stubs`): `WillowAIPawn.CheckInjured`, `AddHitLocation`, `GetParent`, `WillowMind.NotifyAttackedBy`, `AIComponent.GetTargetRecordFor`,
 `StatusEffectsComponent.RollChanceForStatusEffect` (the incendiary roll), `WillowDamageSource.GetAmmoTheftAmounts`, `Pawn.IsDead / InGodMode / GetController / IsUsingWalkingPhysics /
