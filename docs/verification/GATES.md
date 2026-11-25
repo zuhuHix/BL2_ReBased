@@ -4,17 +4,18 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **LINK1-HEAD-MESH (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh from #721 c845ff85):** AI-assisted (Claude
 Code, Opus 5.5). Link 1's set-up walks Maya's body composition templates and their meshes, loading only exports of her
-pawn's streaming package file (UNVERIFIED stand-in; hub ruling).
-- `cargo test --workspace -j 8 --no-fail-fast`: 3,597 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
-- Installed Off `--slice-gate` strict (release build, under the machine lock), base fc1a46cb and this change at
-  546b0fd1: 5 ok / 9 NotYet / 0 errors on both. The walk loads 11 objects (16 visited). Link 1 moves in `maya:8` from
-  "InitializeBodyComposition: the mesh of the unloaded component template
-  GD_Siren_Streaming.Pawn_Siren.GearLikenessMeshComponent_2780" to "the skeletal mesh data layer: the unloaded skeletal
-  mesh CubeForCode": the store's handle for the cube is the `GD_Assassin_Streaming_SF` copy, which the walk does not
-  load. Links 3, 4, 5, 13 and 14 report the same. Every other row is unchanged.
+pawn's streaming package file, and a reference followed from that file loads its own copy of the path
+(`DefStore::load_export_of_file`; UNVERIFIED stand-in and store rule; hub rulings).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,599 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock):
+  - the walk alone (base fc1a46cb, 546b0fd1): 5 ok / 9 NotYet / 0 errors on both; link 1 at "the skeletal mesh data
+    layer: the unloaded skeletal mesh CubeForCode" (the store's Assassin copy);
+  - with the store rule (25cd9b07): **5 ok / 3 NotYet / 6 errors**. Link 1 gets through the body composition and stops
+    in `maya:8` at the error "unbound native BodyClassDefinition.GetWeaponHoldDef(name,object,bool,bool)"; links 3, 4,
+    5, 13 and 14 report the same. Every other row is unchanged.
 
-No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/bodywalk/` and `local/p2/bodywalk-base/` (the first
-version's in `local/p2/headmesh/`). Decision 2026-11-25-NNN.
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/filecopy/`, `local/p2/bodywalk/` and
+`local/p2/bodywalk-base/`. Decision 2026-11-25-NNN.
 
 **IMPL-WEAPON-ONCREATE (2026-11-25, pc-hummer, on fix/rust-psc-setcolorparameter d3c22f85):** AI-assisted (Claude
 Code, Opus 5.5). `WillowWeapon.OnCreate` in Off, from NATIVE_WEAPON_ON_CREATE.md section 4, sharing the broadcast's

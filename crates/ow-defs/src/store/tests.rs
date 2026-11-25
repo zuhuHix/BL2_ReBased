@@ -313,6 +313,53 @@ fn identity_is_by_path_whichever_file_holds_it() {
     ));
 }
 
+/// The file ids of `names`, loaded through the store's package store.
+fn file_ids(t: &mut World, names: &[&str]) -> Vec<PackageId> {
+    names.iter().map(|n| t.defs.code_mut().1.load(&PackageName::parse(n).unwrap()).unwrap()).collect()
+}
+
+/// Lane LINK1-HEAD-MESH (the hub's ruling): a handle reached from a file that holds its own copy of the path loads that
+/// file's copy, and stays the one object for the path. `GD_Test.Part_A` has two holders: `GD_Test.upk` (ClipSize 7,
+/// the policy's) and `Startup.upk` (ClipSize 99). Then the conflict: from `GD_Test.upk`, with Startup's copy resident,
+/// a typed `NotRead` naming both files; and a file that holds no export at the path does nothing.
+#[test]
+fn a_file_s_own_copy_loads_into_the_handle_and_a_resident_other_copy_is_a_conflict() {
+    let mut t = World::off("filecopy");
+    let ids = file_ids(&mut t, &["Startup", "GD_Test", "Engine"]);
+    let (startup, gd, engine) = (ids[0], ids[1], ids[2]);
+    let b = t.get("GD_Test.Part_B");
+    let a = t.object(b, "Next");
+    assert!(t.defs.is_unloaded(&t.w, a), "an unloaded handle for the path");
+    assert_eq!(t.defs.load_export_of_file(&mut t.w, a, engine).unwrap(), FileCopy::NotInFile);
+    assert!(t.defs.is_unloaded(&t.w, a), "a file without the path does nothing");
+    assert_eq!(t.defs.load_export_of_file(&mut t.w, a, startup).unwrap(), FileCopy::Loaded);
+    assert_eq!(t.read(a, "ClipSize"), Value::Int(99), "Startup's own copy");
+    assert_eq!(t.get("GD_Test.Part_A"), a, "still one object per path");
+    assert_eq!(t.defs.load_export_of_file(&mut t.w, a, startup).unwrap(), FileCopy::Loaded, "again: nothing changes");
+    match t.defs.load_export_of_file(&mut t.w, a, gd) {
+        Err(DefError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(n.what.contains("resident from Startup") && n.what.contains("GD_Test holds its own copy"), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.read(a, "ClipSize"), Value::Int(99), "the conflict changes nothing");
+}
+
+/// Other callers keep the identity policy's holder: an ordinary load of the same handle is `GD_Test.upk`'s copy, and a
+/// later call from `Startup.upk` is then the conflict.
+#[test]
+fn ordinary_loads_keep_the_policy_holder() {
+    let mut t = World::off("filecopy-policy");
+    let ids = file_ids(&mut t, &["Startup", "GD_Test"]);
+    let b = t.get("GD_Test.Part_B");
+    let a = t.object(b, "Next");
+    t.defs.ensure_loaded(&mut t.w, a).unwrap();
+    assert_eq!(t.read(a, "ClipSize"), Value::Int(7));
+    assert_eq!(t.defs.load_export_of_file(&mut t.w, a, ids[1]).unwrap(), FileCopy::Loaded, "the resident copy is GD_Test's");
+    assert!(matches!(t.defs.load_export_of_file(&mut t.w, a, ids[0]), Err(DefError::NotYet(_))));
+}
+
 #[test]
 fn candidate_lists_are_the_store_s_and_a_prefetched_holder_is_adopted_once() {
     // Lane FIX-SCENE-LOAD: the cached candidate lists are the package store's own, whatever the case or form of the

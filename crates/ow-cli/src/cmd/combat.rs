@@ -608,11 +608,33 @@ impl BodyWalk {
         let path = object_path(vm, o);
         if file_package(vm, o) != Some(self.home) {
             let at = file_package(vm, o).map_or_else(|| "no package".to_string(), |p| vm.defs.packages().get(p).name.clone());
+            // The home file's own copy of the path, if it holds one (the hub's ruling: the game, which loads only the
+            // pawn's package, has that copy; `DefStore::load_export_of_file`, an UNVERIFIED store rule).
             vm.log.push(format!(
-                "harness input: body-composition walk: {path} is not an export of {} ({at}); its branch stops",
+                "harness input: body-composition walk: the store holds {path} from {at}; asking {} for its own copy \
+                 (UNVERIFIED store rule)",
                 self.package
             ));
-            return Ok(false);
+            let copy = vm.defs.load_export_of_file(&mut vm.space, o, self.home);
+            vm.log.extend(vm.defs.take_log());
+            return match copy {
+                Ok(ow_defs::store::FileCopy::Loaded) => {
+                    vm.log.push(format!("harness input: preload {path}: loaded {}'s own copy", self.package));
+                    self.loaded += 1;
+                    Ok(true)
+                }
+                Ok(ow_defs::store::FileCopy::NotInFile) => {
+                    vm.log.push(format!(
+                        "harness input: body-composition walk: {path} is not an export of {} ({at}); its branch stops",
+                        self.package
+                    ));
+                    Ok(false)
+                }
+                Err(e) => {
+                    vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+                    Err(VmError::from(e))
+                }
+            };
         }
         if !vm.defs.is_unloaded(&vm.space, o) {
             return Ok(true);
