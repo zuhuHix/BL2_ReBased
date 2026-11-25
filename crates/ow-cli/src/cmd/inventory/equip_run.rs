@@ -998,7 +998,9 @@ pub(crate) const MATERIAL_CLASS_INPUT: &str = "harness input: set-up load of the
 /// `Engine.MaterialInstanceConstant` and the weapon type's `MaterialClass` to be ready (a defined layout and loaded
 /// code) and for that class's default object to be resident. Engine and WillowGame script classes are loaded at boot in
 /// the game (they live in the startup and native script packages), so the harness loads, in this order:
-/// 1. `MaterialInstanceConstant`'s class code;
+/// 1. `MaterialInstanceConstant`'s class code, then `Engine.MaterialExpressionScalarParameter`'s
+///    ([`SCALAR_EXPRESSION_CLASS`]) when the material's resident `Parent` chain holds a `Material` with expressions (the
+///    glow read's class test; the hub's ruling);
 /// 2. the `MaterialClass`'s class code;
 /// 3. that class's default object (`DefStore::class_default`).
 ///
@@ -1014,6 +1016,11 @@ pub(crate) fn preload_material_classes(vm: &mut Vm, weapon: ObjRef) -> Result<()
     }
     let mic = ow_inventory::equip::weapon_material::MATERIAL_INSTANCE_CONSTANT;
     class_code_load(vm, mic)?;
+    // The hub's ruling: the glow read's scalar-expression class, only when the material walk met a Material with
+    // expressions (another Engine script class, loaded at boot in the game: UNVERIFIED).
+    if material_chain_has_expressions(vm, weapon) {
+        class_code_load(vm, SCALAR_EXPRESSION_CLASS)?;
+    }
     let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
         .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
     let Ok(Value::Object(Some(weapon_type))) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition").cloned()
@@ -1056,6 +1063,46 @@ pub(crate) fn preload_material_classes(vm: &mut Vm, weapon: ObjRef) -> Result<()
         Err(e) => vm.log.push(format!("{MATERIAL_CLASS_INPUT}: the default object of {path}: failed ({e})")),
     }
     built.map(|_| ()).map_err(VmError::from)
+}
+
+/// The class the glow read's `Material` walk tests expressions against (NATIVE_INITMESHES_MATERIAL_GLOW.md section
+/// 4.2, by fit).
+pub(crate) const SCALAR_EXPRESSION_CLASS: &str = "Engine.MaterialExpressionScalarParameter";
+
+/// Whether the Material-part material's resident `Parent` chain (the material included) holds an object with a
+/// non-empty `Expressions`, read only. [`preload_material_part_material`]'s walk has loaded what it could by then.
+fn material_chain_has_expressions(vm: &Vm, weapon: ObjRef) -> bool {
+    let Some(data) = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData") else {
+        return false;
+    };
+    let Ok(Value::Object(Some(part))) = ow_attr::eval::field(&vm.space, &data, "MaterialPartDefinition").cloned() else {
+        return false;
+    };
+    if vm.defs.is_unloaded(&vm.space, part) {
+        return false;
+    }
+    let mut cursor = match ow_inventory::equip::read_prop(vm, part, "Material") {
+        Some(Value::Object(Some(m))) => Some(m),
+        _ => None,
+    };
+    let mut seen: Vec<ObjRef> = Vec::new();
+    while let Some(o) = cursor {
+        if seen.contains(&o) || seen.len() >= MATERIAL_WALK_CAP || vm.defs.is_unloaded(&vm.space, o) {
+            return false;
+        }
+        seen.push(o);
+        if ow_inventory::equip::read_prop(vm, o, "Expressions")
+            .and_then(|v| v.elements().map(|e| !e.is_empty()))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        cursor = match ow_inventory::equip::read_prop(vm, o, "Parent") {
+            Some(Value::Object(Some(p))) => Some(p),
+            _ => None,
+        };
+    }
+    false
 }
 
 /// One class-code step of [`preload_material_classes`]: `path`'s layout and code through `Vm::find_class`, logged

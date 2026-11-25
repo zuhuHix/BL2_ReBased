@@ -51,7 +51,11 @@ Engine and WillowGame script classes are loaded at boot in the game (startup and
 reading, UNVERIFIED). So
 `equip_run::preload_material_classes` follows the material preload, in Off, as a harness set-up load (not a native
 stand-in; **UNVERIFIED** that the game has them resident at that point). It loads, each only when not already so:
-1. `MaterialInstanceConstant`'s class code;
+1. `MaterialInstanceConstant`'s class code, then `Engine.MaterialExpressionScalarParameter`'s (a fifth commit, the hub's
+   ruling). That second class is loaded only when the material's resident `Parent` chain holds a `Material` with
+   expressions: the glow read tests expressions against it (NATIVE_INITMESHES_MATERIAL_GLOW.md section 4.2), and with
+   the Startup walk loaded, link 8 stopped at that class check. It is another Engine script class, loaded at boot in
+   the game (UNVERIFIED);
 2. the `MaterialClass`'s class code;
 3. that class's default object (`DefStore::class_default`).
 
@@ -76,6 +80,8 @@ step 1 runs, and the native answers those cases itself. `BuildWeaponMaterial`'s 
 - a parent that is not a Startup export stops the walk with a line and is not loaded;
 - a Material with two Startup expressions has both loaded;
 - a non-Startup expression is skipped with a line and stays unloaded, while the Startup one beside it is loaded;
+- the scalar-expression class is warmed, logged, for a chain with a Material with expressions, and adds no line when
+  already loaded; a chain with no expressions does not warm it;
 - an out-of-family `MaterialClass` gets no class-code or default load, one skip line, and stays cold (the native's
   refusals for that case are tested in `ow-inventory`'s `weapon_material_tests.rs`).
 

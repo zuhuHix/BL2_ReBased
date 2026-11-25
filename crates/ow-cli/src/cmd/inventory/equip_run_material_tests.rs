@@ -25,7 +25,9 @@ use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 
-use super::{MATERIAL_CLASS_INPUT, MATERIAL_INPUT, preload_material_classes, preload_material_part_material};
+use super::{
+    MATERIAL_CLASS_INPUT, MATERIAL_INPUT, SCALAR_EXPRESSION_CLASS, preload_material_classes, preload_material_part_material,
+};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -36,6 +38,8 @@ fn engine() -> Vec<u8> {
     let interface = t.class("MaterialInterface", object);
     let mic = t.class("MaterialInstanceConstant", interface);
     t.class("ToyMIC", mic);
+    // The glow read's scalar-expression class (the hub's ruling on #712).
+    t.class("MaterialExpressionScalarParameter", object);
     // Outside the family, and not an ancestor of MaterialInstanceConstant (review of #712).
     t.class("ToyNotMIC", interface);
     t.build()
@@ -506,4 +510,32 @@ fn a_non_startup_expression_is_skipped_with_a_line() {
     assert!(x.vm.defs.is_unloaded(&x.vm.space, expressions[1]), "the WillowGame expression is not");
     let lines = x.lines();
     assert!(lines.iter().any(|l| l.contains("the walk stops at WillowGame.ToyExpr_Local (WillowGame export")), "{lines:?}");
+}
+
+/// The hub's ruling: with a Material with expressions on the material's chain, the class step warms
+/// `MaterialExpressionScalarParameter`'s class code, logged; a second call (already loaded) adds no line. A chain with
+/// no expressions does not warm it.
+#[test]
+fn the_scalar_expression_class_is_warmed_only_for_a_material_with_expressions() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Glow");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    assert!(x.vm.space.classes.by_path(SCALAR_EXPRESSION_CLASS).is_none(), "cold before");
+    preload_material_classes(&mut x.vm, weapon).unwrap();
+    let scalar = x.vm.space.classes.by_path(SCALAR_EXPRESSION_CLASS).expect("defined");
+    assert!(x.vm.class_code_loaded(scalar), "warmed");
+    let lines = x.class_lines();
+    assert!(lines.iter().any(|l| l.ends_with(&format!("the class code of {SCALAR_EXPRESSION_CLASS}: loaded"))), "{lines:?}");
+    let n = x.class_lines().len();
+    preload_material_classes(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.class_lines().len(), n, "already loaded: no line");
+
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Mat");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    preload_material_classes(&mut x.vm, weapon).unwrap();
+    assert!(x.vm.space.classes.by_path(SCALAR_EXPRESSION_CLASS).is_none(), "no expressions: not warmed");
+    assert!(x.class_lines().iter().all(|l| !l.contains(SCALAR_EXPRESSION_CLASS)));
 }
