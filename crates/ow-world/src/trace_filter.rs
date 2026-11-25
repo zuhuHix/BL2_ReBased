@@ -110,6 +110,9 @@ pub(crate) enum PartClass {
 }
 
 /// [`PartClass`] of `class`, walking its chain up; `primitive` is `None` when the table has no `PrimitiveComponent`.
+/// The one stand-in rule of the port's component walks: the live collision walks use it, and the bounding cylinder's
+/// and the spawn extent's `Components` walks reach it through `bounding_cylinder::primitive_class` (lane
+/// UNIFY-STANDIN-RULE).
 pub(crate) fn part_class(
     space: &ObjectSpace,
     class: ClassId,

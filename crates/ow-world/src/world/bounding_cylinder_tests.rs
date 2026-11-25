@@ -977,3 +977,42 @@ fn the_class_test_refuses_a_stand_in_with_no_primitive_id() {
     };
     assert_eq!(n.missing, Missing::NotRead);
 }
+
+/// Lane UNIFY-STANDIN-RULE: the `Components` walks' class test and the live collision walks' class test are one rule.
+/// For the same classes they agree: a primitive is yes / `Primitive`, a native stand-in is `NotRead` / `Uncertain`
+/// naming it, a package non-primitive is no / `Other`, and so is a class that is only declared (no object of one can
+/// exist, but the class id can be asked about).
+#[test]
+fn both_class_tests_give_the_same_answer() {
+    use crate::trace_filter::{PartClass, part_class};
+    let mut x = fx();
+    let primitive = x.vm.find_class("Engine.PrimitiveComponent").unwrap();
+    let mut root = primitive;
+    while let Some(up) = x.vm.space.classes.get_layout(root).and_then(|l| l.super_class()) {
+        root = up;
+    }
+    let native = x.vm.space.classes.define("Test.NativeOnlyComponent", Some(root), vec![]).unwrap();
+    x.vm.space.classes.mark_native(native).unwrap();
+    let declared = x.vm.space.classes.declare("Test.DeclaredOnlyComponent").unwrap();
+    let light = x.vm.find_class("Engine.DynamicLightEnvironmentComponent").unwrap();
+    let space = &x.vm.space;
+    for p in [Some(primitive), None] {
+        for class in [primitive, native, declared, light] {
+            let walk = primitive_class(space, class, p, "Actor.GetBoundingCylinder", RECORD);
+            match (part_class(space, class, p), walk) {
+                (PartClass::Primitive, Ok(true)) | (PartClass::Other, Ok(false)) => {}
+                (PartClass::Uncertain(path), Err(VmError::NotYet(n))) => {
+                    assert_eq!(n.missing, Missing::NotRead);
+                    assert!(n.what.ends_with(&path), "{}", n.what);
+                }
+                (a, b) => panic!("class {class:?} with {p:?}: {} vs {b:?}", match a {
+                    PartClass::Primitive => "Primitive",
+                    PartClass::Other => "Other",
+                    PartClass::Uncertain(_) => "Uncertain",
+                }),
+            }
+        }
+    }
+    assert!(matches!(part_class(space, declared, Some(primitive)), PartClass::Other));
+    assert!(matches!(part_class(space, native, None), PartClass::Uncertain(_)));
+}
