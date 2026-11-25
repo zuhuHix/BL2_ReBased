@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**WALK-INVALID-BOUNDS (2026-11-25, zuhuPC Linux, on fix/rust-walk-invalid-bounds stacked on f12b4e99):** AI-assisted
+(Claude Code, Opus 5.5). The spawn and touch walk no longer takes NaN or inverted service bounds for a miss: a primitive
+the filters keep is refused with `Actor.Trace`'s text and record. Off only. Workspace numbers are in the hand-back; the
+installed slice gate was not run (no rule an installed link reaches is known to change). UNVERIFIED in game.
+
 **GETSMNODE-FIND-NODE-LAZY (2026-11-25, zuhu desktop (Linux), on fix/rust-getsmnode-lazy-node stacked on
 fix/rust-getsmnode-no-code-load 9147b0f):** AI-assisted (Claude Code, Opus 5.5). `GetSMNode` refuses, write-free, an
 object it reads (component, owner, mesh, cached node, each tree node) that the store has not loaded; not reached on

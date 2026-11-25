@@ -3130,6 +3130,58 @@ mod placement {
         });
     }
 
+    /// Lane WALK-INVALID-BOUNDS: service bounds that are not finite and ordered (a NaN, an inverted box) are never
+    /// taken for a miss. A primitive the filters keep is refused as `Actor.Trace` refuses it (its text, its record),
+    /// in the spawn's box test and in the touch's line walk; one the filters leave out (its `CollideActors` clear) is
+    /// left out whatever its bounds, and the spawn is made.
+    #[test]
+    fn invalid_bounds_are_refused_once_the_filters_keep_the_primitive() {
+        run(|| {
+            let nan = Bounds { min: [f32::NAN, -5.0, -5.0], max: [5.0, 5.0, 5.0] };
+            let inverted = Bounds { min: [600.0, 600.0, 600.0], max: [500.0, 500.0, 500.0] };
+            for bounds in [nan, inverted] {
+                for kept in [true, false] {
+                    let mut x = fx();
+                    let wi = x.wi;
+                    script_with_bounds(&mut x, bounds);
+                    let flags: &[&str] = if kept { &["BlockNonZeroExtent", "BlockZeroExtent", "CollideActors"] } else { &["BlockNonZeroExtent", "BlockZeroExtent"] };
+                    let b = blocker(&mut x, "Actor", true, flags);
+                    set_field(&mut x.w.vm.space, b, "bCollideActors", Value::Bool(true)).unwrap();
+                    let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+                    let before = count(&x);
+                    let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+                    if !kept {
+                        assert!(got.unwrap().is_some(), "{bounds:?}: a primitive the filters leave out");
+                        continue;
+                    }
+                    let VmError::NotYet(n) = got.unwrap_err() else { panic!() };
+                    assert_eq!((n.missing, n.record), (Missing::NotRead, crate::world::actor_trace::RECORD), "{bounds:?}");
+                    assert!(n.what.starts_with(SPOT_SEARCH) && n.what.contains(crate::placement::INVALID_BOUNDS), "{}", n.what);
+                    assert!(crate::world::actor_trace::BAD_BOUNDS.ends_with(crate::placement::INVALID_BOUNDS));
+                    assert_eq!(count(&x), before, "nothing made");
+                    // The touch's line walk over the same live primitive, from another actor.
+                    let model = crate::placement::collision_model(&x.w.vm).unwrap().unwrap();
+                    let other = x.spawn("Actor");
+                    let unloaded = |_: ObjRef| false;
+                    let src = crate::trace_filter::Source { actor: other, unloaded: &unloaded, admission_established: true };
+                    let region = Bounds { min: [-1.0; 3], max: [1.0; 3] };
+                    let line = crate::placement::actor_walk(
+                        &x.w.vm,
+                        &*model,
+                        crate::trace_filter::Query::PointLine,
+                        region,
+                        Some(&src),
+                        "touch",
+                        "R",
+                    );
+                    let (missing, text) = what(line.unwrap_err());
+                    assert_eq!(missing, Missing::NotRead);
+                    assert!(text.contains(crate::placement::INVALID_BOUNDS), "{text}");
+                }
+            }
+        });
+    }
+
     /// Review r2 of #477, item 1: a sweep's walk checks a primitive's service bounds before its filter data. A
     /// 100-unit sweep with the BSP at 0.5 walks to 0.55: an unloaded primitive whose bounds lie beyond it is not
     /// read (the BSP hit is the answer); the same primitive inside it is a named refusal for its unloaded data.

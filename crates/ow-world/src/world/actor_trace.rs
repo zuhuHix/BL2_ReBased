@@ -374,10 +374,7 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
                 crate::trace_filter::PartClass::Uncertain(path) => {
                     // A part whose real class chain is not known might be met (lane LIVE-COLLISION-STANDIN): only
                     // sound service bounds that miss the swept box rule it out; otherwise T's NotRead names it.
-                    let clear = model.actor_bounds(space, part)?.is_some_and(|b| {
-                        (0..3).all(|k| b.min[k].is_finite() && b.max[k].is_finite() && b.min[k] <= b.max[k])
-                            && !b.meets(&region)
-                    });
+                    let clear = model.actor_bounds(space, part)?.is_some_and(|b| b.is_sound() && !b.meets(&region));
                     if clear {
                         continue;
                     }
@@ -415,8 +412,7 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
             };
             // Only finite, ordered bounds can prove a primitive clear (review r1 of #633, item 2): a NaN makes every
             // comparison false, and an inverted box would miss everything.
-            let sound = (0..3).all(|k| bounds.min[k].is_finite() && bounds.max[k].is_finite() && bounds.min[k] <= bounds.max[k]);
-            if !sound {
+            if !bounds.is_sound() {
                 return Err(NotYet::not_read(BAD_BOUNDS, RECORD).into());
             }
             if !bounds.meets(&region) {

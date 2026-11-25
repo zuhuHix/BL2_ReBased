@@ -112,7 +112,17 @@ impl Bounds {
     pub fn meets(&self, other: &Bounds) -> bool {
         (0..3).all(|k| self.min[k] <= other.max[k] && other.min[k] <= self.max[k])
     }
+
+    /// Whether the box is finite and ordered on every axis: only such bounds can prove a miss (review r1 of #633,
+    /// item 2: a NaN makes every comparison false, and an inverted box would miss everything).
+    pub fn is_sound(&self) -> bool {
+        (0..3).all(|k| self.min[k].is_finite() && self.max[k].is_finite() && self.min[k] <= self.max[k])
+    }
 }
+
+/// The refusal of a live primitive whose service bounds are not sound ([`Bounds::is_sound`]), after the query's prefix,
+/// on `Actor.Trace`'s record (lane WALK-INVALID-BOUNDS: the walks refuse as `Actor.Trace` does).
+pub const INVALID_BOUNDS: &str = "a primitive's bounds that are not finite and ordered (they cannot prove a miss)";
 
 /// The world's collision service (module documentation). Extents are half sizes. The three queries answer for the
 /// **level's BSP only** (bit 4, the first pass): `Blocked` means the BSP blocks the box, and a sweep's `Hit` is the
@@ -618,8 +628,9 @@ pub(crate) fn actor_walk(
                     }
                     // A part whose real class chain is not known might block (lane LIVE-COLLISION-STANDIN): it is
                     // ruled out only by service bounds that miss the region, else the query's own NotRead.
+                    // Unsound bounds do not rule it out (lane WALK-INVALID-BOUNDS, as in `Actor.Trace`).
                     let bounds = model.actor_bounds(space, part)?;
-                    if bounds.is_some_and(|b| !b.meets(&region)) {
+                    if bounds.is_some_and(|b| b.is_sound() && !b.meets(&region)) {
                         continue;
                     }
                     let what = format!("{who}'s {}", name(space, part)?);
@@ -638,13 +649,24 @@ pub(crate) fn actor_walk(
             // Bounds first (review r2 of #477): a primitive whose service bounds miss the region leaves the walk
             // before any of its filter data is read, so its unloaded flags cannot refuse the query.
             let bounds = model.actor_bounds(space, part)?;
-            if bounds.is_some_and(|b| !b.meets(&region)) {
+            // Only sound bounds can prove a miss (lane WALK-INVALID-BOUNDS, as in `Actor.Trace`): a NaN or an inverted
+            // box is not taken for one.
+            if bounds.is_some_and(|b| b.is_sound() && !b.meets(&region)) {
                 continue;
             }
             let standing = trace_filter::tested_from(space, part, actor, kind, source);
             let Candidate::Unsupported(rule) = missing_data(standing, &named(&what), record)? else {
                 continue;
             };
+            // A part the filters keep, with bounds that are not finite and ordered: refused as `Actor.Trace` refuses
+            // it once its collide flags pass (its text and record), not as the unread filter rule.
+            if bounds.is_some_and(|b| !b.is_sound()) {
+                return Err(NotYet::not_read(
+                    format!("{prefix}: {INVALID_BOUNDS} (the live actor primitive {what})"),
+                    crate::world::actor_trace::RECORD,
+                )
+                .into());
+            }
             let held = if bounds.is_some() { "" } else { ", whose bounds the collision service does not hold" };
             return Err(NotYet::not_read(
                 format!("{prefix}: {} (the live actor primitive {what}{held})", rule.rule()),

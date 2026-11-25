@@ -405,3 +405,17 @@ fn with_no_primitive_class_the_spawn_walk_still_refuses_a_stand_in_part() {
     let VmError::NotYet(n) = actor_walk(&bare.vm, &far, kind, REGION, None, "spot", "R").unwrap_err() else { panic!() };
     assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n:?}");
 }
+
+/// Lane WALK-INVALID-BOUNDS: a stand-in part with bounds that are not finite and ordered is not ruled out by them (as
+/// in `Actor.Trace`): the walk gives the stand-in refusal.
+#[test]
+fn invalid_bounds_do_not_rule_out_a_stand_in_part() {
+    let (x, _) = standin_world(true);
+    for b in [Bounds { min: [f32::NAN; 3], max: [60.0; 3] }, Bounds { min: [60.0; 3], max: [50.0; 3] }] {
+        let model = OneBounds(Some(b));
+        let kind = trace_filter::Query::BoxTest { zero_extent: false, complex: false };
+        let VmError::NotYet(n) = actor_walk(&x.vm, &model, kind, REGION, None, "spot", "R").unwrap_err() else { panic!() };
+        assert_eq!((n.missing, n.record), (Missing::NotRead, "R"));
+        assert!(n.what.contains(trace_filter::STAND_IN_PART), "{}", n.what);
+    }
+}
