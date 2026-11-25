@@ -427,6 +427,11 @@ pub struct DecodeState {
     /// Tags dropped because the class does not declare their property, though the C++ VM would have decoded them
     /// into its bag (`<Class>.<Property> (<Type>)`, module documentation). Not printed.
     pub dropped: Vec<String>,
+    /// The declared top-level properties [`ValueCx::apply_tags`] skipped (the "defaults: skipped" lines), by the
+    /// object written and the property, so a reader can tell a skipped value from a decoded one (lane
+    /// IMPL-AIMOFFSET-PROFILES). Undeclared tags (`dropped`) and fields skipped inside a struct are not listed. The
+    /// definition store drains it per load (`ow_defs::DefStore::is_skipped`).
+    pub skipped: Vec<(ObjRef, PropId)>,
     /// The engine-native classes defined for stand-ins, by path, in order ([`ValueCx::resource`]).
     pub native_classes: Vec<String>,
     /// How many [`ReferenceResolver`] calls are under way ([`MAX_RESOLVE_DEPTH`]).
@@ -469,6 +474,7 @@ impl Default for DecodeState {
             class_defaults: FixedHashMap::default(),
             log: Vec::new(),
             dropped: Vec::new(),
+            skipped: Vec::new(),
             native_classes: Vec::new(),
             resolve_depth: 0,
             resolve_budget: MAX_RESOLVES_PER_LOAD,
@@ -879,6 +885,9 @@ impl<'a> ValueCx<'a> {
                     "defaults: skipped {class_name}.{} ({})",
                     h.name, h.ty
                 ));
+                if let Some(prop) = prop {
+                    self.state.skipped.push((object, prop));
+                }
             }
         }
         Ok(r.pos() - offset)

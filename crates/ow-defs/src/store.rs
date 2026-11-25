@@ -493,6 +493,9 @@ struct Handles {
     entries: FixedHashMap<ObjRef, Entry>,
     /// Folded object path -> the holder the policy picked (cached; `None`: no holder).
     holders: FixedHashMap<String, Option<(PackageId, i32)>>,
+    /// Loaded definition -> the declared top-level properties its load skipped (`DecodeState::skipped`, keyed by the
+    /// handle the load moved into; [`DefStore::is_skipped`]).
+    skipped: FixedHashMap<ObjRef, Vec<PropId>>,
     /// The export paths of every candidate file a holder lookup read, or why it could not be read: read once, and no
     /// package kept for it (only a holder's file is loaded into the package store).
     files: FixedHashMap<PathBuf, Result<Rc<FileIndex>, PackageError>>,
@@ -598,6 +601,7 @@ impl Handles {
         self.by_path.retain(|_, o| live(o));
         self.by_target.retain(|_, o| live(o));
         self.entries.retain(|o, _| live(o));
+        self.skipped.retain(|o, _| live(o));
     }
 }
 
@@ -1036,6 +1040,10 @@ impl Loader<'_, '_> {
         // `made` is new and nothing older refers to it: its slots move into the handle without a walk over the heap
         // (`ObjectSpace::free_newest`; lane FIX-SCENE-LOAD).
         let built = self.cx.space.free_newest(made)?;
+        // The skipped properties were recorded against the object the instantiation made; it is now the handle.
+        for entry in self.cx.state.skipped.iter_mut().filter(|e| e.0 == made) {
+            entry.0 = o;
+        }
         let class = built.class;
         {
             let object = self.cx.space.heap.get_mut(o)?;
@@ -1763,15 +1771,29 @@ impl DefStore {
             handles: &*handles,
             policy: &*policy,
         };
-        let mut cx = ValueCx::new(packages, code, w, state, *mode).with_resolver(&linker);
-        let mut loader = Loader {
-            cx: &mut cx,
-            linker: &linker,
-            overlays,
-            tails,
-            class_props,
+        let out = {
+            let mut cx = ValueCx::new(packages, code, w, state, *mode).with_resolver(&linker);
+            let mut loader = Loader {
+                cx: &mut cx,
+                linker: &linker,
+                overlays,
+                tails,
+                class_props,
+            };
+            f(&mut loader)
         };
-        f(&mut loader)
+        // The skips of this call's loads, by live object (an object a discarded or failed load freed is dropped).
+        let skipped = std::mem::take(&mut state.skipped);
+        let mut handles = handles.borrow_mut();
+        for (o, prop) in skipped {
+            if w.heap.contains(o) {
+                let props = handles.skipped.entry(o).or_default();
+                if !props.contains(&prop) {
+                    props.push(prop);
+                }
+            }
+        }
+        out
     }
 
     /// The definition at `path`, loaded, with every overlay applied: the export of the holder the policy picks
@@ -1882,6 +1904,14 @@ impl DefStore {
                 self.handles.borrow().entries.get(&obj),
                 Some(Entry::Unloaded { .. } | Entry::Failed { .. })
             )
+    }
+
+    /// Whether loading `obj` skipped its declared top-level property `prop`: the decoder logged "defaults: skipped"
+    /// for it and left the class default in the slot (`DecodeState::skipped`; lane IMPL-AIMOFFSET-PROFILES). False for
+    /// a property that decoded (empty included), one the export does not tag, and any object the store did not load.
+    /// Read only. Fields skipped inside a struct and undeclared tags are not tracked.
+    pub fn is_skipped(&self, w: &ObjectSpace, obj: ObjRef, prop: PropId) -> bool {
+        w.heap.contains(obj) && self.handles.borrow().skipped.get(&obj).is_some_and(|props| props.contains(&prop))
     }
 
     /// Whether `obj` is a handle whose load already failed: [`DefStore::ensure_loaded`] returns that error again and
