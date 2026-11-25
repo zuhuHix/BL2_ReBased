@@ -583,9 +583,9 @@ pub(crate) fn actor_walk(
     record: &'static str,
 ) -> Result<Vec<trace_filter::Hit>, VmError> {
     let space = &vm.space;
-    let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
-        return Ok(Vec::new());
-    };
+    // No PrimitiveComponent in the table: no package part can be a primitive, but a stand-in part is still uncertain
+    // (lane LIVE-COLLISION-STANDIN), so the walk runs.
+    let primitive = space.classes.by_path("Engine.PrimitiveComponent");
     // Missing data on a live primitive or its actor (a property not loaded) becomes a named refusal.
     let named = |what: &str| format!("{prefix}: the data of the live actor primitive {what}, which is not loaded");
     let list = actors_of(vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
@@ -607,8 +607,27 @@ pub(crate) fn actor_walk(
             }
         }
         for part in parts {
-            if !space.classes.is_child_of(space.heap.get(part)?.class, primitive) {
-                continue;
+            match trace_filter::part_class(space, space.heap.get(part)?.class, primitive) {
+                trace_filter::PartClass::Primitive => {}
+                trace_filter::PartClass::Other => continue,
+                trace_filter::PartClass::Uncertain(path) => {
+                    // A part whose real class chain is not known might block (lane LIVE-COLLISION-STANDIN): it is
+                    // ruled out only by service bounds that miss the region, else the query's own NotRead.
+                    let bounds = model.actor_bounds(space, part)?;
+                    if bounds.is_some_and(|b| !b.meets(&region)) {
+                        continue;
+                    }
+                    let what = format!("{who}'s {}", name(space, part)?);
+                    return Err(NotYet::not_read(
+                        format!(
+                            "{prefix}: {} {path}, so whether it is a primitive is not known (the live actor \
+                             component {what})",
+                            trace_filter::STAND_IN_PART
+                        ),
+                        record,
+                    )
+                    .into());
+                }
             }
             let what = format!("{who}'s {}", name(space, part)?);
             // Bounds first (review r2 of #477): a primitive whose service bounds miss the region leaves the walk

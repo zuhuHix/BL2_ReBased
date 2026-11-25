@@ -338,9 +338,9 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
         return Ok(());
     }
     let space = &vm.space;
-    let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
-        return Ok(());
-    };
+    // No PrimitiveComponent in the table: no package part is a primitive, but a stand-in part is still uncertain
+    // (lane LIVE-COLLISION-STANDIN), so the walk runs.
+    let primitive = space.classes.by_path("Engine.PrimitiveComponent");
     let terrain = space.classes.by_path("Engine.Terrain");
     let is_terrain = |o: ObjRef| -> Result<bool, VmError> {
         Ok(terrain.is_some_and(|t| space.heap.get(o).is_ok_and(|x| space.classes.is_child_of(x.class, t))))
@@ -368,8 +368,31 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
             }
         }
         for part in parts {
-            if !space.classes.is_child_of(space.heap.get(part)?.class, primitive) {
-                continue;
+            match crate::trace_filter::part_class(space, space.heap.get(part)?.class, primitive) {
+                crate::trace_filter::PartClass::Primitive => {}
+                crate::trace_filter::PartClass::Other => continue,
+                crate::trace_filter::PartClass::Uncertain(path) => {
+                    // A part whose real class chain is not known might be met (lane LIVE-COLLISION-STANDIN): only
+                    // sound service bounds that miss the swept box rule it out; otherwise T's NotRead names it.
+                    let clear = model.actor_bounds(space, part)?.is_some_and(|b| {
+                        (0..3).all(|k| b.min[k].is_finite() && b.max[k].is_finite() && b.min[k] <= b.max[k])
+                            && !b.meets(&region)
+                    });
+                    if clear {
+                        continue;
+                    }
+                    let who = space.names.text(space.heap.get(actor)?.name);
+                    let what = space.names.text(space.heap.get(part)?.name);
+                    return Err(NotYet::not_read(
+                        format!(
+                            "Actor.Trace: {} {path}, so whether it is a primitive is not known (the live actor \
+                             component {who}'s {what})",
+                            crate::trace_filter::STAND_IN_PART
+                        ),
+                        RECORD,
+                    )
+                    .into());
+                }
             }
             resident(vm, part, "the component")?;
             let owner = owner_of(space, part, actor)?;
