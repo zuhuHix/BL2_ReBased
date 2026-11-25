@@ -45,8 +45,10 @@ impl TfcStore {
         } else {
             format!("{cache_name}.tfc")
         };
-        let mut file =
-            std::fs::File::open(self.root.join(filename)).map_err(|_| AssetError::TfcOpen)?;
+        // The cache file in its own case (review r1 of #675: Aspyr's Linux build lower-cases it); an ambiguous name
+        // is a failed open, as a missing one is. The name checks above are unchanged.
+        let path = ow_core::install::resolve_or_join(&self.root, &filename).map_err(|_| AssetError::TfcOpen)?;
+        let mut file = std::fs::File::open(path).map_err(|_| AssetError::TfcOpen)?;
         // The C++ opens at the end and takes the position as the size; a size it cannot get fails the range check.
         let total = file.metadata().map_err(|_| AssetError::TfcRange)?.len();
         check(
@@ -82,6 +84,18 @@ mod tests {
         for bad in ["", "None", "a/b", "a\\b", "C:x"] {
             assert_eq!(store.read(bad, 0, 0), Err(AssetError::TfcName), "{bad:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review r1 of #675: a lower-cased cache file (Aspyr's Linux build) is found from the package's spelling.
+    #[test]
+    fn a_lower_case_cache_file_is_found_from_the_package_s_spelling() {
+        let dir = std::env::temp_dir().join(format!("ow-assets-tfc-lower-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("textures_cache.tfc"), [7u8, 8, 9]).unwrap();
+        let store = TfcStore::new(&dir);
+        assert_eq!(store.read("Textures_Cache", 1, 2), Ok(vec![8, 9]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -59,10 +59,14 @@ pub struct Loaded {
 
 /// The package a map name means in the install's cooked folder `cooked`: the name itself when it has `<name>.upk`,
 /// else `<name>_P` when it has that (so `Sanctuary` is `Sanctuary_P`), else the name as given (the load then reports
-/// it missing).
-pub fn resolve_map(cooked: &Path, name: &str) -> String {
-    let has = |n: &str| cooked.join(format!("{n}.upk")).is_file();
-    if !has(name) && has(&format!("{name}_P")) { format!("{name}_P") } else { name.to_string() }
+/// it missing). Each file is found in its own case (`ow_core::install::resolve`, review r1 of #675); two that differ
+/// only in case are an error.
+pub fn resolve_map(cooked: &Path, name: &str) -> Result<String, ow_core::install::PathCaseError> {
+    let has = |n: &str| -> Result<bool, ow_core::install::PathCaseError> {
+        Ok(ow_core::install::resolve(cooked, &format!("{n}.upk"))?.is_some_and(|p| p.is_file()))
+    };
+    let p = format!("{name}_P");
+    Ok(if !has(name)? && has(&p)? { p } else { name.to_string() })
 }
 
 /// Loads map `map` from the install's cooked folder `cooked` (ParityMode::Off, as every host run) and builds its

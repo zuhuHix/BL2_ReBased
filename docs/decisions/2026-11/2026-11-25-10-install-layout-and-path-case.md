@@ -31,7 +31,17 @@ Lane LINUX-PATHS, with Claude Opus 5.5; the hub approved cause B of the Linux in
   - `installed_default_game`'s `DefaultGame.ini`;
   - the item cards' and the Phaselock run's localization files;
   - the installed-game tests that built `WillowGame/CookedPCConsole` by hand (`skeletal_source`,
-    `after_login_census`, ow-ai's two).
+    `after_login_census`, ow-ai's two);
+  - (review r1 of #675) the `Object.Localize` roots of `slice::open` and `ow-host`'s `build_installed`
+    (`install::localization_roots`: `Engine`, `Gearbox` and `WillowGame`'s `Localization`) and their `INT` folder
+    (`localize.rs`, by `resolve_child`; two that differ only in case are an error);
+  - (review r1 of #675) `resolve_map` (`ow-assets` `movement/sanctuary.rs`), used by `ow-host --map` and `--play`;
+    an ambiguous name is now an error there;
+  - (found while measuring review r1 of #675) the texture file caches: `TfcStore::read` (`ow-assets` `tfc.rs`)
+    resolves `<cache name>.tfc` the same way, after its unchanged name checks; an ambiguous name is a failed open.
+- **Errors, not guesses** (review r1 of #675): a folder that cannot be checked or listed for any reason but its
+  absence is `PathCaseError::Io`. The vendor map view refuses two census files that both match its level ignoring
+  case, instead of taking the first.
   Adding `pub mod install;` to `ow-core/src/lib.rs` is that file's first edit since the scaffold.
 - **Measured** (zuhuPC, Linux, release build under the machine lock, main faa3bbc plus this lane): `ow-host --game
   <Aspyr install>` exit 0 (install found); `--game /tmp` exit 1. Installed Off strict `--slice-gate` on the Aspyr
