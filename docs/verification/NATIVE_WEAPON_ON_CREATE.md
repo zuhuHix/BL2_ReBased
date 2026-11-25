@@ -64,7 +64,8 @@ Read with `research/script_disasm.py`. Link 8's data was read with `ow-package -
    NATIVE_BEHAVIOR_CONTEXT.md reads it for the pawn; the slot's body was not read.
 3. **The event.** The name `OnCreate`, with the output-link filter -1 (every output link) and no parameters, goes to
    the kernel. The kernel step is **the one `BroadcastBehaviorEventFromScript` uses, without parameters:**
-   - no kernel, or a handle the kernel does not hold as a live consumer: nothing;
+   - no kernel, or a handle the kernel does not hold as a live consumer: nothing, in the game (section 4, steps 3 and
+     4, give the port's answers);
    - no array: the event is fired on every provider of the consumer. Each provider's enabled event entries named
      `OnCreate` run, as the broadcast rule already ported says (COMBAT_DEATH.md: every provider, in registration
      order);
@@ -76,8 +77,20 @@ Read with `research/script_disasm.py`. Link 8's data was read with `ow-package -
 4. **Nothing else.** The native writes no field itself. What runs is the providers' own behaviors.
 
 **On link 8.** The weapon is registered, and its providers are those of `WT_Bandit_AssaultRifle` and its parts. Every
-one of the nine providers on the fixed weapon (the type, body, barrel, grip, sight, stock, material, prefix and title)
-has **zero behavior sequences** (`--behavior-dump`, `values_decoded` true). So `OnCreate` fires nothing on link 8.
+one of the nine providers on the fixed weapon has **zero behavior sequences**. They were read with
+`ow-package <CookedPCConsole>/Startup.upk --behavior-dump <path> --cooked <CookedPCConsole>`, and each answered
+`values_decoded` true with `sequences` empty:
+- `GD_Weap_AssaultRifle.A_Weapons.WT_Bandit_AssaultRifle.BehaviorProviderDefinition_163`;
+- `GD_Weap_AssaultRifle.Body.AR_Body_Bandit.BehaviorProviderDefinition_0`;
+- `GD_Weap_AssaultRifle.Barrel.AR_Barrel_Bandit.BehaviorProviderDefinition_11`;
+- `GD_Weap_AssaultRifle.Grip.AR_Grip_Jakobs.BehaviorProviderDefinition_7`;
+- `GD_Weap_AssaultRifle.Sight.AR_Sight_None.BehaviorProviderDefinition_17`;
+- `GD_Weap_AssaultRifle.Stock.AR_Stock_Jakobs.BehaviorProviderDefinition_19`;
+- `GD_Weap_AssaultRifle.ManufacturerMaterials.Mat_BanditMade_1.BehaviorProviderDefinition_0`;
+- `GD_Weap_Shared_Names.Name.Prefix_Bandit.Prefix_Grip_Jakobs.BehaviorProviderDefinition_0`;
+- `GD_Weap_AssaultRifle.Name.Title_Bandit.Title__MashineGun.BehaviorProviderDefinition_0`.
+
+So `OnCreate` fires nothing on link 8.
 
 ## 4. The Off answer (for a separate implementer)
 
@@ -88,15 +101,26 @@ has **zero behavior sequences** (`--behavior-dump`, `values_decoded` true). So `
    caller passes one.
 2. **The handle:** the weapon's `ConsumerHandle`, a plain read as `WillowPawn.GetBehaviorConsumerHandle`'s Off rule
    reads the pawn's. Missing or of the wrong kind: `VmError::Script`.
-3. **The event:** the kernel's broadcast, as `BroadcastBehaviorEventFromScript` is bound, with:
-   - event name `OnCreate`;
-   - filter -1;
-   - no payload;
-   - every provider of the consumer.
-
-   An unknown or dead handle, or no kernel, is nothing. The behaviors it fires answer for themselves; their refusals
-   keep their own kinds.
-4. **No other write.**
+3. **The event:** the kernel's broadcast, with event name `OnCreate`, filter -1, no payload and every provider of the
+   consumer. **Where to share it:** `crates/ow-behavior/src/kernel/natives.rs`, `kernel_rule`'s
+   `BROADCAST_FROM_SCRIPT` arm. That arm loops over every provider slot of the process and calls
+   `fire_event(name, -1, [])` on each. Factor that loop out and call it from both natives. `OnCreate` takes its
+   handle from the weapon's interface slot (step 2), not from argument 0, so it cannot reuse `routed` / `dispatch`
+   as they are. It keeps their rule per owner:
+   - **`Owner::Kernel`:** the shared loop fires;
+   - **`Owner::Crate(name)`:** that crate's route body for this native, when it has one, else the stub policy's
+     answer (`unbound`), as `dispatch` does. No crate has one today, so that is a `NotYet` or the stub, never a
+     guess;
+   - **no owner** (a PID never registered) **or `Owner::Released`:** nothing, as `dispatch`'s unowned answer in Off.
+4. **No kernel.** In the game, a null kernel means nothing fires (by fit: the routine's first gate). In the port, a
+   **missing kernel service** stays what `kernel()` gives every kernel native: `NotYet { LayerAbsent }`, "the behavior
+   kernel natives" (`natives.rs`, `kernel()`). It is not answered as "nothing".
+5. **Atomicity.** There is no preflight across providers. The answer **inherits the existing broadcast's
+   non-atomicity (UNVERIFIED):** providers are fired one by one. A refusal from a later provider's behaviors comes
+   after an earlier provider's behaviors have run and written. It is marked "stopped after partial writes: " by #518's
+   counters, its kind and record kept. The behaviors it fires answer for themselves, and their refusals keep their own
+   kinds.
+6. **No other write.**
 
 `WillowItem.OnCreate` has the same script shape. Its native was not read; leave it unbound.
 
@@ -110,13 +134,20 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
    runs that sequence's behaviors once, with every output link;
 2. two providers, each with an `OnCreate` entry: both run, in registration order;
 3. a provider whose only event is another name: nothing runs;
-4. a weapon whose `ConsumerHandle` the kernel does not hold (never registered, or unregistered): nothing, and no
-   error;
+4. a weapon whose `ConsumerHandle` PID was never registered (no owner): nothing, no error, and the handle unchanged;
+4a. a weapon whose PID was registered and then released (`ForceUnregisterBehaviorConsumer`, `Owner::Released`):
+    nothing, no error, and the handle unchanged by `OnCreate`;
 5. providers with no sequences (link 8's case): nothing;
 6. a supplied `Providers` array: the `NotRead`, before anything is fired;
 7. `ConsumerHandle` missing or of the wrong kind: `VmError::Script`;
 8. an `OnCreate` entry whose enabled bit is clear: not run (the kernel's per-entry test, shared with the broadcast);
-9. Reference: unchanged.
+9. **a crate-owned handle** (`Owner::Crate`, a toy crate route): the crate's route body for `OnCreate` when it
+   registers one; with none, the stub policy's answer (`unbound`), as `dispatch` does;
+10. **two providers, the second refuses** (its `OnCreate` behavior is a toy that answers `NotYet`): the first
+    provider's behaviors have run and their writes stay. The refusal is marked "stopped after partial writes: ",
+    with its kind and record kept;
+11. **no kernel service** installed: `NotYet { LayerAbsent }`, "the behavior kernel natives", and nothing written;
+12. Reference: unchanged.
 
 ## Open questions
 

@@ -25,4 +25,12 @@ changed.
   - a supplied `Providers` array is `NotRead`;
   - tests listed.
 - **Prediction** (not a run): link 8's next stop is the unbound `WillowWeapon.GetFiringModeDefinition`.
+- **Review r1 (#723):**
+  - the implementer is pointed at `kernel_rule`'s `BROADCAST_FROM_SCRIPT` arm as the loop to share. `OnCreate` takes
+    its handle from the weapon's interface slot, so it does not reuse `routed`;
+  - one rule per owner (kernel, crate, unowned or released);
+  - a missing kernel service stays `LayerAbsent`;
+  - the broadcast's non-atomicity is inherited and stated;
+  - the nine provider paths and the exact command are listed;
+  - tests 4 and 4a, 9, 10 and 11 are added or split.
 - **Clean room:** a different lane implements this note.
