@@ -198,6 +198,7 @@ fn gearbox() -> Vec<u8> {
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
     let blend_base = t.p.add_import("Core", "Class", engine, "AnimNodeBlendBase");
+    let actor = t.p.add_import("Core", "Class", engine, "Actor");
     let interface = t.class("SpecialMoveInterface", object);
     let data = toy_struct(&mut t, interface, "SpecialMoveData", None);
     t.prop("Object", data, "Data", 0, object);
@@ -212,7 +213,31 @@ fn gearbox() -> Vec<u8> {
     t.prop("Struct", component, "CurrentSMData", 0, data);
     toy_array_of(&mut t, component, "SMDQueue", "Struct", data);
     t.prop("Object", component, "SMBlendNode", 0, object);
+    // The component's Owner, which Queue's forward test reads (lane IMPL-SPECIALMOVE-QUEUE).
+    t.prop("Object", component, "Owner", 0, actor);
+    // Two misshapen components for Queue's shape checks: `CurrentSMData` an int, and `SMDQueue` of ints.
+    let odd_current = t.class("ToyOddCurrentComponent", object);
+    t.prop("Interface", odd_current, "SMI", 0, interface);
+    t.prop("Object", odd_current, "Owner", 0, actor);
+    t.prop("Int", odd_current, "CurrentSMData", 0, 0);
+    toy_array_of(&mut t, odd_current, "SMDQueue", "Struct", data);
+    let odd_queue = t.class("ToyOddQueueComponent", object);
+    t.prop("Interface", odd_queue, "SMI", 0, interface);
+    t.prop("Object", odd_queue, "Owner", 0, actor);
+    t.prop("Struct", odd_queue, "CurrentSMData", 0, data);
+    toy_array_of(&mut t, odd_queue, "SMDQueue", "Int", 0);
     let smi = || D("Interface", "SMI", 0, vec![interface]);
+    {
+        let declared = [
+            D("Object", "NewSMD", 0, vec![object]),
+            D("Float", "PlayRateScale", CPF_OPT, vec![0]),
+            D("Float", "Duration", CPF_OPT, vec![0]),
+            D("Name", "CallbackName", CPF_OPT, vec![0]),
+            D("Object", "CallbackObject", CPF_OPT, vec![object]),
+            D("Object", "Data", CPF_OPT, vec![object]),
+        ];
+        native(&mut t, component, "Queue", &declared, None);
+    }
     for name in ["Play", "PlayLocal"] {
         let declared = [
             D("Object", "NewSMD", 0, vec![object]),
@@ -414,6 +439,7 @@ impl Fx {
         self.set(pawn, "Role", Value::Byte(role));
         let component = self.obj("GearboxFramework.SpecialMoveComponent");
         self.set(component, "SMI", Value::Interface(Some(pawn)));
+        self.set(component, "Owner", Value::Object(Some(pawn)));
         (pawn, component)
     }
 
@@ -971,4 +997,233 @@ fn the_cast_pack_binds_no_groundwork_test_in_off() {
         let key = x.vm().function(f).unwrap().native_key.clone().unwrap();
         assert_eq!(x.vm().has_native(&key), mode == ParityMode::Reference, "{mode:?}");
     }
+}
+
+// ---- SpecialMoveComponent.Queue (NATIVE_SPECIAL_MOVE_QUEUE.md section 6; lane IMPL-SPECIALMOVE-QUEUE) ------------
+
+impl Fx {
+    fn queue(&mut self, component: ObjRef, args: Vec<Value>) -> Result<Value, VmError> {
+        self.call(PATHS[7], component, args)
+    }
+
+    /// #518's three counters and the name table's length.
+    fn counters(&mut self) -> (u64, u64, u64, usize) {
+        let vm = self.vm();
+        (vm.space.heap.committed_writes() as u64, vm.rng.draws() as u64, vm.defs.load_transitions() as u64, vm.space.names.len())
+    }
+
+    /// The six arguments, every one given: rate 0.5, duration 3, callback `ToyDone` on `callback`, data `data`.
+    fn six(&mut self, smd: ObjRef, callback: ObjRef, data: ObjRef) -> Vec<Value> {
+        let name = self.name("ToyDone");
+        vec![
+            Value::Object(Some(smd)),
+            Value::Float(0.5),
+            Value::Float(3.0),
+            name,
+            Value::Object(Some(callback)),
+            Value::Object(Some(data)),
+        ]
+    }
+
+    fn queue_entries(&mut self, component: ObjRef) -> Vec<Value> {
+        self.get(component, "SMDQueue").elements().unwrap().to_vec()
+    }
+}
+
+/// A refusal of `Queue`: its kind and text, the component's state, #518's counters and the name table unchanged, and
+/// no event.
+fn queue_refused(x: &mut Fx, component: ObjRef, args: Vec<Value>) -> (Missing, String) {
+    let (state, counters) = (x.state(component), x.counters());
+    x.clear_calls();
+    let r = not_yet(x.queue(component, args));
+    assert_eq!(x.state(component), state, "nothing written");
+    assert_eq!(x.counters(), counters, "write-, draw-, load- and intern-free");
+    assert!(x.calls().is_empty(), "no event");
+    assert!(!r.1.contains("stopped after partial writes"), "{}", r.1);
+    r
+}
+
+/// Test 1: no definition, or an owner interface unset: nothing changes, no refusal, no event.
+#[test]
+fn queue_with_nothing_to_queue_does_nothing() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    x.seed(component, d, None);
+    let args = x.six(d, pawn, pawn);
+    let (state, counters) = (x.state(component), x.counters());
+    assert_eq!(x.queue(component, vec![Value::Object(None)]).unwrap(), Value::None);
+    assert_eq!(x.counters(), counters, "no definition: nothing written");
+    x.set(component, "SMI", Value::Interface(None));
+    let counters = x.counters();
+    assert_eq!(x.queue(component, args).unwrap(), Value::None);
+    assert_eq!(x.counters(), counters, "no owner interface: nothing written");
+    assert_eq!(x.state(component), state);
+    assert!(x.calls().is_empty());
+}
+
+/// Test 2: an owner interface and no component `Owner`: the `Owner` refusal, nothing written.
+#[test]
+fn queue_without_an_owner_refuses() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    x.set(component, "Owner", Value::Object(None));
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let args = x.six(d, pawn, pawn);
+    let (missing, what) = queue_refused(&mut x, component, args);
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.contains(QUEUE_NO_OWNER), "{what}");
+}
+
+/// Tests 3 and 4: an owner below authority is the forward's refusal, with or without a current move; an autonomous
+/// proxy with a definition that sets `bClientHasAuthority` gets it too (preflight step 3 before step 4), nothing queued.
+#[test]
+fn queue_on_an_owner_below_authority_refuses_the_forward_first() {
+    for (role, client_authority, current) in [(SIMULATED, false, false), (SIMULATED, false, true), (AUTONOMOUS, true, true)] {
+        let mut x = fx(ParityMode::Off);
+        let (pawn, component) = x.owner(role);
+        let d = x.definition("GearboxFramework.ToyMove", client_authority);
+        if current {
+            let other = x.definition("GearboxFramework.ToyOtherMove", false);
+            x.seed(component, other, None);
+        }
+        let args = x.six(d, pawn, pawn);
+        let (missing, what) = queue_refused(&mut x, component, args);
+        assert_eq!(missing, Missing::NotRead, "{role} {client_authority} {current}");
+        assert!(what.contains(QUEUE_FORWARD), "{what}");
+    }
+}
+
+/// Test 5: behind a current move, on the authority: one entry appended with all six fields as given (`Data`
+/// included, the definition as given); a second `Queue` of the same definition appends a second entry after it. The
+/// current move, `StartTime` and the existing entry are unchanged, and no definition event runs.
+#[test]
+fn queue_behind_a_current_move_appends_full_entries_in_order() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let current = x.definition("GearboxFramework.ToyOtherMove", false);
+    x.seed(component, current, None);
+    let (before_current, before_queue, before_time) = x.state(component);
+    let existing = before_queue.elements().unwrap()[0].clone();
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (callback, data) = (x.obj("Engine.Pawn"), x.obj("Engine.Actor"));
+    x.clear_calls();
+    let args = x.six(d, callback, data);
+    assert_eq!(x.queue(component, args).unwrap(), Value::None);
+    let data2 = x.obj("Engine.Actor");
+    let mut args = x.six(d, callback, data2);
+    args.truncate(2);
+    x.queue(component, args).unwrap();
+    let entries = x.queue_entries(component);
+    assert_eq!(entries.len(), 3, "the existing entry, then the two queued");
+    assert_eq!(entries[0], existing);
+    let vm = &x.world.vm;
+    let f = |e: &Value, n: &str| field(vm, e, n, "test").unwrap();
+    assert_eq!(f(&entries[1], "SMD"), Value::Object(Some(d)));
+    assert_eq!(f(&entries[1], "PlayRateScale"), Value::Float(0.5));
+    assert_eq!(f(&entries[1], "Duration"), Value::Float(3.0));
+    assert_eq!(f(&entries[1], "CallbackName"), Value::Name(vm.space.names.find("ToyDone").unwrap()));
+    assert_eq!(f(&entries[1], "CallbackObject"), Value::Object(Some(callback)));
+    assert_eq!(f(&entries[1], "Data"), Value::Object(Some(data)), "Data kept behind a current move");
+    // The second, its omitted arguments at the defaults.
+    assert_eq!(f(&entries[2], "SMD"), Value::Object(Some(d)), "the same definition twice");
+    assert_eq!(f(&entries[2], "PlayRateScale"), Value::Float(0.5));
+    assert_eq!(f(&entries[2], "Duration"), Value::Float(0.0));
+    assert_eq!(f(&entries[2], "Data"), Value::Object(None));
+    let _ = pawn;
+    assert_eq!(x.get(component, "CurrentSMData"), before_current);
+    assert_eq!(x.get(component, "StartTime"), before_time);
+    assert!(x.calls().is_empty(), "no event: {:?}", x.calls());
+}
+
+/// Test 6, the integration: nothing current, on the authority. Play's path runs, and its own refusal stands: the
+/// replication-record `NotRead`, no "stopped after partial writes" prefix, the queue unchanged.
+#[test]
+fn queue_with_nothing_current_on_the_authority_meets_play_s_refusal() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let waiting = x.definition("GearboxFramework.ToyOtherMove", false);
+    let mut entry = x.get(component, "CurrentSMData");
+    entry = with_field(&x.world.vm, entry, "SMD", Value::Object(Some(waiting)), "test").unwrap();
+    x.set(component, "SMDQueue", Value::array(vec![entry]));
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let args = x.six(d, pawn, pawn);
+    let (missing, what) = queue_refused(&mut x, component, args);
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.contains("the record the owner keeps of the current move for replication"), "{what}");
+    assert!(what.contains(RECORD), "Play's own record: {what}");
+}
+
+/// Test 6, the delegation: nothing current, a component `Owner` at authority and an owner interface (an autonomous
+/// proxy, a definition with `bClientHasAuthority`) whose `Play` starts. Play's path runs with `Data` None: the started
+/// move's `Data` is None though the caller gave one, the other fields as given; Play empties the queue.
+#[test]
+fn queue_with_nothing_current_delegates_to_play_with_data_dropped() {
+    let mut x = fx(ParityMode::Off);
+    let (interface_owner, component) = x.owner(AUTONOMOUS);
+    let owner = x.obj("Engine.Pawn");
+    x.set(owner, "Role", Value::Byte(AUTHORITY));
+    x.set(component, "Owner", Value::Object(Some(owner)));
+    let waiting = x.definition("GearboxFramework.ToyOtherMove", false);
+    let mut entry = x.get(component, "CurrentSMData");
+    entry = with_field(&x.world.vm, entry, "SMD", Value::Object(Some(waiting)), "test").unwrap();
+    x.set(component, "SMDQueue", Value::array(vec![entry]));
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let data = x.obj("Engine.Actor");
+    let args = x.six(d, interface_owner, data);
+    assert_eq!(x.queue(component, args).unwrap(), Value::None, "Play's duration is dropped");
+    assert_eq!(x.current(component, "SMD"), Value::Object(Some(d)), "Play started the move");
+    assert_eq!(x.current(component, "Data"), Value::Object(None), "Data passed as None");
+    assert_eq!(x.current(component, "PlayRateScale"), Value::Float(0.5));
+    assert_eq!(x.current(component, "Duration"), Value::Float(3.0));
+    assert_eq!(x.current(component, "CallbackObject"), Value::Object(Some(interface_owner)));
+    assert!(x.queue_entries(component).is_empty(), "Play's start empties the queue");
+    assert!(x.calls().iter().any(|c| c.starts_with("ClientStarted on ToyMove")), "{:?}", x.calls());
+}
+
+/// Test 7: `CurrentSMData` not a struct, or `SMDQueue` of another element type: a `VmError::Script` naming the field,
+/// nothing written.
+#[test]
+fn queue_on_misshapen_fields_is_a_script_error() {
+    for (class, field_name) in [
+        ("GearboxFramework.ToyOddCurrentComponent", "CurrentSMData"),
+        ("GearboxFramework.ToyOddQueueComponent", "SMDQueue"),
+    ] {
+        let mut x = fx(ParityMode::Off);
+        let pawn = x.obj("Engine.Pawn");
+        x.set(pawn, "Role", Value::Byte(AUTHORITY));
+        let component = x.obj(class);
+        x.set(component, "SMI", Value::Interface(Some(pawn)));
+        x.set(component, "Owner", Value::Object(Some(pawn)));
+        let d = x.definition("GearboxFramework.ToyMove", false);
+        let args: Vec<ow_vm::api::Arg> = vec![ow_vm::api::Arg::new(Value::Object(Some(d)), false, true)];
+        let before = x.counters();
+        let vm = x.vm();
+        let f = vm.find_function(PATHS[7]).unwrap();
+        let mut c = NativeCall::new(vm, f, Some(component), args);
+        match queue(&mut c) {
+            Err(VmError::Script { message, .. }) => assert!(message.contains(field_name), "{class}: {message}"),
+            other => panic!("{class}: expected a script error, got {other:?}"),
+        }
+        assert_eq!(x.counters(), before, "{class}: nothing written");
+    }
+}
+
+/// The hub's ask on #680 (loaded-only reads): a definition that is not resident (here a stand-in with no slots) is
+/// refused before anything reads it, nothing loaded or written.
+#[test]
+fn queue_refuses_an_unloaded_definition_without_loading_it() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let move_class = x.vm().find_class("GearboxFramework.ToyMove").unwrap();
+    let cold = x
+        .vm()
+        .space
+        .alloc_stand_in(move_class, "ToyColdMove", ow_object::heap::Origin::Resource { package: 0, index: -1 })
+        .unwrap();
+    let args = x.six(cold, pawn, pawn);
+    let (missing, what) = queue_refused(&mut x, component, args);
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.contains("the definition") && what.contains("is not loaded"), "{what}");
+    assert!(x.world.vm.space.heap.get(cold).unwrap().slots.is_empty(), "still a stand-in with no slots");
 }

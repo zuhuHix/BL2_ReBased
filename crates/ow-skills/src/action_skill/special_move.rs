@@ -71,6 +71,24 @@
 //!   definition to play (0 with none), its `ServerStarted(SMI)` and then its `ClientStarted(SMI, SMData)`, whose answer
 //!   is the answer. No gate, no current move, no `StartTime`, no queue.
 //!
+//! - **`SpecialMoveComponent.Queue(NewSMD, PlayRateScale = 1, Duration = 0, CallbackName, CallbackObject, Data)`**
+//!   (lane IMPL-SPECIALMOVE-QUEUE, coded from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 alone; its record, [`QUEUE_RECORD`]).
+//!   No answer. The preflight, write-free, in the note's order:
+//!   1. no definition, or no owner interface (`SMI`'s object): nothing;
+//!   2. an owner interface and no component `Owner`: `NotYet { NotRead }` (the game reads its `Role` unchecked);
+//!   3. the component `Owner`'s `Role` below `ROLE_Authority`: `NotYet { NotRead }`, the forward to the server
+//!      (`ServerSpecialMove_Queue`) is network play, not ported;
+//!   4. `IsLocalAuthority(NewSMD)` (not resolved through `GetSMDToPlay`) false: nothing;
+//!   5. `CurrentSMData` a `SpecialMoveData` struct and `SMDQueue` an array of that struct, else a `VmError::Script`
+//!      naming the field.
+//!
+//!   Then: **no current move** (`CurrentSMData.SMD` None): `Play`'s own path here, with the same arguments but `Data`
+//!   passed as None (the note reads the game dropping it), its answer dropped; whatever it refuses stands, with its
+//!   own record and its own "stopped after partial writes" rule (Queue writes nothing before it). **A current move:**
+//!   one `SpecialMoveData` appended at the end of `SMDQueue`, every field as given (`Data` included) and `SMD` the
+//!   definition as given; the only write. Draining the queue when a move stops is not part of this native and is not
+//!   ported: an entry queued here waits in Off.
+//!
 //! **Still unread, so unbound here** (the stub policy answers): `RunBehaviors` (lane #432), the behavior provider's
 //! `OnStart` / `OnServerStart`, and the blend node's `PlayData`, which `ClientStarted` reaches.
 
@@ -89,8 +107,19 @@ use super::{method_of, need, script_error};
 /// The record these natives follow.
 pub const RECORD: &str = "NATIVE_SPECIAL_MOVE_PLAY.md";
 
+/// The record `Queue` follows (lane IMPL-SPECIALMOVE-QUEUE).
+pub const QUEUE_RECORD: &str = "NATIVE_SPECIAL_MOVE_QUEUE.md";
+
+/// The refusal for a component with an owner interface and no `Owner` (the note's preflight step 2).
+pub const QUEUE_NO_OWNER: &str =
+    "SpecialMoveComponent.Queue: a component with an owner interface and no Owner (the game reads its Role unchecked)";
+
+/// The refusal for an owner below authority (the note's preflight step 3).
+pub const QUEUE_FORWARD: &str =
+    "SpecialMoveComponent.Queue: the forward to the server (ServerSpecialMove_Queue) on an owner below authority";
+
 /// The function paths [`register`] binds in Off.
-pub const PATHS: [&str; 7] = [
+pub const PATHS: [&str; 8] = [
     "Engine.Pawn.IsAliveAndWell",
     "GearboxFramework.SpecialMoveDefinition.GetSMDToPlay",
     "GearboxFramework.SpecialMoveDefinition.IsLocalAuthority",
@@ -98,6 +127,7 @@ pub const PATHS: [&str; 7] = [
     "GearboxFramework.SpecialMoveComponent.GetSMNode",
     "GearboxFramework.SpecialMoveComponent.Play",
     "GearboxFramework.SpecialMoveComponent.PlayLocal",
+    "GearboxFramework.SpecialMoveComponent.Queue",
 ];
 
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
@@ -637,6 +667,81 @@ fn play_local(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     }
 }
 
+/// The element struct of `SMDQueue`, which must be `ty` (`CurrentSMData`'s), else a `VmError::Script` naming it.
+fn require_queue_of(vm: &Vm, component: ObjRef, ty: StructId, what: &str) -> Result<(), VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let p = vm.space.prop(class, "SMDQueue").ok_or_else(|| script_error(what, "no SMDQueue"))?;
+    match vm.space.classes.decl(p).map(|d| &d.kind) {
+        Some(PropKind::Array(inner)) if **inner == PropKind::Struct(ty) => Ok(()),
+        _ => Err(script_error(what, "SMDQueue is not an array of CurrentSMData's struct (SpecialMoveData)")),
+    }
+}
+
+/// `NotYet { NotRead }` for an object that is not resident: a handle the store has not loaded, or a stand-in with no
+/// slots (as `Actor.Trace`'s residency check). Reading it would load it, and the preflight reads only what is loaded
+/// (a load is a write).
+fn loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
+    let obj = vm.space.heap.get(o)?;
+    let full = u32::try_from(obj.slots.len()).ok() == vm.space.classes.get_layout(obj.class).map(|l| l.slot_count());
+    if vm.defs.is_unloaded(&vm.space, o) || !full {
+        return Err(NotYet::not_read(
+            format!("SpecialMoveComponent.Queue: {what} {} is not loaded (a load is a write)", ow_attr::eval::class_path(&vm.space, o)),
+            QUEUE_RECORD,
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// `Queue` (module documentation; NATIVE_SPECIAL_MOVE_QUEUE.md section 5).
+fn queue(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const WHAT: &str = "SpecialMoveComponent.Queue";
+    let component = this(c, WHAT)?;
+    loaded(c.vm, component, "the component")?;
+    // 1. Nothing to queue.
+    let Some(requested) = object(c.arg(0)?, WHAT)? else { return Ok(Value::None) };
+    let smi = need(c.vm, component, "SMI")?;
+    let Some(interface_object) = object(&smi, WHAT)? else {
+        return Ok(Value::None);
+    };
+    // 2. and 3. The component's Owner, and its Role (the forward is network play, not ported).
+    let Some(owner) = object(&need(c.vm, component, "Owner")?, WHAT)? else {
+        return Err(NotYet::not_read(QUEUE_NO_OWNER, QUEUE_RECORD).into());
+    };
+    loaded(c.vm, owner, "the Owner")?;
+    if !role_at_least(c.vm, owner, "ROLE_Authority", WHAT)? {
+        return Err(NotYet::not_read(QUEUE_FORWARD, QUEUE_RECORD).into());
+    }
+    // 4. The authority gate, on the definition as given (it reads the definition and the owner interface's object).
+    loaded(c.vm, requested, "the definition")?;
+    loaded(c.vm, interface_object, "the owner interface's object")?;
+    if !is_local_authority_of(c.vm, requested, &smi)? {
+        return Ok(Value::None);
+    }
+    // 5. The fields' shapes, then the current move.
+    let ty = data_type(c.vm, component, WHAT)?;
+    require_queue_of(c.vm, component, ty, WHAT)?;
+    let current = need(c.vm, component, "CurrentSMData")?;
+    if object(&field(c.vm, &current, "SMD", WHAT)?, WHAT)?.is_none() {
+        // 3a: Play's path with Data passed as None; its answer dropped, its refusals as they are.
+        let f = c.vm.find_function(PATHS[5])?;
+        let mut args: Vec<ow_vm::api::Arg> = (0..5.min(c.arg_count()))
+            .map(|i| Ok(ow_vm::api::Arg::new(c.arg(i)?.clone(), false, c.has(i))))
+            .collect::<Result<_, VmError>>()?;
+        args.resize_with(5, || ow_vm::api::Arg::new(Value::None, false, false));
+        args.push(ow_vm::api::Arg::new(Value::Object(None), false, true));
+        let mut inner = NativeCall::new(&mut *c.vm, f, Some(component), args);
+        play(&mut inner)?;
+        return Ok(Value::None);
+    }
+    // 3b: one entry appended, every field as given, the definition as given.
+    let entry = request(c, component, requested, WHAT)?;
+    let mut list = need(c.vm, component, "SMDQueue")?;
+    list.array_mut().ok_or_else(|| script_error(WHAT, "SMDQueue is not an array"))?.push(entry);
+    write(c.vm, component, "SMDQueue", list, WHAT)?;
+    Ok(Value::None)
+}
+
 /// Binds the module's natives in `ParityMode::Off`; Reference binds nothing (module documentation).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ow_core::ParityMode::Off {
@@ -645,8 +750,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.service::<Deferred>().is_none() {
         vm.add_service(Deferred::default())?;
     }
-    let [alive, to_play_path, local, playing, node, play_path, local_play] = PATHS;
-    let natives: [(&str, NativeFn); 7] = [
+    let [alive, to_play_path, local, playing, node, play_path, local_play, queue_path] = PATHS;
+    let natives: [(&str, NativeFn); 8] = [
         (alive, Rc::new(is_alive_and_well)),
         (to_play_path, Rc::new(|c: &mut NativeCall<'_>| Ok(Value::Object(Some(this(c, "GetSMDToPlay")?))))),
         (
@@ -661,6 +766,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (node, Rc::new(get_sm_node)),
         (play_path, Rc::new(play)),
         (local_play, Rc::new(play_local)),
+        (queue_path, Rc::new(queue)),
     ];
     for (path, f) in natives {
         bind(vm, path, f)?;
