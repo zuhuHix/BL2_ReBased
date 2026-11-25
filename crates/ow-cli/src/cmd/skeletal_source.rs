@@ -52,13 +52,13 @@ impl PskExports {
 }
 
 /// Whether a candidate file is an export, from its metadata lookup (`Ok(is a file)`). Review r1 of #693, item 2: only
-/// "not found" or "not a file" moves on to the next candidate. Any other lookup error (permissions, an unreadable
-/// folder) is an error naming the path, so a preferred export that cannot be seen never silently gives way to the
-/// package source.
+/// "not found", "not a directory" (a regular file where the package or `SkeletalMesh3` folder would be; review r2 of
+/// #693) or "not a file" moves on to the next candidate. Any other lookup error (permissions, an unreadable folder) is
+/// an error naming the path, so a preferred export that cannot be seen never silently gives way to the package source.
 fn is_export(found: std::io::Result<bool>, path: &Path) -> Result<bool, String> {
     match found {
         Ok(is_file) => Ok(is_file),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => Ok(false),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
@@ -248,7 +248,7 @@ mod tests {
     /// install, `OW_LOD_PACKAGES` the packages, `OPENWILLOW_PSK_EXPORTS` one UModel export root. Every
     /// `SkeletalMesh` export's package skeleton is compared, bone for bone, with the `.psk` reader's skeleton of the
     /// same mesh: names, parents, rotations (to 1e-4, a quaternion and its negation being one rotation) and
-    /// positions (to 1e-3). Counts only are printed (lane SKELMESH-REFSKELETON, decision 2026-11-25-NNN).
+    /// positions (to 1e-3). Counts only are printed (lane SKELMESH-REFSKELETON, decision 2026-11-25-27).
     #[test]
     #[ignore = "needs the installed game and UModel exports"]
     fn installed_refskeleton_census() {
@@ -321,6 +321,8 @@ mod tests {
         assert_eq!(is_export(Ok(false), path), Ok(false), "a folder of that name is not an export");
         let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert_eq!(is_export(Err(missing), path), Ok(false));
+        let file_in_the_way = std::io::Error::from(std::io::ErrorKind::NotADirectory);
+        assert_eq!(is_export(Err(file_in_the_way), path), Ok(false), "a file where a folder would be is a miss");
         let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         let e = is_export(Err(denied), path).unwrap_err();
         assert!(e.contains("Toy.psk"), "{e}");

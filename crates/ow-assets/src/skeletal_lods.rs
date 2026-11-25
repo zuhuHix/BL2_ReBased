@@ -1,7 +1,7 @@
 //! Owner: lane SKELMESH-LOD-LAYER. A `SkeletalMesh` export's native data, read from the 832/46 package: the prefix up
 //! to its LOD model count ([`read_lod_count`]), the count `SkeletalMeshComponent.SetSkeletalMesh`'s LOD row asks for
 //! (NATIVE_SKELMESH_MESH_CHANGE.md row 15, `ow_world::world::skeletal::lod_count`), and the LOD models to the export's
-//! end ([`read_lod_models`]). AI-assisted (Claude Code). Decision 2026-11-25-09; the reference skeleton (lane SKELMESH-REFSKELETON), decision 2026-11-25-NNN.
+//! end ([`read_lod_models`]). AI-assisted (Claude Code). Decision 2026-11-25-09; the reference skeleton (lane SKELMESH-REFSKELETON), decision 2026-11-25-27.
 //!
 //! **Fitted, UNVERIFIED** (AGENTS.md rule 4: no public spec). Recovered from the installed packages and checked with
 //! structural oracles, as decision 2026-11-25-09 records. After the tagged properties, in order:
@@ -241,7 +241,7 @@ struct Prefix {
 
 /// One bone of the reference skeleton (module documentation, item 4), as the package stores it. Fitted and
 /// UNVERIFIED in meaning: the rotation and position equal, bone for bone, what the project's `.psk` reader gives for
-/// UModel's export of the same mesh (decision 2026-11-25-NNN), and that is the evidence for their convention: the
+/// UModel's export of the same mesh (decision 2026-11-25-27), and that is the evidence for their convention: the
 /// bone's transform relative to its parent, `p_parent = q p q* + t` (Hamilton, `(x, y, z, w)`), in the game's frame.
 ///
 /// `N` is the name: its text (`name_<number - 1>` for a numbered name) in what [`read_lod_models`] returns; inside
