@@ -124,6 +124,14 @@ pub trait SkeletonSource {
         let _ = (package, path, leaf);
         Ok(None)
     }
+
+    /// The LOD model count of export `index` of `package`, the definition store's own in-memory package (lane
+    /// SKELMESH-LOD-LAYER), when the source reads it from the package itself. Asked before
+    /// [`SkeletonSource::lod_count`]; the default, `Ok(None)`, leaves the answer to that method. Reads only.
+    fn lod_count_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
+        let _ = (package, index);
+        Ok(None)
+    }
 }
 
 /// The layer's service: the installed source and the cache by mesh identity.
@@ -704,7 +712,15 @@ pub fn lod_count(vm: &Vm, mesh: ObjRef) -> Result<Option<usize>, VmError> {
         Err(VmError::NotYet(_)) => return Ok(None),
         Err(e) => return Err(e),
     };
-    let read = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.source.lod_count(&package, &path, &leaf);
+    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
+    // The store's own package first (lane SKELMESH-LOD-LAYER): `identity` placed the mesh in an export.
+    if let Origin::Export { package: at, index } | Origin::Resource { package: at, index } = vm.space.heap.get(mesh)?.origin {
+        let pkg = vm.defs.packages().get(at);
+        if let Some(n) = layer.source.lod_count_in(pkg, index).map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))? {
+            return Ok(Some(n));
+        }
+    }
+    let read = layer.source.lod_count(&package, &path, &leaf);
     read.map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))
 }
 

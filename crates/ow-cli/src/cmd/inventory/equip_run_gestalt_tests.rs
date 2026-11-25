@@ -18,7 +18,7 @@ use ow_package::testkit::reflect::toy_struct;
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 
-use super::{GESTALT_INPUT, NEW_MESH_INPUT, preload_gestalt_mesh, preload_gestalt_skeletal_mesh};
+use super::{GESTALT_INPUT, LOD_LAYER_LINE, NEW_MESH_INPUT, install_mesh_layer, preload_gestalt_mesh, preload_gestalt_skeletal_mesh};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -320,3 +320,33 @@ fn a_gestalt_mesh_that_fails_to_load_is_an_error_and_logged() {
     only_the_stores_own(&x.vm, &before, mesh);
     assert!(!x.vm.defs.is_unloaded(&x.vm.space, gestalt), "the definition stays loaded");
 }
+
+/// Lane SKELMESH-LOD-LAYER: after the preloads, Off installs the skeletal mesh data layer once and logs it, then logs
+/// what the layer answers for the resident gestalt mesh (here the toy mesh is not a `SkeletalMesh`, so the answer is
+/// "no answer" with the layer's error, logged and not raised). Nothing is written or loaded; a second call installs
+/// nothing more. Reference gets nothing.
+#[test]
+fn the_mesh_layer_is_installed_once_and_its_answer_logged() {
+    let mut x = fx(ParityMode::Off);
+    let weapon_type = x.find("WillowGame.ToyType_Gestalt");
+    let weapon = x.weapon(Some(weapon_type));
+    preload_gestalt_mesh(&mut x.vm, weapon).unwrap();
+    preload_gestalt_skeletal_mesh(&mut x.vm, weapon).unwrap();
+    let before = x.counts();
+    install_mesh_layer(&mut x.vm, weapon).unwrap();
+    assert_eq!(x.counts(), before, "the install and the read write and load nothing");
+    assert!(x.vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_some(), "installed");
+    let lines: Vec<String> = x.vm.log.iter().filter(|l| l.starts_with(LOD_LAYER_LINE)).cloned().collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0], LOD_LAYER_LINE);
+    assert!(lines[1].contains("ToyMesh_0 has no answer"), "{lines:?}");
+    install_mesh_layer(&mut x.vm, weapon).unwrap();
+    let again = x.vm.log.iter().filter(|l| l.as_str() == LOD_LAYER_LINE).count();
+    assert_eq!(again, 1, "installed once");
+    let mut r = fx(ParityMode::Reference);
+    let weapon_type = r.find("WillowGame.ToyType_Gestalt");
+    let weapon = r.weapon(Some(weapon_type));
+    install_mesh_layer(&mut r.vm, weapon).unwrap();
+    assert!(r.vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_none(), "Reference: nothing");
+}
+

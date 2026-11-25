@@ -367,3 +367,43 @@ fn twins_are_decided_by_class_ancestry() {
     assert_eq!(reference_skeleton(&e.vm, solo).unwrap().len(), 1, "an unrelated class is no twin");
     assert_eq!(reads.get(), 1);
 }
+
+/// Lane SKELMESH-LOD-LAYER: a source that reads the store's own package answers through `lod_count_in`, asked first
+/// with the mesh's export; one that does not (`Ok(None)` there) falls back to the name-based `lod_count`. Nothing is
+/// written either way.
+#[test]
+fn the_lod_count_prefers_the_in_package_answer() {
+    struct InPackage {
+        in_package: Option<usize>,
+        by_name: Option<usize>,
+        asked: Rc<Cell<(u32, u32)>>,
+    }
+    impl SkeletonSource for InPackage {
+        fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+            Ok(None)
+        }
+        fn lod_count(&self, _: &str, _: &str, _: &str) -> Result<Option<usize>, String> {
+            let (a, b) = self.asked.get();
+            self.asked.set((a, b + 1));
+            Ok(self.by_name)
+        }
+        fn lod_count_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
+            let (a, b) = self.asked.get();
+            self.asked.set((a + 1, b));
+            let leaf = package.object(index).map_err(|e| e.to_string())?.name.clone();
+            assert_eq!((package.name.as_str(), leaf.as_str()), ("GD_ToyMesh", "Mesh_A"), "the mesh's own export");
+            Ok(self.in_package)
+        }
+    }
+    for (in_package, by_name, want, asks) in [(Some(3), Some(9), Some(3), (1, 0)), (None, Some(2), Some(2), (1, 1)), (None, None, None, (1, 1))] {
+        let mut e = env();
+        let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+        let asked = Rc::new(Cell::new((0, 0)));
+        SkeletalMeshes::install(&mut e.vm, Box::new(InPackage { in_package, by_name, asked: asked.clone() })).unwrap();
+        let heap = format!("{:?}", e.vm.space.heap);
+        assert_eq!(lod_count(&e.vm, mesh).unwrap(), want);
+        assert_eq!(asked.get(), asks, "in-package first, the name-based answer only as the fallback");
+        assert_eq!(format!("{:?}", e.vm.space.heap), heap, "nothing written");
+    }
+}
+
