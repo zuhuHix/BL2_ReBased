@@ -1,8 +1,8 @@
 ## 2026-11-25: BodyClassDefinition.GetWeaponHoldDef in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-GETWEAPONHOLDDEF, stacked on `fix/rust-link1-head-mesh` (#727,
-15cd21c0, its review fix). It implements docs/verification/NATIVE_GET_WEAPON_HOLD_DEF.md section 3 (lane F's note, branch
-`docs/native-getweaponholddef` at 420b03e6, its review pending). Clean room: this lane did not read the executable. No
+fff815f4, its review fix). It implements docs/verification/NATIVE_GET_WEAPON_HOLD_DEF.md section 3 (lane F's note, branch
+`docs/native-getweaponholddef`, #728 at its review fix 7e0ed56c). Clean room: this lane did not read the executable. No
 real-game session was run. **Every rule is UNVERIFIED in the running game.** Reference keeps the stub policy.
 
 **Where.** `ow-world` `world::weapon_hold`, bound keep-existing by key in the world pack's Off block.
@@ -17,10 +17,11 @@ real-game session was run. **Every rule is UNVERIFIED in the running game.** Ref
    entry has no tag;
 3. with `bSearchParentClass` and a parent: the same lookup on `WeaponActionParentClass` (by fit), the fallback passed
    on only when this class has no default. With a candidate, the parent's answer stands only when it is an exact match;
-   with none, the parent's answer when it is not None. **"Exact" is the match kind the parent's lookup reports**
-   (exact / candidate / default), not a re-read of the returned hold's fields: the hub's interim ruling while #728's
-   review asks the analyst which the routine does (UNVERIFIED). It reads nothing more and stays load-free. If the note
-   settles on a re-read, the port switches and adds the not-loaded `NotRead` on the returned object;
+   with none, the parent's answer when it is not None. **"Exact" is a field read** (the note's fix, #728 at
+   7e0ed56c; it replaced the hub's interim reading, the match kind the recursion reports): with a candidate and a
+   non-None parent answer, the returned hold's own `HoldName` and `EnvironmentTag` are re-read and compared with the
+   request, after the same not-loaded check. So a parent default whose name and tag equal the request stands over the
+   candidate;
 4. then the candidate; then `DefaultWeaponHoldDef` when `bFallbackToDefaultDef`, else None.
 
 A parent chain that loops is a `VmError::Script`, a port-only guard.
@@ -33,8 +34,8 @@ its `DefaultWeaponHoldDef`, by the same rule (only exports of the pawn's file, o
 each load logged as an UNVERIFIED stand-in. The installed run logs 22 loaded, 26 visited: the seven Siren holds, her
 default, `BodyClass_PlayerShared` and `WeaponHold_Player_Default` (both from the Siren file's own copies).
 
-**Tests.** `weapon_hold_tests.rs`: the note's section 4, 1 to 12, in 11 tests, on invented classes, with #728's review cases: a parent default that looks like an exact match
-when the fallback was passed on (the own candidate wins), the fallback passed on with no match (the parent's default)
+**Tests.** `weapon_hold_tests.rs`: the note's section 4, 1 to 12, in 11 tests, on invented classes, with the note's fixed cases: a parent default whose name and tag equal the
+request, with the fallback passed on (it stands over the own candidate), a lazy returned default (`NotRead`), the fallback passed on with no match (the parent's default)
 and with an own candidate (the candidate), and (`A`, None) asked against [(`A`, X)] (the tagged entry, ahead of the
 default). Every call asserts
 that #518's counters, `class_code_loads` and the name table are unchanged. Lazy objects are slotless stand-ins.
@@ -47,4 +48,4 @@ ok 5/14`, `step share X = 5.783/14 = 41.3%`. Links 1, 3, 4, 5, 13 and 14 are pas
 stop). Before the walk's extension they stopped at `NotRead`, "GetWeaponHoldDef over a weapon hold definition not
 loaded at set-up".
 
-**Gates.** `cargo test --workspace -j 8`: 3,659 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+**Gates.** `cargo test --workspace -j 8`: 3,668 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.

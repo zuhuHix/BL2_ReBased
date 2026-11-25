@@ -4,7 +4,7 @@
 //! Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_GET_WEAPON_HOLD_DEF.md section 3 alone (lane
-//! ANALYST-GETWEAPONHOLDDEF, branch docs/native-getweaponholddef at 420b03e6); this lane did not read the executable.
+//! ANALYST-GETWEAPONHOLDDEF, #728 at its review fix 7e0ed56c); this lane did not read the executable.
 //! **Every rule is UNVERIFIED in the running game.** Reference keeps the stub policy.
 //!
 //! **A pure read:** no load, no class-code load, nothing interned, nothing written. On body class B with name N, tag
@@ -22,10 +22,11 @@
 //!    field, by fit): the same lookup on the parent (with the same residency check), with N, T, P, and F passed on
 //!    only when B has no `DefaultWeaponHoldDef`. With a candidate, the parent's answer stands only when it is an exact
 //!    match, otherwise (or when it is None) the candidate. With no candidate, the parent's answer when it is not None.
-//!    **"An exact match" is how the parent's lookup matched, as the recursion reports it** ([`Match`]: exact,
-//!    candidate or default), not a re-read of the returned hold's fields: the hub's interim ruling while #728's review
-//!    asks the analyst which one the routine does (UNVERIFIED). So a parent default whose own `HoldName` and
-//!    `EnvironmentTag` happen to equal N and T is a default answer, not an exact one, and nothing more is read;
+//!    **"An exact match" is a field read** (the note's fix, #728 at 7e0ed56c): only when this class has a candidate
+//!    and the parent answers non-None, the returned hold's own `HoldName` and `EnvironmentTag` are re-read and compared
+//!    with N and T; the recursion does not report how it matched. So a parent default whose name and tag equal N and T
+//!    stands over the candidate. The returned hold gets the same residency check before its fields are read (it can be
+//!    the parent's `DefaultWeaponHoldDef`, returned unread);
 //! 4. **the candidate**, when there is one;
 //! 5. **the default**: `DefaultWeaponHoldDef` when F is true, else None.
 //!
@@ -98,18 +99,7 @@ fn hold_key(vm: &Vm, hold: ObjRef) -> Result<(NameId, Option<ObjRef>), VmError> 
     Ok((name, object(vm, hold, "EnvironmentTag")?))
 }
 
-/// How a lookup found its answer (module documentation, step 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Match {
-    /// An entry with the name and the tag (in this class's list or, reported up, a parent's).
-    Exact,
-    /// A name-only candidate.
-    Candidate,
-    /// `DefaultWeaponHoldDef`, or None.
-    Default,
-}
-
-/// The lookup on `body` and how it matched (module documentation); `visited` is the port's loop guard.
+/// The lookup on `body` (module documentation); `visited` is the port's loop guard.
 fn lookup(
     vm: &Vm,
     body: ObjRef,
@@ -118,7 +108,7 @@ fn lookup(
     parent_search: bool,
     fallback: bool,
     visited: &mut Vec<ObjRef>,
-) -> Result<(Option<ObjRef>, Match), VmError> {
+) -> Result<Option<ObjRef>, VmError> {
     if visited.contains(&body) {
         return Err(script("the WeaponActionParentClass chain comes back to a class it already visited".to_string()));
     }
@@ -145,25 +135,26 @@ fn lookup(
             continue;
         }
         if t == tag {
-            return Ok((Some(hold), Match::Exact));
+            return Ok(Some(hold));
         }
         if candidate.is_none() || t.is_none() {
             candidate = Some(hold);
         }
     }
     if parent_search && let Some(parent) = parent {
-        let (answer, how) = lookup(vm, parent, name, tag, parent_search, fallback && default.is_none(), visited)?;
+        let answer = lookup(vm, parent, name, tag, parent_search, fallback && default.is_none(), visited)?;
         match (candidate, answer) {
-            (Some(_), Some(a)) if how == Match::Exact => return Ok((Some(a), Match::Exact)),
-            (Some(c), _) => return Ok((Some(c), Match::Candidate)),
-            (None, Some(a)) => return Ok((Some(a), how)),
+            // The re-read: the returned hold's own name and tag (residency checked first by `hold_key`).
+            (Some(c), Some(a)) => return Ok(Some(if hold_key(vm, a)? == (name, tag) { a } else { c })),
+            (Some(c), None) => return Ok(Some(c)),
+            (None, Some(a)) => return Ok(Some(a)),
             (None, None) => {}
         }
     }
     if candidate.is_some() {
-        return Ok((candidate, Match::Candidate));
+        return Ok(candidate);
     }
-    Ok((if fallback { default } else { None }, Match::Default))
+    Ok(if fallback { default } else { None })
 }
 
 /// The native (module documentation).
@@ -184,7 +175,7 @@ pub fn get_weapon_hold_def(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     };
     let parent_search = flag(c, 2, "bSearchParentClass")?;
     let fallback = flag(c, 3, "bFallbackToDefaultDef")?;
-    let (answer, _) = lookup(c.vm, body, name, tag, parent_search, fallback, &mut Vec::new())?;
+    let answer = lookup(c.vm, body, name, tag, parent_search, fallback, &mut Vec::new())?;
     Ok(Value::Object(answer))
 }
 
