@@ -307,28 +307,47 @@ fn lod_info_struct(vm: &Vm, component: ObjRef) -> Result<ow_object::ids::StructI
 }
 
 /// One default `LODInfo` entry: the struct's script default, checked against the note's default entry (module
-/// documentation, D). A struct of another shape, or a default that differs, is `NotYet { NotRead }` ([`LOD_DEFAULT`]).
+/// documentation, D). The two members the note names (fitted) are resolved by name through the layout, in any order:
+/// `InstanceWeightUsage` a byte (its value taken as the default holds it, UNVERIFIED) and `InstanceWeightIdx` an int
+/// holding -1 (review r1 of #678, item 2). The note does not name the other three, so they are checked by kind and
+/// value: exactly one array, empty (no hidden materials), and two bools, clear (the flags). Anything else, a struct
+/// without those names among them, is `NotYet { NotRead }` ([`LOD_DEFAULT`]).
 fn lod_default(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> {
     let refuse = || -> VmError { NotYet::not_read(LOD_DEFAULT, CHANGE_RECORD).into() };
     let layout = vm.space.classes.struct_layout(ty).ok_or_else(refuse)?;
     let value = vm.space.classes.struct_defaults(ty).map_err(|_| refuse())?;
     let s = value.as_struct().ok_or_else(refuse)?;
-    let (mut arrays, mut bools, mut ints, mut bytes) = (0, 0, 0, 0);
-    for (entry, decl) in layout.fields() {
-        let v = s.fields.get(entry as usize).ok_or_else(refuse)?;
-        let count = match (&decl.kind, v) {
-            (PropKind::Array(_), v) if v.elements().is_some_and(<[Value]>::is_empty) => &mut arrays,
-            (PropKind::Bool, Value::Bool(false)) => &mut bools,
-            (PropKind::Int, Value::Int(-1)) => &mut ints,
-            (PropKind::Byte { .. }, Value::Byte(_)) => &mut bytes,
-            _ => return Err(refuse()),
-        };
+    let named = |name: &str| -> Result<u32, VmError> {
+        let id = vm.space.names.find(name).ok_or_else(refuse)?;
+        let (entry, decl) = layout.field(id).ok_or_else(refuse)?;
         if decl.array_dim != 1 {
             return Err(refuse());
         }
-        *count += 1;
+        Ok(entry)
+    };
+    let (usage, index) = (named("InstanceWeightUsage")?, named("InstanceWeightIdx")?);
+    let (mut arrays, mut bools) = (0, 0);
+    for (entry, decl) in layout.fields() {
+        let v = s.fields.get(entry as usize).ok_or_else(refuse)?;
+        let fits = decl.array_dim == 1
+            && match (&decl.kind, v) {
+                (PropKind::Byte { .. }, Value::Byte(_)) if entry == usage => true,
+                (PropKind::Int, Value::Int(-1)) if entry == index => true,
+                (PropKind::Array(_), v) if entry != usage && entry != index => {
+                    arrays += 1;
+                    v.elements().is_some_and(<[Value]>::is_empty)
+                }
+                (PropKind::Bool, Value::Bool(false)) if entry != usage && entry != index => {
+                    bools += 1;
+                    true
+                }
+                _ => false,
+            };
+        if !fits {
+            return Err(refuse());
+        }
     }
-    if (arrays, bools, ints, bytes) != (1, 2, 1, 1) {
+    if (arrays, bools) != (1, 2) {
         return Err(refuse());
     }
     Ok(value)

@@ -48,3 +48,21 @@ component's slots unchanged):
 - the fixture's `LODInfo` is now an array of the entry struct, and the clear test keeps a struct entry.
 
 **Not verified:** anything in the running game; both rulings; the installed struct's default; the usage byte.
+
+**Review r1** (Sol high, on #678):
+1. **An unsupported trailing count is data, not an error.** On installed data, `ow-cli`'s source answers both
+   in-package questions with #673's full reader, and the reader refuses a non-zero trailing count as
+   `LodCountError::TrailingArray`. That became a string error, and a `VmError::Script` before row 15 could refuse.
+   - **What changed in #673's source** (`crates/ow-cli/src/cmd/skeletal_source.rs` only): one helper, `known`,
+     matches `TrailingArray` and answers "not known" (`Ok(None)`) for `lod_count_in` and `lod_trailing_in`. With no
+     name-based count either, row 15 then refuses `LayerAbsent`, write-free.
+   - The reader, its bounds checks, its error type and the `SkeletonSource` trait are unchanged. Every other reader
+     refusal is still an error with its text.
+   - Tests: the helper's three cases in `ow-cli`, and in `ow-world` a source that answers like the CLI one.
+2. **The named members by name.** The default check resolves `InstanceWeightUsage` (a byte) and `InstanceWeightIdx`
+   (an int holding -1) by name through the struct's layout, in any order. A struct with the same kinds and values under
+   other names is `NotRead`. The note does not name the other three members, so they are still checked by kind and
+   value (one empty array, two clear bools). Their names can be pinned once a names-only read of the installed struct
+   is recorded.
+3. **The order and the byte.** A test asserts the planned writes in order, with `LODInfo` after `bHasValidBodies`.
+   The fixture's script-default usage byte is non-zero (3), and the refill carries it.
