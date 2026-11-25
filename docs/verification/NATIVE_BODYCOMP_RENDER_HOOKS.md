@@ -100,6 +100,8 @@ mode 0). Links 3, 4, 5, 13 and 14 are blocked behind link 1, so each needs what 
   If it is set, the helper's unidentified array check is reached, and it is `NotYet { NotRead }` (no passing answer is
   authorised, review r1 of #622). That check is the **current stop on this path**. The one `LightEnvironment` write is
   reachable only once that check is read, or under an explicit harness input the hub grants.
+  *Superseded 2026-11-25 by section 7: the array check applies to static mesh components only, and her made meshes
+  are all skeletal, so it is not her stop.*
 
 **After the hooks** (section 5's probe, where all three hooks were answered with nothing as a stand-in), the six links
 stop at attachment 1's socket attach on her mesh: "InitializeBodyComposition: the socket and bone tables of
@@ -127,6 +129,8 @@ no layer.
 - **Hook 3: a real answer up to the array check.** `SetLightEnvironment`'s rule is already ported. The mesh-component
   test's fitted `bAcceptsLights` is answered; once it passes, the unidentified array check is `NotYet { NotRead }`
   (no passing answer is authorised), and so is the lighting-channel branch when it would act.
+  *Superseded 2026-11-25 by section 7.1: both apply to static mesh components only; any other mesh component goes
+  straight to the setter.*
 
 **Where the shared logic lives** (review r1 of #622, item 1). The two setters' Off rules are in `ow-inventory`
 (`attach_mesh.rs`), and `ow-inventory` already depends on `ow-world`. So the body composition (`ow-world`) cannot call
@@ -209,6 +213,9 @@ behaviour change.
        refresh";
      - then `set_light_environment`'s planner on the slots the attach produces: the same value is nothing; not
        attached is one write; attached runs the deferred reattach's refusals.
+   - *Superseded 2026-11-25 by section 7.1 (static meshes only): the array check and the lighting-channel step apply
+     to a made `StaticMeshComponent` only, which is `NotRead`; any other mesh component goes straight to the setter's
+     planner.*
 
 **Writes** (only after the whole preflight passed, in the hooks' order): the setters' apply side with their plans.
 Hook 2's writes are never reached under today's rules: where the setter would write, the pawn test refuses first.
@@ -243,7 +250,7 @@ and load transitions unchanged):
 12. a malformed pawn or component field: `VmError::Script` naming it, before any write;
 13. **conditional on the array check being read, or on an explicit harness input:** hook 3 on an unattached mesh
     component gets the one `LightEnvironment` write after the walk's own writes; the lighting-channel bit set is
-    `NotRead`;
+    `NotRead` *(superseded 2026-11-25 by section 7.2, tests 1, 2 and 4)*;
 14. the existing Off natives (`SetOwnerNoSee`, `SetLightEnvironment`) keep their tests unchanged after the move to the
     shared planners, and `crate_edges_test.py` passes;
 15. Reference: unchanged.
@@ -350,7 +357,8 @@ for the pawn test on the classes listed.**
 controller is a `WillowPlayerController`, whose class defaults have `bBehindView` and `bViewingThirdPersonMenu` clear.
 If they stay clear, the controller test passes too. Then:
 - with her `Mesh` template's `bOwnerNoSee` already true, hook 2 does nothing and the body composition goes on to hook
-  3, whose array check is the next stop;
+  3, whose array check is the next stop *(superseded 2026-11-25 by section 7: the check does not apply to her
+  skeletal mesh; the predicted next stop is attachment 1's `Parent` link)*;
 - with it clear, the next stop is the setter's `REATTACH_OWNER` (the deferred reattach).
   *Superseded 2026-11-25 by NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1: with an ordinary owner the deferred
   reattach does not refuse, and hook 2's plan is applied in the write phase.*

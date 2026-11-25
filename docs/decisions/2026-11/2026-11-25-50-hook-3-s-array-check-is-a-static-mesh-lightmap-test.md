@@ -22,4 +22,7 @@ changed.
   - any other mesh component runs `plan_light_environment`, and the plan is applied in the write phase;
   - tests listed.
 - **Prediction** (not a run): link 1's next stop is attachment 1's `Parent` link (hub ruling 3).
+- **Review r1 (#715):** superseded markers added where the older text still calls the array check a stop for any
+  mesh component: section 2's hook 3 line, section 3's hook 3 line, section 4's preflight step 3 and test 13, and
+  section 6.1's prediction.
 - **Clean room:** a different lane implements this note.
