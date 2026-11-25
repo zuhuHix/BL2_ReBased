@@ -388,7 +388,28 @@ impl PackageStore {
             }
             Some(paths) => paths[0].clone(),
         };
-        self.load_path(&path)
+        self.load_path_named(&path, name)
+    }
+
+    /// [`PackageStore::load_path`] for a file the caller found by `name` (lane LINUX-CAUSE-A, decision
+    /// 2026-11-25-NNN-package-name-case). The package is named after the file stem, as `load_path` names it, unless
+    /// the stem has no upper-case letter (a lower-cased file name, as in Aspyr's Linux build) and `name` is the same
+    /// name spelled otherwise; then it is named `name`, the spelling of the import or caller that asked. A mixed-case
+    /// stem (every Windows install) is always kept, so Windows is unchanged. The first load decides; a later request
+    /// returns the package already loaded, as before. UNVERIFIED: that the first requester spells it as the game does.
+    pub fn load_path_named(&mut self, path: &Path, name: &str) -> Result<PackageId, StoreError> {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let lowered = !stem.chars().any(|c| c.is_ascii_uppercase());
+        if !lowered || stem == name || fold(&stem) != fold(name) {
+            return self.load_path(path);
+        }
+        let normal = normal_absolute(path);
+        let key = path_key(&normal);
+        if let Some(&id) = self.loaded.get(&key) {
+            return Ok(id);
+        }
+        let package = Package::load_as(&normal, name.to_string())?;
+        Ok(self.insert(key, package))
     }
 
     /// C++ `resolveLoaded`, step for step.
@@ -917,6 +938,44 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Lane LINUX-CAUSE-A: a lower-cased file loaded by name takes the requested spelling; by path it keeps its stem;
+    /// the first load decides.
+    #[test]
+    fn a_lower_cased_file_takes_the_requested_spelling() {
+        let tree = Tree::new("case-lower");
+        tree.write("toy_pkg.upk", &package(&[], &[("Thing", 0)]));
+        let mut store = tree.store();
+        let id = store.load(&PackageName::parse("Toy_Pkg").unwrap()).unwrap();
+        assert_eq!(store.get(id).name, "Toy_Pkg");
+        // The same file, asked again by path or by another spelling: the package already loaded, its name unchanged.
+        assert_eq!(store.load_path(&tree.0.join("toy_pkg.upk")).unwrap(), id);
+        assert_eq!(store.load(&PackageName::parse("TOY_PKG").unwrap()).unwrap(), id);
+        assert_eq!(store.get(id).name, "Toy_Pkg");
+        // Loaded by path first: the stem, as before.
+        let mut fresh = tree.store();
+        let by_path = fresh.load_path(&tree.0.join("toy_pkg.upk")).unwrap();
+        assert_eq!(fresh.get(by_path).name, "toy_pkg");
+    }
+
+    /// Lane LINUX-CAUSE-A: a file whose stem has an upper-case letter (every Windows install) keeps its stem whatever
+    /// spelling asks for it, the name `load_path` gives; Windows behaviour is unchanged.
+    #[test]
+    fn an_exact_case_file_keeps_its_stem() {
+        let tree = Tree::new("case-exact");
+        tree.write("Toy_Pkg.upk", &package(&[], &[("Thing", 0)]));
+        let before = {
+            let mut store = tree.store();
+            let id = store.load_path(&tree.0.join("Toy_Pkg.upk")).unwrap();
+            store.get(id).name.clone()
+        };
+        for spelling in ["Toy_Pkg", "toy_pkg", "TOY_PKG"] {
+            let mut store = tree.store();
+            let id = store.load(&PackageName::parse(spelling).unwrap()).unwrap();
+            assert_eq!(store.get(id).name, before, "{spelling}");
+        }
+        assert_eq!(before, "Toy_Pkg");
     }
 
     /// `global_resolve_test.py`'s `package()`: imports (class package, class, outer, name), exports (name, outer).

@@ -758,7 +758,11 @@ fn run_fire_once(
         let source = source.clone().map_err(|e| slice::Failure::from(e.to_string()))?;
         let package = ow_package::package::Package::load(&source)
             .map_err(|e| slice::Failure::from(e.to_string()))?;
-        let name = PackageName::parse(&package.name).map_err(|e| slice::Failure::from(e.to_string()))?;
+        // The game's spelling of the name (lane LINUX-CAUSE-A), not the file's: on Aspyr's Linux build the file is
+        // lower-cased. On a Windows install the two are the same.
+        let _ = package;
+        let spelled = FIRE_SOURCE.strip_suffix(".upk").unwrap_or(FIRE_SOURCE);
+        let name = PackageName::parse(spelled).map_err(|e| slice::Failure::from(e.to_string()))?;
         let vm = slice::open(cooked, ParityMode::Off, policy)?;
         let mut world = bridge::world(vm)?;
         let fire = FireMissionSlice::new(&mut world, FIRE_MISSION, &name, DUMMY_PROVIDER)?;
