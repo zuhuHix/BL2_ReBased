@@ -105,7 +105,7 @@ under it.
 
 ### 3.1 Amendment (2026-11-25): the pickup's own filter row
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-PICKUP-TOUCH-TRACE-FILTER (decision 2026-11-25-NNN), analyst only:
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-PICKUP-TOUCH-TRACE-FILTER (decision 2026-11-25-46), analyst only:
 **another lane implements this section.** Raw output stays under ignored `local/analysis/reattach/`. **UNVERIFIED in
 the running game.**
 
