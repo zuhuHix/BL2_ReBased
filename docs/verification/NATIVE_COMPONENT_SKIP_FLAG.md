@@ -84,6 +84,9 @@ What the classes answer, read from the vtables their internal constructors store
 **So for the cylinder family the check always passes.** That is a static read of their vtables, medium-high and
 still UNVERIFIED. For every other primitive class it is unread (section 5: `NotRead`).
 
+*Superseded on 2026-11-25 by section 6:* the virtual was read for every native component class. Every primitive class
+answers true and every other component class false, so the "not read" row above no longer holds.
+
 ## 4. The box routine, in order (for the record)
 
 Per entry of the actor's `Components`, in order:
@@ -202,17 +205,178 @@ name table unchanged:
    check's `NotRead`;
 7. Reference: unchanged.
 
+## 6. Amendment (2026-11-25): the component check, read for every component class
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SKELMESH-COMPONENT-CHECK (decision 2026-11-25-03),
+analyst only: **another lane implements this section.** Raw output stays under ignored `local/analysis/skelcheck/`.
+**Every rule here is UNVERIFIED in the running game.**
+
+**Why.** Main's measured stop for links 6 and 7 (`pick_up_gun`, `pick_up_aimed`) on 2026-11-25 is in `touch`:
+"Actor.GetBoundingCylinder: the component check of Engine.SkeletalMeshComponent (not read)", section 5's refusal for
+a class section 3 had not read.
+
+**Evidence, in the order asked.**
+- **bl-sdk live reads:** none. No session was granted, and the check is a C++ virtual with no script face to call.
+- **The script:** nothing. No script function stands for the check.
+- **The native** (Ghidra 12.1.4 headless, read-only, under the machine lock; a throwaway table tracer kept under
+  `local/analysis/skelcheck/scripts/`, not tracked):
+  - the actor default's bounding cylinder, its box routine and the call between them, reached through `Actor`'s own
+    table. The box routine is the one section 4 describes. The bounding cylinder asks it for **colliding components
+    only**, which settles the call argument this note took from #590;
+  - the check is one slot of the entry's **primary** table, called with no argument. Only its answer is tested,
+    zero or not;
+  - for each class, its primary table, found by the method of `docs/NATIVE_ANALYSIS.md`, "When `virtual:` refuses a
+    class": the class's registration, the default constructor it hands over, then the constructors that one calls, down
+    to the last store of a table into the object's first word. For `SkeletalMeshComponent`, `StaticMeshComponent` and
+    `ParticleSystemComponent` the handed-over constructor is a short wrapper. The table store sits one call further
+    down, which is presumably why section 3's scan stopped short;
+  - the same slot of every native component class the executable registers whose name ends in `Component`: 145
+    classes. The superclass chains of the nine code packages were then checked against the answers.
+
+**What the check answers.** Two bodies, nothing else:
+- **every class that descends from `Engine.PrimitiveComponent` answers true.** That is 93 native classes, and the body
+  is the folded "return true" of section 3. Among them are `Engine.SkeletalMeshComponent`,
+  `Engine.StaticMeshComponent`, `Engine.ParticleSystemComponent`, `Engine.MeshComponent`,
+  `Engine.InstancedStaticMeshComponent`, `GearboxFramework.GearboxSkeletalMeshComponent`,
+  `GearboxFramework.GearboxStaticMeshComponent`, `WillowGame.CustomSkeletalMeshComponent`,
+  `WillowGame.GearLikenessMeshComponent`, and the three of section 3. The full list is at the end of this section;
+- **every other native component class answers false.** That is 52 classes: `Engine.ActorComponent` itself, the light,
+  fog, scene-capture, audio and wind components, `GearboxFramework.AIComponent`, `GearboxFramework.SpecialMoveComponent`,
+  `WillowGame.MovementComponent`, the waypoint components, and others. The body is the folded "return nothing" of
+  section 3, which settles that row (its "base or secondary table" doubt is gone).
+
+Neither body reads a field, a flag or the mesh, and neither writes anything. The answer is a constant of the class.
+In effect the check asks "is this a primitive component?". The executable does not name it, and it is not named here.
+
+**The oracle.** The split matches the packages class by class: all 93 true classes have `PrimitiveComponent` in their
+superclass chain, and none of the 52 false classes do. The packages declare 96 descendants of `PrimitiveComponent`.
+The other three (`WillowGame.DebugArrowComponent`, `WillowGame.NxFootForceFieldComponent` and
+`WillowGame.RotationArrowComponent`) have no registration in the executable, so they are script-only. An instance of a
+script-only class uses its nearest native parent's table, which is an engine convention, UNVERIFIED here. They would
+therefore answer true too.
+
+**A second check of the table rule.** The same "last store into the first word" rule gives `Actor`'s table. Its two
+slots there are the box routine and the bounding cylinder named by the exec stubs of `GetComponentsBoundingBox` and
+`GetBoundingCylinder`, and `WillowPickup`'s table holds the same two. So the pickup takes the actor default, as
+NATIVE_GET_BOUNDING_CYLINDER.md says.
+
+**Confidence:**
+- **high** for the answers: every slot was read, and the 93 / 52 split agrees with the hierarchy without one
+  exception;
+- **medium-high** that the table found is the primary one in each case: the store-order rule, plus the two checks
+  above;
+- **high** that the check has no side effects. Section 5 had to assume that.
+
+### 6.1 The Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces section 5's component check. The skip check, the order of steps and
+the entry boxes are unchanged.
+
+**Recommended: the component check passes for every entry that reaches it.** On all three paths (the live receiver,
+the template receiver and `placement::actor_rule`), an entry gets there only once it is known to be a
+`PrimitiveComponent`, by the class its handle carries. Every primitive class answers true. So the check never refuses:
+- `COMPONENT_CHECK_PASSES`, the exact-class list, and the `COMPONENT_CHECK_OF` refusal retire. Alternatively,
+  `component_check` stays as a documented pass, to mark the step;
+- it stays read-only, and no counter or name-table change follows;
+- its place in the order (asked last, just before the box) changes no answer now, because it cannot refuse and has no
+  side effects. It may stay where it is.
+
+A non-primitive entry is skipped at the class test, as now. The game's false answer skips it too, one test earlier, so
+the outcomes agree.
+
+**An alternative, not recommended:** keep a refusal for an unread class. Walk up from the entry's class to its first
+native class, by the fitted `CLASS_NATIVE` bit, as `ow-combat`'s `pawn_interface` read-only walk does. Pass when that
+class is one of the 93 below, and keep the `NotRead` otherwise. No class in the nine packages would reach that
+refusal, and it would cost a 93-name list, so it is offered only in case the hub wants the read set spelled out in
+code.
+
+**What links 6 and 7 would meet** (a prediction from main's measured stop and the recorded probe values, not a run):
+1. The pickup's `CylinderComponent` passes and gives its box, as on main. The measured stop lies past it.
+2. The `SkeletalMeshComponent` passes the component check. It then reaches its box,
+   NATIVE_COMPONENT_BOUNDS.md section 7 B.7's skeletal case: `NotYet { NotRead }`, "Actor.GetBoundingCylinder: a
+   skeletal mesh component's bounds source" (the `SKELETAL_SOURCE` text already on main, record
+   NATIVE_COMPONENT_BOUNDS.md). That is the next stop, still in `touch`.
+3. The `ParticleSystemComponent` does not collide. It is skipped before the check, as now.
+
+The next analyst question is therefore the skeletal bounds update's two early returns and its source selector
+(NATIVE_COMPONENT_BOUNDS.md section 3, "read at the level of its branches only").
+
+**Tests for the implementer** (synthetic, `package()` / `tag()`). Each refusal leaves #518's three counters and the
+name table unchanged:
+1. a live, recorded, attached, colliding entry with `BulletListener` clear, of exact class:
+   - `Engine.SkeletalMeshComponent`: the `SKELETAL_SOURCE` `NotRead`, with record NATIVE_COMPONENT_BOUNDS.md, and no
+     component-check refusal;
+   - `Engine.StaticMeshComponent`: the `STATIC_BOUNDS` / `STATIC_LAYER` `LayerAbsent`;
+   - `Engine.ParticleSystemComponent`: "Actor.GetBoundingCylinder: the bounds update of
+     Engine.ParticleSystemComponent" `NotRead`;
+2. a toy script-only subclass of `PrimitiveComponent`, and one of `CylinderComponent`: both pass the check, then meet
+   "the bounds update of <toy class>" `NotRead`. `entry_box` stays exact-class;
+3. unchanged: a `CylinderComponent` gives its box, and a `BulletListenerComponent` meets B.7's `NotRead`;
+4. the template receiver: the same `SkeletalMeshComponent` entry, attached and colliding with the bit clear, meets
+   refusal L at step 8, not the check;
+5. `placement::actor_rule`: the same entry meets step 7's `LayerAbsent`. The test that today expects
+   "the component check of Engine.SkeletalMeshComponent (not read)" changes to expect that;
+6. a non-primitive entry (a toy `ActorComponent` subclass) is still skipped at the class test;
+7. no answer on any path carries the "the component check of" text;
+8. Reference: unchanged.
+
+**Live checks that would confirm it** (bl-sdk; none run, no session granted). The virtual cannot be called from script.
+On a dropped pickup whose skeletal mesh collides, call `GetBoundingCylinder` and compare it with the cylinder alone
+(√2 × R, H). A larger answer means the skeletal component was counted, so its check passed.
+
+**The 93 native classes that answer true:** `AkAudio.AkAmbientSoundRenderingComponent`,
+`AkAudio.WwiseSoundGroupRenderingComponent`, `Engine.ApexComponentBase`, `Engine.ApexDynamicComponent`,
+`Engine.ApexStaticComponent`, `Engine.ApexStaticDestructibleComponent`, `Engine.ArrowComponent`,
+`Engine.BlockingMeshComponent`, `Engine.BrushComponent`, `Engine.CameraConeComponent`,
+`Engine.CoverGroupRenderingComponent`, `Engine.CoverMeshComponent`, `Engine.CylinderComponent`,
+`Engine.DecalComponent`, `Engine.DrawBoxComponent`, `Engine.DrawCapsuleComponent`, `Engine.DrawConeComponent`,
+`Engine.DrawCylinderComponent`, `Engine.DrawFrustumComponent`, `Engine.DrawLightConeComponent`,
+`Engine.DrawLightRadiusComponent`, `Engine.DrawPylonRadiusComponent`, `Engine.DrawQuadComponent`,
+`Engine.DrawSoundRadiusComponent`, `Engine.DrawSphereComponent`, `Engine.FluidInfluenceComponent`,
+`Engine.FluidSurfaceComponent`, `Engine.FoliageComponent`, `Engine.GBXNavMeshRenderingComponent`,
+`Engine.HomingTargetComponent`, `Engine.HybridNavigationAreaDebugRenderingComponent`,
+`Engine.HybridNavigationVisualizationComponent`, `Engine.InstancedStaticMeshComponent`,
+`Engine.InteractiveFoliageComponent`, `Engine.LandscapeComponent`, `Engine.LandscapeHeightfieldCollisionComponent`,
+`Engine.LensFlareComponent`, `Engine.LevelGridVolumeRenderingComponent`, `Engine.LineBatchComponent`,
+`Engine.MeshComponent`, `Engine.ModelComponent`, `Engine.NavMeshRenderingComponent`, `Engine.NxForceFieldComponent`,
+`Engine.NxForceFieldCylindricalComponent`, `Engine.NxForceFieldGenericComponent`, `Engine.NxForceFieldRadialComponent`,
+`Engine.NxForceFieldTornadoComponent`, `Engine.ParticleSystemComponent`, `Engine.PathRenderingComponent`,
+`Engine.PrimitiveComponent`, `Engine.RB_ConstraintDrawComponent`, `Engine.RB_RadialImpulseComponent`,
+`Engine.RouteRenderingComponent`, `Engine.SkeletalMeshComponent`, `Engine.SocketComponent`, `Engine.SphereComponent`,
+`Engine.SplineComponent`, `Engine.SplineMeshComponent`, `Engine.SpriteComponent`, `Engine.SpriteRTTComponent`,
+`Engine.StaticMeshComponent`, `Engine.TerrainComponent`, `GearboxFramework.GearboxAIMoveNodeRenderComponent`,
+`GearboxFramework.GearboxSkeletalMeshComponent`, `GearboxFramework.GearboxStaticMeshComponent`,
+`GearboxFramework.PopulationEncounterRenderingComponent`, `GearboxFramework.PopulationOpportunityAreaRenderingComponent`,
+`GearboxFramework.PopulationOpportunityCombatRenderingComponent`,
+`GearboxFramework.PopulationOpportunityPointRenderingComponent`, `GearboxFramework.PopulationPointRenderingComponent`,
+`WillowGame.BoundaryTurretRenderingComponent`, `WillowGame.BulletListenerComponent`,
+`WillowGame.CustomSkeletalMeshComponent`, `WillowGame.GearLikenessMeshComponent`,
+`WillowGame.LevelLandmarkAnchorRenderingComponent`, `WillowGame.PerchEditorComponent`,
+`WillowGame.PerchPreviewComponent`, `WillowGame.PhysicsJumpNodeEditorComponent`,
+`WillowGame.PhysicsJumpPreviewComponent`, `WillowGame.PopulationOpportunityDenRenderingComponent`,
+`WillowGame.TravelStationNozzleComponent`, `WillowGame.WillowAIMoveNodePathComponent`,
+`WillowGame.WillowDynamicNavMeshConnectionPointRenderingComponent`, `WillowGame.WillowElevatorRenderingComponent`,
+`WillowGame.WillowFormationComponent`, `WillowGame.WillowInteractiveSwitchRenderingComponent`,
+`WillowGame.WillowObstacleRenderComponent`, `WillowGame.WillowPopulationPointEditorComponent`,
+`WillowGame.WillowPopulationPointPreviewComponent`, `WillowGame.WillowPreviewComponent`,
+`WillowGame.WillowReplicatedAmbientSoundRenderingComponent`, `WillowGame.WillowVehicleCombatAreaRenderingComponent`,
+`WillowGame.WorldDiscoveryAreaRenderingComponent`.
+
 ## Open questions
 
 1. **Not read:**
-   - the per-component virtual of `SkeletalMeshComponent`, `StaticMeshComponent`, `ParticleSystemComponent` and the
-     other primitive classes;
+   - ~~the per-component virtual of `SkeletalMeshComponent`, `StaticMeshComponent`, `ParticleSystemComponent` and the
+     other primitive classes~~: read on 2026-11-25 (section 6);
    - who sets `BulletListener` on an instance (no script writes it, the class default does not, and no native writes
      the bit directly in the forms searched). Perhaps a projectile definition's component template, or a native
      setter through a register;
-   - the bounding cylinder's own call argument, which this lane takes from #590.
-2. **UNVERIFIED:** the bit's name (a structural fit plus fitting behaviour, no name in the executable); the
-   folded-body readings of section 3.
+   - ~~the bounding cylinder's own call argument, which this lane takes from #590~~: colliding only (section 6);
+   - the skeletal bounds update's early returns and source selector (NATIVE_COMPONENT_BOUNDS.md section 3), now links
+     6 and 7's predicted next stop.
+2. **UNVERIFIED:**
+   - the bit's name (a structural fit plus fitting behaviour, no name in the executable);
+   - the folded-body readings of sections 3 and 6;
+   - that a script-only class uses its native parent's table (section 6).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
