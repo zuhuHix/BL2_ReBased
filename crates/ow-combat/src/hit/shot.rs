@@ -23,8 +23,11 @@
 //!   barrel part's `CustomFiringModeDefinition`, else the elemental part's, else the type's
 //!   `DefaultFiringModeDefinition`. The executable has the elemental step, so NATIVE_WEAPON_TRIGGER_AMMO.md section 3
 //!   was right; it was refused here before. The shot keeps its own loading around the rule: each object the rule
-//!   reaches is loaded first (a shot is not load-free; the native is). UNVERIFIED for the elemental step; the barrel
-//!   and type steps were observed live (lane L7).
+//!   reaches is loaded first (a shot is not load-free; the native is), and it takes the note's declaration check (a
+//!   mode field not declared as an object is a data error). UNVERIFIED for the elemental step; the barrel and type
+//!   steps were observed live (lane L7). **Off only** (review of #735): Reference keeps the earlier reading exactly,
+//!   the barrel's mode, else the type's, an elemental part with its own mode and no barrel mode `NotYet { NotRead }`,
+//!   each field read leniently (the C++, `weapon_gen.cpp`, takes the type default there).
 //! - [`shot`]: NATIVE_WEAPON_TRIGGER_AMMO.md (`FiringModeDefinitionFire`, `ProcessInstantHitBullet`) and
 //!   NATIVE_WEAPON_FIRING.md sections 1.1, 1.7 and 6. A Bullet or HitScan pellet's damage is the weapon's
 //!   `InstantHitDamage`, the instigator the shooter's controller, the damage class `InstantHitDamageTypes[fire mode]`,
@@ -127,8 +130,12 @@ pub fn weapon_damage_type(vm: &mut Vm, parts: &WeaponParts) -> Result<Option<Obj
     object(vm, weapon_type, "DefaultDamageTypeDefinition")
 }
 
-/// `GetFiringModeDefinition` (module documentation): the shared rule, each object loaded when the rule reaches it.
+/// `GetFiringModeDefinition` (module documentation): in Off the shared rule, each object loaded when the rule reaches
+/// it; in Reference the earlier reading, unchanged (review of #735).
 pub fn firing_mode(vm: &mut Vm, parts: &WeaponParts) -> Result<Option<ObjRef>, VmError> {
+    if vm.parity == ow_core::ParityMode::Reference {
+        return reference_firing_mode(vm, parts);
+    }
     ow_inventory::equip::firing_mode::rule(
         vm,
         parts.barrel,
@@ -136,6 +143,29 @@ pub fn firing_mode(vm: &mut Vm, parts: &WeaponParts) -> Result<Option<ObjRef>, V
         Some(parts.weapon_type),
         &mut |vm, _, o| loaded(vm, o),
     )
+}
+
+/// Reference's reading, as it was before lane IMPL-GETFIRINGMODEDEFINITION: the barrel's mode, else (both records
+/// agree only when the elemental part has none) the type's.
+fn reference_firing_mode(vm: &mut Vm, parts: &WeaponParts) -> Result<Option<ObjRef>, VmError> {
+    if let Some(barrel) = parts.barrel {
+        let barrel = loaded(vm, barrel)?;
+        if let Some(custom) = object(vm, barrel, "CustomFiringModeDefinition")? {
+            return Ok(Some(custom));
+        }
+    }
+    if let Some(part) = parts.elemental {
+        let part = loaded(vm, part)?;
+        if object(vm, part, "CustomFiringModeDefinition")?.is_some() {
+            return Err(not_read(
+                "the firing mode of a weapon whose elemental part has its own and whose barrel has none \
+                 (NATIVE_WEAPON_TRIGGER_AMMO.md section 3 takes the elemental part's, NATIVE_WEAPON_FIRING.md \
+                 section 1.1 the type's)",
+            ));
+        }
+    }
+    let weapon_type = loaded(vm, parts.weapon_type)?;
+    object(vm, weapon_type, "DefaultFiringModeDefinition")
 }
 
 /// Writes element 0 of the weapon's array `name`: the element replaced, or the array grown to one element when it
