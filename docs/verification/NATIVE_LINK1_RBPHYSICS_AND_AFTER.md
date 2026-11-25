@@ -41,8 +41,8 @@ rule here is UNVERIFIED in the running game.**
 
 **What it does:**
 1. **The actor's rigid-body set-up.** Unless the pawn is `bDeleteMe`, and only when the world has a physics scene, it
-   walks the pawn's `Components` in order. For each component that is **attached** (`bAttached`), and that is the
-   `CollisionComponent` when the pawn's `Physics` is `PHYS_RigidBody`, it calls the component's rigid-body set-up,
+   walks the pawn's `Components` in order. For each component that is **attached** (in the game, its `bAttached`),
+   and that is the `CollisionComponent` when the pawn's `Physics` is `PHYS_RigidBody`, it calls the component's rigid-body set-up,
    "fixed" unless the pawn is `PHYS_RigidBody`;
 2. **then `SetPushesRigidBodies(bPushesRigidBodies)`** (a pawn virtual):
    - `bPushesRigidBodies` := the value (the same value, here);
@@ -50,29 +50,54 @@ rule here is UNVERIFIED in the running game.**
      `CollisionComponent` (its radius and height), when the world has a physics scene;
    - when clear and a pushing body exists: that body is destroyed.
 
+**What "attached" means in the port.** The port never sets `bAttached` on a component. The spawn's component update
+(#605/#610) and `Actor.AttachComponent` (#520) leave it as it was (NATIVE_COMPONENT_BOUNDS.md section 5). The stand-in
+is the **attach record**, NATIVE_COMPONENT_BOUNDS.md section 7 A (`ow_world::actors::attached_to`, used the same way by
+`bounding_cylinder.rs`):
+- **a live receiver:** a component counts as attached when it is in the attach record **under the current owner**,
+  the pawn, by the record's scoped lookup;
+- **a template receiver** (`Origin::Default`): `bAttached` read from the entry, as #595's template path does.
+
+Maya's components are in that record. In the game they are attached at this point, so bodies would be built.
+
 **Off answer.**
-- **Preflight:** `bDeleteMe`, `Physics`, `Components`, `CollisionComponent` and `bPushesRigidBodies` declared; each
-  component's `bAttached` read. A component that is a store handle not loaded yet is `NotYet { NotRead }`.
-- **The port has no physics scene.** The game always has one in play. So the answer goes by what would be built:
-  - **no component attached, and `bPushesRigidBodies` clear (or the `CollisionComponent` not attached): nothing.**
-    The game's own gates build nothing for that state either. That matches the port's scene-layer convention
-    (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2: the port leaves `bAttached` as it was). The `bPushesRigidBodies`
-    write re-writes the same value;
-  - **any component attached** (with the `Physics` filter above), or `bPushesRigidBodies` set with an attached
-    `CollisionComponent`: `NotYet { LayerAbsent }`, "WillowPawn.InitializeRBPhysics: a component's rigid body",
-    with layer "a physics layer (rigid bodies)". #574's at-rest ruling covers only the pickup; extending it here is
-    the hub's call.
+- **Preflight** (write-free and load-free): `bDeleteMe`, `Physics`, `Components`, `CollisionComponent` and
+  `bPushesRigidBodies` declared, else `VmError::Script`.
+  - A None `Components` entry is **skipped**, as the game skips it.
+  - A component that is a store handle not loaded yet is `NotYet { NotRead }`.
+  - An entry whose class does not declare `Owner` as an object (the field the record's lookup reads) is
+    `VmError::Script`, as `component_attach.rs` answers it.
+- **`bDeleteMe` set:** nothing.
+- **The component walk,** in `Components` order, after the `Physics` filter (with `PHYS_RigidBody`, only the
+  `CollisionComponent`):
+  - **an entry attached** (by the record, or by `bAttached` on a template receiver): the game would build its rigid
+    body. That is `NotYet { LayerAbsent }`, "WillowPawn.InitializeRBPhysics: a component's rigid body", with layer "a
+    physics layer (rigid bodies)";
+  - **a live entry not in the record**, with `bAttached` false: attachment is unknown. It follows refusal L's
+    convention (NATIVE_COMPONENT_BOUNDS.md section 7 B step 5): `NotYet { LayerAbsent }`, with refusal L's text and
+    layer;
+  - no entry left: nothing from this step.
+- **`SetPushesRigidBodies(bPushesRigidBodies)`:**
+  - with `bPushesRigidBodies` clear, and no pushing body (the port makes none): **nothing, and no write.** The
+    same-value write is skipped, so no write is made and no partial-writes prefix can arise;
+  - set, with the `CollisionComponent` attached by the same test: the same physics `LayerAbsent`. Not attached by the
+    record: refusal L's convention.
+- #574's at-rest ruling covers only the pickup; extending it here is the hub's call.
 
-**Maya:** `bPushesRigidBodies` false, and the port leaves her components unattached. So the answer is **nothing**.
+**Maya:** her components are in the attach record under her pawn, so the walk meets an attached entry: **the
+physics `LayerAbsent`**, with nothing written. 2.A is her stop.
 
-**Tests:**
-1. a toy pawn, nothing attached, `bPushesRigidBodies` clear: nothing written;
-2. one attached component: the `LayerAbsent`, nothing written;
-3. `PHYS_RigidBody` with an attached component that is not the `CollisionComponent`: skipped by the filter, so
-   nothing (when nothing else is attached);
-4. `bPushesRigidBodies` set with an attached `CollisionComponent`: the `LayerAbsent`;
-5. `bDeleteMe` set: nothing;
-6. a lazy component handle: the not-loaded `NotRead`.
+**Tests** (on attach-record state):
+1. a toy pawn whose `Components` are all None, `bPushesRigidBodies` clear: nothing written, and no prefix;
+2. one component in the attach record under the pawn: the physics `LayerAbsent`, nothing written;
+3. one colliding component not in the record, `bAttached` false: refusal L's `LayerAbsent`;
+4. `PHYS_RigidBody` with a recorded component that is not the `CollisionComponent`, and nothing else: skipped by the
+   filter, so nothing;
+5. `bPushesRigidBodies` set with the `CollisionComponent` in the record: the physics `LayerAbsent`;
+6. `bDeleteMe` set: nothing;
+7. a lazy component handle: the not-loaded `NotRead`;
+8. a template receiver (`Origin::Default`) with an entry whose `bAttached` is set: the physics `LayerAbsent`;
+9. an entry recorded under another owner: not attached, so refusal L's convention.
 
 ### 2.B `WillowPawn.InitializeBehaviorProviders()` (outline; not this note's answer)
 
@@ -88,7 +113,7 @@ The arrays and fields were not named in this lane. NATIVE_BEHAVIOR_POPULATION.md
 `WillowAIPawn`'s, and lists "the pawn's `WillowPawn.InitializeBehaviorProviders` provider list in full" as open.
 
 **Off answer:** `NotYet { NotRead }`, "WillowPawn.InitializeBehaviorProviders (the provider list)", until a lane
-names the list. **That is the next stop after 2.A.**
+names the list. **It is the next stop once 2.A answers.**
 
 ### 2.C `BodyClassDefinition.GetFirstPersonWeaponHoldDef(name, object, bool, bool)`
 
@@ -109,11 +134,15 @@ parent class:
 
 ### 2.D `WillowPlayerPawn.GetLinearColor(Color C)`
 
-**What it does:** returns a `LinearColor` with R, G, B and A each the byte times 1/255 (0.003921569), from the
-`Color`'s R, G, B and A. Nothing is written.
+**What it does:** returns a `LinearColor` with R, G, B and A each **an f32 multiply** of the byte by the f32
+constant 1/255 (0.003921569), from the `Color`'s R, G, B and A. Nothing is written. It is a multiply, not a divide: the
+two differ by 1 ulp for some bytes (3, 6, 7, 12, 13, 14).
 
-**Off answer:** that conversion. **Tests:** (255, 0, 128, 255) gives (1.0, 0.0, about 0.502, 1.0); (0, 0, 0, 0) gives
-zeros.
+**Off answer:** that conversion, as `byte as f32 * (1.0f32 / 255.0)` with the constant rounded to f32 first.
+**Tests:**
+- (255, 0, 128, 255) gives (1.0, 0.0, 0.50196081, 1.0); (0, 0, 0, 0) gives zeros;
+- **the multiply, not the divide:** byte 3 gives the f32 with bits `0x3C40C0C2`. `3.0 / 255.0` rounded to f32 would
+  be `0x3C40C0C1`.
 
 ### 2.E `MeshComponent.GetInstancedMaterialInstanceConstant(int ElementIndex)` (outline)
 
@@ -141,9 +170,9 @@ the flag clear: set after the call, and no other field changed.
 ## 3. What link 1 would meet (a prediction, not a run)
 
 Past the collision setters:
-1. 2.A answers nothing;
-2. **2.B is the next stop** (`NotRead` once bound, or the unbound native today);
-3. after it: `SetDeathDefinition` and the provider registration (bound);
+1. **2.A is the stop:** the physics `LayerAbsent`. Maya's components are in the attach record;
+2. past it (once the hub rules or a physics layer exists): 2.B (`NotRead` once bound, or the unbound native today);
+3. then `SetDeathDefinition` and the provider registration (bound);
 4. then the player part: `SetDefaultStance`, the arms (2.C, the materials), `UpdatePreferredColors` (2.D, 2.E,
    skipped without a `PlayerReplicationInfo`), and 2.F.
 

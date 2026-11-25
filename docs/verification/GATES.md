@@ -4,9 +4,9 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **ANALYST-LINK1-RBPHYSICS-AND-AFTER (2026-11-25, pc-hummer, docs only, on docs/native-link1-rbphysics-and-after from
 main 40d7d957):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK1_RBPHYSICS_AND_AFTER.md: the pawn's
-`InitializeRBPhysics` builds nothing for unattached components (Maya's case in the port), and `LayerAbsent`
-otherwise. Three of the player pawn's last natives are read whole. `InitializeBehaviorProviders` is outlined and
-is the next stop. No code changed, so no measured number moved; the slice gate was not run for this lane.
+`InitializeRBPhysics` is `LayerAbsent` for Maya: her components are in the attach record, the port's stand-in for
+attached (review r1 of #738). Three of the player pawn's last natives are read whole. `InitializeBehaviorProviders`
+is outlined and comes after. No code changed, so no measured number moved; the slice gate was not run for this lane.
 UNVERIFIED in game.
 
 **ANALYST-LINK1-TAIL (2026-11-25, pc-hummer, docs only, on docs/native-link1-tail-blend-collision-setters from main

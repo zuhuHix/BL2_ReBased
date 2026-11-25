@@ -17,10 +17,11 @@ bounds check changed.
 
   Raw output stays under ignored `local/analysis/rbphys/`.
 - **Findings** (UNVERIFIED in game):
-  - `InitializeRBPhysics` sets up rigid bodies for attached components only, then `SetPushesRigidBodies`. For Maya's
-    unattached components in the port it builds nothing;
+  - `InitializeRBPhysics` sets up rigid bodies for attached components only, then `SetPushesRigidBodies`. In the port
+    "attached" is the attach record (NATIVE_COMPONENT_BOUNDS.md section 7 A). Maya's components are in it, so the
+    answer for her is the physics `LayerAbsent`;
   - `GetFirstPersonWeaponHoldDef` is `GetWeaponHoldDef`'s rule on the first-person fields;
-  - `GetLinearColor` divides each byte by 255;
+  - `GetLinearColor` multiplies each byte by the f32 constant 1/255;
   - the hook sets `ImmuneToFallingDamage`;
   - `InitializeBehaviorProviders` and `GetInstancedMaterialInstanceConstant` are outlined only.
 - **Proposed Off answer:**
@@ -28,5 +29,11 @@ bounds check changed.
   - physics creation `LayerAbsent`;
   - the outlined ones `NotRead`;
   - tests listed.
-- **Next** (a prediction, not a run): `WillowPawn.InitializeBehaviorProviders`.
+- **Next** (a prediction, not a run): 2.A's `LayerAbsent` is the stop. `WillowPawn.InitializeBehaviorProviders`
+  comes once it answers.
+- **Review r1 (#738):**
+  - "attached" is the attach record, not `bAttached`, and Maya's case becomes `LayerAbsent`;
+  - the same-value `bPushesRigidBodies` write is skipped;
+  - `GetLinearColor` is an f32 multiply, with a test byte that separates it from the divide;
+  - None entries and undeclared attach fields are named.
 - **Clean room:** a different lane implements this note.
