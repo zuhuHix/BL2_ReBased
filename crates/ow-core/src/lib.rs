@@ -9,6 +9,7 @@
 pub mod detmap;
 pub mod fmt;
 pub mod ident;
+pub mod install;
 pub mod notyet;
 pub mod num;
 pub mod ordmap;

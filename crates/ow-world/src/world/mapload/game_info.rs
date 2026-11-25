@@ -143,7 +143,8 @@ pub fn default_game_from_ini(text: &str) -> Result<Option<String>, NotYet> {
 /// than [`MAX_INI_BYTES`], and a read error, are data errors; the reader's refusals are its `NotYet`.
 pub fn installed_default_game(root: &Path) -> Result<Option<String>, VmError> {
     use std::io::Read as _;
-    let path = root.join(DEFAULT_GAME_INI);
+    // In its own case (lane LINUX-PATHS, `ow_core::install`): Aspyr's Linux build names it in lower case.
+    let path = ow_core::install::resolve_or_join(root, DEFAULT_GAME_INI).map_err(|e| data_error(e.to_string()))?;
     let io = |e: std::io::Error| data_error(format!("reading {}: {e}", path.display()));
     let mut bytes = Vec::new();
     std::fs::File::open(&path).map_err(io)?.take(MAX_INI_BYTES + 1).read_to_end(&mut bytes).map_err(io)?;

@@ -677,8 +677,8 @@ impl MapView {
     /// The view of the map `persistent` (a file stem under [`COOKED`]) over a store's census; `root` is the install.
     pub fn open(census: &Census, root: &Path, persistent: &str) -> Result<MapView, VendorError> {
         let has = |name: &str| {
-            let rel: std::path::PathBuf = level_file(name).split('/').collect();
-            census.files.iter().any(|f| f.ends_with(&rel))
+            let rel = level_file(name);
+            census.files.iter().any(|f| ow_core::install::ends_with(f, &rel))
         };
         if !has(persistent) {
             return Err(VendorError::Data(format!("{persistent}: no such map package in the census")));
@@ -719,20 +719,19 @@ impl MapView {
         }
         files.push(STARTUP);
         let input = PoolData::from_files(census, root, &files);
-        let rel: std::path::PathBuf = own.split('/').collect();
         let mut exports = Vec::new();
         let mut own_exports = DetMap::new();
         let mut file = None;
         for p in &input.paths {
             let Some(h) = p.holders.first() else { continue };
-            if h.file.ends_with(&rel) {
+            if ow_core::install::ends_with(&h.file, &own) {
                 exports.push((p.path.clone(), h.class.clone()));
                 own_exports.insert(p.path.clone(), h.export);
                 file.get_or_insert_with(|| h.file.clone());
             }
         }
         let file = file
-            .or_else(|| census.files.iter().find(|f| f.ends_with(&rel)).cloned())
+            .or_else(|| census.files.iter().find(|f| ow_core::install::ends_with(f, &own)).cloned())
             .ok_or_else(|| VendorError::Data(format!("{own}: not in the census")))?;
         let package = Package::load(&file).map_err(|e| VendorError::Data(format!("{own}: {e}")))?;
         let mut typer = SchemaTyper::new_empty();
@@ -753,13 +752,12 @@ impl MapView {
     }
 
     fn globals(census: &Census, root: &Path) -> Result<TagLookup, VendorError> {
-        let rel: std::path::PathBuf = WILLOW_GAME.split('/').collect();
         let mut input = CensusInput::new(root.to_path_buf());
         for entry in &census.class_defaults {
             if entry.path != "Default__GlobalsDefinition" {
                 continue;
             }
-            if let Some(o) = entry.holders.iter().find(|o| o.file.ends_with(&rel)) {
+            if let Some(o) = entry.holders.iter().find(|o| ow_core::install::ends_with(&o.file, WILLOW_GAME)) {
                 input.files.push(o.file.clone());
                 input.paths.push(PathHolders::new(
                     GLOBALS_DEFAULT.to_string(),
