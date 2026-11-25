@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-DEFERRED-REATTACH-OWNER (2026-11-25, pc-hummer, docs only, on docs/native-deferred-reattach-owner from
+main ce76c5f8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1: the deferred
+reattach's owner branch (an ordinary owner gets only `bNeedsReattach`). No code changed, so no measured number
+moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **COLD-LOAD-FIXES (2026-11-25, pc-hummer, on main ce76c5f8, after review r1 of #708):** AI-assisted (Claude Code,
 Opus 5.5). #701's five cold-class findings fixed and their pinned tests un-ignored, plus pickup targeting's
 `suspended` (cold `WillowPlayerPawn`, and no "Dead" intern). `cargo test --workspace -j 8` 3,550 passed / 0 failed / 54

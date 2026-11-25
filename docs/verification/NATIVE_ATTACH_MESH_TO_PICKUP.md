@@ -87,6 +87,7 @@ In the game it is made from the weapon's `ThirdPersonMesh` (open question 1).
 2. **with an `Owner`:** when the owner passes a few checks of its own flags (not read in detail), it calls one of the
    owner's class-table entries, by its purpose the one that marks the actor's components for an update (not read).
    Nothing else happens to the component now;
+   *(Read on 2026-11-25: section 2.1.)*
 3. **with no `Owner`:** the component is reattached on the spot:
    - when it has no `Scene`, nothing happens;
    - otherwise it is detached (when attached), its `Scene` and `Owner` are put aside and cleared, and then restored
@@ -98,7 +99,8 @@ then `Owner`, then the bool word holding `bAttached` and `bNeedsReattach`.
 
 **Off answer for the deferred reattach**, used by 3.1, 3.2 and part 2's 6.2:
 - **Preflight, before any write of the calling native:**
-  - `Owner` set: `NotYet { NotRead }`, "the deferred reattach: the owner's component update", record
+  - `Owner` set (*superseded by section 2.1.1 on 2026-11-25*): a `NotYet` of kind `NotRead`, "the deferred reattach:
+    the owner's component update", record
     `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`;
   - no `Owner`, and `Scene` not zero: `NotYet { NotRead }`, "the deferred reattach: the component's detach and
     reattach", record `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`.
@@ -115,6 +117,98 @@ for any of these natives called on an attached component whose flag changes:
 - part 2's `SetLightEnvironment` when the environment changes while `bAttached` is set.
 
 The scene layer leaves `bAttached` as it was, so that last case does not arise on the slice.
+
+### 2.1 Amendment (2026-11-25): the owner branch, read
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-DEFERRED-REATTACH-OWNER (decision 2026-11-25-NNN), analyst only:
+**another lane implements this section.** Raw output stays under ignored `local/analysis/reattach/`. **Every rule
+here is UNVERIFIED in the running game.**
+
+**Why.** With #693 and #706, link 1's `maya:8` gets past the skeleton and hook 2. It stops at section 2's
+`REATTACH_OWNER`, "the deferred reattach: the owner's component update". Links 3, 4, 5, 13 and 14 are behind it.
+
+**Evidence.**
+- bl-sdk: none (no session).
+- Script: none; the step is native.
+- Native: Ghidra 12.1.4 headless, read-only, under the machine lock. Read: the deferred reattach's owner branch,
+  the owner's class-table entry it calls (one body, `Actor`'s, kept by `GearboxPawn`, `WillowPawn` and
+  `WillowPlayerPawn`; the tables found as in NATIVE_COMPONENT_SKIP_FLAG.md section 6), and the per-component update
+  that entry runs.
+- Field names from `tools/ghidra/class_layout.py`. They land on the `Actor` bool word (`bStatic`, `bDeleteMe`,
+  `bTickIsDisabled`) and on `ActorComponent`'s (`bAttached`, `bSkipChildComponentUpdate`, `bNeedsReattach`,
+  `bNeedsUpdateTransform`).
+- No exec stub calls the owner's entry, so it has no script name. It is named here by what it does.
+
+**The owner branch, in order:**
+1. `bNeedsReattach` is set (as before);
+2. **the update runs now only for some owners:** the owner's `bStatic` or `bTickIsDisabled` must be set, its
+   `bDeleteMe` clear, and two object-state flags of the owner clear. By fit, those two mean "not being destroyed".
+3. **When it runs, the owner's component update:** it builds the owner's world transform. Then, for every non-None
+   entry of the owner's `Components` (all of them, not only the colliding ones; the colliding-only form is a different
+   caller's), it runs the per-component update:
+   - an attached component with `bNeedsReattach` is detached, its `Scene` and `Owner` cleared, and attached again with
+     the owner's transform;
+   - an attached one with `bNeedsUpdateTransform` gets its transform updated;
+   - any other attached one is left as it is;
+   - an unattached one is attached;
+   - then the component's child-component update runs. `bSkipChildComponentUpdate` is set and cleared around it, so
+     its net state is unchanged;
+4. **otherwise nothing more happens now.** The component keeps `bNeedsReattach` set. By fit, the owner's own tick
+   later processes the pending reattach; that was not read.
+
+**What this means.** For an ordinary owner (not static, with its tick enabled), the deferred reattach really is
+deferred: the native's only effect on the component is `bNeedsReattach`. The class defaults of `WillowPlayerPawn`
+(Maya), `WillowPickup` and `WillowWeapon` all have `bStatic`, `bTickIsDisabled` and `bDeleteMe` clear.
+
+#### 2.1.1 The Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces section 2's owner-branch refusal (`component_setters::reattach_check`'s
+`REATTACH_OWNER`). The no-owner branch is unchanged. Reference is unchanged.
+
+**Preflight, write-free and loaded-only** (no load, and no class-code load, where #685 has landed), with `Owner` set
+(read through the planner's `Slots`, so a template plan sees the attach's `Owner` stand-in):
+1. the `Owner` must be resident, else a `NotYet` of kind `NotRead`, "the deferred reattach: an owner the store has not
+   loaded (a load is a write)";
+2. the owner's `bStatic`, `bTickIsDisabled` and `bDeleteMe` are read by name. Each must be declared as a bool, else a
+   `VmError::Script` naming it. Being destroyed is the port's `actors::is_destroyed`;
+3. **when the update would run now** (`bStatic` or `bTickIsDisabled` set, not `bDeleteMe`, not destroyed): a `NotYet`
+   of kind `LayerAbsent`, "the deferred reattach: the owner's component update (attach, reattach and transform of
+   every component)", layer "the scene layer's component update". The scene layer's attach exists only for the
+   spawn's own attach (section 3.4), and the child-component update is not read. The port cannot do this update
+   faithfully yet;
+4. **otherwise:** no refusal. The calling native's commit writes as in the no-owner, no-scene case: its own field,
+   then `bNeedsReattach` = true. The owner and its other components are not touched.
+
+The `REATTACH_OWNER` text retires. Its record stays this note, and the new refusal carries it too.
+
+**What `maya:8` would meet** (a prediction, not a run). Hook 2 plans `SetOwnerNoSee(true)` on Maya's `Mesh` template,
+with `Owner` = her pawn as the attach's stand-in (NATIVE_BODYCOMP_RENDER_HOOKS.md section 6.1). Her pawn is a
+`WillowPlayerPawn`. With its defaults (not static, tick enabled, not being deleted), the deferred reattach does not
+refuse. So hook 2's plan is `bOwnerNoSee` = true and `bNeedsReattach` = true. The rendering hooks then need that plan
+applied to the made component, the part section 4 of the render-hooks note left unreached ("Hook 2's writes are never
+reached under today's rules"). Then the body composition goes on to hook 3. The other setters on an attached
+component with an ordinary owner (the pickup, the weapon) stop refusing at this point too.
+
+#### 2.1.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`. Each preflight refusal leaves #518's three counters and the name table
+unchanged, and causes no class-code load (where #685 has landed):
+1. `SetOwnerNoSee(true)` on a component whose `Owner` is a toy pawn with `bStatic`, `bTickIsDisabled` and `bDeleteMe`
+   clear: no refusal; `bOwnerNoSee` and `bNeedsReattach` are true. The owner, and its other components'
+   `bAttached`, `bNeedsReattach` and transforms, are unchanged;
+2. the same with the owner's `bStatic` set, and again with `bTickIsDisabled` set: the owner-update `LayerAbsent`,
+   nothing written;
+3. `bStatic` set and `bDeleteMe` set, and `bStatic` set on a destroyed owner: no refusal, as in test 1;
+4. a lazy `Owner`: the "not loaded" `NotRead`, nothing loaded;
+5. an owner class that declares `bStatic` (or `bTickIsDisabled`, `bDeleteMe`) as another kind, or not at all:
+   `VmError::Script` naming it;
+6. no `Owner`: unchanged (a non-zero `Scene` is `REATTACH_SCENE`; else only `bNeedsReattach`);
+7. **`maya:8`'s call shape:** hook 2's planner on a template, with the `Owner` stand-in a live toy `WillowPlayerPawn`
+   with defaults and `bOwnerNoSee` clear: the plan is `bOwnerNoSee` = true and `bNeedsReattach` = true, with no
+   refusal;
+8. `SetForceRefPose(true)` on a pickup's attached component (`Owner` a toy `WillowPickup` with defaults): only
+   `bForceRefpose` and `bNeedsReattach` are written;
+9. Reference: unchanged.
 
 ## 3. The natives
 
