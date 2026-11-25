@@ -462,6 +462,48 @@ fn a_failed_handle_keeps_its_error_and_a_failed_file_copy_restores_the_policy_ho
     assert_eq!(t.read(good, "ClipSize"), Value::Int(5), "the policy's copy loads");
 }
 
+/// `GD_Skip.upk` (lane IMPL-AIMOFFSET-PROFILES): `Thing` with a `ClipSize` tag whose size does not fit an int (the
+/// decoder skips it and logs), a decoded empty `List`, and no `Damage` tag; `Holder` names it.
+fn skip_file() -> Vec<(&'static str, Vec<u8>)> {
+    let mut p = PackageBuilder::new_empty();
+    let (thing, _, _, _, _) = class_imports(&mut p);
+    let none = p.none();
+    let mut b = ints(&[0]);
+    b.extend(p.tag("ClipSize", "IntProperty", &ints(&[1, 2])));
+    b.extend(p.array_tag("List", 0, &[]));
+    b.extend_from_slice(&none);
+    assert_eq!(p.add_export(thing, "Thing", b), 1);
+    let mut h = ints(&[0]);
+    h.extend(p.object_tag("Next", 1));
+    h.extend_from_slice(&none);
+    p.add_export(thing, "Holder", h);
+    vec![("GD_Skip.upk", p.build())]
+}
+
+/// Lane IMPL-AIMOFFSET-PROFILES: a declared property the decoder skips is marked on the loaded object, through `find`
+/// and through a handle's load alike; a decoded empty array, a property the export does not tag and an object the
+/// store did not load are not. The log line and the slot (the class default) are as before, in both modes.
+#[test]
+fn a_skipped_property_is_marked_and_a_decoded_or_absent_one_is_not() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut t = World::with_extra("skipmark", IdentityPolicy::FirstInScanOrder, mode, skip_file());
+        let (clip, list, damage) = (t.key("ClipSize"), t.key("List"), t.key("Damage"));
+        let holder = t.get("GD_Skip.Holder");
+        let thing = t.object(holder, "Next");
+        assert!(!t.defs.is_skipped(&t.w, thing, clip), "{mode:?}: an unloaded handle has no mark");
+        t.defs.ensure_loaded(&mut t.w, thing).unwrap();
+        assert!(t.defs.is_skipped(&t.w, thing, clip), "{mode:?}: the skip is the handle's");
+        assert!(!t.defs.is_skipped(&t.w, thing, list), "{mode:?}: a decoded empty array");
+        assert!(!t.defs.is_skipped(&t.w, thing, damage), "{mode:?}: a property the export does not tag");
+        assert!(!t.defs.is_skipped(&t.w, holder, clip), "{mode:?}: another object");
+        assert_eq!(t.read(thing, "ClipSize"), Value::Int(1), "{mode:?}: the class default stays");
+        assert!(t.defs.take_log().iter().any(|l| l == "defaults: skipped Thing.ClipSize (IntProperty)"), "{mode:?}");
+        let found = t.get("GD_Skip.Thing");
+        assert_eq!(found, thing);
+        assert!(t.defs.is_skipped(&t.w, found, clip));
+    }
+}
+
 #[test]
 fn candidate_lists_are_the_store_s_and_a_prefetched_holder_is_adopted_once() {
     // Lane FIX-SCENE-LOAD: the cached candidate lists are the package store's own, whatever the case or form of the
