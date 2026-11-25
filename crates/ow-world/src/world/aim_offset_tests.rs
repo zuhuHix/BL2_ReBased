@@ -96,6 +96,14 @@ fn package() -> Vec<u8> {
     p.extend(t.p.array_tag("Profiles", 2, &ints(&[5])));
     p.extend_from_slice(&none);
     t.p.add_export(willow, "Skipped_0", p);
+    // Lane IMPL-AIMOFFSET-PROFILES: a `Profiles` decoded empty, and a node that tags none.
+    let mut p = ints(&[0]);
+    p.extend(t.p.array_tag("Profiles", 0, &[]));
+    p.extend_from_slice(&none);
+    t.p.add_export(willow, "Decoded_0", p);
+    let mut p = ints(&[0]);
+    p.extend_from_slice(&none);
+    t.p.add_export(willow, "Untagged_0", p);
     let mut p = ints(&[0]);
     p.extend_from_slice(&none);
     let lazy = t.p.add_export(willow, "LazyTemplate_0", p);
@@ -415,4 +423,85 @@ fn reference_binds_nothing() {
     let mut r = fx_in(ParityMode::Reference);
     ow_vm::api::NativePack::register(&crate::world::Pack, &mut r.vm).unwrap();
     assert!(!r.vm.has_native(BY_NAME) && !r.vm.has_native(BY_INDEX));
+}
+
+// Lane IMPL-AIMOFFSET-PROFILES: the profiles layer (crate::world::aim_profiles) behind a skipped `Profiles`.
+
+/// A source giving `names` (or refusing with `refuse`), with the export's real tag-walk end unless `end` says otherwise.
+struct Fake {
+    names: Vec<&'static str>,
+    refuse: Option<&'static str>,
+    end: Option<usize>,
+}
+
+impl crate::world::aim_profiles::ProfileSource for Fake {
+    fn profiles_in(
+        &self,
+        package: &ow_package::package::Package,
+        index: i32,
+        offset: usize,
+    ) -> Result<crate::world::aim_profiles::SourceProfiles, String> {
+        if let Some(why) = self.refuse {
+            return Err(why.to_string());
+        }
+        let walked = ow_package::props::read_tagged(package, index, offset, &ow_package::props::NoArrayTypes).map_err(|e| e.to_string())?;
+        Ok((Some(self.names.iter().map(|n| n.to_string()).collect()), self.end.unwrap_or(walked.end)))
+    }
+}
+
+fn with_source(x: &mut Fx, names: &[&'static str], refuse: Option<&'static str>, end: Option<usize>) {
+    let source = Fake { names: names.to_vec(), refuse, end };
+    crate::world::aim_profiles::AimProfiles::install(&mut x.vm, Box::new(source)).unwrap();
+}
+
+/// A `Profiles` the store skipped is the profiles layer's names: by name on the node and through a run-time copy whose
+/// `TemplateNode` is it. A reader name the name table does not hold matches nothing, and nothing is interned.
+#[test]
+fn a_skipped_profile_list_is_the_reader_s() {
+    let mut x = fx();
+    with_source(&mut x, &["Default", "Unarmed", "NeverInternedProfile"], None, None);
+    let skipped = x.export("Skipped_0");
+    let class = x.vm.space.heap.get(skipped).unwrap().class;
+    let profiles = x.vm.space.prop(class, "Profiles").unwrap();
+    assert!(x.vm.defs.is_skipped(&x.vm.space, skipped, profiles), "the store marked it");
+    x.vm.space.names.intern("Unarmed");
+    x.by_name(skipped, "Unarmed").unwrap();
+    assert_eq!(x.current(skipped), 1);
+    let copy = x.node("Copy_R", &[]);
+    x.set(copy, "TemplateNode", Value::Object(Some(skipped)));
+    x.by_name(copy, "Unarmed").unwrap();
+    assert_eq!(x.current(copy), 1, "the copy takes the template's list");
+    assert!(x.arrays_empty(copy));
+    let names = x.vm.space.names.len();
+    x.nothing(|x| x.by_index(copy, 7));
+    assert!(x.vm.space.names.find("NeverInternedProfile").is_none());
+    assert_eq!(x.vm.space.names.len(), names, "nothing interned");
+}
+
+/// The layer's refusals are the profiles `LayerAbsent`, write-free: the reader's own (its reason in the text), and a
+/// tag walk that ends elsewhere than the store's decode.
+#[test]
+fn a_reader_refusal_or_a_walk_mismatch_is_layer_absent() {
+    for (refuse, end, needle) in [(Some("a toy oracle miss"), None, "a toy oracle miss"), (None, Some(1), "the tag walk ends at 1")] {
+        let mut x = fx();
+        with_source(&mut x, &["Default"], refuse, end);
+        let skipped = x.export("Skipped_0");
+        x.vm.space.names.intern("Default");
+        let e = x.refusal(|x| x.by_index(skipped, 0));
+        assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
+        assert!(e.what.starts_with(PROFILES) && e.what.contains(needle), "{}", e.what);
+    }
+}
+
+/// A loaded definition whose `Profiles` decoded empty, or tags none, has an empty list: "no match", not the profiles
+/// `LayerAbsent`, with no reader installed.
+#[test]
+fn a_decoded_empty_profile_list_is_no_match() {
+    let mut x = fx();
+    x.vm.space.names.intern("Unarmed");
+    for name in ["Decoded_0", "Untagged_0"] {
+        let node = x.export(name);
+        x.nothing(|x| x.by_name(node, "Unarmed"));
+        x.nothing(|x| x.by_index(node, 0));
+    }
 }

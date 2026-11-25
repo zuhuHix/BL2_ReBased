@@ -656,6 +656,7 @@ pub mod online;
 /// `UpdateURL`, `SaveConfig` and `UpdateInputContext` after the login check (lane IMPL-LINK1-AFTER-LOGIN).
 pub mod after_login;
 pub mod aim_offset;
+pub mod aim_profiles;
 
 /// `SkeletalMeshComponent.SetSkeletalMesh` (lane IMPL-SET-SKELETAL-MESH, NATIVE_SET_SKELETAL_MESH.md).
 pub mod skeletal_mesh;

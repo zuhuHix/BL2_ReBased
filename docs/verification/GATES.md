@@ -2,6 +2,20 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-AIMOFFSET-PROFILES (2026-11-25, pc-hummer, on fix/rust-aimoffset-profiles from lane D's
+fix/rust-aimoffset-set-profile d906ee9f):** AI-assisted (Claude Code, Opus 5.5). The store marks a property the decoder
+skipped (`DefStore::is_skipped`); `ow_assets::aim_profiles` reads `AnimNodeAimOffset.Profiles`' binary elements
+(fitted, UNVERIFIED); `SetActiveProfileByName` reads a skipped list through it.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,685 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.
+- The ignored installed census `installed_aim_profiles_census` (4 class packages): 5 aim-offset nodes read, 0 refused.
+- Installed Off `--slice-gate` strict (release build, under the machine lock), base d906ee9f and this change at
+  762bc93a: 5 ok / 8 NotYet / 1 error on both. Links 1, 3, 4, 5, 13 and 14 move in `maya:8` from "AnimNodeAimOffset:
+  the profiles (a binary-serialized struct array)" to "AnimNodeAimOffset: the required-bones rebuild's sort and parent
+  pass"; link 8's error is the base's. Every other row is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/profiles2/` and `local/p2/profiles2-base/`.
+Decision 2026-11-25-NNN.
+
 **IMPL-INVENTORY-ACTORS (2026-11-25, pc-hummer, on main 40d7d957):** AI-assisted (Claude Code, Opus 5.5).
 `InventoryManager.InventoryActors` in Off, from NATIVE_INVENTORY_ACTORS.md section 3. `cargo test --workspace -j 8`
 3,667 passed / 0 failed / 57 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build,
