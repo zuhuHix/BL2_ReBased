@@ -16,7 +16,7 @@ the note's template question (the hub's ruling is pending).
   - Every other row is unchanged.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/skelbounds/`, `local/p2/skelbounds-base/` and
-`local/p2/skelbounds-probe/`. Decision 2026-11-25-NNN.
+`local/p2/skelbounds-probe/`. Decision 2026-11-25-41.
 
 **ANALYST-PICKUP-TOUCH-TRACE-FILTER (2026-11-25, pc-hummer, docs only, on docs/native-pickup-touch-trace-filter
 from main 3aaabe97):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_PICKUP_TRACE.md section 3.1:
