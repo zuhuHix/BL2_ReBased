@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-INVENTORY-ACTORS (2026-11-25, pc-hummer, on main 40d7d957):** AI-assisted (Claude Code, Opus 5.5).
+`InventoryManager.InventoryActors` in Off, from NATIVE_INVENTORY_ACTORS.md section 3. `cargo test --workspace -j 8`
+3,667 passed / 0 failed / 57 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build,
+under the machine lock): 5 ok / 2 NotYet / 7 errors, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`; links 6 and 7
+do not reach it, still stopping at the `GetBoundingCylinder` template `NotRead`. No real-game run.
+
 **IMPL-GETFIRINGMODEDEFINITION (2026-11-25, pc-hummer, on main 72c6355e):** AI-assisted (Claude Code, Opus 5.5).
 `WillowWeapon.GetFiringModeDefinition` in Off, from NATIVE_WEAPON_GET_FIRING_MODE.md, and `ow-combat`'s shot helper on
 the same rule (its elemental case now answers). `cargo test --workspace -j 8` 3,664 passed / 0 failed / 57 ignored;
