@@ -17,15 +17,19 @@ asked for. Synthetic fixtures only.
   - "read from the packages' interface lists": both agree; the entries resolved at set-up are a load, an UNVERIFIED
     stand-in for when the game resolves them;
   - "unresolved": the strict reading has no answer (an entry or a class chain did not resolve), fails (an entry's
-    lookup failed, for example an entry naming something that is not a class), or disagrees. The set-up then answers `NotYet` (`NotRead`, record the owner note), because the plain resolve keeps a
-    failed lookup as "resolved to nothing" and the owner test would read that as a settled no (O7);
+    lookup failed, for example an entry naming something that is not a class), or disagrees. The set-up then answers
+    `NotYet` (`NotRead`, record the owner note). The plain resolve keeps a failed lookup as "resolved to nothing", and
+    the raw resolved-chain read (`implements_resolved_chain`) skips such an entry, so it alone would give a false no.
+    The owner test does not take that no: since #667's review r1 it refuses such an entry itself. The strict read keeps
+    the failure's typed error and checks the whole chain before `maya` goes on;
   - interface not loaded, no code key, or undecoded bodies: nothing is resolved, and the owner test answers that case
     itself (O1, O3/O3', O4). No structural fallback is taken anywhere, as the owner test takes none.
   - No pawn archetype loaded: the tables' line says it skipped.
 - **Review r1 of #670:**
   - **Every entry:** `resolve_interface_tables` resolves every interface entry on the pawn class's chain, not only the
-    one naming `SpecialMoveInterface`, and the line says "(every entry on the chain)". So other read-only interface
-    questions about Maya's pawn class now answer from resolved entries too. `Vm::plain_interface_read_only` has no
+    one naming `SpecialMoveInterface`. The line says "the pass covers every entry on the chain", then how many
+    previously unresolved entries this pass resolved (an earlier query may have resolved others). So other read-only
+    interface questions about Maya's pawn class now answer from resolved entries too. `Vm::plain_interface_read_only` has no
     guard like the owner test's for an entry resolved to nothing on its no.
   - **An earlier stop:** a set-up refusal stops the `maya` step before the tree, mesh and socket preloads and
     `ServerPlayerSelectClass`, which is earlier than the owner test's O5 stopped it.
