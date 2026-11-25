@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-INITIALIZE-BEHAVIOR-PROVIDERS (2026-11-25, pc-hummer, docs only, on docs/native-initialize-behavior-providers
+from main fb09b0a0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md names the player
+pawn's provider list and the kernel's gate (None and empty definitions skipped). For Maya the gate passes two
+providers, and `PlayerEvents_Siren`'s conditional sequences give the kernel's pass-2 `LayerAbsent` with nothing
+written: the next stop once `InitializeRBPhysics` answers. `GetMaterial`, `SetParent`, `SetVectorParameterValue` and
+`GetInstancedMaterialInstanceConstant` are read whole. No code changed, so no measured number moved; the slice gate
+was not run for this lane. UNVERIFIED in game.
+
 **IMPL-LINK1-TAIL-SETTERS (2026-11-25, pc-hummer, on main 49810ce4):** AI-assisted (Claude Code, Opus 5.5). maya:8's
 tail in Off from NATIVE_LINK1_TAIL_SETTERS.md: `FindAllAnimNodes`, `SetBlendTarget`, `SetActiveChild` (`NotRead`) and
 the five collision setters; `SetRBChannel`'s no-op is Reference-only. `cargo test --workspace -j 8` 3,690 passed / 0

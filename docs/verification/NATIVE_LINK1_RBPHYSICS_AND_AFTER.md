@@ -115,6 +115,9 @@ The arrays and fields were not named in this lane. NATIVE_BEHAVIOR_POPULATION.md
 **Off answer:** `NotYet { NotRead }`, "WillowPawn.InitializeBehaviorProviders (the provider list)", until a lane
 names the list. **It is the next stop once 2.A answers.**
 
+*Read in full in NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md section 2 (decision 2026-11-25-NNN): the list is named, and
+Maya's answer is the kernel's pass-2 `LayerAbsent` for `PlayerEvents_Siren`, with nothing written.*
+
 ### 2.C `BodyClassDefinition.GetFirstPersonWeaponHoldDef(name, object, bool, bool)`
 
 **What it does:** exactly `GetWeaponHoldDef`'s rule (NATIVE_GET_WEAPON_HOLD_DEF.md section 2, with #728's re-read),
@@ -155,6 +158,9 @@ two differ by 1 ulp for some bytes (3, 6, 7, 12, 13, 14).
 - the read branch: answerable once the port's `GetMaterial` rule exists (none is indexed). Until then
   `NotYet { NotRead }`, "MeshComponent.GetMaterial";
 - the creation branch: `NotYet { NotRead }`, "GetInstancedMaterialInstanceConstant: making an instanced material".
+
+*Read in full in NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md section 3 (decision 2026-11-25-NNN), with `GetMaterial`,
+`SetParent` and `SetVectorParameterValue`.*
 
 **Maya:** `UpdatePreferredColors` calls this only with a `PlayerReplicationInfo`. Her archetype has none. Whether her
 spawned pawn has one at this point depends on the combat driver's possession order (not read). With none, the whole
