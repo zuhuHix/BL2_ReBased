@@ -19,8 +19,9 @@
 //! 4. equal handles (both None, or the same handle, loaded or not): the native's own "nothing to do".
 //!
 //! **B. The meshes:** 5. the old mesh, when set, resident; 6. the new mesh, when set, resident (a clear skips it). An
-//! unloaded, a failed handle, or one with fewer slots than its class's layout (a stand-in or a cut object), is
-//! `NotYet { NotRead }` ([`OLD_UNLOADED`], [`NEW_UNLOADED`]).
+//! unloaded or a failed handle is `NotYet { NotRead }` ([`OLD_UNLOADED`], [`NEW_UNLOADED`]); a resident one with fewer
+//! slots than its class's layout (a stand-in or a cut object) is the same kind with its own text ([`OLD_CUT`],
+//! [`NEW_CUT`]).
 //!
 //! **C. The unported paths, in the native's step order** (the note's step in brackets):
 //! 7. [1] `bKeepSpaceBases` with a current mesh and a non-empty `SpaceBases`: `LayerAbsent(`[`BONES_LAYER`]`)`;
@@ -29,8 +30,8 @@
 //! 10. [8] a set `Animations`: `NotPorted`, the tree's per-bone state ([`TREE`]);
 //! 11. [9] the transform (the hub's ruling, UNVERIFIED): each set mesh's `Origin` (a [`VECTOR`]: `X`, `Y`, `Z` floats)
 //!     and `RotOrigin` (a [`ROTATOR`]: `Pitch`, `Yaw`, `Roll` ints), the old mesh's first. Another declaration, or
-//!     none, is `VmError::Script` naming the field; so is a struct of another type with the same members
-//!     (FIX-645-PREFLIGHT, as `actor_trace` checks its vectors). Any member non-zero (`-0.0` is zero): `LayerAbsent(`[`TRANSFORM_LAYER`]`)`.
+//!     none, is `VmError::Script` naming the field; so is a struct of another type with the same members, declared or
+//!     only stored in the slot (FIX-645-PREFLIGHT and its review r1, as `actor_trace` checks its vectors). Any member non-zero (`-0.0` is zero): `LayerAbsent(`[`TRANSFORM_LAYER`]`)`.
 //!     All zero, or no mesh: nothing is answered for the transform;
 //! 12. [10] a set `ParentAnimComponent`: `LayerAbsent(`[`BONE_NAMES_LAYER`]`)`, the parent bone map;
 //! 13. [11] a set `PhysicsAsset`: the same layer, for `bHasValidBodies`;
@@ -81,6 +82,12 @@ pub const LOD_LAYER: &str = "the skeletal mesh data layer's LOD models";
 pub const OLD_UNLOADED: &str = "SetSkeletalMesh: the old mesh is an unloaded handle (a load is a write)";
 /// Row 6's text.
 pub const NEW_UNLOADED: &str = "SetSkeletalMesh: the new mesh is an unloaded handle (a load is a write)";
+/// Row 5's text for a resident old mesh with fewer slots than its class.
+pub const OLD_CUT: &str =
+    "SetSkeletalMesh: the old mesh has fewer slots than its class (a stand-in or a cut object; its fields are not read)";
+/// Row 6's text for a resident new mesh with fewer slots than its class.
+pub const NEW_CUT: &str =
+    "SetSkeletalMesh: the new mesh has fewer slots than its class (a stand-in or a cut object; its fields are not read)";
 /// Row 7's text.
 pub const KEEP: &str = "SetSkeletalMesh: keeping the bone transforms over a mesh change";
 /// Row 8's text.
@@ -160,16 +167,17 @@ fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The mesh change's four writes, settled by the preflight (module documentation, D).
+/// The mesh change's four writes, settled by the preflight (module documentation, D). Private with [`answer`] and
+/// [`Plan::apply`], so no caller can change the receiver between the two (review r1 of #664, item 2).
 #[derive(Debug)]
-pub struct Plan {
+struct Plan {
     component: ObjRef,
     writes: [(PropId, Value); 4],
 }
 
 impl Plan {
     /// The writes, in the native's order. A `NotYet` after the first is marked "stopped after partial writes: ".
-    pub fn apply(self, vm: &mut Vm) -> Result<(), VmError> {
+    fn apply(self, vm: &mut Vm) -> Result<(), VmError> {
         for (i, (p, v)) in self.writes.into_iter().enumerate() {
             if let Err(e) = vm.space.write(self.component, PropAddr::scalar(p), v) {
                 let e = VmError::from(e);
@@ -182,7 +190,7 @@ impl Plan {
 
 /// The rule on its inputs (module documentation): `Ok(None)` when the mesh is already `new_mesh`, `Ok(Some(plan))` for
 /// a change every row lets through. Reads only.
-pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases: bool) -> Result<Option<Plan>, VmError> {
+fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases: bool) -> Result<Option<Plan>, VmError> {
     resident(vm, component)?;
     let current = current_mesh(vm, component)?;
     // Row 4.
@@ -192,10 +200,10 @@ pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_b
     let space = &vm.space;
     // Rows 5 and 6.
     if let Some(old) = current {
-        mesh_resident(vm, old, OLD_UNLOADED)?;
+        mesh_resident(vm, old, OLD_UNLOADED, OLD_CUT)?;
     }
     if let Some(new) = new_mesh {
-        mesh_resident(vm, new, NEW_UNLOADED)?;
+        mesh_resident(vm, new, NEW_UNLOADED, NEW_CUT)?;
     }
     // Row 7.
     if keep_space_bases && current.is_some() && array_len(vm, component, "SpaceBases")? > 0 {
@@ -254,11 +262,14 @@ fn short(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     Ok(vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize))
 }
 
-/// Rows 5 and 6: `mesh` resident. An unloaded or a failed handle, or one with fewer slots than its class's layout, is
-/// `NotRead` with `text`; nothing is loaded.
-fn mesh_resident(vm: &Vm, mesh: ObjRef, text: &'static str) -> Result<(), VmError> {
-    if vm.defs.is_unloaded(&vm.space, mesh) || short(vm, mesh)? {
-        return Err(NotYet::not_read(text, CHANGE_RECORD).into());
+/// Rows 5 and 6: `mesh` resident. An unloaded or a failed handle is `NotRead` with `unloaded`; one with fewer slots
+/// than its class's layout is `NotRead` with `cut` (review r1 of #664, item 3). Nothing is loaded.
+fn mesh_resident(vm: &Vm, mesh: ObjRef, unloaded: &'static str, cut: &'static str) -> Result<(), VmError> {
+    if vm.defs.is_unloaded(&vm.space, mesh) {
+        return Err(NotYet::not_read(unloaded, CHANGE_RECORD).into());
+    }
+    if short(vm, mesh)? {
+        return Err(NotYet::not_read(cut, CHANGE_RECORD).into());
     }
     Ok(())
 }
@@ -307,6 +318,10 @@ fn members(
     let layout = vm.space.classes.struct_layout(ty).ok_or_else(bad)?;
     let value = vm.space.read(mesh, PropAddr::scalar(p))?;
     let s = value.as_struct().ok_or_else(bad)?;
+    // The stored value too, not only the declaration (review r1 of #664, item 1).
+    if s.ty != ty {
+        return Err(script(format!("{}.{field} holds a struct of another type, not a {expected}", path())));
+    }
     let mut all = true;
     for n in names {
         let id = vm.space.names.find(n).ok_or_else(bad)?;
