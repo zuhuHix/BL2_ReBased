@@ -399,11 +399,12 @@ fn no_globals_comes_out_before_the_player_class_is_read() {
     assert_eq!(n.what, "the toy world's globals", "the world's NotYet, unchanged");
 }
 
-/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-SKILLS): `InitPlayerSkillTree` on a controller, and with a player class, whose
-/// classes have a layout but no loaded code (the fixture warms its classes through `find_class`): the existing-tree
-/// refusal loads no class code, and leaves #518's counters and the name table unchanged.
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-SKILLS): `InitPlayerSkillTree` on a controller whose class has a layout but
+/// no loaded code (the fixture warms its classes through `find_class`): the existing-tree refusal loads no class code,
+/// and leaves #518's counters and the name table unchanged. That refusal returns before `PlayerClass` is read, so the
+/// cold player class set here is not reached (review r1 of #690, item 2): the test covers the controller only.
 #[test]
-fn a_cold_controller_and_player_class_load_no_code() {
+fn a_cold_controller_loads_no_code() {
     let mut x = fx();
     x.ready("A.B");
     let cold = |x: &mut Fx, class: &str| {

@@ -3,15 +3,26 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **COLD-CLASS-AUDIT-SKILLS (2026-11-25, zuhu desktop (Linux), on fix/rust-cold-class-audit-skills stacked on
-fix/rust-class-code-load-counter 1a22658, #685):** AI-assisted (Claude Code, Opus 5.5). Tests only. Each of ow-skills'
-package-backed Off natives is called with an object whose class has a layout but no loaded code, asserting
-`Vm::class_code_loads`, #518's three counters and the name table unchanged. 9 tests: 6 pass (`GetSMDToPlay`,
-`IsLocalAuthority`, `IsPlayingClass`, `InitPlayerSkillTree`, `GetSkillManager`'s spawn refusal,
-`DeactivateAllSkillsForInstigator`'s refusal, and the class achievement as the action-skill pack binds it); 3 are
-`#[ignore]`d because the native loads cold code (`Play` and `PlayLocal` through `GetSMDToPlay`'s `method_of`, and
-`GetSMNode`'s `find_class` of `AnimNodeSpecialMoveBlend`). `cargo test --workspace -j 4`: 3,409 passed / 4 failed (the
-expected N1 float-oracle failures on Linux) / 56 ignored; `cargo test -p ow-skills` 160 / 0 / 4; `crate_edges_test.py`
-OK. No real-game run.
+fix/rust-class-code-load-counter 1a22658, #685):** AI-assisted (Claude Code, Opus 5.5). Tests only. Some of
+ow-skills' package-backed Off natives are called with an object whose class has a layout but no loaded code. Exactly
+what is covered (review r1 of #690):
+- **pass**, with `Vm::class_code_loads`, #518's three counters and the name table unchanged:
+  - `GetSMDToPlay` and `IsLocalAuthority` on a cold definition;
+  - `IsPlayingClass` asked with the cold definition's own class (true);
+  - `InitPlayerSkillTree`'s existing-tree refusal on a cold controller (it returns before `PlayerClass` is read);
+  - `GetSkillManager`'s spawn refusal on a cold game info (the spawn target's class is already warm);
+  - `DeactivateAllSkillsForInstigator`'s refusal on a cold manager and skill;
+  - the class achievement, as the action-skill pack binds it, on a cold controller;
+- **`#[ignore]`d**, each seen failing at the code-load assertion:
+  - `Play` loads the cold definition's code through `GetSMDToPlay`'s `method_of`;
+  - `PlayLocal` does the same, on a successful dispatch: an intended load (#689 keeps it), not a refusal;
+  - `GetSMNode` loads `AnimNodeSpecialMoveBlend`'s code through `find_class`. This test checks only the class-code
+    counter;
+- **not covered:** `Pawn.IsAliveAndWell`, the natives whose fixtures declare classes by hand (no package code), and
+  the events natives.
+
+`cargo test --workspace -j 4` (r0): 3,409 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 56
+ignored; after r1 `cargo test -p ow-skills` 160 / 0 / 4; `crate_edges_test.py` OK. No real-game run.
 
 **SLICE-GATE-READING (2026-11-25, pc-hummer runner, written by the hub from the runner's own run):** AI-assisted
 (Claude Code, Opus 5.5). Installed Off strict `ow-package --slice-gate`, release build, under the machine lock, on
