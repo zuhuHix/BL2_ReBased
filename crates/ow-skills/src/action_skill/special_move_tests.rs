@@ -1895,16 +1895,17 @@ fn cold_definition_natives_load_no_code() {
     assert_eq!(got.unwrap(), Value::Bool(false), "an autonomous owner, bClientHasAuthority clear");
 }
 
-/// `IsPlayingClass` with a current move whose definition's class code is not loaded.
+/// `IsPlayingClass` with a current move whose definition's class code is not loaded, asked with that definition's own
+/// class, so the native reaches the class test on the cold definition (review r1 of #690, item 1).
 #[test]
 fn cold_is_playing_class_loads_no_code() {
     let mut x = fx(ParityMode::Off);
     let (_, component) = x.owner(AUTONOMOUS);
     let d = x.cold("GearboxFramework.ToyColdMove");
     x.seed(component, d, None);
-    let class = x.world.vm.space.classes.by_path("GearboxFramework.ToyMove");
-    let got = x.no_code_load("IsPlayingClass", |x| x.call(PATHS[3], component, vec![Value::Class(class)]));
-    assert_eq!(got.unwrap(), Value::Bool(false));
+    let class = x.world.vm.space.heap.get(d).unwrap().class;
+    let got = x.no_code_load("IsPlayingClass", |x| x.call(PATHS[3], component, vec![Value::Class(Some(class))]));
+    assert_eq!(got.unwrap(), Value::Bool(true));
 }
 
 /// `GetSMNode` on a tree whose `SpecialMoveBlend` node is of a cold class.

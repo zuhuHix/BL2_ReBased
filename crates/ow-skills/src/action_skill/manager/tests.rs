@@ -338,7 +338,9 @@ fn cold_marks(vm: &Vm) -> (u64, u64, u64, u64, usize) {
 }
 
 /// COLD-CLASS-AUDIT: `GetSkillManager` on a cold game info in a world that cannot spawn: the `LayerAbsent` refusal
-/// loads no class code (the game info's, or the manager's it would spawn) and writes nothing.
+/// loads no class code and writes nothing. It covers the game info's class only: the spawn target's class
+/// (`SkillEffectManager`) is already warm, because binding `DeactivateAllSkillsForInstigator` loads it (review r1 of
+/// #690, item 3).
 #[test]
 fn a_cold_game_info_s_spawn_refusal_loads_no_code() {
     let mut x = fx(ParityMode::Off, 3, false);
