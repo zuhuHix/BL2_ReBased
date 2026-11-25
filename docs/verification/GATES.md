@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINKS67-NEXT (2026-11-25, pc-hummer, docs only, on docs/native-links67-next-save-rotation from main
+79007ec9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PICKUP_SAVE_ROTATION.md: option B needs a VM rule for
+`new`'s template and a pickup fixture whose gun runs its init. Past the bounds, links 6 and 7's touch is covered;
+link 7 stops at `look`'s HUD, and link 6's first unread native is `WillowPickup.GetSaveRotation` (a rigid-body
+pickup's body pose, else its `Rotation`). No code changed, so no measured number moved; the slice gate was not
+run for this lane. UNVERIFIED in game.
+
 **ANALYST-GETWEAPONHOLDDEF (2026-11-25, pc-hummer, docs only, on docs/native-getweaponholddef from main ca547247):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_GET_WEAPON_HOLD_DEF.md: link 1's new stop is a pure read of the body
 class's weapon holds. For Maya (`Unarmed`, no tag) it answers the shared class's default hold, then
