@@ -9,17 +9,20 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core; engine route picked) · **Last update:** 2026-11-15
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core; engine route picked) · **Last update:** 2026-11-25
 
 **2026-11-14: the host engine changes.** The maintainer reversed the Unreal Engine 5 host choice
 ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). New runtime code is Rust; Python stays for tools and analysis. The UE5 host
 (`host/ue5/`, its scripts and suites) left the tree; main 08bcf3e is the last commit that holds it, and
-`git show 08bcf3e:<path>` recovers any of it. The C++ core in `src/` will be ported to Rust crate by crate (not started: the crates are skeletons) and stays the
-reference until each crate matches it. The engine route is picked: on 2026-11-15 the maintainer chose an own engine
-on wgpu + winit over Bevy from the Phase 0R benchmark ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)); the host itself
-is not written yet. Host results below are the retired UE5 host's: they say what that host did and no longer count
+`git show 08bcf3e:<path>` recovers any of it. The C++ core in `src/` is being ported to Rust crate by crate and stays the reference until each crate matches it: the
+container decoder and the package reader are ported
+([decisions](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md),
+[2026-11-15-03](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)), the rest is in
+progress. The engine route is picked: on 2026-11-15 the maintainer chose an own engine
+on wgpu + winit over Bevy from the Phase 0R benchmark ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)); `ow-host` walks
+Sanctuary and loads it as a world (see How it's going). Host results below are the retired UE5 host's: they say what that host did and no longer count
 toward a gate. Host-independent evidence (real-game captures, native notes, script disassembly, reader checks, the
-core's VM, combat, mission and item results) keeps its status. Nothing about the Rust route is verified yet.
+core's VM, combat, mission and item results) keeps its status. Nothing about the Rust route is verified in the running game yet.
 
 ---
 
@@ -67,22 +70,24 @@ UNVERIFIED in the running game)
 
 - **The reader:** the Rust container decoder and package reader are ported
   ([container](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md),
-  [reader](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)). On 2026-11-19
-  (pc-hummer), `tools/verify_packages.py` read the 9 code packages with 3,339 of 3,339 class bodies exact, with the
+  [reader](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)). In lane
+  FIX-FIRE-TO-HIT, on main 86c28d00 (pc-hummer, 2026-11-19), `tools/verify_packages.py` read the 9 code packages with 3,339 of 3,339 class bodies exact, with the
   C++ reader and with the Rust reader ([gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). The C++ code in
   `src/` is still the reference; none of it has retired yet.
 - **The crates:** the 22 crates of [crates/README.md](crates/README.md) hold the ported reader, object model,
   definition store, script VM and the game rules ported so far. Rules are ported one native at a time in
   `ParityMode::Off`, each from an own-words note, and answer a typed `NotYet` where a rule is not read yet. The
-  workspace test counts are in [gates](docs/verification/GATES.md) (the top rows). On Linux, four float-oracle tests
-  fail by design, because their bit parity is checked on Windows only (rule N1 in `crates/ow-core/src/num.rs`).
+  workspace test counts are in [gates](docs/verification/GATES.md) (the top rows). Float-oracle tests whose bit
+  parity is gated on Windows (rule N1 in `crates/ow-core/src/num.rs`) are not expected to pass on Linux.
 - **The engine:** our own engine on wgpu + winit, picked by the maintainer on 2026-11-15
   ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). wgpu 30.0.1 and
-  winit 0.30.13 are the only third-party crates, used by `ow-host` alone (approved 2026-11-16,
+  winit 0.30.13 are the only direct third-party dependencies, used by `ow-host` alone, with their transitive crates
+  (approved 2026-11-16,
   [THIRD_PARTY.md](THIRD_PARTY.md), "Engine crates: wgpu and winit").
 - **The host:** `ow-host` walks Sanctuary in a window from the installed data (H4-PLAY, 2026-11-16) and fires a gun
   read from a weapon file (H4-WEAPON). It also loads `Sanctuary_P` as a world in Off (H-WORLD, 2026-11-19): 2,363
-  actors, but it halts at tick 1 on a physics mode the host does not have, and the window drew 1 of 11 pawns
+  actors, and it still halts at tick 1, since H-MATINEE (2026-11-19) on the level-load event that starts a Matinee
+  op binding a `WillowSpectatorPoint`; the window drew 1 of 11 pawns (H-WORLD baseline)
   ([gates](docs/verification/GATES.md), the three host sections).
 - **The slice gate**, headless (`ow-package --slice-gate`, installed data, Off, strict; the hub's run on main
   d3c7a13, pc-hummer, 2026-11-25): 4 links ok, 10 NotYet, 0 errors. The mean per-link share of slice steps passed is
@@ -398,8 +403,8 @@ check or a decision, not parity, and nothing here is verified in the running gam
       ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)).
 - [x] `tools/verify_packages.py --reader <the Rust reader>` gives the same
       counts and exact class bodies as the C++ reader: 9 packages, 3,339 of
-      3,339 class bodies exact with both readers (2026-11-19, pc-hummer;
-      [gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). Only then does the
+      3,339 class bodies exact with both readers (lane FIX-FIRE-TO-HIT on main
+      86c28d00, pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md)). Only then does the
       matching part of `src/` retire. *Status:* nothing in `src/` has retired yet.
 - [x] Engine benchmark: Bevy and an own engine on wgpu + winit, the same
       small scene in each, prototypes under ignored `local/bench/`
@@ -417,14 +422,16 @@ check or a decision, not parity, and nothing here is verified in the running gam
       others has one.
 - [ ] Port the script VM and the game rules (combat, missions, items,
       weapons) crate by crate, each against the C++ results. *Status:* in
-      progress. The VM runs the slice's script headless, and the rules are
-      ported native by native in Off. The slice gate reads 4 ok / 10 NotYet /
+      progress. The VM runs parts of the slice's script headless, most of it in
+      Reference only; in Off each link stops early
+      ([SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md), section 2). The
+      rules are ported native by native in Off. The slice gate reads 4 ok / 10 NotYet /
       0 errors (2026-11-25; [gates](docs/verification/GATES.md), row
       SLICE-GATE-READING).
 - [ ] Rebuild Sanctuary in the Rust host (Phase 1), then Maya (Phases 3-4),
       with the retired UE5 host's records as the behaviour target. *Status:*
       started. The host walks Sanctuary in a window and loads it as a world,
-      which halts at tick 1 ([gates](docs/verification/GATES.md), the host
+      which halts at tick 1 on a Matinee op's level-load event (H-MATINEE) ([gates](docs/verification/GATES.md), the host
       sections); no slice link is counted in `ow-host --play` yet.
 
 The UE5-era list (sky, materials, terrain and BSP, visual defects, walking
@@ -494,8 +501,8 @@ engine route picked from measurements.
 - [x] `ow-package` ported; same results on the same synthetic fixtures
       ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md))
 - [x] `tools/verify_packages.py --reader` on the Rust reader: same counts and
-      exact class bodies as the C++ reader (3,339 of 3,339, 2026-11-19;
-      [gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT)
+      exact class bodies as the C++ reader (3,339 of 3,339; lane FIX-FIRE-TO-HIT
+      on main 86c28d00, pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md))
 - [x] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox, the
       optional one, not built) and recorded in
       [ENGINE_BENCHMARK.md](docs/verification/ENGINE_BENCHMARK.md). *Caveat:*
@@ -505,6 +512,8 @@ engine route picked from measurements.
 
 **Gate:** the Rust reader matches `verify_packages.py`, the benchmark is
 recorded, and the maintainer has picked the route.
+
+*Whether this gate is passed is the maintainer's call; not marked.*
 
 ---
 

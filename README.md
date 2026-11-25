@@ -32,13 +32,13 @@ One developer, a lot of AI, and a written record of every check.
 > **2026-11-14: the project moved from Unreal Engine 5 to Rust.** The UE5 host has been removed from the repository ([the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). What that means:
 >
 > - The pictures on this page, "See it running" included, were made with the retired UE5 host. They show what that host did, not a build you can get today.
-> - The Rust host is not running yet. On 2026-11-15 I picked the engine it builds on from a benchmark: our own engine on wgpu + winit, not Bevy ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The host itself isn't written yet.
+> - The Rust host is early. On 2026-11-15 I picked the engine it builds on from a benchmark: our own engine on wgpu + winit, not Bevy ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). `ow-host` walks Sanctuary in a window and loads it as a world, which halts at its first tick; none of the slice runs in it yet ([how to run it](docs/TOOLING.md#ow-host-the-rust-host), [status](ROADMAP.md#how-its-going)).
 > - The part that reads the game carries over: the package reader, the script VM and the combat, mission and item rules. It's being ported from C++ to Rust crate by crate, and the C++ version stays the reference until each Rust crate matches it.
 > - The last commit with the UE5 host is `08bcf3e`, if you want to look at it.
 
 ## See it running
 
-*These frames are from the retired UE5 host (see the note above). The Rust host doesn't render anything yet.*
+*These frames are from the retired UE5 host (see the note above). The Rust host draws Sanctuary but no slice yet ([`ow-host`](docs/TOOLING.md#ow-host-the-rust-host)).*
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/phaselock-cast-host-2026-11-07.jpg" width="100%" alt="Maya casts Phaselock on a Sanctuary street, running in Unreal Engine 5">
@@ -90,7 +90,7 @@ Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openr
   <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed the Rust host, whose engine route was chosen by benchmark: an own engine on wgpu + winit.">
 </p>
 
-<sub>The target design. The game-reading core (package reader, script VM, combat, mission and item rules) is C++ today and is being ported to Rust. The host (the "host" in the docs) is not started in Rust: its engine route is picked (an own engine on wgpu + winit, from a benchmark), but none of it is written yet. Until 2026-11-14 the host was a UE5 project, now retired; in it, only parts of the slice ran on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run).</sub>
+<sub>The target design. The game-reading core (package reader, script VM, combat, mission and item rules) is C++ today and is being ported to Rust. The host (the "host" in the docs) is early in Rust: its engine route is picked (an own engine on wgpu + winit, from a benchmark), and `ow-host` walks and draws Sanctuary but plays none of the slice yet. Until 2026-11-14 the host was a UE5 project, now retired; in it, only parts of the slice ran on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run).</sub>
 
 <details>
 <summary><b>Why can't mods just fix this?</b></summary>
@@ -329,8 +329,8 @@ An independent AI critic, one that didn't build the thing, gets our frames and m
 
 **Short version:** there's no game to play yet. On 2026-11-14 the UE5 host was removed and the project switched to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). Right now:
 
-- **The host is back to not started, but its engine is picked.** A benchmark built the same small Sanctuary-and-Maya scene in Bevy and in an own engine on wgpu + winit, and on 2026-11-15 I picked the own engine on wgpu + winit ([record](docs/verification/ENGINE_BENCHMARK.md), [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Its main draws: BL2's Flash UI runs through Ruffle on the same GPU device, and the binary is several times smaller. None of its crates is in the repository yet.
-- **The core carries over.** The package reader, the census, the VM prototype and the combat, mission and item rules keep their status. They're C++ today and get ported to Rust crate by crate. The Rust workspace exists, but its crates are skeletons: no Rust code reads a package yet.
+- **The host started over, on the engine that was picked.** A benchmark built the same small Sanctuary-and-Maya scene in Bevy and in an own engine on wgpu + winit, and on 2026-11-15 I picked the own engine on wgpu + winit ([record](docs/verification/ENGINE_BENCHMARK.md), [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Its main draws: BL2's Flash UI runs through Ruffle on the same GPU device, and the binary is several times smaller. wgpu and winit are in the repository now, in `ow-host` alone; the other engine crates, Ruffle included, are not ([`ow-host`](docs/TOOLING.md#ow-host-the-rust-host)).
+- **The core carries over.** The package reader, the census, the VM prototype and the combat, mission and item rules keep their status. They're C++ today and get ported to Rust crate by crate. The Rust container decoder and package reader are ported and match the C++ reader on `tools/verify_packages.py`; the rest is being ported ([status](ROADMAP.md#how-its-going)).
 - **The evidence stays.** Real-game captures, the own-words native notes and the script disassembly don't depend on the host. What the UE5 host showed stays on record as history and as a target, but doesn't count toward the Rust host's gates.
 
 Before the switch, the Sanctuary slice in the UE5 host was a developer prototype that covered the whole loop in a scripted run, on labelled stand-ins and with most rules still unconfirmed against the game.
@@ -360,7 +360,7 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 **Not yet:**
 
-- **A Rust host.** The engine route is picked (own engine on wgpu + winit), but nothing renders, moves or plays in the repository's Rust yet.
+- **A Rust host.** The engine route is picked (own engine on wgpu + winit). `ow-host` renders and walks Sanctuary, but nothing of the slice plays in it yet ([`ow-host`](docs/TOOLING.md#ow-host-the-rust-host)).
 - **Parity with the original game.** Nothing here should be read as "it works like the real thing" unless its record says so.
 - **An enemy that actually downs Maya in the gate run.** In the UE5 host, enemies hit her on the range, but the gate's down still came from the test.
 - **The rest of the game.** The other ~79 maps, the other Vault Hunters, the full campaign, co-op, your saves.
