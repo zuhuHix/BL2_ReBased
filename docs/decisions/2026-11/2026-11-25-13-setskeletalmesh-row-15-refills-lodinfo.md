@@ -66,3 +66,15 @@ component's slots unchanged):
    is recorded.
 3. **The order and the byte.** A test asserts the planned writes in order, with `LODInfo` after `bHasValidBodies`.
    The fixture's script-default usage byte is non-zero (3), and the refill carries it.
+
+**Review r2** (Sol high, on #678), and the hub's amendment to ruling 1:
+- **The `known` mapping of review r1, item 1, is reverted.** The reader emits `TrailingArray` for any non-zero
+  trailing count, negative ones included, and a misread export already yields it: the reader's own test with an
+  untagged colour buffer reads a trailing count of 4. So the source cannot tell a real trailing array from a misread,
+  and answering "not known" would hide malformed exports.
+- **Ruling 1, amended (UNVERIFIED; the maintainer may overturn it):** on installed data, a non-zero trailing count
+  surfaces the reader's error. It is a `VmError::Script` raised from row 15, loud and still write-free, because the
+  preflight has written nothing by then. "Non-zero -> `LayerAbsent`" still holds where a source reports the counts as
+  data (the synthetic sources, and the `ow-world` test with a source answering like the CLI one, which stays).
+- `crates/ow-cli/src/cmd/skeletal_source.rs` is back as #673 left it, and its r1 test is removed with the mapping. All
+  110 installed LOD models read a trailing count of 0, so the slice is unaffected.

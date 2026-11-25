@@ -593,9 +593,9 @@ fn the_lod_row_refuses_without_zero_trailing_counts() {
     assert_eq!(kind(z.refused(c, vec![some(b)])).0, Missing::LayerAbsent(LOD_LAYER), "no count");
 }
 
-/// Review r1 of #678, item 1: a source that behaves like `ow-cli`'s, whose full read of a mesh with a non-zero
-/// trailing count answers "not known" to both in-package questions (and nothing by name): row 15's `LayerAbsent`,
-/// write-free, not a script error.
+/// Review r1 of #678, item 1 (kept after r2): a source that answers "not known" to both in-package questions (and
+/// nothing by name) gives row 15's `LayerAbsent`, write-free. `ow-cli`'s source does not answer so for a non-zero
+/// trailing count: after review r2 the reader's error surfaces, write-free (decision 2026-11-25-13).
 #[test]
 fn a_cli_like_source_s_unsupported_trailing_count_is_layer_absent() {
     struct CliLike;
