@@ -2,6 +2,19 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SLICE-GATE-READING (2026-11-25, pc-hummer, main d3c7a13):** AI-assisted (Claude Code, Opus 5.5). Recorded for
+ROADMAP-REFRESH from the hub's run, as the hub reported it. This lane did not see the run's log. Installed Off
+`--slice-gate`, strict: 4 ok / 10 NotYet / 0 errors, and the mean per-link share of slice steps passed is 37.7%.
+First stops:
+- link 1 in `maya:8`: no reference skeleton without a UModel export;
+- links 3, 4, 5, 13 and 14 are behind link 1;
+- links 6 and 7 in `touch`, at the component check;
+- link 8 in `init`, at SetSkeletalMesh's LOD row;
+- link 9 in `cast`, at `Actor.Trace`;
+- links 2, 10, 11 and 12 pass.
+
+`ow-host --play` counts no slice links yet. No real-game run; UNVERIFIED in game.
+
 **ANALYST-INITMESHES-SETMATERIAL-GLOW (2026-11-25, pc-hummer, docs only, on docs/native-initmeshes-setmaterial-glow
 from main a3b548d3):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITMESHES_MATERIAL_GLOW.md: `SetMaterial` and
 `GetScalarParameterValue`, link 8's stops after `BuildWeaponMaterial`. No code changed, so no measured number
