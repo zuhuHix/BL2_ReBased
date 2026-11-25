@@ -478,6 +478,8 @@ takes the first, an **UNVERIFIED** choice.
 
 ### 8.1 The Off answer (proposed for the hub's revisit of ruling 3)
 
+*Adopted by decision 2026-11-25-56 (the `PARENT_LINK` refusal is gone), plus an unloaded-child-template guard.*
+
 **Every rule below is UNVERIFIED.** If the hub revisits ruling 3, it replaces the `PARENT_LINK` refusal
 (`body_composition::PARENT_LINK`, section 7's walk). The gate is unchanged: identifier `Parent`, the parent a made
 `SkeletalMeshComponent` and the new component one too.
