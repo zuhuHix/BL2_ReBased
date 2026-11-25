@@ -487,6 +487,9 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
 ///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
 ///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
+/// 1a. **Owner-test set-up** (lane ROUTE-A, NATIVE_SPECIALMOVE_OWNER.md route (a)): `SpecialMoveInterface` loaded and
+///    the interface entries on the archetype's class chain resolved ([`owner_setup`]), UNVERIFIED stand-ins for the
+///    game having them loaded and resolved.
 /// 2. **Tree preload:** Maya's animation tree and the nodes and controls it reaches ([`preload_player_tree`]).
 /// 3. **Skeleton source:** ow-cli's `.psk` source installed as the skeletal mesh data layer's source, once per VM
 ///    ([`install_skeleton_source`]), an UNVERIFIED stand-in for the engine's own mesh data.
@@ -508,6 +511,8 @@ pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<
 }
 
 fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
+    // The pawn archetype's class, for the owner test's set-up below (lane ROUTE-A).
+    let mut pawn_class = None;
     match class {
         None => vm.log.push(format!("harness input: preload skipped (no class at {PLAYER_CLASS_PATH})")),
         Some(definition) => {
@@ -535,6 +540,7 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
                                     if found.is_some() { "loaded" } else { "found nothing" }
                                 ));
                                 if let Some(archetype) = found {
+                                    pawn_class = Some(vm.space.heap.get(archetype)?.class);
                                     load_same_package_references(vm, archetype)?;
                                 }
                             }
@@ -552,6 +558,7 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
             }
         }
     }
+    owner_setup::special_move_owner_setup(vm, pawn_class)?;
     preload_player_tree(vm)?;
     // Maya's mesh data (lane SLICE-HARNESS-MAYA-MESH, hub ruling), before the class select spawns her pawn: the
     // skeleton source (once per VM), then the mesh. Both are logged inside the `maya` step, so the slice gate's harness list for
@@ -632,6 +639,7 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
 }
 
 pub mod map_route;
+pub mod owner_setup;
 
 #[cfg(test)]
 mod tests;
