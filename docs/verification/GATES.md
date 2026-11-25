@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-BODYCOMP-HOOK2-PAWN-TEST (2026-11-25, pc-hummer, on integration/2026-11-25-c15 25425bb9):** AI-assisted
+(Claude Code, Opus 5.5). Hook 2's pawn test (`IsPlayerPawn`) and controller test (`UsingFirstPersonCamera`) in Off,
+from NATIVE_BODYCOMP_RENDER_HOOKS.md section 6 at 44532835; `PAWN_TEST` "not identified" and the
+`IsLocalPlayerController` check leave hook 2. `cargo test --workspace -j 8` 3,500 passed / 0 failed / 55 ignored;
+`crate_edges_test.py` 19 OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 5 ok / 8
+NotYet / 1 error, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`. Every row and report line is the same as c15's
+own run (render_hooks.rs swapped back for the run, nothing else changed). Link 1 is 0 of 2 at `maya:8` (no reference
+skeleton on this machine, no UModel export), before hook 2; link 8's error is c15's unbound
+`WillowWeapon.BuildWeaponMaterial` at `init`. Gameplay UNVERIFIED; no real-game run.
+
 **IMPL-BUILDWEAPONMATERIAL (2026-11-25, zuhu desktop (Linux), on fix/rust-build-weapon-material from
 integration/2026-11-25-c15 25425bb):** AI-assisted (Claude Code, Opus 5.5). `WillowWeapon.BuildWeaponMaterial` in
 Off from NATIVE_WEAPON_VISUALS.md section 1.1 (#698 at 5797b5a). `cargo test --workspace -j 4`: 3,499 passed / 4 failed
