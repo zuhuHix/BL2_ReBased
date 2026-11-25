@@ -72,6 +72,11 @@ impl Drop for Fx {
 }
 
 fn fx(mode: ParityMode, inventory: Inventory) -> Fx {
+    fx_with(mode, inventory, false)
+}
+
+/// [`fx`]; with `prebound`, the native's function bound to a stand-in answering true before any registration.
+fn fx_with(mode: ParityMode, inventory: Inventory, prebound: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-class-achievement-{}-{}",
         std::process::id(),
@@ -89,6 +94,10 @@ fn fx(mode: ParityMode, inventory: Inventory) -> Fx {
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode)
         .with_stub_policy(StubPolicy::refuse_all());
     vm.find_class("WillowGame.WillowPlayerController").unwrap();
+    if prebound {
+        let f = vm.find_function(PATH).unwrap();
+        vm.register_native_for(f, Rc::new(|_: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Bool(true)))).unwrap();
+    }
     if inventory == Inventory::Before {
         ow_inventory::globals::class_achievement::register(&mut vm).unwrap();
     }
@@ -130,6 +139,17 @@ fn either_order_keeps_one_binding() {
         assert_eq!(x.world.vm.package_bindings(KEY), 1);
         assert!(!x.world.vm.native_keys().any(|k| k == KEY));
         assert_eq!(x.call().unwrap(), Value::Bool(false));
+    }
+}
+
+/// Review r1 of #668, item 3: a different handler bound first is kept by the pack and by the inventory's registration,
+/// in either order, with no duplicate-registration error.
+#[test]
+fn a_handler_bound_first_is_kept() {
+    for order in [Inventory::Absent, Inventory::Before, Inventory::After] {
+        let mut x = fx_with(ParityMode::Off, order, true);
+        assert_eq!(x.world.vm.package_bindings(KEY), 1);
+        assert_eq!(x.call().unwrap(), Value::Bool(true), "the stand-in answers, not the rule's false");
     }
 }
 

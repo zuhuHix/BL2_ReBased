@@ -96,13 +96,16 @@ fn willow_game(mistyped: bool) -> Vec<u8> {
     let holder = t.class("ToyHolder", object);
     t.prop("Object", holder, "Controller", 0, object);
     t.prop("Object", holder, "Definition", 0, object);
+    t.prop("Object", holder, "Other", 0, object);
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&t.none);
     let stored_controller = t.p.add_export(client, "ToyStoredController", empty.clone());
-    let stored_definition = t.p.add_export(definition, "ToyStoredClass", empty);
+    let stored_definition = t.p.add_export(definition, "ToyStoredClass", empty.clone());
+    let stored_other = t.p.add_export(other, "ToyStoredOther", empty);
     let mut h = 0i32.to_le_bytes().to_vec();
     h.extend(t.p.object_tag("Controller", stored_controller));
     h.extend(t.p.object_tag("Definition", stored_definition));
+    h.extend(t.p.object_tag("Other", stored_other));
     h.extend_from_slice(&t.none);
     t.p.add_export(holder, "ToyHolderObject", h);
     t.build()
@@ -117,6 +120,8 @@ enum Client {
     WriteAndRefuse,
     /// Records the id and refuses at once, writing nothing.
     Refuse,
+    /// Records the id; the first call returns writing nothing, a later one refuses (review r1 of #668, item 2).
+    RefuseSecond,
 }
 
 #[derive(Clone, Copy)]
@@ -124,9 +129,11 @@ struct Setup {
     mode: ParityMode,
     client: Client,
     mistyped: bool,
+    /// Whether the native's function is already bound, to a stand-in answering true, before [`register`] runs.
+    prebound: bool,
 }
 
-const OFF: Setup = Setup { mode: ParityMode::Off, client: Client::Record, mistyped: false };
+const OFF: Setup = Setup { mode: ParityMode::Off, client: Client::Record, mistyped: false, prebound: false };
 
 struct Fx {
     vm: Vm,
@@ -179,6 +186,8 @@ fn fx_with(setup: Setup) -> Fx {
             match client {
                 Client::Record => Ok(Value::None),
                 Client::Refuse => refuse(),
+                Client::RefuseSecond if seen.borrow().len() > 1 => refuse(),
+                Client::RefuseSecond => Ok(Value::None),
                 Client::WriteAndRefuse => {
                     let this = c.this.unwrap();
                     let class = c.vm.space.heap.get(this)?.class;
@@ -190,6 +199,10 @@ fn fx_with(setup: Setup) -> Fx {
         }),
     )
     .unwrap();
+    if setup.prebound {
+        let f = vm.find_function(PATH).unwrap();
+        vm.register_native_for(f, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Bool(true)))).unwrap();
+    }
     register(&mut vm).unwrap();
     let pc = make(&mut vm, "WillowGame.ToyClientController");
     let definition = make(&mut vm, DEFINITION);
@@ -421,6 +434,12 @@ fn an_unloaded_receiver_or_class_is_not_read() {
     let path = ow_attr::eval::object_path(&x.vm.space, definition);
     assert_eq!((n.missing, &*n.what, n.record), (Missing::NotRead, &*class_not_loaded(&path), RECORD));
     assert!(x.vm.defs.is_unloaded(&x.vm.space, definition), "not loaded by the native");
+    // Review r1 of #668, item 1: an unloaded handle of another class answers false without a refusal (the class test
+    // needs only the handle's class) and stays unloaded.
+    let other = x.held("Other");
+    x.set(pc, "PlayerClass", Value::Object(Some(other)));
+    assert_eq!(x.clean(|x| x.unlock(2, 1, true, false)).unwrap(), Value::Bool(false));
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, other), "not loaded by the native");
 }
 
 /// Test 8: a malformed array (an entry field of another kind; an entry of a lookalike struct) or argument is a
@@ -489,6 +508,13 @@ fn partial_writes_are_marked_only_after_a_write() {
     assert_eq!(&*n.what, "stopped after partial writes: an invented online subsystem");
     assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD));
     assert_eq!(y.calls(), vec![7]);
+    // Review r1 of #668, item 2: an earlier event that finished without writing leaves a later refusal unmarked; the
+    // mark follows the counters, not the event count.
+    let mut z = fx_with(Setup { client: Client::RefuseSecond, ..OFF });
+    z.rows(&[(2, 7, 1), (2, 8, 1)]);
+    let n = not_yet(z.unlock(2, 1, true, false));
+    assert_eq!(&*n.what, "an invented online subsystem");
+    assert_eq!(z.calls(), vec![7, 8]);
 }
 
 /// Test 11, this pack's half: keep-existing (a second registration, and the inventory registration after it, keep
@@ -502,6 +528,15 @@ fn registration_is_keep_existing_and_off_only() {
     assert_eq!(x.vm.package_bindings(KEY), 1);
     assert!(!x.vm.native_keys().any(|k| k == KEY));
     assert_eq!(x.unlock(2, 1, true, false).unwrap(), Value::Bool(true));
+    // Review r1 of #668, item 3: a different handler bound first is kept by both registrations, with no
+    // duplicate-registration error.
+    let mut p = fx_with(Setup { prebound: true, ..OFF });
+    p.rows(&[(2, 7, 100)]);
+    register(&mut p.vm).unwrap();
+    crate::globals::register(&mut p.vm).unwrap();
+    assert_eq!(p.vm.package_bindings(KEY), 1);
+    assert_eq!(p.unlock(2, 1, true, false).unwrap(), Value::Bool(true), "the stand-in answers, not the rule");
+    assert!(p.calls().is_empty());
     let mut r = fx_with(Setup { mode: ParityMode::Reference, ..OFF });
     r.rows(&[(2, 7, 1)]);
     assert!(!r.vm.has_native(KEY));
