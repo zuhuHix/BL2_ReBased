@@ -1,5 +1,5 @@
 //! Owner: lane IMPL-AIMOFFSET-PROFILES. `AnimNodeAimOffset.Profiles` read from an export's binary-serialized array
-//! (decision 2026-11-25-NNN). AI-assisted (Claude Code). The layout is **fitted, UNVERIFIED** (AGENTS.md rule 4):
+//! (decision 2026-11-25-72). AI-assisted (Claude Code). The layout is **fitted, UNVERIFIED** (AGENTS.md rule 4):
 //! recovered from the installed packages by sizes, property flags and values, not read from the serializer.
 //!
 //! **The layout.** The `Profiles` tag is an `ArrayProperty` whose value is a 4-byte element count, then each

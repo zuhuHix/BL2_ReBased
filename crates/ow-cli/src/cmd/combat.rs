@@ -214,7 +214,7 @@ impl ow_world::world::aim_profiles::ProfileSource for AssetProfiles {
 }
 
 /// Installs [`AssetProfiles`] as the VM's profiles reader, logged as a harness input (a fitted layout checked by
-/// structural oracles, UNVERIFIED; decision 2026-11-25-NNN).
+/// structural oracles, UNVERIFIED; decision 2026-11-25-72).
 pub(crate) fn install_profiles_reader(vm: &mut Vm) -> Result<(), VmError> {
     vm.log.push(
         "harness input: the aim-offset profiles reader over the node's own export (ow_assets::aim_profiles, a fitted \

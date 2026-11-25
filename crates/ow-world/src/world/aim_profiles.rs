@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-AIMOFFSET-PROFILES. The aim-offset profiles layer: the profile names of an aim-offset node whose
 //! `Profiles` the store skipped (`ow_defs::DefStore::is_skipped`), read from the node's own export by an installed
-//! [`ProfileSource`], cached by the node's identity. AI-assisted (Claude Code). Decision 2026-11-25-NNN.
+//! [`ProfileSource`], cached by the node's identity. AI-assisted (Claude Code). Decision 2026-11-25-72.
 //!
 //! The reader lives in `ow-assets` (`aim_profiles`, a fitted layout checked by structural oracles, **UNVERIFIED**),
 //! which this crate may not depend on (the crate edges), so `ow-cli` installs it as the source, as the skeletal mesh
