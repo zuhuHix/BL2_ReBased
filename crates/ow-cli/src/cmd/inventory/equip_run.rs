@@ -910,7 +910,59 @@ pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Res
         Ok(()) => vm.log.push(format!("{MATERIAL_INPUT} {name}: loaded")),
         Err(e) => vm.log.push(format!("{MATERIAL_INPUT} {name}: failed ({e})")),
     }
-    loaded.map_err(VmError::from)
+    loaded.map_err(VmError::from)?;
+    preload_parent_chain(vm, material)
+}
+
+/// How many `Parent` links [`preload_parent_chain`] follows at most.
+pub(crate) const PARENT_CHAIN_CAP: usize = 8;
+
+/// The rest of [`preload_material_part_material`] (the hub's ruling on #712's parent chain): from the loaded
+/// material, its `Parent` chain, each parent loaded **only while it is a Startup export** (`DefStore::handle_source`),
+/// by the same rule as the material itself. The glow read (`GetScalarParameterValue`) walks that chain and refuses a
+/// parent that is not resident. A parent already resident is walked through with no load. The walk stops, with a
+/// logged line, at:
+/// - a None `Parent`, or an object that declares none (the chain's end);
+/// - the first parent that is not a Startup export (left for the native to refuse);
+/// - [`PARENT_CHAIN_CAP`] links (a cap; hitting it is logged).
+///
+/// Each load is logged before and after; a failed load keeps its error. **UNVERIFIED stand-in**, as the material's.
+fn preload_parent_chain(vm: &mut Vm, material: ObjRef) -> Result<(), VmError> {
+    let mut current = material;
+    for _ in 0..PARENT_CHAIN_CAP {
+        let here = ow_vm::path_name::path_name(vm, current).unwrap_or_else(|_| format!("{current:?}"));
+        let Some(Value::Object(Some(parent))) = ow_inventory::equip::read_prop(vm, current, "Parent") else {
+            vm.log.push(format!("{MATERIAL_INPUT}: the parent chain ends at {here} (no Parent)"));
+            return Ok(());
+        };
+        if !vm.defs.is_unloaded(&vm.space, parent) {
+            current = parent;
+            continue;
+        }
+        let name = ow_vm::path_name::path_name(vm, parent).unwrap_or_else(|_| format!("{parent:?}"));
+        let export = match vm.defs.handle_source(parent) {
+            Some((package, index)) if package.eq_ignore_ascii_case(STARTUP_PACKAGE) => index,
+            other => {
+                let from = other.map_or_else(|| "an unknown package".to_string(), |(p, i)| format!("{p} export {i}"));
+                vm.log.push(format!(
+                    "{MATERIAL_INPUT}: the parent chain stops at {name} ({from}, not a Startup export; the glow read's \
+                     refusal stands)"
+                ));
+                return Ok(());
+            }
+        };
+        vm.log.push(format!("{MATERIAL_INPUT}: parent {name} (Startup export {export}; UNVERIFIED stand-in)"));
+        let loaded = vm.defs.ensure_loaded(&mut vm.space, parent);
+        vm.log.extend(vm.defs.take_log());
+        match &loaded {
+            Ok(()) => vm.log.push(format!("{MATERIAL_INPUT}: parent {name}: loaded")),
+            Err(e) => vm.log.push(format!("{MATERIAL_INPUT}: parent {name}: failed ({e})")),
+        }
+        loaded.map_err(VmError::from)?;
+        current = parent;
+    }
+    vm.log.push(format!("{MATERIAL_INPUT}: the parent chain walk stopped at its cap of {PARENT_CHAIN_CAP} links"));
+    Ok(())
 }
 
 /// The text of [`preload_material_classes`]'s harness lines.

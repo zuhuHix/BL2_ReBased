@@ -25,6 +25,19 @@ after (": loaded", or ": failed (...)" with the error kept); the slice-gate row'
 that one object: not the part, nor the material's parent chain, nor any class. `BuildWeaponMaterial`'s refusal is
 unchanged.
 
+**The parent chain** (the hub's ruling, a third commit). With SetMaterial bound (the stacked IMPL-SETMATERIAL-AND-GLOW
+lane), the glow read walks the weapon material's `Parent` chain and refused at a parent that was not resident:
+`Common_GunMaterials.MasterMaterials.Bandit.MasterMati_BanditCommon`, **Startup export 23841** (named by a reverted
+probe on the installed run, 2026-11-25). So after loading the Material-part material, the preload follows its
+`Parent` chain:
+- each parent is loaded **only while it is a Startup export** (`DefStore::handle_source`, the rule above);
+- a parent already resident is walked through with no load;
+- the walk stops with a logged line at a None `Parent` (or an object that declares none), at the first parent that is
+  not a Startup export (left for the native to refuse), or at a cap of 8 links (logged if hit).
+
+Each load is logged before and after; a failed load keeps its error. It is the same **UNVERIFIED stand-in** as the
+material's.
+
 **The material classes** (the hub's extension, a second commit). With the material resident, `BuildWeaponMaterial`'s
 step 4 refused next: it asks, with no load, for `Engine.MaterialInstanceConstant` and the weapon type's
 `MaterialClass` to be ready (a defined layout and loaded code) and for that class's default object to be resident.
@@ -53,6 +66,8 @@ step 1 runs, and the native answers those cases itself. `BuildWeaponMaterial`'s 
 - the class step loads both classes' code and the class default, logged, and a second call does nothing;
 - with no `MaterialClass` only the family class loads, and Reference does nothing;
 - a material that is not a Startup export is skipped with a line, and nothing is loaded;
+- a two-level Startup parent chain loads both parents, logged, and ends with a line;
+- a parent that is not a Startup export stops the walk with a line and is not loaded;
 - an out-of-family `MaterialClass` gets no class-code or default load, one skip line, and stays cold (the native's
   refusals for that case are tested in `ow-inventory`'s `weapon_material_tests.rs`).
 

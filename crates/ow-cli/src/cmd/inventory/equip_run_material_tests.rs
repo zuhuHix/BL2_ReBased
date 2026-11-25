@@ -49,6 +49,7 @@ fn package() -> Vec<u8> {
     let weapon_type = t.class("ToyWeaponType", object);
     t.prop_tail("Class", weapon_type, "MaterialClass", 0, &ints(&[object, interface]));
     let material = t.class("ToyMaterialInstance", object);
+    t.prop("Object", material, "Parent", 0, material);
     let part = t.class("ToyMaterialPart", object);
     t.prop("Object", part, "Material", 0, material);
     let holder = t.class("ToyPartHolder", object);
@@ -98,6 +99,33 @@ fn startup() -> Vec<u8> {
     payload.extend_from_slice(&t.none);
     t.p.add_export(part, "ToyPart_Broken", payload);
     t.p.add_export(material, "ToyMati_Cut", ints(&[0]));
+    // A two-level Startup chain: `ToyPart_Chain` names `ToyMati_C0`, whose Parent is `ToyMati_C1`, whose Parent is
+    // `ToyMati_C2` (no Parent).
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Chain", payload);
+    for (i, name) in ["ToyMati_C0", "ToyMati_C1"].into_iter().enumerate() {
+        let mut payload = ints(&[0]);
+        payload.extend(t.p.object_tag("Parent", next + 2 + i as i32));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(material, name, payload);
+    }
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(material, "ToyMati_C2", payload);
+    // A chain that leaves Startup: `ToyPart_Leave` names `ToyMati_L0`, whose Parent is `WillowGame.ToyMati_Local`.
+    let local = t.p.add_import("WillowGame", "ToyMaterialInstance", willow, "ToyMati_Local");
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Leave", payload);
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Parent", local));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(material, "ToyMati_L0", payload);
     // `ToyHolder_0` names `ToyPart_Mat`, so the part is a store handle not loaded yet when reached through it.
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Part", part_mat));
@@ -182,9 +210,10 @@ fn off_loads_the_material_part_s_material_and_logs_it() {
     preload_material_part_material(&mut x.vm, weapon).unwrap();
     assert!(!x.vm.defs.is_unloaded(&x.vm.space, material), "loaded");
     let lines = x.lines();
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(lines[0].contains("Startup.ToyMati_0") && lines[0].contains("UNVERIFIED stand-in"), "{}", lines[0]);
     assert!(lines[1].ends_with("Startup.ToyMati_0: loaded"), "{}", lines[1]);
+    assert!(lines[2].contains("the parent chain ends at Startup.ToyMati_0 (no Parent)"), "{}", lines[2]);
     let (before, n) = (x.counts(), x.vm.log.len());
     preload_material_part_material(&mut x.vm, weapon).unwrap();
     assert_eq!((x.counts(), x.vm.log.len()), (before, n), "already loaded: nothing");
@@ -343,4 +372,48 @@ fn an_out_of_family_material_class_is_skipped_with_a_line() {
     assert!(lines[1].ends_with("the class code of Engine.MaterialInstanceConstant: loaded"), "{}", lines[1]);
     assert!(lines[2].contains("skipped Engine.ToyNotMIC"), "{}", lines[2]);
     assert!(lines.iter().all(|l| !l.contains("the class code of Engine.ToyNotMIC")), "{lines:?}");
+}
+
+/// The hub's ruling on #712's parent chain: a two-level Startup chain loads both parents, logged, and ends with a line
+/// at the last one.
+#[test]
+fn a_startup_parent_chain_loads_each_parent() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Chain");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let parent = |x: &Fx, o: ObjRef| match ow_inventory::equip::read_prop(&x.vm, o, "Parent") {
+        Some(Value::Object(Some(p))) => p,
+        other => panic!("Parent: {other:?}"),
+    };
+    let c0 = x.material_of(part);
+    let c1 = parent(&x, c0);
+    let c2 = parent(&x, c1);
+    for o in [c0, c1, c2] {
+        assert!(!x.vm.defs.is_unloaded(&x.vm.space, o), "loaded");
+    }
+    let lines = x.lines();
+    assert_eq!(lines.len(), 7, "{lines:?}");
+    assert!(lines[2].contains("parent Startup.ToyMati_C1 (Startup export"), "{}", lines[2]);
+    assert!(lines[3].ends_with("parent Startup.ToyMati_C1: loaded"), "{}", lines[3]);
+    assert!(lines[5].ends_with("parent Startup.ToyMati_C2: loaded"), "{}", lines[5]);
+    assert!(lines[6].contains("the parent chain ends at Startup.ToyMati_C2 (no Parent)"), "{}", lines[6]);
+}
+
+/// A parent that is not a Startup export stops the walk with a line, and is not loaded.
+#[test]
+fn a_parent_outside_startup_stops_the_walk() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Leave");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let l0 = x.material_of(part);
+    let local = match ow_inventory::equip::read_prop(&x.vm, l0, "Parent") {
+        Some(Value::Object(Some(p))) => p,
+        other => panic!("Parent: {other:?}"),
+    };
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, local), "the WillowGame parent is not loaded");
+    let lines = x.lines();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[2].contains("the parent chain stops at WillowGame.ToyMati_Local (WillowGame export"), "{}", lines[2]);
 }
