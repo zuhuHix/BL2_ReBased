@@ -149,9 +149,13 @@ struct Setup {
     prebound: bool,
     /// Whether `AchievementUnlockData.IntData` is declared with the wrong type.
     mistyped: bool,
+    /// COLD-CLASS-AUDIT: `GlobalsDefinition` left cold (its layout through the code index, its code not loaded, its
+    /// object allocated without a lookup).
+    cold_definition: bool,
 }
 
-const OFF: Setup = Setup { mode: ParityMode::Off, client: Client::Record, globals: true, prebound: false, mistyped: false };
+const OFF: Setup =
+    Setup { mode: ParityMode::Off, client: Client::Record, globals: true, prebound: false, mistyped: false, cold_definition: false };
 
 fn fx_with(setup: Setup) -> Fx {
     let Setup { mode, client, .. } = setup;
@@ -171,7 +175,12 @@ fn fx_with(setup: Setup) -> Fx {
     .unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode)
         .with_stub_policy(StubPolicy::refuse_all());
-    for c in ["WillowGame.WillowGlobals", "WillowGame.GlobalsDefinition", "WillowGame.WillowPlayerController"] {
+    let warm: &[&str] = if setup.cold_definition {
+        &["WillowGame.WillowGlobals", "WillowGame.WillowPlayerController"]
+    } else {
+        &["WillowGame.WillowGlobals", "WillowGame.GlobalsDefinition", "WillowGame.WillowPlayerController"]
+    };
+    for c in warm {
         vm.find_class(c).unwrap();
     }
     let calls = Rc::new(RefCell::new(Vec::new()));
@@ -211,7 +220,15 @@ fn fx_with(setup: Setup) -> Fx {
     }
     crate::globals::register(&mut vm).unwrap();
     let globals = make(&mut vm, "WillowGame.WillowGlobals");
-    let gd = make(&mut vm, "WillowGame.GlobalsDefinition");
+    let gd = if setup.cold_definition {
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, "WillowGame.GlobalsDefinition").unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        assert!(!vm.class_code_loaded(c), "GlobalsDefinition starts cold");
+        ow_vm::interp::instantiate_from_defaults(&mut vm, c).unwrap()
+    } else {
+        make(&mut vm, "WillowGame.GlobalsDefinition")
+    };
     let pc = make(&mut vm, "WillowGame.WillowPlayerController");
     if setup.globals {
         query.borrow_mut().set_globals(globals);
@@ -504,4 +521,20 @@ fn reference_binds_nothing_and_a_bound_key_is_kept() {
     x.set_rows(&[(1, 0, "", 1)]);
     assert_eq!(x.unlock(1, "", 1, NONE).unwrap(), Value::Bool(true), "the earlier binding answers");
     assert!(x.calls().is_empty());
+}
+
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the read-only "no match" answer with the globals
+/// definition's class cold. Ignored: two code loads happen before the answer false; by reading, they are step 1's
+/// `globals_definition`, whose `find_class` of `GearboxGlobalsDefinition` and `GlobalsDefinition` loads their cold
+/// code.
+#[test]
+#[ignore = "finding: UnlockAchievementIfConditionsMet's globals_definition find_class loads cold class code on its read-only path (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
+fn no_match_with_a_cold_globals_definition_loads_no_code() {
+    let mut x = fx_with(Setup { cold_definition: true, ..OFF });
+    x.set_rows(&[(16, 7, "", 20)]);
+    let gd_class = x.vm.space.heap.get(x.gd).unwrap().class;
+    assert!(!x.vm.class_code_loaded(gd_class), "the globals definition's class is still cold before the call");
+    let before = x.vm.class_code_loads();
+    assert_eq!(x.unlock(16, "", 1, GREATER).unwrap(), Value::Bool(false));
+    assert_eq!(x.vm.class_code_loads(), before, "no class code loaded on the read-only path");
 }
