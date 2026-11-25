@@ -4,9 +4,9 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **ANALYST-PICKUP-TOUCH-TRACE-FILTER (2026-11-25, pc-hummer, docs only, on docs/native-pickup-touch-trace-filter
 from main 3aaabe97):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_PICKUP_TRACE.md section 3.1:
-`DroppedPickup` and `WillowPickup` keep `Actor`'s trace filter, so a pickup's touch line does not test its own
-primitives. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in
-game.
+`DroppedPickup` and `WillowPickup` keep `Actor`'s trace filter, so a touch line does not test another pickup on
+its segment (link 7's decoy). No code changed, so no measured number moved; the slice gate was not run for this
+lane. UNVERIFIED in game.
 
 **ANALYST-DEFERRED-REATTACH-OWNER (2026-11-25, pc-hummer, docs only, on docs/native-deferred-reattach-owner from
 main ce76c5f8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1: the deferred

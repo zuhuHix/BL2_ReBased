@@ -13,8 +13,14 @@ bounds check changed.
 - **Findings** (UNVERIFIED in game):
   - the per-actor filter's slot is identified by its distinct `Actor`, `Pawn`, `Volume` and `InterpActor` bodies;
   - `DroppedPickup` and `WillowPickup` keep `Actor`'s body;
-  - with the touch's flags (no bit 16) and the pickup's `bWorldGeometry` clear, a pickup's own primitives are not
-    tested by its touch line;
+  - with the touch's flags (no bit 16) and `bWorldGeometry` clear, another pickup on the segment (link 7's decoy)
+    is not tested. The touched pickup is the source and was already excluded;
   - `KActor` has its own body there, with the mover row's tests.
 - **Proposed Off answer:** two exact-class `Row::Actor` entries in `trace_filter::ROWS`. Tests listed.
+- **Review r1 (#711):**
+  - the blocker is the other pickup (the decoy), not the source, which section 2's walker excludes before the rows;
+  - Maya is dropped by the `Pawn` row;
+  - 8902 has no bit 16, and test 5 is fixed;
+  - the class-default read is cited;
+  - tests 0 to 6 cover the before-the-rows refusal, one result per setup and the source exclusion.
 - **Clean room:** a different lane implements this note.
