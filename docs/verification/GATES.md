@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-HOOK1-INTERFACE (2026-11-25, pc-hummer, docs only, on docs/native-hook1-interface from main e4d383f2):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 8: hook 1 is the simple-anim cache
+(`ISimpleAnimPlayer`, asked of the owner by fit), not a gear-likeness step. For Maya it writes nothing, as the
+port already answers. No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game.
+
 **ANALYST-PSC-SETCOLORPARAMETER (2026-11-25, pc-hummer, docs only, on docs/native-psc-setcolorparameter from main
 4464e814):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PSC_SET_COLOR_PARAMETER.md: link 8's next native
 updates or appends one `InstanceParameters` entry and touches no render state. No code changed, so no measured

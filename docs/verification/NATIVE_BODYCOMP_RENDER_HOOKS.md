@@ -39,6 +39,8 @@ between hooks 1 and 2.
   to refresh the gear likeness: render-side, not read.
 - **Reads:** the made object's class (its interfaces). **Writes:** nothing for a non-implementer; for an
   implementer, not read.
+- *Superseded 2026-11-25 by section 8: the interface is `ISimpleAnimPlayer`, asked of the owner (by fit), and the
+  routine is `CacheSimpleAnims(owner, the made skeletal component)`.*
 
 ### Hook 2: the mode-0 owner-no-see setting
 
@@ -86,7 +88,8 @@ is `UsingFirstPersonCamera`, not `IsLocalPlayerController`.
 Links 1, 3, 4, 5, 13 and 14 meet the hooks first on Maya's attachment 0, her made `Mesh` (a `SkeletalMeshComponent`,
 mode 0). Links 3, 4, 5, 13 and 14 are blocked behind link 1, so each needs what link 1 needs:
 - **Hook 1:** an Engine `SkeletalMeshComponent` does not implement the WillowGame interface (by its class tables;
-  checkable read-only), so nothing happens.
+  checkable read-only), so nothing happens. *(Superseded 2026-11-25 by section 8: the owner is asked, and for Maya
+  the cache finds no node and an empty list, so nothing happens.)*
 *Superseded by section 6 (2026-11-25):* the pawn test is `IsPlayerPawn`, the controller test
   `UsingFirstPersonCamera`; the reading below is historical.
 - **Hook 2** (the hub's ruling on #622: the unidentified pawn test is `NotRead` whenever it would decide). Her
@@ -114,6 +117,7 @@ the stand-in, they may stop earlier, at hook 2's pawn test or hook 3's array che
 The hub's rule (19:58Z, #529): a hook answers "nothing" in Off only when it writes no field the script or a slice step
 reads. #605's pattern keeps a `LayerAbsent` behind a harness input (an empty `SceneLayer` service) where the port has
 no layer.
+- *Superseded 2026-11-25 by section 8.1 (hook 1 is the simple-anim cache).*
 - **Hook 1: a real answer for non-implementers; `LayerAbsent` for implementers.** The interface test is read and
   checkable, and its "no" writes nothing, so Off answers it. An implementer's refresh is not read and is render-side.
   It stays `NotYet { LayerAbsent }`, "InitializeBodyComposition: the body's rendering hooks (the gear-likeness
@@ -182,7 +186,8 @@ the planners; the writes call the apply side with the plan. The existing natives
 behaviour change.
 
 **Preflight, in this order** (write-free, load-free, RNG-free; reads with `vm.space.prop` / `vm.space.read`):
-1. **Hook 1** (before the `CustomHead` validation):
+1. **Hook 1** (before the `CustomHead` validation). *Superseded 2026-11-25 by section 8.1: the owner, not the made
+   class, is asked for `ISimpleAnimPlayer`, and the `GEAR_*` refusals go.*
    - the engine flags: taken as allowing (the hub's ruling on #529);
    - `WillowGame.IGearLikenessConsumer` resolved read-only (`classes.by_path`, a defined class), else
      `NotYet { NotRead }`, "the gear-likeness interface not resolved at set-up";
@@ -494,16 +499,120 @@ causes no class-code load:
 
 Section 4's test 10 (the array check's `NotRead` for any mesh component) is replaced by tests 1 and 4.
 
+## 8. Amendment (2026-11-25): hook 1 is the simple-anim cache, not a gear-likeness step
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-HOOK1-INTERFACE (decision 2026-11-25-NNN), analyst only: **another
+lane implements this section.** Raw output stays under ignored `local/analysis/hook1/`. **Every rule here is UNVERIFIED
+in the running game.**
+
+**Why.** While checking which of Maya's component classes implement `IGearLikenessConsumer`, lane F found that the
+interface hook 1 asks for is registered under another name. Section 1 had read the interface's package and taken its
+name by fit. This section reads the name, the object asked and what the routine does.
+
+**Evidence.**
+- Ghidra 12.1.4 headless, read-only, under the machine lock:
+  - hook 1 again, in the routine section 1 found;
+  - the interface lookup's class registration, which names **`ISimpleAnimPlayer`** in `WillowGame`;
+  - the routine hook 1 then calls, and its other callers.
+- One of those callers is the exec of the script native `WillowAnimNode_Simple.CacheSimpleAnims(AnimPlayer,
+  SkelMesh)`. It passes the script's `ISimpleAnimPlayer` argument and the `SkeletalMeshComponent` argument straight
+  to it. So **the routine is `CacheSimpleAnims`**, with the arguments (player, mesh).
+- Three other routines of the same shape call the lookup too. They are by fit the matching "component removed" hooks,
+  and they call the routine `UncacheSimpleAnims` uses. Which classes own them was not read.
+- The routine collects nodes through a class registration that names `WillowAnimNode_Simple`.
+- **Interface tables in the packages** (each native class that implements a native interface carries a
+  `VfTable_I<Interface>` property):
+  - `VfTable_IISimpleAnimPlayer` is on `WillowPawn`, `WillowInteractiveObject` and `WillowPopulationPoint` only. Each
+    of those also declares `SimpleAnimInfo` and `SimpleAnimState`;
+  - `VfTable_IIGearLikenessConsumer` is on `WillowPawn`, `PlayerStandIn` and `WillowProjectile`;
+  - neither `CustomSkeletalMeshComponent` nor `GearLikenessMeshComponent` carries any interface table.
+- `ow-package --exports` of `GD_Siren_Streaming_SF.upk` lists the 70 subobjects of Maya's tree
+  `GD_PlayerShared.Character.AnimTree_Player` (her `Mesh` template's `AnimTreeTemplate`). **None is a
+  `WillowAnimNode_Simple`.**
+- `ow-package --def-dump GD_Siren_Streaming.Pawn_Siren`: `SimpleAnimInfo` empty, `SimpleAnimState` 0.
+
+**Which object is asked** (by fit, high). The made object is first cast to `SkeletalMeshComponent`, and that cast is
+the routine's mesh argument. No `SkeletalMeshComponent` class carries the `ISimpleAnimPlayer` table, so the player
+must be the **owner**: the pawn, whose class implements it. The register that carries the asked object was lost in the
+decompile, so this is a fit, not a read. It is the only reading under which the call can do anything.
+
+**Hook 1, in order** (this replaces section 1's "Hook 1: the gear-likeness step"):
+1. **Gate:** the two engine-wide flags, still not identified, taken as allowing (the hub's ruling on #529);
+2. the made object, cast to `SkeletalMeshComponent`. **Not one:** nothing;
+3. the owner, as an `ISimpleAnimPlayer`. **Not an implementer:** nothing;
+4. **`CacheSimpleAnims(owner, mesh)`:**
+   1. the owner hands over its simple-anim list (`SimpleAnimInfo`: entries of `AnimName`, `Tree` and `Nodes`) and its
+      state bits (by fit, `SimpleAnimState`);
+   2. the mesh collects every `WillowAnimNode_Simple` node of its animation tree;
+   3. for each node, its key is chosen: its `LinkTree` and `LinkName` when those are set, otherwise its own tree and
+      `SimpleAnimName` (by fit). The entry with that key is found in the owner's list, or added. The node is appended
+      to the entry's `Nodes`. When the entry's index is below 32 and its bit is set in the state, the node is started
+      (a node virtual, by fit its play);
+   4. then, for every entry of the owner's list, exactly one node is marked dominant (by fit `bDominant`, the third
+      bool of the node). It is the first node with one field set (not identified), else the first node. The others are
+      cleared.
+
+**What Maya takes.**
+- Her made skeletal components (attachments 0, 1, 2 to 6, 9 and 12) pass steps 2 and 3: she is a `WillowPawn`.
+- Her `Mesh`'s tree has no `WillowAnimNode_Simple`, so step 4.2 collects nothing from attachment 0.
+- Her list is empty, so step 4.4 marks nothing. Hook 1 writes nothing for her attachment 0.
+- Her other made skeletal templates (attachment 1's and the seven gear-likeness ones) have neither `AnimTreeTemplate`
+  nor `Animations` set (the same `--def-dump`). So they collect nothing either, and **hook 1 writes nothing for any of
+  her components.**
+- **So the port's current answer for her ("nothing") is right, for the wrong reason.** The port asks the made class
+  for `IGearLikenessConsumer`, and no component class implements it.
+
+### 8.1 The Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces `render_hooks::gear_likeness` and its `GEAR_*` refusals (section 4,
+hook 1). It is read only, before any write, with no load.
+1. The engine flags: taken as allowing (unchanged).
+2. The made class is not a `SkeletalMeshComponent`: nothing.
+3. `WillowGame.ISimpleAnimPlayer` resolved read-only, else `NotYet { NotRead }`, "the simple-anim interface not
+   resolved at set-up". Then whether the **owner's** class implements it, with the same read-only interface reading and
+   stand-ins that `gear_likeness` uses today. An unresolved entry is `NotYet { NotRead }`. No: nothing.
+4. **An implementer:**
+   - **the nodes:** the `WillowAnimNode_Simple` nodes of the tree the attach will give the component, as the
+     tree-copy plan lists them. A component with no tree has none. A node list the plan cannot give without a load is
+     the plan's own refusal;
+   - **no nodes, and the owner's `SimpleAnimInfo` empty:** nothing;
+   - **any node, or a non-empty `SimpleAnimInfo`:** `NotYet { NotRead }`, "the simple-anim cache (CacheSimpleAnims)
+     with nodes or a non-empty list". The node key's field names, the start virtual and the dominance field are fits,
+     not reads.
+5. Each field read is declared with its kind (`SimpleAnimInfo` an array of structs), else `VmError::Script`.
+
+**What link 1 would meet** (a prediction, not a run): no change. Attachment 0 passes hook 1 with "nothing", as now.
+
+### 8.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged:
+1. a made `SkeletalMeshComponent` on a toy `WillowPawn` with no tree and an empty `SimpleAnimInfo`: nothing;
+2. the same with a tree holding a toy `WillowAnimNode_Simple` node: the cache's `NotRead`, before any write;
+3. the same with no node but one `SimpleAnimInfo` entry: the cache's `NotRead`;
+4. an owner class that does not implement `ISimpleAnimPlayer` (a toy `Engine.Actor`), with a `WillowAnimNode_Simple`
+   node: nothing;
+5. a made component that is not a `SkeletalMeshComponent` (a `CylinderComponent`), on a `WillowPawn` with a non-empty
+   list: nothing;
+6. a made class that implements `IGearLikenessConsumer` (a toy) under a non-implementing owner: nothing. The old
+   `GEAR_REFRESH` refusal is gone;
+7. `ISimpleAnimPlayer` not defined at set-up: the not-resolved `NotRead`;
+8. `SimpleAnimInfo` declared with the wrong kind: `VmError::Script`;
+9. a Maya-shaped fixture (a `WillowPlayerPawn` owner, a skeletal `Mesh` whose tree has no simple node): hook 1 gives
+   nothing, and the build reaches hook 2;
+10. Reference: unchanged.
+
 ## Open questions
 
 1. **UNVERIFIED:** every rule above.
 2. **Not identified:** the two engine flags of hook 1. Hook 3's array check is identified in section 7
    (`StaticMeshComponent.LODData`, by fit).
    Hook 2's pawn virtual is identified in section 6 (`IsPlayerPawn`).
-3. **By fit:** the interface name (`IGearLikenessConsumer`), hook 2's controller test (corrected in section 6:
+3. **By fit:** the object hook 1 asks (the owner; section 8 reads the interface's name, `ISimpleAnimPlayer`, which
+   replaces the fitted `IGearLikenessConsumer`), hook 2's controller test (corrected in section 6:
    it is `UsingFirstPersonCamera`, by its exec),
    and hook 3's `bAcceptsLights` and `LightingChannels` fields (the constant shift of #598).
-4. **Not read:** the gear-likeness refresh, and hook 3's lighting-channel virtual (static mesh components only).
+4. **Not read:** in the simple-anim cache, the node key's fields, the start virtual and the dominance field (fits,
+   section 8), and hook 3's lighting-channel virtual (static mesh components only).
 5. **Read for Maya (section 7):** her made mesh templates have `bAcceptsLights` true. **Not read:** whether her
    spawned pawn's `LightEnvironment` is the archetype's component or an instanced copy.
 
