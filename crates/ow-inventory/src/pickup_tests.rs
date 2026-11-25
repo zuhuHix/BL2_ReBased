@@ -313,3 +313,49 @@ fn the_definition_natives_bind_on_the_engine_class() {
         assert!(x.vm.has_native(key), "{key}");
     }
 }
+
+// ---- COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY) ---------------------------------------------------------
+
+/// An object of the class at `path`, its layout defined through the code index and its code NOT loaded.
+fn cold(x: &mut Fx, path: &str) -> (ObjRef, ow_object::ids::ClassId) {
+    let vm = &mut x.vm;
+    let (code, store) = vm.defs.code_mut();
+    let key = code.find_class(store, path).unwrap();
+    let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+    assert!(!vm.class_code_loaded(c), "{path} starts cold");
+    (vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap(), c)
+}
+
+/// Code loads, #518's three counters and the name table.
+fn marks(vm: &Vm) -> (u64, u64, u64, u64, usize) {
+    (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+/// `GetInventoryPawn` with a pawn whose class's code is cold (and the player pawn class not warmed): the refusal for
+/// a player pawn subclass. Ignored: the native looks the player pawn class up with `find_class`, which loads its code.
+#[test]
+#[ignore = "finding: GetInventoryPawn's find_class(WillowPlayerPawn) loads cold class code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
+fn get_inventory_pawn_on_a_cold_pawn_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let controller = x.obj("WillowGame.WillowPlayerController");
+    let (pawn, _) = cold(&mut x, "WillowGame.ToyPlayerPawnSubclass");
+    x.set(controller, "Pawn", Value::Object(Some(pawn)));
+    let before = marks(&x.vm);
+    let r = x.call("WillowGame.WillowPlayerController.GetInventoryPawn", controller, vec![]);
+    assert!(not_read(r).contains("open question 4"));
+    assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
+}
+
+/// `GetPickupableInventoryDefinition` with an inventory whose class's code is cold. Ignored: the native looks
+/// `GetInventoryDefinition` up with `find_method` on the inventory's class, which loads its code.
+#[test]
+#[ignore = "finding: GetPickupableInventoryDefinition's find_method loads the inventory class's cold code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
+fn the_definition_query_on_a_cold_inventory_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    let (item, _) = cold(&mut x, "Engine.ToyInheritingInventory");
+    x.set(pickup, "Inventory", Value::Object(Some(item)));
+    let before = marks(&x.vm);
+    let _ = x.call(DEFINITION_OF, pickup, vec![]);
+    assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
+}

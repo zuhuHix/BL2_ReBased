@@ -537,3 +537,25 @@ fn a_class_under_an_outer_compares_as_the_class() {
     ));
     assert_eq!(x.vm.space.live(nested).count(), 0, "nothing was loaded");
 }
+
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the not-implementing refusal of `LoadPlayerPawnDataAsync`
+/// with a context whose class has a layout and no loaded code (and the interface class never looked up): the refusal
+/// should load no class code and leave #518's counters unchanged. Ignored: two code loads happen before the refusal;
+/// by reading, the native's `find_class` of the interface class is the one step before it that loads code.
+#[test]
+#[ignore = "finding: LoadPlayerPawnDataAsync's find_class(IStreamingDataEvent) loads cold class code before its refusal (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
+fn load_async_with_a_cold_context_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let manager = x.make("WillowPlayerPawnDataManager");
+    x.load("GearboxFramework.ToyPawn");
+    let vm = &mut x.vm;
+    let (code, store) = vm.defs.code_mut();
+    let key = code.find_class(store, "GearboxFramework.ToyBystander").unwrap();
+    let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+    assert!(!vm.class_code_loaded(c), "starts cold");
+    let bystander = vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap();
+    let marks = |vm: &ow_vm::api::Vm| (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+    let before = marks(&x.vm);
+    assert!(not_read(&x.load_async(manager, "GearboxFramework.ToyPawn", Some(bystander), None)));
+    assert_eq!(marks(&x.vm), before, "no code load, write, draw or store load");
+}

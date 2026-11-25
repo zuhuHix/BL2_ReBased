@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**COLD-CLASS-AUDIT-WORLD-INVENTORY (2026-11-25, zuhuPC Linux, on integration/2026-11-25-c15 25425bb):** AI-assisted
+(Claude Code, Opus 5.5). Tests only. 6 cold-class tests: 1 passes (`pickup_targeting`'s pawn test), 5 are `#[ignore]`d
+findings where a write-free path loads cold code (`GetInventoryPawn`, `GetPickupableInventoryDefinition`,
+`UnlockAchievementIfConditionsMet`'s no-match answer, `GetDataStoreClient`'s preflight, `LoadPlayerPawnDataAsync`'s
+refusal). `cargo test --workspace -j 4`: 3,488 passed / 4 failed (the expected Linux N1 tests) / 60 ignored (ow-cli
+re-run with the system TMPDIR: `the_parity_file_stays_under_local` fails when TMPDIR points into `local/`).
+`crate_edges_test.py` OK. No real-game run.
+
 **SKELMESH-REFSKELETON (2026-11-25, pc-hummer, on fix/rust-skelmesh-refskeleton, stacked on #673 fbfcd3d3):**
 AI-assisted (Claude Code, Opus 5.5). The reference skeleton is read from the mesh's package export when no UModel
 `.psk` answers (fitted bone layout, structural oracles; UNVERIFIED).

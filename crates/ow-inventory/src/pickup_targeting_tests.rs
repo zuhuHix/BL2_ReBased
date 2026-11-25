@@ -833,3 +833,25 @@ fn a_definition_store_not_yet_keeps_its_variant() {
         e => panic!("{e}"),
     }
 }
+
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the pawn test's refusal with a pawn whose class has a
+/// layout and no loaded code (the fixture's own classes are warm, as the HUD's world has them): it reads fields only,
+/// so it loads no class code, and leaves #518's counters unchanged. (The name table is not compared: `suspended`
+/// interns "Dead" on each pass, a side finding of the audit, reported apart from the code loads.)
+#[test]
+fn the_pawn_test_on_a_cold_pawn_class_loads_no_code() {
+    let mut x = fx();
+    let _p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let vm = &mut x.vm;
+    let (code, store) = vm.defs.code_mut();
+    let key = code.find_class(store, "WillowGame.ToyPlayerPawnSubclass").unwrap();
+    let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+    assert!(!vm.class_code_loaded(c), "starts cold");
+    let other = vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap();
+    x.set(x.controller, "Pawn", Value::Object(Some(other)));
+    let marks = |vm: &Vm| (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+    let before = marks(&x.vm);
+    let n = not_yet(x.tick());
+    assert!(n.what.contains("open question 1"), "{n}");
+    assert_eq!(marks(&x.vm), before, "no code load, write, draw or store load");
+}
