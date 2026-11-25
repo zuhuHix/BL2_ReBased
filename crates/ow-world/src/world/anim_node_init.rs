@@ -188,25 +188,33 @@ fn owner_not_read(what: String) -> VmError {
     NotYet::not_read(what, OWNER_RECORD).into()
 }
 
+/// The failed-target refusal's text (review r1 of #667, item 3; a port policy, UNVERIFIED).
+pub fn owner_target_missing(class: &str) -> String {
+    format!(
+        "AnimNodeSpecialMoveBlend: the interface table of {class} has an entry whose class lookup found nothing (its \
+         target was never read, so it is not taken as a no)"
+    )
+}
+
 /// Rule 7's owner test, read-only (NATIVE_SPECIALMOVE_OWNER.md section 4.1; lane IMPL-SPECIALMOVE-OWNER): whether the
 /// owner's class implements [`SPECIAL_MOVE_INTERFACE`], one outcome per case, in the note's order. Nothing is
 /// written, loaded, drawn or interned, and no interface entry is resolved.
 /// - **O1**, the interface class not loaded: `NotRead` ([`OWNER_INTERFACE_NOT_LOADED`]);
-/// - a class that is the interface or derives from it in the class table: yes (a port choice: the note names this yes
-///   under O3 only; it is taken first here, as `Vm::plain_interface_read_only` takes it, since the class table alone
-///   proves it read-only; a package class never derives from an interface class, so only hand classes meet it);
-/// - **O2**, no code layer: `LayerAbsent`, as `Vm::plain_interface_read_only` gives it;
-/// - **O3**, the owner's class has no code key: a hand-defined class implements nothing, so no, unless the chain meets
-///   an engine-native stand-in (its `NotYet`), through `Vm::plain_interface_read_only`;
+/// - **O2**, no code layer: `LayerAbsent`, the text `Vm::plain_interface_read_only` gives, before any ancestry is
+///   consulted;
+/// - **O3**, the owner's class has no code key: a class derived from the interface in the class table is a yes;
+///   otherwise it implements nothing, a settled no, unless the chain meets an engine-native stand-in
+///   (`Vm::is_child_checked`'s `NotYet`; its boolean is not taken as an interface answer);
 /// - **O3'**, only the interface has no code key: `NotRead` ([`OWNER_INTERFACE_NO_KEY`]);
 /// - **O4**, a body on the owner's chain or the interface's not decoded, tested directly: `NotRead`
 ///   ([`owner_not_decoded`]); the structural fallback is not taken;
 /// - then `implements_resolved_chain` alone: **O5**, an unresolved entry and no resolved yes, `NotRead`
-///   ([`owner_not_resolved`], naming the class it names); **O6**, a resolved yes; **O7**, a resolved no, the stand-in
-///   check through `Vm::plain_interface_read_only`.
+///   ([`owner_not_resolved`], naming the class it names); **O6**, a resolved yes; **O7**, a resolved no. Before O7's
+///   no: an entry whose lookup found no class (cached as "resolved to nothing") is `NotRead`
+///   ([`owner_target_missing`], review r1 of #667, a port policy), then the stand-in check as in O3.
 ///
-/// `Ok(true)` is a yes (O6, or the class table); `Ok(false)` a settled no (O3, O7). Every outcome is UNVERIFIED in
-/// the running game.
+/// `Ok(true)` is a yes (O3's ancestry, O6); `Ok(false)` a settled no (O3, O7). Every outcome is UNVERIFIED in the
+/// running game.
 pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
     #[cfg(test)]
     if let Some(answer) = OWNER_ANSWER.with(std::cell::Cell::get) {
@@ -216,17 +224,26 @@ pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
     let Some(iface) = vm.space.classes.by_path(SPECIAL_MOVE_INTERFACE) else {
         return Err(owner_not_read(OWNER_INTERFACE_NOT_LOADED.to_string()));
     };
-    if vm.space.classes.is_child_of(class, iface) {
-        return Ok(true);
-    }
     let code = vm.defs.code();
     if code.classes().next().is_none() {
-        // O2: the read-only plain answer's own refusal.
-        return vm.plain_interface_read_only(owner, iface).map(|a| a.is_some());
+        // O2, with the plain read-only answer's own text and record.
+        return Err(NotYet::layer_absent(
+            format!(
+                "the interface table of {}: the world has no code layer (no class export is loaded)",
+                class_path(vm, class)
+            ),
+            "the code layer (package class exports)",
+            ow_vm::api::DISPATCH_RECORD,
+        )
+        .into());
     }
     let Some(c) = code.key_of(class) else {
-        // O3: a hand-defined class; its stand-in check is the plain answer's.
-        return vm.plain_interface_read_only(owner, iface).map(|a| a.is_some());
+        // O3: a hand-defined class implements nothing, unless it derives from the interface in the class table.
+        if vm.space.classes.is_child_of(class, iface) {
+            return Ok(true);
+        }
+        vm.is_child_checked(class, iface)?;
+        return Ok(false);
     };
     let Some(i) = code.key_of(iface) else {
         return Err(owner_not_read(OWNER_INTERFACE_NO_KEY.to_string()));
@@ -237,8 +254,14 @@ pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
     }
     match code.implements_resolved_chain(c, i) {
         Ok(true) => Ok(true),
-        // O7: the stand-in check is the plain answer's (it reads the same resolved chain, and answers no).
-        Ok(false) => vm.plain_interface_read_only(owner, iface).map(|a| a.is_some()),
+        Ok(false) => {
+            if let Some(at) = code.interface_target_missing(c) {
+                return Err(owner_not_read(owner_target_missing(code.class(at).path.as_str())));
+            }
+            // O7: the stand-in check only (its boolean is not the interface answer).
+            vm.is_child_checked(class, iface)?;
+            Ok(false)
+        }
         Err(at) => Err(owner_not_read(owner_not_resolved(code.class(at).path.as_str()))),
     }
 }
@@ -262,7 +285,7 @@ fn declares_bool(vm: &Vm, class: ClassId, name: &str) -> bool {
 
 /// The preflight's check of one node (module documentation), reading `node` (a template node: the copy holds the same
 /// values) and `component`.
-fn check_node(vm: &Vm, component: ObjRef, node: ObjRef) -> Result<(), VmError> {
+fn check_node(vm: &Vm, component: ObjRef, node: ObjRef, owner: Option<ObjRef>) -> Result<(), VmError> {
     let (k, path) = kind(vm, node)?;
     // A, the base every implementation runs first.
     for name in ["bRelevant", "bJustBecameRelevant", "NodeTotalWeight", "NodeTickTag", "bCallScriptEventOnInit"] {
@@ -340,7 +363,10 @@ fn check_node(vm: &Vm, component: ObjRef, node: ObjRef) -> Result<(), VmError> {
                         }
                     }
                 }
-                if let Some(owner) = object_of(&read(vm, component, "Owner")?) {
+                // The declared field is checked on the component; the test runs on the owner the instance will have
+                // (review r1 of #667, item 1: an attach passes the actor, not the template's own `Owner`).
+                read(vm, component, "Owner")?;
+                if let Some(owner) = owner {
                     // The owner test's refusals (O1, O2, O3', O4, O5, a stand-in); a settled no leaves `SMI`.
                     owner_implements(vm, owner)?;
                 }
@@ -449,8 +475,9 @@ fn expand(vm: &Vm, node: ObjRef, out: &mut Vec<Step>) -> Result<(), VmError> {
 
 /// The preflight (module documentation): the steps for `order` (every node of the tick list, in order) and their
 /// checks. Every node a step initialises is checked, H's re-initialised children included, whether or not it is on the
-/// tick list (review r1 of #575, item 1).
-pub fn plan(vm: &Vm, component: ObjRef, order: &[ObjRef]) -> Result<(Vec<Step>, Vec<Build>), VmError> {
+/// tick list (review r1 of #575, item 1). `owner` is the owner the instance's component will have, which H's owner test
+/// asks (rule 7): the component's own `Owner` for a copy, the actor attached to for an attach (review r1 of #667).
+pub fn plan(vm: &Vm, component: ObjRef, order: &[ObjRef], owner: Option<ObjRef>) -> Result<(Vec<Step>, Vec<Build>), VmError> {
     let mut steps = Vec::new();
     for &n in order {
         steps.push(Step::Tick(n));
@@ -461,7 +488,7 @@ pub fn plan(vm: &Vm, component: ObjRef, order: &[ObjRef]) -> Result<(Vec<Step>, 
     for step in &mut steps {
         if let Step::Head(n, slot) = step {
             if checked.insert(*n) {
-                check_node(vm, component, *n)?;
+                check_node(vm, component, *n, owner)?;
             }
             // Every F head's build, planned on its own (the note's section 6, "Where it runs").
             if kind(vm, *n)?.0 == Kind::F {

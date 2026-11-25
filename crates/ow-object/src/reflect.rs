@@ -1022,6 +1022,15 @@ impl CodeIndex {
         unresolved.map_or(Ok(false), Err)
     }
 
+    /// The first class on `class`'s super chain with an interface entry resolved to nothing (its lookup found no class or
+    /// failed: `CodeIndex::implements` and [`CodeIndex::resolve_interfaces`] cache both as "resolved to nothing"), read
+    /// only; `None` when there is none (review r1 of #667, item 3: a read-only caller must not take such an entry as a
+    /// settled no).
+    pub fn interface_target_missing(&self, class: ClassKey) -> Option<ClassKey> {
+        self.super_chain(class)
+            .find(|c| self.classes[c.index()].interface_targets.iter().any(|t| matches!(t, Some(None))))
+    }
+
     /// Resolves every interface entry on the super chain of `class` not resolved yet, as [`CodeIndex::implements`]
     /// resolves one (a set-up step: a load, which the caller logs). Returns how many entries this call resolved.
     pub fn resolve_interfaces(&mut self, store: &mut PackageStore, class: ClassKey) -> usize {
