@@ -63,7 +63,7 @@ fn the_mesh_preload_loads_through_the_store_and_logs_attempt_then_outcome() {
     let mut x = fx();
     let class = x.vm.find_class("WillowGame.ToyMesh").unwrap();
     assert!(x.vm.space.live(class).next().is_none(), "nothing loaded before the preload");
-    preload_mesh(&mut x.vm, "WillowGame.ToyBody").unwrap();
+    preload_mesh(&mut x.vm, "WillowGame.ToyBody", "Maya's mesh").unwrap();
     let lines = harness_lines(&x.vm);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].starts_with("harness input: preload WillowGame.ToyBody (Maya's mesh; UNVERIFIED"), "{lines:?}");
@@ -75,11 +75,11 @@ fn the_mesh_preload_loads_through_the_store_and_logs_attempt_then_outcome() {
 #[test]
 fn a_mesh_no_package_holds_is_logged_and_skipped() {
     let mut x = fx();
-    preload_mesh(&mut x.vm, "WillowGame.Missing").unwrap();
+    preload_mesh(&mut x.vm, "WillowGame.Missing", "Maya's mesh").unwrap();
     let lines = harness_lines(&x.vm);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[1], "harness input: preload WillowGame.Missing: found nothing");
-    assert!(preload_mesh(&mut x.vm, "").is_err(), "an empty path is no object path");
+    assert!(preload_mesh(&mut x.vm, "", "Maya's mesh").is_err(), "an empty path is no object path");
 }
 
 #[test]
