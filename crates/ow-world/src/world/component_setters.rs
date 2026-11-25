@@ -27,6 +27,10 @@ pub const RECORD: &str = "docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md";
 /// The deferred reattach's two refusals.
 pub const REATTACH_OWNER: &str = "the deferred reattach: the owner's component update";
 pub const REATTACH_SCENE: &str = "the deferred reattach: the component's detach and reattach";
+/// The owner rule's refusal for an owner the store holds only as a handle (NATIVE_ATTACH_MESH_TO_PICKUP.md 2.1.1).
+pub const REATTACH_OWNER_NOT_LOADED: &str = "the deferred reattach: an owner the store has not loaded (a load is a write)";
+/// The owner flags the owner rule reads, by name, from the owner instance.
+pub const OWNER_FLAGS: [(&str, Want); 3] = [("bStatic", Want::Bool), ("bTickIsDisabled", Want::Bool), ("bDeleteMe", Want::Bool)];
 
 /// A data error of native `what`.
 pub fn bad(what: &str, message: impl Into<String>) -> VmError {
@@ -135,11 +139,38 @@ pub fn is_zero(v: &Value, what: &str) -> Result<bool, VmError> {
     }
 }
 
-/// The deferred reattach's preflight: `Owner` set is [`REATTACH_OWNER`]; then a `Scene` not zero is
-/// [`REATTACH_SCENE`]; both `NotYet { NotRead }`. Reads only.
-pub fn reattach_check(vm: &Vm, c: Slots<'_>, what: &str) -> Result<(), VmError> {
-    if object_of(&c.required(vm, "Owner", what)?, what)?.is_some() {
+/// The deferred reattach's owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER;
+/// UNVERIFIED in game), one rule for every caller:
+/// 1. the owner must be resident (not a store handle, not a stand-in with no slots), else
+///    [`REATTACH_OWNER_NOT_LOADED`] (`NotRead`), with nothing loaded;
+/// 2. its `bStatic`, `bTickIsDisabled` and `bDeleteMe` are read by name from the **instance**, each declared as a bool,
+///    else a data error naming it;
+/// 3. `bStatic` or `bTickIsDisabled` set, and `bDeleteMe` clear: [`REATTACH_OWNER`] (`NotRead`), whatever the owner's
+///    pending-kill and template-object states, which the port does not model here (it refuses on the side where the
+///    game may update);
+/// 4. otherwise: no refusal, and the caller writes as in the no-owner, no-scene case.
+///
+/// Reads only.
+pub fn owner_rule(vm: &Vm, owner: ObjRef, what: &str) -> Result<(), VmError> {
+    let obj = vm.space.heap.get(owner)?;
+    let full = u32::try_from(obj.slots.len()).ok() == vm.space.classes.get_layout(obj.class).map(|l| l.slot_count());
+    if vm.defs.is_unloaded(&vm.space, owner) || !full {
+        return Err(NotYet::not_read(REATTACH_OWNER_NOT_LOADED, RECORD).into());
+    }
+    schemas(vm, owner, &OWNER_FLAGS, what)?;
+    let flag = |name: &str| -> Result<bool, VmError> { bool_of(&Slots::of(owner).required(vm, name, what)?, name, what) };
+    if (flag("bStatic")? || flag("bTickIsDisabled")?) && !flag("bDeleteMe")? {
         return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
+    }
+    Ok(())
+}
+
+/// The deferred reattach's preflight: with `Owner` set, the [`owner_rule`]; with none, a `Scene` not zero is
+/// [`REATTACH_SCENE`] (`NotYet { NotRead }`). Reads only; `Owner` is read through the caller's slots, so a template
+/// plan sees the attach's stand-in.
+pub fn reattach_check(vm: &Vm, c: Slots<'_>, what: &str) -> Result<(), VmError> {
+    if let Some(owner) = object_of(&c.required(vm, "Owner", what)?, what)? {
+        return owner_rule(vm, owner, what);
     }
     if !is_zero(&c.required(vm, "Scene", what)?, what)? {
         return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
@@ -231,12 +262,14 @@ pub fn plan_light_environment(vm: &Vm, c: Slots<'_>, new: Option<ObjRef>) -> Res
         return Ok(LightPlan::Detached(value));
     }
     schemas(vm, o, &[("Owner", Want::Object)], LIGHT)?;
-    if object_of(&c.required(vm, "Owner", LIGHT)?, LIGHT)?.is_some() {
-        return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
-    }
-    schemas(vm, o, &[("Scene", Want::Struct)], LIGHT)?;
-    if !is_zero(&c.required(vm, "Scene", LIGHT)?, LIGHT)? {
-        return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
+    if let Some(owner) = object_of(&c.required(vm, "Owner", LIGHT)?, LIGHT)? {
+        // The same deferred reattach (section 6.2 step 4): the owner rule (lane IMPL-DEFERRED-REATTACH-OWNER).
+        owner_rule(vm, owner, LIGHT)?;
+    } else {
+        schemas(vm, o, &[("Scene", Want::Struct)], LIGHT)?;
+        if !is_zero(&c.required(vm, "Scene", LIGHT)?, LIGHT)? {
+            return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
+        }
     }
     schemas(vm, o, &[("PreviousLightEnvironment", Want::Object), ("bNeedsReattach", Want::Bool)], LIGHT)?;
     let previous = Value::Object(current);
