@@ -35,7 +35,10 @@ const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 ///   four);
 /// - `Skipped_0`: one whose `Profiles` tag says two elements and holds garbage, so the store skips it;
 /// - `Copy_0`: one whose `TemplateNode` names `LazyTemplate_0`, which loading `Copy_0` leaves an unloaded handle.
-fn package() -> Vec<u8> {
+///
+/// With `cdo`, also a class default `Default__WillowAnimNodeAimOffset` whose `Profiles` the store skips (review r1 of
+/// #737); and always `Inherit_0`, built over `Skipped_0` as its archetype with no `Profiles` tag of its own.
+fn package_with(cdo: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
         "Function",
@@ -95,7 +98,19 @@ fn package() -> Vec<u8> {
     let mut p = ints(&[0]);
     p.extend(t.p.array_tag("Profiles", 2, &ints(&[5])));
     p.extend_from_slice(&none);
-    t.p.add_export(willow, "Skipped_0", p);
+    let skipped = t.p.add_export(willow, "Skipped_0", p);
+    // Review r1 of #737: an export built over `Skipped_0` as its archetype, with no `Profiles` tag of its own.
+    let mut p = ints(&[0]);
+    p.extend_from_slice(&none);
+    let mut inherit = ow_package::testkit::Export::new(willow, "Inherit_0", p);
+    inherit.archetype = skipped;
+    t.p.add_export_with(inherit);
+    if cdo {
+        let mut p = ints(&[0]);
+        p.extend(t.p.array_tag("Profiles", 2, &ints(&[5])));
+        p.extend_from_slice(&none);
+        t.p.add_export(willow, "Default__WillowAnimNodeAimOffset", p);
+    }
     // Lane IMPL-AIMOFFSET-PROFILES: a `Profiles` decoded empty, and a node that tags none.
     let mut p = ints(&[0]);
     p.extend(t.p.array_tag("Profiles", 0, &[]));
@@ -126,9 +141,13 @@ impl Drop for Fx {
 }
 
 fn fx_in(mode: ParityMode) -> Fx {
+    fx_of(mode, false)
+}
+
+fn fx_of(mode: ParityMode, cdo: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-world-aimoffset-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let bytes = package();
+    let bytes = package_with(cdo);
     let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     for c in ["Engine.WillowAnimNodeAimOffset", "Engine.ToyPawn", "Engine.ToyMeshComponent", "Engine.ToyMesh"] {
@@ -493,15 +512,36 @@ fn a_reader_refusal_or_a_walk_mismatch_is_layer_absent() {
     }
 }
 
-/// A loaded definition whose `Profiles` decoded empty, or tags none, has an empty list: "no match", not the profiles
+/// A loaded definition whose own `Profiles` tag decoded empty has an empty list: "no match", not the profiles
 /// `LayerAbsent`, with no reader installed.
 #[test]
 fn a_decoded_empty_profile_list_is_no_match() {
     let mut x = fx();
     x.vm.space.names.intern("Unarmed");
-    for name in ["Decoded_0", "Untagged_0"] {
+    let node = x.export("Decoded_0");
+    x.nothing(|x| x.by_name(node, "Unarmed"));
+    x.nothing(|x| x.by_index(node, 0));
+}
+
+/// Review r1 of #737: an empty list the node's own export does not tag carries the value it was built over, which the
+/// store does not report, so it is the reader's "no Profiles tag" `LayerAbsent`, write-free: a node with no tag over
+/// the class default, one built over an archetype whose `Profiles` was skipped (the build does not carry the mark), and
+/// one over a class default whose `Profiles` was skipped (the mark stays on the class default).
+#[test]
+fn an_empty_list_the_node_does_not_tag_is_layer_absent() {
+    for (cdo, name) in [(false, "Untagged_0"), (false, "Inherit_0"), (true, "Untagged_0")] {
+        let mut x = fx_of(ParityMode::Off, cdo);
+        x.vm.space.names.intern("Unarmed");
         let node = x.export(name);
-        x.nothing(|x| x.by_name(node, "Unarmed"));
-        x.nothing(|x| x.by_index(node, 0));
+        let class = x.vm.space.heap.get(node).unwrap().class;
+        let profiles = x.vm.space.prop(class, "Profiles").unwrap();
+        assert!(!x.vm.defs.is_skipped(&x.vm.space, node, profiles), "{name}: the node itself is not marked");
+        if cdo {
+            let d = x.vm.defs.class_default(&mut x.vm.space, "Engine.WillowAnimNodeAimOffset").unwrap();
+            assert!(x.vm.defs.is_skipped(&x.vm.space, d, profiles), "the class default carries the mark");
+        }
+        let e = x.refusal(|x| x.by_name(node, "Unarmed"));
+        assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{name}: {e}");
+        assert!(e.what.starts_with(PROFILES) && e.what.contains("no Profiles tag"), "{name}: {}", e.what);
     }
 }

@@ -1909,7 +1909,9 @@ impl DefStore {
     /// Whether loading `obj` skipped its declared top-level property `prop`: the decoder logged "defaults: skipped"
     /// for it and left the class default in the slot (`DecodeState::skipped`; lane IMPL-AIMOFFSET-PROFILES). False for
     /// a property that decoded (empty included), one the export does not tag, and any object the store did not load.
-    /// Read only. Fields skipped inside a struct and undeclared tags are not tracked.
+    /// Read only. Fields skipped inside a struct and undeclared tags are not tracked. The mark describes the slot **as
+    /// loaded**: it is never cleared, and a later write to the slot (by script or a native) is not tracked (review r1
+    /// of #737). An export built over a non-default archetype does not inherit the archetype's marks.
     pub fn is_skipped(&self, w: &ObjectSpace, obj: ObjRef, prop: PropId) -> bool {
         w.heap.contains(obj) && self.handles.borrow().skipped.get(&obj).is_some_and(|props| props.contains(&prop))
     }
