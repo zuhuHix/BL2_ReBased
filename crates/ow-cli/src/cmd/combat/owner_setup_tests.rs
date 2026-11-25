@@ -97,15 +97,16 @@ fn the_set_up_turns_o5_into_the_packages_yes() {
     assert_eq!(
         lines[1],
         "harness input: set-up interface tables of GearboxFramework.ToyPawn for GearboxFramework.SpecialMoveInterface \
-         (the lookups loaded code: a write): yes, read from the packages' interface lists; 2 entries (every entry on the chain) resolved at set-up (a \
-         load; UNVERIFIED stand-in for the game having them resolved)"
+         (the lookups loaded code: a write): yes, read from the packages' interface lists; the pass covers every \
+         entry on the chain; 2 previously unresolved entries resolved at set-up (a load; UNVERIFIED stand-in for the \
+         game having them resolved)"
     );
     let before = counters(&vm);
     assert!(owner_implements(&vm, owner).unwrap(), "the owner test reads the resolved yes");
     assert_eq!(counters(&vm), before, "the owner test still writes and loads nothing");
     let (line, outcome) = owner_tables(&mut vm, c);
     outcome.unwrap();
-    assert!(line.ends_with("yes, read from the packages' interface lists; every entry on the chain already resolved"), "{line}");
+    assert!(line.ends_with("yes, read from the packages' interface lists; the pass covers every entry on the chain; none was left unresolved"), "{line}");
 }
 
 /// A class whose entries name only another interface: a no, read the same way; the owner test then gives the
@@ -119,7 +120,7 @@ fn the_set_up_reads_a_no() {
     special_move_owner_setup(&mut vm, Some(c)).unwrap();
     let line = vm.log.last().unwrap();
     assert!(line.contains("ToyPlain for GearboxFramework.SpecialMoveInterface: no, read from the packages'"), "{line}");
-    assert!(line.contains("1 entry (every entry on the chain) resolved at set-up"), "{line}");
+    assert!(line.contains("1 previously unresolved entry resolved at set-up"), "{line}");
     assert!(!line.contains("loaded code"), "the target was already loaded: {line}");
     assert!(!owner_implements(&vm, owner).unwrap());
 }
@@ -134,7 +135,7 @@ fn an_entry_that_resolves_to_no_class_refuses() {
     let e = special_move_owner_setup(&mut vm, Some(c)).unwrap_err();
     let line = vm.log.last().unwrap();
     assert!(line.contains(": unresolved, the strict reading has no answer (an entry or a class chain did not resolve)"), "{line}");
-    assert!(line.ends_with("1 entry (every entry on the chain) resolved at set-up (a load; UNVERIFIED stand-in for the game having it resolved)"), "{line}");
+    assert!(line.ends_with("1 previously unresolved entry resolved at set-up (a load; UNVERIFIED stand-in for the game having it resolved)"), "{line}");
     assert!(!line.contains(": no, read"), "{line}");
     let VmError::NotYet(n) = e else { panic!("{e:?}") };
     assert_eq!((n.missing, n.record), (Missing::NotRead, ow_world::world::anim_node_init::OWNER_RECORD));
@@ -185,7 +186,7 @@ fn an_entry_that_is_not_a_class_is_a_failed_lookup() {
     vm.find_class(SPECIAL_MOVE_INTERFACE).unwrap();
     let (line, outcome) = owner_tables(&mut vm, c);
     assert!(line.contains(": unresolved, an entry's lookup failed ("), "{line}");
-    assert!(line.contains("1 entry (every entry on the chain) resolved at set-up"), "{line}");
+    assert!(line.contains("1 previously unresolved entry resolved at set-up"), "{line}");
     let Err(VmError::NotYet(n)) = outcome else { panic!("{outcome:?}") };
     assert_eq!((n.missing, n.record), (Missing::NotRead, ow_world::world::anim_node_init::OWNER_RECORD));
     assert!(n.what.contains("an entry's lookup failed"), "{}", n.what);

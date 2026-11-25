@@ -40,11 +40,13 @@ pub fn special_move_owner_setup(vm: &mut Vm, pawn: Option<ClassId>) -> Result<()
 ///   here, as the owner test takes none;
 /// - **read:** the answer (yes or no) is the packages' interface lists, each entry resolved to its class.
 ///   Resolving them at set-up rather than when the game first asks is the harness input (UNVERIFIED stand-in);
-/// - **unresolved:** `Vm::resolve_interface_tables` keeps an entry whose lookup failed as "resolved to nothing", which
-///   the owner test would read as a settled answer (O7). So the answer is checked against the strict
-///   `CodeIndex::implements_declared` (as review r1 of #665 asked of its own set-up): when that has no answer (an entry
-///   or a class chain did not resolve), fails, or disagrees with the resolved entries, the line says so and the
-///   set-up answers `NotYet` (`NotRead`).
+/// - **unresolved:** `Vm::resolve_interface_tables` keeps an entry whose lookup failed as "resolved to nothing", and
+///   the raw resolved-chain read (`implements_resolved_chain`) skips it, so it alone would give a false no. (The
+///   owner test does not take that no: since #667 it refuses such an entry itself.) So the set-up also reads the strict
+///   `CodeIndex::implements_declared` (as review r1 of #665 asked of its own set-up), which keeps a failed lookup's
+///   typed error and checks the whole chain before `maya` goes on: when it has no answer (an entry or a class chain
+///   did not resolve), fails, or disagrees with the resolved entries, the line says so and the set-up answers
+///   `NotYet` (`NotRead`).
 ///
 /// The entries resolved are counted on every line that resolves, the refusal's included. A load of code the lookups
 /// make (a class the code index did not hold, or a package the store had not loaded) is a write, which the line names
@@ -82,13 +84,13 @@ pub fn owner_tables(vm: &mut Vm, pawn: ClassId) -> (String, Result<(), VmError>)
     let read = vm.defs.code().implements_resolved_chain(ck, ik);
     let loaded = if marks(vm) != before { " (the lookups loaded code: a write)" } else { "" };
     let entries = match resolved {
-        0 => "every entry on the chain already resolved".to_string(),
-        1 => "1 entry (every entry on the chain) resolved at set-up (a load; UNVERIFIED stand-in for the game having \
-              it resolved)"
+        0 => "the pass covers every entry on the chain; none was left unresolved".to_string(),
+        1 => "the pass covers every entry on the chain; 1 previously unresolved entry resolved at set-up (a load; \
+              UNVERIFIED stand-in for the game having it resolved)"
             .to_string(),
         n => format!(
-            "{n} entries (every entry on the chain) resolved at set-up (a load; UNVERIFIED stand-in for the game \
-             having them resolved)"
+            "the pass covers every entry on the chain; {n} previously unresolved entries resolved at set-up (a load; \
+             UNVERIFIED stand-in for the game having them resolved)"
         ),
     };
     match (strict, read) {
