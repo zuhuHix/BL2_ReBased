@@ -216,6 +216,15 @@ decision before implementation.
   docs/NATIVE_ANALYSIS.md). Local execution only: no Ghidra or JDK code or file is in the repository, and the
   repository contains no Ghidra output. Projects and exports live under ignored `local/analysis/` or the private store.
   Scripts in `tools/` that drive Ghidra headlessly contain no game data.
+- **Linux desktop: Ghidra 12.2** (maintainer decision 2026-11-25). On the desktop (CachyOS Linux since 2026-11-22) the
+  maintainer uses Ghidra **12.2** instead of 12.1.4: the distribution package `ghidra 12.2-1.1` from the CachyOS
+  repository `cachyos-extra-v3` (upstream https://ghidra-sre.org/, Apache License 2.0; package built 2026-11-11,
+  installed 2026-11-22 under `/opt/ghidra`). It requires Java 25 or newer and runs on the distribution's
+  **OpenJDK 27** (`jdk-openjdk 27.0.1.1.u4-1`, Arch Linux `extra`, GPL-2.0 with the Classpath Exception), installed
+  system-wide by the package manager. The Windows machines keep 12.1.4 and Temurin 21 as above. Same use and the same
+  rules: local analysis only, nothing of Ghidra, the JDK or their output in the repository. `tools/ghidra_import.ps1`
+  is PowerShell and does not run on the Linux desktop. Whether a project saved by 12.2 opens in 12.1.4 was not
+  tested, so analysis databases are not moved from the desktop to the Windows machines.
 
 ### REA (Reverse Engineer Anything) MCP server (analysis front end; maintainer request 2026-10-07)
 
