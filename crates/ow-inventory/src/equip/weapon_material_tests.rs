@@ -1,5 +1,5 @@
-//! `BuildWeaponMaterial` in Off (NATIVE_WEAPON_VISUALS.md section 1.1.2, the note's tests 1 to 9, and the hub's points
-//! on #698's review) on two invented packages in a synthetic store (AGENTS.md rule 9):
+//! `BuildWeaponMaterial` in Off (NATIVE_WEAPON_VISUALS.md section 1.1.2, the note's tests 1 to 12, as amended at
+//! #698's review r1) on two invented packages in a synthetic store (AGENTS.md rule 9):
 //! - `Engine`: `Object`, `MaterialInterface`, `MaterialInstanceConstant` (`Parent`), `ToyMIC` and `ToyColdMIC` under it,
 //!   `ToyNotMIC` outside the family, `SkeletalMeshComponent`, and a parent material export `Mati_Toy`;
 //! - `WillowGame`: `WillowWeapon` with the static native and its `WeaponDefinitionData`, `WeaponTypeDefinition`
@@ -290,11 +290,22 @@ fn a_material_part_s_material_is_the_parent() {
     let part = x.part("WillowGame.WeaponPartDefinition", Some(mat), false);
     let mesh = x.obj("Engine.SkeletalMeshComponent");
     let data = x.data(&[("WeaponTypeDefinition", Some(weapon_type)), ("MaterialPartDefinition", Some(part))]);
-    let (objects, loads) = (x.objects(), x.vm.class_code_loads());
+    let default_of = |x: &Fx| {
+        let c = x.vm.space.classes.by_path("Engine.ToyMIC").unwrap();
+        x.vm.space.heap.handles().into_iter().filter(|&o| {
+            let o = x.vm.space.heap.get(o).unwrap();
+            o.class == c && matches!(o.origin, Origin::Default { .. })
+        }).collect::<Vec<_>>()
+    };
+    let (objects, loads, store_loads, defaults) =
+        (x.objects(), x.vm.class_code_loads(), x.vm.defs.load_transitions(), default_of(&x));
+    assert_eq!(defaults.len(), 1, "one default object");
     let weapon = x.weapon;
     let Value::Object(Some(instance)) = x.call(Some(weapon), Some(mesh), data).unwrap() else { panic!("an instance") };
     assert_eq!(x.objects(), objects + 1, "one new object");
     assert_eq!(x.vm.class_code_loads(), loads, "no class code loaded");
+    assert_eq!(x.vm.defs.load_transitions(), store_loads, "no store load");
+    assert_eq!(default_of(&x), defaults, "the same default object, not built again");
     let o = x.vm.space.heap.get(instance).unwrap();
     assert_eq!((o.class, o.outer), (x.vm.space.classes.by_path("Engine.ToyMIC").unwrap(), Some(weapon)));
     assert_eq!(x.get(instance, "Parent"), Value::Object(Some(mat)));
@@ -352,6 +363,15 @@ fn the_class_refusals() {
     let data = x.data(&[("WeaponTypeDefinition", Some(t))]);
     assert_eq!(not_yet(x.same(Some(weapon), None, data)), (Missing::NotRead, class_not_ready("Engine.ToyColdMIC")));
     assert!(!x.vm.class_code_loaded(cold), "still cold");
+    // Review r1 of #702: a declared-only class (no defined layout, no super chain) is not ready, not outside the family.
+    let declared = x.vm.space.classes.declare("Engine.ToyDeclaredMIC").unwrap();
+    let t = x.obj("WillowGame.WeaponTypeDefinition");
+    // Past the heap's metaclass check (a fixture value: a declared class has no super chain to check).
+    let class = x.vm.space.heap.get(t).unwrap().class;
+    let p = x.vm.space.prop(class, "MaterialClass").unwrap();
+    *x.vm.space.slot_mut(t, ow_object::ids::PropAddr::scalar(p)).unwrap() = Value::Class(Some(declared));
+    let data = x.data(&[("WeaponTypeDefinition", Some(t))]);
+    assert_eq!(not_yet(x.same(Some(weapon), None, data)), (Missing::NotRead, class_not_ready("Engine.ToyDeclaredMIC")));
 }
 
 /// The hub's point 1: a ready class whose default object is not built yet is refused too (the construction would
