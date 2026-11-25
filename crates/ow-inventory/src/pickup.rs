@@ -40,13 +40,16 @@
 //!   - Where the note is silent, a named `NotYet { NotRead }`: a pickup with no `Inventory` ([`NO_INVENTORY`]); an
 //!     inventory whose class declares no `GetInventoryDefinition` ([`NO_DEFINITION_QUERY`]); and one whose query
 //!     resolves to anything but that native, a script or state override included ([`NO_NATIVE_DEFINITION_QUERY`]):
-//!     the note does not say the native runs an override.
+//!     the note does not say the native runs an override. The query is resolved without a load
+//!     (`Vm::find_loaded_method`, lane COLD-LOAD-FIXES): a class of the chain whose code is not loaded is a named
+//!     `NotYet { NotRead }`, "the class <path>, not loaded (a class load is a write)".
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so Reference binds nothing here (R3).
 
 use std::rc::Rc;
 
 use ow_core::{NotYet, ParityMode};
+use ow_object::ids::ClassId;
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
@@ -155,7 +158,12 @@ fn get_pickupable_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, 
         let x = c.vm.space.heap.get(inventory)?;
         (x.class, x.state)
     };
-    let Some(f) = c.vm.find_method(class, "GetInventoryDefinition", state)? else {
+    // Resolved without a load (lane COLD-LOAD-FIXES): a class of the chain whose package code is not loaded makes the
+    // answer need a load, which is a write before the dispatch check.
+    let Some(found) = c.vm.find_loaded_method(class, "GetInventoryDefinition", state) else {
+        return Err(cold_class(c.vm, class));
+    };
+    let Some(f) = found else {
         return Err(NotYet::not_read(NO_DEFINITION_QUERY, RECORD_EQUIP).into());
     };
     // Checked before anything runs: only the native declaration is dispatched.
@@ -167,6 +175,26 @@ fn get_pickupable_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, 
         return Err(NotYet::not_read(NO_NATIVE_DEFINITION_QUERY, RECORD_EQUIP).into());
     }
     Ok(c.vm.call(f, Some(inventory), vec![])?.ret)
+}
+
+/// The first class of `class`'s chain whose package code is not loaded, as a named `NotYet { NotRead }`: a class load
+/// is a write (lane COLD-LOAD-FIXES).
+fn cold_class(vm: &Vm, class: ClassId) -> VmError {
+    let mut cursor = Some(class);
+    let mut cold = class;
+    while let Some(k) = cursor {
+        if vm.defs.code().key_of(k).is_some() && !vm.class_code_loaded(k) {
+            cold = k;
+            break;
+        }
+        cursor = vm.space.classes.get_layout(k).and_then(|l| l.super_class());
+    }
+    let path = vm.space.classes.get_layout(cold).map_or_else(|| format!("{cold:?}"), |l| l.path().as_str().to_string());
+    NotYet::not_read(
+        format!("GetPickupableInventoryDefinition: the class {path}, not loaded (a class load is a write)"),
+        RECORD_EQUIP,
+    )
+    .into()
 }
 
 fn get_inventory_pawn(c: &mut NativeCall<'_>) -> Result<Value, VmError> {

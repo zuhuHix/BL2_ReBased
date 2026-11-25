@@ -345,19 +345,21 @@ fn get_inventory_pawn_on_a_cold_pawn_loads_no_code() {
     assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
 }
 
-/// `GetPickupableInventoryDefinition` with an inventory whose class's code is cold. Ignored: the native looks
-/// `GetInventoryDefinition` up with `find_method` on the inventory's class, which loads its code.
+/// `GetPickupableInventoryDefinition` with an inventory whose class's code is cold: the query cannot be resolved
+/// without a load (lane COLD-LOAD-FIXES, `find_loaded_method`), so it is the named `NotRead` for that class, with no
+/// code load, write, draw, store load or name. The warm sibling answers the inherited query's `UnboundNative`.
 #[test]
-#[ignore = "finding: GetPickupableInventoryDefinition's find_method loads the inventory class's cold code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn the_definition_query_on_a_cold_inventory_loads_no_code() {
     let mut x = fx(ParityMode::Off);
     let pickup = x.obj("WillowGame.WillowPickup");
     let (item, _) = cold(&mut x, "Engine.ToyInheritingInventory");
     x.set(pickup, "Inventory", Value::Object(Some(item)));
     let before = marks(&x.vm);
-    // As the sibling test: nothing is registered under the native's key, so the inherited query is unbound.
     match x.call(DEFINITION_OF, pickup, vec![]) {
-        Err(VmError::UnboundNative(k)) => assert!(k.contains("GetInventoryDefinition"), "{k}"),
+        Err(VmError::NotYet(n)) => {
+            assert_eq!((n.missing.clone(), n.record), (Missing::NotRead, crate::pickup::RECORD_EQUIP), "{n}");
+            assert!(n.what.contains("the class Engine.ToyInheritingInventory, not loaded (a class load is a write)"), "{n}");
+        }
         other => panic!("{other:?}"),
     }
     assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
