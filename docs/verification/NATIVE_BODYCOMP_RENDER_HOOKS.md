@@ -71,6 +71,8 @@ is `UsingFirstPersonCamera`, not `IsLocalPlayerController`.
     its first entry's field is set, the step is skipped;
   - when a `LightingChannels` bit is set (fitted), the helper clears `bUsePrecomputedShadows` and calls a component
     virtual (by fit, a lighting-channel refresh; not read).
+  - *Superseded 2026-11-25 by section 7: the second object is the same component cast to `StaticMeshComponent`, the
+    array is its `LODData` (the first entry's `LightMap`), and both steps apply to static mesh components only.*
 - **What it does:** `PrimitiveComponent.SetLightEnvironment(Pawn.LightEnvironment)`, again through the slot that
   native's own exec calls, so it follows NATIVE_ATTACH_MESH_TO_PICKUP.md section 6.2 as `attach_mesh.rs` implements
   it:
@@ -213,6 +215,8 @@ Hook 2's writes are never reached under today's rules: where the setter would wr
 *Superseded 2026-11-25 by NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1: with an ordinary owner the deferred
 reattach does not refuse, and hook 2's plan is applied in the write phase.*
 Hook 3's writes come only once the array check is resolved.
+*Superseded 2026-11-25 by section 7.1: the array check applies to static mesh components only, and on any other mesh
+component hook 3's setter plan is applied in the write phase.*
 
 **After writes started:** the walk's writes precede these. A `NotYet` raised in a hook's writes despite the preflight is
 marked "stopped after partial writes: " by #518's counters, its kind and record kept.
@@ -232,7 +236,8 @@ and load transitions unchanged):
 8. hook 2 with a malformed reattach declaration on a component whose flag already equals the value: the setter
    planner's `VmError::Script` (its order kept), before any write;
 9. hook 3 with no pawn `LightEnvironment`, on a non-mesh component, or with `bAcceptsLights` clear: nothing;
-10. hook 3 with `bAcceptsLights` set: the array check's `NotRead`, before any write;
+10. hook 3 with `bAcceptsLights` set: the array check's `NotRead`, before any write *(superseded 2026-11-25 by
+    section 7.2, tests 1 and 4)*;
 11. an unloaded or failed template on a path that needs its values (hooks 2 and 3): the not-settled `NotRead`, with
     nothing loaded;
 12. a malformed pawn or component field: `VmError::Script` naming it, before any write;
@@ -380,16 +385,119 @@ causes no class-code load (where #685 has landed):
 11. order: an unsettled template with a camera-test class and `bOwnerNoSee` clear gives `NOT_SETTLED`, not the camera
     test's `NotRead`.
 
+## 7. Amendment (2026-11-25): hook 3's array check, identified
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK1-NEXT (decision 2026-11-25-NNN), analyst only: **another lane
+implements this section.** Raw output stays under ignored `local/analysis/link1next/`. **Every rule here is
+UNVERIFIED in the running game.**
+
+**Why.** A look-ahead for link 1. Once hook 2's plan is applied (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1), Maya's
+attachment 0 reaches hook 3. Hook 3's unidentified array check (`render_hooks::ARRAY_CHECK`, `NotRead`) is the first
+item on `maya:8`'s path past hook 2 that no note had read.
+
+**Evidence.**
+- Ghidra 12.1.4 headless, read-only, under the machine lock. Hook 3's mesh-component helper was read again, in the
+  routine section 1 found. Its two class tests were identified by the class names their registrations carry: the
+  first is `Engine.MeshComponent`, the second `Engine.StaticMeshComponent`.
+- Field names come from `tools/ghidra/class_layout.py`, with #598's shift for the `PrimitiveComponent` fields.
+- The array is `StaticMeshComponent.LODData`, by fit: it is the only array of that class whose entry has a pointer
+  where the helper reads, `StaticMeshComponentLODInfo.LightMap`.
+- Maya's templates were read with `ow-package --def-dump` on `GD_Siren_Streaming.BodyClass_Siren` and its component
+  templates, from the installed packages. The output stays local.
+- The class chains were read from the packages' class exports. There are no bl-sdk reads.
+
+**The helper, in order** (this replaces section 1's hook 3 "mesh-component test"):
+1. the object is not a `MeshComponent`, or its `bAcceptsLights` is clear: hook 3 does nothing (as before);
+2. **only when the object is also a `StaticMeshComponent`:**
+   1. when its `LODData` has entries and the first entry's `LightMap` is set, hook 3 does nothing. By fit, a static mesh
+      with baked lighting keeps it;
+   2. otherwise, when the `Static` bit of its `LightingChannels` is set (bit 2 of the container, fitted), it clears
+      `bUsePrecomputedShadows` and calls a component virtual with one argument (not read; by fit, a lighting refresh);
+3. then `SetLightEnvironment(Pawn.LightEnvironment)`, through the native's own slot, as section 1 says.
+
+The "second object" of section 1 is the same component, cast to `StaticMeshComponent`. The lighting-channel step is
+part of the static-mesh branch: **a mesh component that is not a `StaticMeshComponent` goes straight from step 1 to
+the setter.** The skeletal ones are among those.
+
+**What Maya takes.**
+- Her made mesh components are attachments 0, 1, 2 to 6, 9 and 12 (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 6).
+  Their classes are `SkeletalMeshComponent`, `CustomSkeletalMeshComponent` and `GearLikenessMeshComponent`. Both
+  `WillowGame` classes extend `Engine.SkeletalMeshComponent` directly.
+- Every one of their templates has `bAcceptsLights` true. So none of them meets step 2.
+- Their templates' `LightEnvironment` is the archetype's `GD_Siren_Streaming.Pawn_Siren.MyLightEnvironment`, which is
+  also `Pawn_Siren`'s own `LightEnvironment`.
+- Attachment 13 (`CylinderComponent`) is not a mesh component. Her only `StaticMeshComponent` (attachment 15) is not
+  made, and its template has `bAcceptsLights` false.
+
+### 7.1 The Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces the `ARRAY_CHECK` refusal of `render_hooks::light_environment`
+(section 4, hook 3). The reads are loaded-only and write-free, as now.
+
+**Preflight:**
+1. The gate is unchanged: the pawn's `LightEnvironment` None, a made class that is not a `MeshComponent`, or (on the
+   settled template) `bAcceptsLights` clear: nothing.
+2. **A made `StaticMeshComponent`:** `NotYet { NotRead }`, "the light-environment step on a static mesh component (its
+   first LOD's lightmap)". The port does not decode `LODData`, which is not tagged data, and it has not read where a
+   made component's `LODData` comes from. The lighting-channel step stays behind this refusal. It is not on the slice.
+3. **Any other mesh component:** `set_light_environment`'s planner (`component_setters::plan_light_environment`), with
+   the new value the pawn's `LightEnvironment`. It runs on the slots the attach produces, as hook 2's overrides give
+   them: `Owner` the pawn, and the two update flags cleared. `bAttached` stays as the template has it, because the
+   port's attach leaves it alone (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2). So:
+   - the same value: nothing;
+   - not attached: the one write `LightEnvironment`;
+   - attached: the deferred reattach. With an ordinary owner it does not refuse once section 2.1.1 of that note is
+     implemented; until then it gives `REATTACH_OWNER`.
+
+**Writes.** The plan is applied in the build's write phase, after the walk's own writes and hook 2's plan for the same
+component, in the made components' order. An error after the first write is marked "stopped after partial writes: "
+by #518's counters, its kind and record kept.
+
+**What link 1 would meet** (a prediction, not a run). Attachment 0 passes hook 3:
+- with the pawn's `LightEnvironment` the archetype's own component, the planner answers nothing;
+- with an instanced copy, it gives one `LightEnvironment` write;
+- neither refuses.
+
+The body composition then goes on to attachment 1 (`CustomHead`). After the collision step and its socket attach at
+`Root` on attachment 0, it stops at **the `Parent` link**: `NotYet { NotRead }`, hub ruling 3
+(NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.1, step 7). That reading is whole except one flag of the new
+component (the identity-map flag). With her head and body on different mesh assets, the flag decides the map.
+
+### 7.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged, and
+causes no class-code load:
+1. a made `SkeletalMeshComponent` with `bAcceptsLights` set, the pawn's `LightEnvironment` set and the template's
+   different, `bAttached` clear: no refusal. After the build, the made component's `LightEnvironment` is the pawn's,
+   and hook 3 writes nothing else (`PreviousLightEnvironment` unchanged);
+2. the same with the template's `LightEnvironment` already the pawn's: nothing;
+3. a toy subclass of `SkeletalMeshComponent` (standing in for `GearLikenessMeshComponent`): as test 1;
+4. a made `StaticMeshComponent` with `bAcceptsLights` set: the static-mesh `NotRead`, before any write;
+5. a `StaticMeshComponent` with `bAcceptsLights` clear, and a `CylinderComponent`: nothing;
+6. order on one component: hook 2's write (`bOwnerNoSee`, `bNeedsReattach`) comes before hook 3's `LightEnvironment`,
+   and both come after the walk's writes;
+7. a malformed `LightEnvironment` or `bAttached` declaration on the component: the planner's `VmError::Script`, before
+   any write;
+8. a template with `bAttached` set: with section 2.1.1 implemented, `PreviousLightEnvironment`, `LightEnvironment`,
+   then `bNeedsReattach`. Without it, `REATTACH_OWNER`;
+9. a Maya-shaped fixture (a skeletal attachment 0 with identifier `Mesh`, then a skeletal `Parent` attachment on it):
+   the build passes attachment 0's hooks and stops at the `Parent` link's `NotRead`;
+10. Reference: unchanged.
+
+Section 4's test 10 (the array check's `NotRead` for any mesh component) is replaced by tests 1 and 4.
+
 ## Open questions
 
 1. **UNVERIFIED:** every rule above.
-2. **Not identified:** the two engine flags of hook 1, and hook 3's array check (the current stop on its path).
+2. **Not identified:** the two engine flags of hook 1. Hook 3's array check is identified in section 7
+   (`StaticMeshComponent.LODData`, by fit).
    Hook 2's pawn virtual is identified in section 6 (`IsPlayerPawn`).
 3. **By fit:** the interface name (`IGearLikenessConsumer`), hook 2's controller test (corrected in section 6:
    it is `UsingFirstPersonCamera`, by its exec),
    and hook 3's `bAcceptsLights` and `LightingChannels` fields (the constant shift of #598).
-4. **Not read:** the gear-likeness refresh, and hook 3's lighting-channel virtual.
-5. **Not read for Maya:** her `Mesh` template's `bOwnerNoSee`, `bAcceptsLights` and `LightingChannels`.
+4. **Not read:** the gear-likeness refresh, and hook 3's lighting-channel virtual (static mesh components only).
+5. **Read for Maya (section 7):** her made mesh templates have `bAcceptsLights` true. **Not read:** whether her
+   spawned pawn's `LightEnvironment` is the archetype's component or an instanced copy.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

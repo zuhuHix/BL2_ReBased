@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK1-NEXT (2026-11-25, pc-hummer, docs only, on docs/native-link1-next-light-env-check from main
+258a7335):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 7: hook 3's array
+check applies to static mesh components only, so Maya's skeletal meshes go straight to `SetLightEnvironment`'s
+planner. Predicted next stop for link 1 (not a run): attachment 1's `Parent` link. No code changed, so no
+measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-GETINVENTORYSPACEREQUIREMENT (2026-11-25, pc-hummer, on fix/rust-inventory-space-requirement from main
 3aaabe97):** AI-assisted (Claude Code, Opus 5.5). `WillowInventory.GetInventorySpaceRequirement` in Off, from
 NATIVE_INVENTORY_EQUIP.md's row: weapon-type and equipable definitions 1, mission items 0, the rest `NotRead`.
