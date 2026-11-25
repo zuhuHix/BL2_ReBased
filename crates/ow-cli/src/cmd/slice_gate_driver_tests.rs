@@ -818,7 +818,8 @@ fn link_9_s_set_up_binds_the_pawn_natives() {
 static GEAR_NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// A WillowGame package with decoded class bodies (`Declarations`): the gear-likeness interface, another interface,
-/// a component class whose only entry is that other interface, and one that implements the gear-likeness interface.
+/// a component class whose only entry is that other interface, one that implements the gear-likeness interface, and
+/// `ToyGone`, whose only entry is a class import from a package no store holds (an entry that resolves to nothing).
 fn decoded_gear_vm() -> (Vm, PathBuf) {
     use ow_object::class_body::CLASS_INTERFACE;
     use ow_package::testkit::reflect::{ClassBodySpec, Declarations, class_body};
@@ -832,6 +833,9 @@ fn decoded_gear_vm() -> (Vm, PathBuf) {
     let other = d.real_class("IToyOther", obj, obj, 2 | CLASS_INTERFACE, &[], None);
     d.real_class("ToyMesh", obj, obj, 2, &[other], None);
     d.real_class("ToyLikeness", obj, obj, 2, &[gear], None);
+    let missing = d.p.add_import("Core", "Package", 0, "ToyMissingPkg");
+    let gone = d.p.add_import("Core", "Class", missing, "ToyGoneTarget");
+    d.real_class("ToyGone", obj, obj, 2, &[gone], None);
     let bytes = d.build();
     let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .expect("store");
@@ -877,6 +881,24 @@ fn the_set_up_interface_check_reads_an_implementer_s_yes() {
     let like = vm.space.classes.by_path("WillowGame.ToyLikeness").unwrap();
     let Err(VmError::NotYet(n)) = gear_likeness(&vm, like) else { panic!() };
     assert!(matches!(n.missing, Missing::LayerAbsent(_)) && &*n.what == GEAR_REFRESH, "{n:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review r1 of #665, MED 1: an interface entry that resolves to no class. `implements` alone would cache it as
+/// "resolved to nothing" and answer a settled no; the strict cross-check has no answer, so the line says the entry did
+/// not resolve and the set-up answers `NotYet` (`NotRead`), not the packages' answer. Hook 1 then answers no too (the
+/// entry is cached), which is why the set-up must refuse.
+#[test]
+fn the_set_up_interface_check_refuses_an_entry_that_resolves_to_no_class() {
+    use ow_world::world::render_hooks::GEAR_LIKENESS;
+    let (mut vm, dir) = decoded_gear_vm();
+    vm.find_class(GEAR_LIKENESS).unwrap();
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyGone", GEAR_LIKENESS);
+    assert!(line.starts_with(SETUP_INTERFACE_INPUT), "{line}");
+    assert!(line.contains(": unresolved, an entry did not resolve to a class;"), "{line}");
+    assert!(!line.contains(": no, read from"), "{line}");
+    let Err(VmError::NotYet(n)) = outcome else { panic!("{outcome:?}") };
+    assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
