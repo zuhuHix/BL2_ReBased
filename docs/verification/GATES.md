@@ -12,7 +12,7 @@ NATIVE_INVENTORY_EQUIP.md's row: weapon-type and equipable definitions 1, missio
   gun's `WeaponTypeDefinition`) and stops at the unbound `InventoryManager.InventoryActors(class,object,bool)`.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/space/` and `local/p2/space-stack/`. Decision
-2026-11-25-NNN.
+2026-11-25-48.
 
 **LINK-6-PICKUP-GAMEINFO (2026-11-25, pc-hummer, on fix/rust-pickup-world-gameinfo from main 5168bb63):**
 AI-assisted (Claude Code, Opus 5.5). The pickup world gets a class-default `WillowGameInfo` stand-in for
