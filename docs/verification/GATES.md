@@ -5,9 +5,11 @@ Update this file in the commit that changes a number. Paste real output in repor
 **BIND-UPDATEANIMATIONS-FORCESKELUPDATE (2026-11-25, pc-hummer, on main d3c7a13b):** AI-assisted (Claude Code, Opus
 5.5). `World::new` binds `ForceSkelUpdate` and `UpdateAnimations` in Off in every slice world, neither under Reference
 (two new tests). `cargo test --workspace -j 8` 3,365 passed / 0 failed / 52 ignored; `crate_edges_test.py` 19 OK.
-Installed Off strict `--slice-gate` (release build, under the machine lock): 4 ok / 10 NotYet / 0 error, as main. A
-throwaway probe (reverted) counted zero calls of either native: links 1, 3, 4, 5, 13 and 14 stop at `maya:8` before
-Maya's body-class step, link 8 at `init` before the equip paths. No real-game run.
+Installed Off strict `--slice-gate` (release build, under the machine lock): 4 ok / 10 NotYet / 0 error, as main. In
+the instrumented Off strict run on main d3c7a13 (probe not committed), neither native was called. Link 1 stops at
+`maya:8`, before Maya's body-class step, and links 3, 4, 5, 13 and 14 are blocked behind it. Link 8 stops at `init`,
+before the equip paths. What the natives do past those blockers is not known. Gameplay behaviour UNVERIFIED; no
+real-game run.
 
 **SLICE-GATE-STEP-SHARE (2026-11-25, pc-hummer, on main faa3bbcc):** AI-assisted (Claude Code, Opus 5.5). After its
 JSON rows, `--slice-gate` prints a report to stderr: one line per link, `link <n> <name>: <result>, steps
