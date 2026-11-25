@@ -233,7 +233,7 @@ fn the_preflight_refuses_before_login() {
                 assert_eq!(n.missing, missing, "{name}: {}", n.what);
                 assert!(!is_partial_writes(&n.what), "{name}: unmarked");
             }
-            assert!(!mark.moved(&x.f.w.vm), "{name}: nothing written");
+            assert!(mark.still(&x.f.w.vm), "{name}: nothing written");
             assert!(x.seen.borrow().login.is_empty(), "{name}: Login not called");
             assert!(x.f.w.actors().borrow().local_players().is_empty(), "{name}");
         });
@@ -254,7 +254,7 @@ fn a_game_info_without_login_is_a_data_error() {
             matches!(&e, VmError::Script { message, .. } if message.contains("defines no Login") && !is_partial_writes(message)),
             "{e:?}"
         );
-        assert!(!mark.moved(&x.f.w.vm), "nothing written");
+        assert!(mark.still(&x.f.w.vm), "nothing written");
         assert!(x.seen.borrow().login.is_empty());
         assert!(x.f.w.actors().borrow().local_players().is_empty());
     });

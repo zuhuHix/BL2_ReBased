@@ -809,7 +809,7 @@ fn an_unloaded_node_or_control_in_a_loaded_tree_is_rule_1_s_refusal() {
             x.set(t.k2, "NextControl", Value::Object(Some(control)));
         }
         let comp = x.component();
-        let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
+        let loads = x.vm.defs.load_transitions() + x.vm.class_code_loads();
         let n = not_yet(refused_clean(&mut x, comp, t.root));
         assert_eq!((&*n.what, n.missing), (ANIM_NODES, Missing::LayerAbsent(ANIM_LAYER)), "{which}");
         assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), loads, "{which}: nothing loaded");

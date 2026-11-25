@@ -536,7 +536,7 @@ fn an_unloaded_definition_is_not_read_and_not_loaded() {
     let mut x = fx();
     let u = x.unloaded;
     x.set_definition(Some(u));
-    let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
+    let loads = x.vm.defs.load_transitions() + x.vm.class_code_loads();
     refused(&mut x, Missing::NotRead, UNLOADED_DEFINITION, RECORD_RB);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, u) && (x.vm.defs.load_transitions() + x.vm.class_code_loads()) == loads, "not loaded");
 }

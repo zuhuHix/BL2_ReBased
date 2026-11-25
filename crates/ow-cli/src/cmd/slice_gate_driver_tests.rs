@@ -784,12 +784,12 @@ fn link_9_s_set_up_binds_get_ai_component() {
 #[test]
 fn a_set_up_object_is_loaded_once_and_reported() {
     let mut t = toy();
-    let loads = (t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads());
+    let loads = t.world.vm.defs.load_transitions();
     let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
     outcome.unwrap();
     assert!(line.ends_with(": loaded at set-up (a write; UNVERIFIED stand-in for the package's load with its definition)"), "{line}");
-    assert!((t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads()) > loads, "a load happened");
-    let loads = (t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads());
+    assert!(t.world.vm.defs.load_transitions() > loads, "a load happened");
+    let loads = t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads();
     let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
     outcome.unwrap();
     assert_eq!(line, format!("{SETUP_OBJECT_INPUT} GearboxFramework.ToyResolver: ready, nothing loaded"));

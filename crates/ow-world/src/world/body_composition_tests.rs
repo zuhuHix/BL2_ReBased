@@ -1096,10 +1096,10 @@ fn a_template_loaded_by_the_writes_is_counted() {
     let (_, cyl, _) = store_templates(&mut e);
     let a = attachment(&mut e, A { template: Some(cyl), ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
-    let loads = (e.vm.defs.load_transitions() + e.vm.class_code_loads());
+    let loads = e.vm.defs.load_transitions();
     run(&mut e, p).unwrap();
     assert!(!e.vm.defs.is_unloaded(&e.vm.space, cyl), "loaded by the writes");
-    assert!((e.vm.defs.load_transitions() + e.vm.class_code_loads()) > loads, "the load is counted");
+    assert!(e.vm.defs.load_transitions() > loads, "the load is counted");
     let made = made_of(&e, &entries(&e, p)[0]);
     assert_ne!(made, cyl);
 }

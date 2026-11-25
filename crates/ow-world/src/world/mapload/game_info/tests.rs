@@ -134,7 +134,7 @@ fn the_configured_default_is_spawned_into_world_info_game() {
         let mark = WriteMark::now(&f.w.vm);
         let again = spawn_game_info(&mut f.w, &PROBE).unwrap();
         assert_eq!((again.game, again.branch), (spawned.game, GameInfoBranch::AlreadySet));
-        assert!(!mark.moved(&f.w.vm), "nothing written");
+        assert!(mark.still(&f.w.vm), "nothing written");
     });
 }
 
@@ -166,7 +166,7 @@ fn the_open_branches_refuse_before_anything_changes() {
             let input = setup(&mut f);
             let (mark, before) = (WriteMark::now(&f.w.vm), listed(&f));
             let what = unmarked(spawn_game_info(&mut f.w, &input).unwrap_err(), Missing::NotRead);
-            assert!(!mark.moved(&f.w.vm), "{name}: nothing written or loaded ({what})");
+            assert!(mark.still(&f.w.vm), "{name}: nothing written or loaded ({what})");
             assert_eq!((game_of(&f), listed(&f)), (Value::Object(None), before), "{name}");
         });
     }
@@ -179,7 +179,7 @@ fn reference_has_no_game_info_routine() {
         let mut f = fx_in(false, ParityMode::Reference);
         let mark = WriteMark::now(&f.w.vm);
         unmarked(spawn_game_info(&mut f.w, &PROBE).unwrap_err(), Missing::NotPorted);
-        assert!(!mark.moved(&f.w.vm) && game_of(&f) == Value::Object(None));
+        assert!(mark.still(&f.w.vm) && game_of(&f) == Value::Object(None));
     });
 }
 
@@ -204,8 +204,26 @@ fn a_missing_or_unfit_class_and_a_refused_spawn_leave_the_field_empty() {
         let mark = WriteMark::now(&f.w.vm);
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
         let what = unmarked(e.unwrap_err(), Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));
+        // #518's three only: the class code load before this refusal is lane COUNTERS-MISS-CLASS-CODE-LOADS's
+        // finding, pinned in the ignored test below.
         assert!(!mark.moved(&f.w.vm), "{what}");
         assert_eq!((game_of(&f), listed(&f)), (Value::Object(None), before));
+    });
+}
+
+/// Review r1 of #685's finding: the spawn refused for collision has already loaded the game class's code (its class
+/// lookup), which #518's three counters do not see. Ignored until the hub routes it; run with `--ignored` to see it.
+#[test]
+#[ignore = "finding: spawn_game_info loads the game class's code before its collision refusal (review r1 of #685)"]
+fn a_refused_spawn_loads_no_class_code() {
+    run(|| {
+        let mut f = fx_in(false, ParityMode::Off);
+        let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
+        actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
+        let mark = WriteMark::now(&f.w.vm);
+        let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
+        assert!(e.is_err());
+        assert!(mark.still(&f.w.vm), "no class code loaded before the refusal");
     });
 }
 
@@ -244,7 +262,7 @@ fn the_map_route_spawns_the_game_info_then_brings_the_map_up() {
         let mark = WriteMark::now(&f.w.vm);
         let skip = BringUpOptions { reset_time: true, mode: RouteMode::SkipStatic };
         unmarked(bring_up_map_for_play(&mut f.w, &PROBE, skip).unwrap_err(), Missing::NotRead);
-        assert!(!mark.moved(&f.w.vm) && game_of(&f) == Value::Object(None), "refused before the spawn");
+        assert!(mark.still(&f.w.vm) && game_of(&f) == Value::Object(None), "refused before the spawn");
 
         let up = bring_up_map_for_play(&mut f.w, &PROBE, EVERY).unwrap();
         let g = up.game_info.game;
