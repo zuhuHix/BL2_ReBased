@@ -72,22 +72,26 @@
 //!   is the answer. No gate, no current move, no `StartTime`, no queue.
 //!
 //! - **`SpecialMoveComponent.Queue(NewSMD, PlayRateScale = 1, Duration = 0, CallbackName, CallbackObject, Data)`**
-//!   (lane IMPL-SPECIALMOVE-QUEUE, coded from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 alone; its record, [`QUEUE_RECORD`]).
-//!   No answer. The preflight, write-free, in the note's order:
-//!   1. no definition, or no owner interface (`SMI`'s object): nothing;
-//!   2. an owner interface and no component `Owner`: `NotYet { NotRead }` (the game reads its `Role` unchecked);
-//!   3. the component `Owner`'s `Role` below `ROLE_Authority`: `NotYet { NotRead }`, the forward to the server
-//!      (`ServerSpecialMove_Queue`) is network play, not ported;
-//!   4. `IsLocalAuthority(NewSMD)` (not resolved through `GetSMDToPlay`) false: nothing;
-//!   5. `CurrentSMData` a `SpecialMoveData` struct and `SMDQueue` an array of that struct, else a `VmError::Script`
+//!   (lane IMPL-SPECIALMOVE-QUEUE, coded from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 at 7dcb5cd alone; its record,
+//!   [`QUEUE_RECORD`]). No answer. The preflight, write-free, in the note's order:
+//!   1. no definition, or no owner interface (`SMI` None): nothing (the component is checked resident before its `SMI`
+//!      is read);
+//!   2. residency: the component's `Owner` (when set), the definition and the `SMI` actor must be resident (not a lazy
+//!      handle, not a stand-in with no slots), else [`QUEUE_NOT_LOADED`]. Only then do the loading helpers read them;
+//!   3. no component `Owner`: [`QUEUE_NO_OWNER`];
+//!   4. an `Owner` that is not the `SMI` actor: [`QUEUE_OWNER_MISMATCH`] (the forward reads one, the gate the other);
+//!   5. the `Owner`'s `Role` below `ROLE_Authority`: [`QUEUE_FORWARD`], the forward to the server is network play, not
+//!      ported;
+//!   6. `IsLocalAuthority(NewSMD)` (not resolved through `GetSMDToPlay`) false: nothing;
+//!   7. `CurrentSMData` a `SpecialMoveData` struct and `SMDQueue` an array of that struct, else a `VmError::Script`
 //!      naming the field.
 //!
-//!   Then: **no current move** (`CurrentSMData.SMD` None): `Play`'s own path here, with the same arguments but `Data`
-//!   passed as None (the note reads the game dropping it), its answer dropped; whatever it refuses stands, with its
-//!   own record and its own "stopped after partial writes" rule (Queue writes nothing before it). **A current move:**
-//!   one `SpecialMoveData` appended at the end of `SMDQueue`, every field as given (`Data` included) and `SMD` the
-//!   definition as given; the only write. Draining the queue when a move stops is not part of this native and is not
-//!   ported: an entry queued here waits in Off.
+//!   Each refusal is `NotYet { NotRead }`. Then: **no current move** (`CurrentSMData.SMD` None): `Play`'s own path
+//!   here, with the arguments [`play_args`] builds (the first five as given, `Data` None, as the note reads the game),
+//!   its answer dropped; whatever it refuses stands, with its own record and its own "stopped after partial writes"
+//!   rule (Queue writes nothing before it). **A current move:** one `SpecialMoveData` appended at the end of
+//!   `SMDQueue`, every field as given (`Data` included) and `SMD` the definition as given; the only write. Draining
+//!   the queue when a move stops is not part of this native and is not ported: an entry queued here waits in Off.
 //!
 //! **Still unread, so unbound here** (the stub policy answers): `RunBehaviors` (lane #432), the behavior provider's
 //! `OnStart` / `OnServerStart`, and the blend node's `PlayData`, which `ClientStarted` reaches.
@@ -677,59 +681,74 @@ fn require_queue_of(vm: &Vm, component: ObjRef, ty: StructId, what: &str) -> Res
     }
 }
 
-/// `NotYet { NotRead }` for an object that is not resident: a handle the store has not loaded, or a stand-in with no
-/// slots (as `Actor.Trace`'s residency check). Reading it would load it, and the preflight reads only what is loaded
-/// (a load is a write).
-fn loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
+/// The residency refusal's text (the note's section 5, "Loaded-only reads").
+pub const QUEUE_NOT_LOADED: &str = "SpecialMoveComponent.Queue: an object the store has not loaded (a load is a write)";
+
+/// The refusal for an `Owner` that is not the owner interface's actor (the note's preflight step 4).
+pub const QUEUE_OWNER_MISMATCH: &str = "SpecialMoveComponent.Queue: a component whose Owner is not its owner \
+     interface's actor (the forward reads Owner, the gate reads SMI)";
+
+/// `NotYet { NotRead }` ([`QUEUE_NOT_LOADED`]) for an object that is not resident: a handle the store has not loaded,
+/// or a stand-in with no slots (as `Actor.Trace`'s residency check). The loading helpers (`need`) are used only on
+/// objects that passed this, so they load nothing.
+fn loaded(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     let obj = vm.space.heap.get(o)?;
     let full = u32::try_from(obj.slots.len()).ok() == vm.space.classes.get_layout(obj.class).map(|l| l.slot_count());
     if vm.defs.is_unloaded(&vm.space, o) || !full {
-        return Err(NotYet::not_read(
-            format!("SpecialMoveComponent.Queue: {what} {} is not loaded (a load is a write)", ow_attr::eval::class_path(&vm.space, o)),
-            QUEUE_RECORD,
-        )
-        .into());
+        return Err(NotYet::not_read(QUEUE_NOT_LOADED, QUEUE_RECORD).into());
     }
     Ok(())
 }
 
-/// `Queue` (module documentation; NATIVE_SPECIAL_MOVE_QUEUE.md section 5).
+/// The arguments `Queue` hands to `Play`'s path (case 3a): the first five as the caller gave them (an omitted one
+/// stays omitted), and `Data` passed as None whatever the caller gave (the note reads the game dropping it).
+fn play_args(c: &NativeCall<'_>) -> Result<Vec<ow_vm::api::Arg>, VmError> {
+    let mut args: Vec<ow_vm::api::Arg> = (0..5.min(c.arg_count()))
+        .map(|i| Ok(ow_vm::api::Arg::new(c.arg(i)?.clone(), false, c.has(i))))
+        .collect::<Result<_, VmError>>()?;
+    args.resize_with(5, || ow_vm::api::Arg::new(Value::None, false, false));
+    args.push(ow_vm::api::Arg::new(Value::Object(None), false, true));
+    Ok(args)
+}
+
+/// `Queue` (module documentation; NATIVE_SPECIAL_MOVE_QUEUE.md section 5 at 7dcb5cd).
 fn queue(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "SpecialMoveComponent.Queue";
     let component = this(c, WHAT)?;
-    loaded(c.vm, component, "the component")?;
-    // 1. Nothing to queue.
+    // 1. Nothing to queue: no definition, or no owner interface.
     let Some(requested) = object(c.arg(0)?, WHAT)? else { return Ok(Value::None) };
+    loaded(c.vm, component)?;
     let smi = need(c.vm, component, "SMI")?;
-    let Some(interface_object) = object(&smi, WHAT)? else {
+    let Some(interface_actor) = object(&smi, WHAT)? else {
         return Ok(Value::None);
     };
-    // 2. and 3. The component's Owner, and its Role (the forward is network play, not ported).
-    let Some(owner) = object(&need(c.vm, component, "Owner")?, WHAT)? else {
+    // 2. Residency of everything the preflight and Play's path read, before any of it is read.
+    let owner = object(&need(c.vm, component, "Owner")?, WHAT)?;
+    for o in owner.into_iter().chain([requested, interface_actor]) {
+        loaded(c.vm, o)?;
+    }
+    // 3. to 5. The Owner, the same actor as the owner interface's, and its Role (the forward is not ported).
+    let Some(owner) = owner else {
         return Err(NotYet::not_read(QUEUE_NO_OWNER, QUEUE_RECORD).into());
     };
-    loaded(c.vm, owner, "the Owner")?;
+    if owner != interface_actor {
+        return Err(NotYet::not_read(QUEUE_OWNER_MISMATCH, QUEUE_RECORD).into());
+    }
     if !role_at_least(c.vm, owner, "ROLE_Authority", WHAT)? {
         return Err(NotYet::not_read(QUEUE_FORWARD, QUEUE_RECORD).into());
     }
-    // 4. The authority gate, on the definition as given (it reads the definition and the owner interface's object).
-    loaded(c.vm, requested, "the definition")?;
-    loaded(c.vm, interface_object, "the owner interface's object")?;
+    // 6. The authority gate, on the definition as given.
     if !is_local_authority_of(c.vm, requested, &smi)? {
         return Ok(Value::None);
     }
-    // 5. The fields' shapes, then the current move.
+    // 7. The fields' shapes, then the current move.
     let ty = data_type(c.vm, component, WHAT)?;
     require_queue_of(c.vm, component, ty, WHAT)?;
     let current = need(c.vm, component, "CurrentSMData")?;
     if object(&field(c.vm, &current, "SMD", WHAT)?, WHAT)?.is_none() {
-        // 3a: Play's path with Data passed as None; its answer dropped, its refusals as they are.
+        // 3a: Play's path; its answer dropped, its refusals as they are.
         let f = c.vm.find_function(PATHS[5])?;
-        let mut args: Vec<ow_vm::api::Arg> = (0..5.min(c.arg_count()))
-            .map(|i| Ok(ow_vm::api::Arg::new(c.arg(i)?.clone(), false, c.has(i))))
-            .collect::<Result<_, VmError>>()?;
-        args.resize_with(5, || ow_vm::api::Arg::new(Value::None, false, false));
-        args.push(ow_vm::api::Arg::new(Value::Object(None), false, true));
+        let args = play_args(c)?;
         let mut inner = NativeCall::new(&mut *c.vm, f, Some(component), args);
         play(&mut inner)?;
         return Ok(Value::None);

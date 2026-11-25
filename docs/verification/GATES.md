@@ -2,9 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-SPECIALMOVE-QUEUE (2026-11-25, zuhuPC Linux, on main 4b3e4df):** AI-assisted (Claude Code, Opus 5.5).
-`SpecialMoveComponent.Queue` bound in Off from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 (#680 @ 8e954320, in review).
-`cargo test --workspace`: 3,385 passed / 4 failed (the expected Linux N1 float-table tests) / 52 ignored;
+**IMPL-SPECIALMOVE-QUEUE (2026-11-25, zuhuPC Linux, on main 373fe4b):** AI-assisted (Claude Code, Opus 5.5).
+`SpecialMoveComponent.Queue` bound in Off from NATIVE_SPECIAL_MOVE_QUEUE.md section 5 (#680 @ 7dcb5cd, its r1
+text: residency first, the Owner/SMI mismatch, the delegation seam; the note's section 6 tests 1 to 8, 2a and 2b, 6a
+and 6b).
+`cargo test --workspace`: 3,401 passed / 4 failed (the expected Linux N1 float-table tests) / 52 ignored;
 `crate_edges_test.py` OK. Not run: `ctest` and `verify_packages.py --reader` (no cmake on this machine), and the
 installed `--slice-gate` (no install yet). By the note, link 9's next stop is `Play`'s replication-record refusal
 (case 3a), not a pass; not measured. UNVERIFIED in game.
