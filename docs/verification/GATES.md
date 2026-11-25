@@ -14,7 +14,7 @@ skipped (`DefStore::is_skipped`); `ow_assets::aim_profiles` reads `AnimNodeAimOf
   pass"; link 8's error is the base's. Every other row is unchanged.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/profiles2/` and `local/p2/profiles2-base/`.
-Decision 2026-11-25-NNN.
+Decision 2026-11-25-72.
 
 **IMPL-INVENTORY-ACTORS (2026-11-25, pc-hummer, on main 40d7d957):** AI-assisted (Claude Code, Opus 5.5).
 `InventoryManager.InventoryActors` in Off, from NATIVE_INVENTORY_ACTORS.md section 3. `cargo test --workspace -j 8`
