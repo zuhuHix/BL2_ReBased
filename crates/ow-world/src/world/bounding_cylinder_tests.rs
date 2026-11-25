@@ -1077,7 +1077,7 @@ fn both_class_tests_give_the_same_answer() {
 use crate::world::skeletal::{MeshBounds, ReferenceSkeleton, SkeletalMeshes, SkeletonSource};
 use crate::world::skeletal_bounds::{
     BODIES, BODIES_LAYER, DETAIL_MODE, HIDDEN_NO_MESH, PARENT_BOUNDS, PARENT_ROOT, PER_BONE, SKELETAL_BOUNDS,
-    SKIP_POSE, SLEEPING, STORED_LAYER, UNBOUNDED,
+    SKIP_POSE, SLEEPING, STORED_LAYER, TEMPLATE,
 };
 
 /// A source whose only answer is the mesh bounds it was given, for any mesh export.
@@ -1151,25 +1151,21 @@ fn stored() -> Missing {
     Missing::LayerAbsent(STORED_LAYER)
 }
 
-/// 9.7 test 1: class defaults and no mesh take source e, the base rule (origin 0, a half extent of 262144), alone and
-/// beside the pickup's cylinder; `BoundsScale` 2 changes nothing, because source e returns first. The per-component
-/// check passes on the way.
+/// 9.7 test 1, under the hub's revised ruling on 9.5 (review r1 of #707): class defaults and no mesh reach source e,
+/// which is not answered: the template's `NotRead`, alone and after the pickup's cylinder has given its box. The
+/// per-component check passes on the way.
 #[test]
-fn a_skeletal_entry_with_no_mesh_takes_the_base_rule() {
+fn a_skeletal_entry_with_no_mesh_refuses_on_its_template() {
     let mut x = fx();
     let (pickup, c) = x.skeletal();
-    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
-    let want = (unbounded[0], unbounded[2]);
-    x.answers(pickup, want, "the base rule");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD);
     x.set(c, "BoundsScale", Value::Float(2.0));
-    x.answers(pickup, want, "BoundsScale is not applied");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD);
     let cyl = x.cylinder(64.0, 20.0);
     x.attach(pickup, cyl);
     x.set(cyl, "CollideActors", Value::Bool(true));
     x.components(pickup, vec![Some(cyl), Some(c)]);
-    let location = [0.0, 0.0, 0.0];
-    let both = box_cylinder(&[(location, [64.0, 64.0, 20.0]), ([0.0; 3], [UNBOUNDED; 3])]);
-    x.answers(pickup, (both[0], both[2]), "the union with the pickup cylinder");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD);
 }
 
 /// 9.7 tests 2 and 9a: a mesh takes source f. With no accessor answer, the stored-bounds `LayerAbsent`. With one, the
@@ -1213,7 +1209,6 @@ fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
 fn a_hidden_or_fixed_skeletal_entry_takes_source_a() {
     let mut x = fx();
     let (pickup, c) = x.skeletal();
-    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
     x.set(c, "HiddenGame", Value::Bool(true));
     x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
     // 3a: a parent with a fixed-bounds mesh does not come first.
@@ -1229,14 +1224,14 @@ fn a_hidden_or_fixed_skeletal_entry_takes_source_a() {
     x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
     x.set(c, "SkeletalMesh", Value::Object(None));
     x.set(c, "bCastHiddenShadow", Value::Bool(true));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "a hidden shadow caster is visible: source e");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "a hidden shadow caster is visible: source e", source e
     x.set(c, "bCastHiddenShadow", Value::Bool(false));
     x.set(c, "HiddenGame", Value::Bool(false));
     // 4: the owner hidden.
     x.set(pickup, "bHidden", Value::Bool(true));
     x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
     x.set(c, "bIgnoreOwnerHidden", Value::Bool(true));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "the owner's bHidden ignored");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "the owner's bHidden ignored", source e
     x.set(pickup, "bHidden", Value::Bool(false));
     // 5: fixed bounds while visible.
     x.set(c, "bComponentUseFixedSkelBounds", Value::Bool(true));
@@ -1249,7 +1244,6 @@ fn a_hidden_or_fixed_skeletal_entry_takes_source_a() {
 fn the_early_returns_refuse_before_the_source() {
     let mut x = fx();
     let (pickup, c) = x.skeletal();
-    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
     x.set(c, "DetailMode", Value::Byte(1));
     x.refuses(pickup, not_read(), DETAIL_MODE, BOUNDS_RECORD);
     x.set(c, "DetailMode", Value::Byte(0));
@@ -1257,10 +1251,10 @@ fn the_early_returns_refuse_before_the_source() {
     x.set(c, "FramesPhysicsAsleep", Value::Int(6));
     x.refuses(pickup, not_read(), SLEEPING, BOUNDS_RECORD);
     x.set(c, "FramesPhysicsAsleep", Value::Int(5));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "five frames asleep goes on");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "five frames asleep goes on", source e
     x.set(c, "FramesPhysicsAsleep", Value::Int(6));
     x.set(pickup, "Physics", Value::Byte(2));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "another Physics goes on");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "another Physics goes on", source e
     x.set(c, "bSkipUpdateSkelPose", Value::Bool(true));
     x.refuses(pickup, not_read(), SKIP_POSE, BOUNDS_RECORD);
 }
@@ -1274,12 +1268,11 @@ fn the_early_returns_refuse_before_the_source() {
 fn the_physics_and_parent_sources() {
     let mut x = fx();
     let (pickup, c) = x.skeletal();
-    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
     let asset = x.live("Engine.PhysicsAsset");
     x.set(c, "PhysicsAsset", Value::Object(Some(asset)));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "bHasValidBodies clear: skipped to e");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "bHasValidBodies clear: skipped to e", source e
     x.set(c, "bHasValidBodies", Value::Bool(true));
-    x.answers(pickup, (unbounded[0], unbounded[2]), "no mesh: cannot use the bones");
+    x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD); // "no mesh: cannot use the bones", source e
     let mesh = x.mesh_export();
     x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
     x.unit_scales(pickup, c, 1.0);
@@ -1303,6 +1296,10 @@ fn the_physics_and_parent_sources() {
     x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(true));
     x.set(c, "ParentAnimComponent", Value::Object(Some(parent)));
     x.refuses(pickup, not_read(), PARENT_ROOT, BOUNDS_RECORD);
+    // Review r1 of #707: PARENT_ROOT only in the simplest transform; otherwise the world transform's NotRead.
+    x.set(c, "Scale", Value::Float(2.0));
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.set(c, "Scale", Value::Float(1.0));
     // Source d.
     x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(false));
     let parent_asset = x.live("Engine.PhysicsAsset");
@@ -1311,6 +1308,14 @@ fn the_physics_and_parent_sources() {
     x.refuses(pickup, l(), PARENT_BOUNDS, BOUNDS_RECORD);
     x.set(c, "bUseBoundsFromParentAnimComponent", Value::Bool(false));
     x.refuses(pickup, Missing::LayerAbsent(BODIES_LAYER), BODIES, BOUNDS_RECORD);
+    // Review r1 of #707: a parent without the fixed-bounds flag never needs its mesh resident, so a lazy parent mesh
+    // there is no refusal N.
+    let lazy_mesh = x.lazy("HolderActor");
+    x.set(parent, "SkeletalMesh", Value::Object(Some(lazy_mesh)));
+    x.set(parent, "PhysicsAsset", Value::Object(None));
+    x.answers(pickup, (want[0], want[2]), "the parent's mesh is not required: source f answers");
+    x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(true));
+    x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
     // A lazy parent: refusal N.
     let lazy = x.lazy("HolderCyl");
     x.set(c, "ParentAnimComponent", Value::Object(Some(lazy)));
