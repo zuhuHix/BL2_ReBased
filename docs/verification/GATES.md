@@ -11,7 +11,7 @@ every caller; hook 2's plan applied in the body composition's write phase.
   array check (not identified)"; links 3, 4, 5, 13 and 14 report the same. Every other row is unchanged.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/reattach/` and `local/p2/reattach-base/`.
-Decision 2026-11-25-NNN.
+Decision 2026-11-25-49.
 
 **ANALYST-LINK1-NEXT (2026-11-25, pc-hummer, docs only, on docs/native-link1-next-light-env-check from main
 258a7335):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 7: hook 3's array
