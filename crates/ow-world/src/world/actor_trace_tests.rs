@@ -843,3 +843,41 @@ fn residency_comes_before_the_skip() {
     let args = x.link9([0.0; 3]);
     x.refuses(t, args, not_read(), "Actor.Trace: the actor ToyGhost is not loaded (a load is a write)");
 }
+
+/// Lane LIVE-COLLISION-STANDIN: a live actor's component whose class runs through an engine-native stand-in is not
+/// skipped as a non-primitive. Sound bounds that miss the swept box leave it out (the miss); bounds that meet it, or
+/// none, are `NotRead` naming it, write-free.
+#[test]
+fn a_live_stand_in_component_is_ruled_out_only_by_its_bounds() {
+    for bounds in [Some(FAR), Some(MEETS), None] {
+        let (mut x, toy) = fx(Some(Toy::default()));
+        let toy = toy.unwrap();
+        let t = x.target();
+        let mut root = x.vm.find_class("Engine.PrimitiveComponent").unwrap();
+        while let Some(up) = x.vm.space.classes.get_layout(root).and_then(|l| l.super_class()) {
+            root = up;
+        }
+        let native = x.vm.space.classes.define("Test.NativeOnlyComponent", Some(root), vec![]).unwrap();
+        x.vm.space.classes.mark_native(native).unwrap();
+        let part = x.vm.space.alloc_stand_in(native, "NativePart", Origin::Resource { package: 0, index: -1 }).unwrap();
+        let holder = x.live("Engine.Actor", "Holder");
+        x.set(holder, "CollisionComponent", Value::Object(Some(part)));
+        x.place(holder);
+        if let Some(b) = bounds {
+            toy.bounds.borrow_mut().insert(part, b);
+        }
+        let args = x.link9([0.0; 3]);
+        if bounds == Some(FAR) {
+            let before = x.counters();
+            assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "disjoint bounds: the miss");
+            assert_eq!(x.counters(), before);
+        } else {
+            let what = format!(
+                "Actor.Trace: {} Test.NativeOnlyComponent, so whether it is a primitive is not known (the live actor \
+                 component Holder's NativePart)",
+                crate::trace_filter::STAND_IN_PART
+            );
+            x.refuses(t, args, not_read(), &what);
+        }
+    }
+}

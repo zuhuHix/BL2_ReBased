@@ -93,6 +93,44 @@ pub const TOUCH_ONLY_BIT: u32 = 134_217_728;
 /// The flag set of `DroppedPickup.TouchPickupTrace` (bits 2, 4, 128, 512, 8192 and [`TOUCH_ONLY_BIT`]), before the
 /// single-line routine adds [`ONE_RESULT`].
 pub const TOUCH_TRACE: u32 = 134_226_566;
+/// The refusal text of a live part whose class runs through an engine-native stand-in (followed by that class).
+pub const STAND_IN_PART: &str = "a live actor component whose class runs through the engine-native stand-in class \
+                                 (decision 2026-11-15-08)";
+
+/// How a live part's class stands for a live collision walk (lane LIVE-COLLISION-STANDIN: the spawn's and the
+/// touch trace's `placement::actor_walk`, and `Actor.Trace`'s walk).
+pub(crate) enum PartClass {
+    /// The class is `Engine.PrimitiveComponent` or derives from it.
+    Primitive,
+    /// A chain of package classes that does not reach it: not a primitive, skipped.
+    Other,
+    /// The chain runs through an engine-native stand-in class (named) before reaching it, so its real chain is not
+    /// known (decision 2026-11-15-08; the VM's casts answer `NotYet` there too).
+    Uncertain(String),
+}
+
+/// [`PartClass`] of `class`, walking its chain up; `primitive` is `None` when the table has no `PrimitiveComponent`.
+pub(crate) fn part_class(
+    space: &ObjectSpace,
+    class: ClassId,
+    primitive: Option<ClassId>,
+) -> PartClass {
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        if Some(c) == primitive {
+            return PartClass::Primitive;
+        }
+        let Some(layout) = space.classes.get_layout(c) else {
+            return PartClass::Other;
+        };
+        if space.classes.is_native(c) {
+            return PartClass::Uncertain(layout.path().as_str().to_string());
+        }
+        cursor = layout.super_class();
+    }
+    PartClass::Other
+}
+
 /// The record of the touch's line check.
 pub const RECORD_TOUCH: &str = "NATIVE_TOUCH_PICKUP_TRACE.md";
 /// The touch note's names for its unread rules.

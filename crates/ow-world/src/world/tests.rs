@@ -3081,6 +3081,55 @@ mod placement {
         });
     }
 
+    /// Lane LIVE-COLLISION-STANDIN: a live actor's component whose class runs through an engine-native stand-in is
+    /// not skipped as a non-primitive. Service bounds that miss the box rule it out and the spawn is made; bounds that
+    /// meet it, or none, refuse the spot search with `NotRead` naming the component, and nothing is made.
+    #[test]
+    fn a_live_stand_in_component_is_ruled_out_only_by_its_bounds() {
+        run(|| {
+            let far = Bounds { min: [500.0, 500.0, 500.0], max: [510.0, 510.0, 510.0] };
+            let near = Bounds { min: [-5.0, -5.0, -5.0], max: [5.0, 5.0, 5.0] };
+            for bounds in [Some(far), Some(near), None] {
+                let mut x = fx();
+                let wi = x.wi;
+                match bounds {
+                    Some(b) => script_with_bounds(&mut x, b),
+                    None => {
+                        script(&mut x, vec![], vec![], Test::Clear);
+                    }
+                }
+                let actor = x.spawn("Actor");
+                set_field(&mut x.w.vm.space, actor, "bCollideActors", Value::Bool(true)).unwrap();
+                let mut root = x.class("CylinderComponent");
+                while let Some(up) = x.w.vm.space.classes.get_layout(root).and_then(|l| l.super_class()) {
+                    root = up;
+                }
+                let native = x.w.vm.space.classes.define("Test.NativeOnlyComponent", Some(root), vec![]).unwrap();
+                x.w.vm.space.classes.mark_native(native).unwrap();
+                let part = x
+                    .w
+                    .vm
+                    .space
+                    .alloc_stand_in(native, "NativePart", ow_object::heap::Origin::Resource { package: 0, index: -1 })
+                    .unwrap();
+                set_field(&mut x.w.vm.space, actor, "CollisionComponent", Value::Object(Some(part))).unwrap();
+                let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+                let before = count(&x);
+                let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+                if bounds == Some(far) {
+                    assert!(got.unwrap().is_some(), "disjoint bounds rule the part out");
+                    assert_eq!(count(&x), before + 1);
+                } else {
+                    let (missing, text) = what(got.unwrap_err());
+                    assert_eq!(missing, Missing::NotRead, "{bounds:?}");
+                    assert!(text.starts_with(SPOT_SEARCH), "{text}");
+                    assert!(text.contains(crate::trace_filter::STAND_IN_PART) && text.contains("Test.NativeOnlyComponent"), "{text}");
+                    assert_eq!(count(&x), before, "nothing made");
+                }
+            }
+        });
+    }
+
     /// Review r2 of #477, item 1: a sweep's walk checks a primitive's service bounds before its filter data. A
     /// 100-unit sweep with the BSP at 0.5 walks to 0.55: an unloaded primitive whose bounds lie beyond it is not
     /// read (the BSP hit is the answer); the same primitive inside it is a named refusal for its unloaded data.
