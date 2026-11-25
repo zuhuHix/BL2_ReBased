@@ -24,23 +24,31 @@ models).
 - **The structural oracles, enforced in code:**
   - every count fits the export;
   - the stored depth equals the depth the parent chain gives;
-  - the LOD count equals the mesh's own tagged `LODInfo` array length;
+  - the LOD count equals the number of decoded entries of the mesh's own tagged `LODInfo` array (each a tagged
+    struct, the entries filling the tag exactly; review r1 of #673, item 1);
   - in each LOD model:
     - the index count is three times the sections' triangles, at the stated index width;
+    - every index is decoded and names a vertex of the model, and each section's span fits the index buffer
+      (checked arithmetic), its indices naming vertices of the section's own chunk (review r1 of #673, item 3);
     - every chunk starts where the ones before it end, and the stated vertex count equals the chunks' total and the
       vertex buffer's length;
     - every bone index names a bone;
-    - the bulk-data block records its own package position;
+    - the bulk-data block is empty and records its own package position;
     - the vertex stride is 28 + 4 per UV set;
+    - each vertex's influences are decoded (fitted: four bone-index bytes at byte 8, four weights after them): the
+      weights sum to 255, and every weighted index names an entry of its chunk's bone map;
     - the colour buffer is there exactly when the tag says so;
   - the bone-name map names every bone by its own name;
+  - the trailer's words are decoded: the per-material words are zero and the last array holds four finite floats;
   - the read ends on the export's last byte.
 
   Nothing is clamped. A value outside the fitted layout is a typed refusal, and so is a non-empty array whose
-  elements are not decoded (the chunks' vertex arrays and the trailing count).
+  elements are not decoded: the chunks' vertex arrays, the bulk-data block and the trailing count (review r1 of
+  #673, item 2). Inside each decoded vertex, the bytes other than the influences (by fit, tangents, position and
+  UVs) are stepped over, not checked.
 - **What is not checked, and why:** the section material index (a 12-triangle placeholder cube, `CubeForCode`, holds
-  255 against one material in four class packages), the child counts (see the prefix), the word before the vertex
-  count, and the trailer's array contents.
+  255 against one material in four class packages), the child counts (see the prefix), the unidentified word before
+  the vertex count (zero in all 110 census LODs), and the vertices' non-influence bytes.
 - **The census** (an ignored installed test in `ow-cli`, `installed_lod_count_census`, counts only; output under
   ignored `local/analysis/skellod/`). It covered twelve packages: Startup, the six class streaming packages,
   Sanctuary, Southern Shelf, Hyperion City, Frost and Ice.
@@ -50,12 +58,16 @@ models).
   - **The trailing count is zero in all 110.**
   - Link 8's `GestaltDef_AssaultRifle_GestaltSkeletalMesh` reads 1 LOD with trailing count 0.
 - **The per-LOD usage byte, still open.** NATIVE_SKELMESH_MESH_CHANGE.md step 16 copies a usage byte from each LOD
-  model "whose model has data of a kind not identified". In the serialized LOD model, the trailing count is the only
-  field left unidentified. It is zero everywhere in the census, so if that field is the native's data, no installed
-  LOD needs the byte. That match is a fit from the package layout, not a reading of the native, and it stays
+  model "whose model has data of a kind not identified". The serialized LOD model has two unidentified fields: the
+  word before the vertex count and the trailing count (review r1 of #673, item 2). Both are zero everywhere in the
+  census. The trailing count is the one shaped as an array count. If it is the native's data, no installed LOD needs
+  the byte. That match is a fit from the package layout, not a reading of the native, and it stays
   **UNVERIFIED**. Whether the layer's "trailing count zero" may stand for "no such data" in row 15 is for the hub and
   that row's owner to rule. This lane does not change row 15 (`crates/ow-world/src/world/skeletal_mesh.rs`, lane A's
   file), so link 8 still stops there.
+- **Dispatch by export origin** (review r1 of #673, item 4): both in-package answers are asked by the mesh's
+  validated export origin (package and export index), so two meshes of one name in different groups each get their
+  own export's answer. Only the name-based `lod_count` fallback keeps the flat-name guard of the `.psk` lookup.
 - **The equip world** (the equip run's set-up and the slice gate's link 8) installs the skeletal mesh data layer in
   Off and logs it as a harness input. Then it logs the mesh's LOD count and trailing counts, both read from the
   player's own package.

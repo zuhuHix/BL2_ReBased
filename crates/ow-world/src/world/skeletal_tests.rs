@@ -436,3 +436,52 @@ fn the_lod_trailing_counts_come_from_the_package() {
         assert_eq!(format!("{:?}", e.vm.space.heap), heap, "nothing written");
     }
 }
+
+/// Review r1 of #673, item 4: the in-package answers dispatch from the mesh's export origin, so two meshes of one
+/// name in different groups each get their own export's answer (keyed by export index). The name-based fallback still
+/// goes through the flat-name guard: with no in-package answer, both twins get `None` and the name-based method is
+/// not asked.
+#[test]
+fn same_named_meshes_get_their_own_in_package_answers() {
+    struct ByIndex {
+        in_package: bool,
+        by_name: Rc<Cell<u32>>,
+    }
+    impl SkeletonSource for ByIndex {
+        fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+            Ok(None)
+        }
+        fn lod_count(&self, _: &str, _: &str, _: &str) -> Result<Option<usize>, String> {
+            self.by_name.set(self.by_name.get() + 1);
+            Ok(Some(99))
+        }
+        fn lod_count_in(&self, _: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
+            Ok(self.in_package.then_some(index as usize))
+        }
+        fn lod_trailing_in(&self, _: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
+            Ok(self.in_package.then(|| vec![index as usize]))
+        }
+    }
+    let mut e = env();
+    let (left, right) = (find(&mut e, "GD_ToyMesh.Left.Twin"), find(&mut e, "GD_ToyMesh.Right.Twin"));
+    let index = |e: &Env, o| match e.vm.space.heap.get(o).unwrap().origin {
+        Origin::Export { index, .. } | Origin::Resource { index, .. } => index as usize,
+        other => panic!("{other:?}"),
+    };
+    let (li, ri) = (index(&e, left), index(&e, right));
+    assert_ne!(li, ri);
+    let by_name = Rc::new(Cell::new(0));
+    SkeletalMeshes::install(&mut e.vm, Box::new(ByIndex { in_package: true, by_name: by_name.clone() })).unwrap();
+    assert_eq!(lod_count(&e.vm, left).unwrap(), Some(li));
+    assert_eq!(lod_count(&e.vm, right).unwrap(), Some(ri));
+    assert_eq!(lod_trailing_counts(&e.vm, left).unwrap(), Some(vec![li]));
+    assert_eq!(lod_trailing_counts(&e.vm, right).unwrap(), Some(vec![ri]));
+    let mut e = env();
+    let (left, right) = (find(&mut e, "GD_ToyMesh.Left.Twin"), find(&mut e, "GD_ToyMesh.Right.Twin"));
+    SkeletalMeshes::install(&mut e.vm, Box::new(ByIndex { in_package: false, by_name: by_name.clone() })).unwrap();
+    for mesh in [left, right] {
+        assert_eq!(lod_count(&e.vm, mesh).unwrap(), None, "the flat-name guard on the fallback");
+        assert_eq!(lod_trailing_counts(&e.vm, mesh).unwrap(), None);
+    }
+    assert_eq!(by_name.get(), 0, "the name-based method is not asked for a twin");
+}

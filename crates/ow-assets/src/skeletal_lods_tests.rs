@@ -36,6 +36,23 @@ struct Mesh<'a> {
     bulk_shift: u32,
     /// Bytes added after the trailer.
     extra: usize,
+    /// The `LODInfo` array's body, when it should differ from one empty tagged struct per entry.
+    lod_info_body: Option<Vec<u8>>,
+    /// The section's first index.
+    first_index: u32,
+    /// The index buffer's last index.
+    last_index: u16,
+    /// Every vertex's four weight bytes, and its first bone index.
+    weights: [u8; 4],
+    first_bone: u8,
+    /// The bulk block's element count and size.
+    bulk: [i32; 2],
+    /// The trailer's per-material word and the length of its last array.
+    per_material_word: u32,
+    last_floats: u32,
+    /// Bytes cut from the end of the mesh's payload, and whether a second export follows it in the file.
+    cut: usize,
+    next_export: bool,
 }
 
 fn mesh<'a>() -> Mesh<'a> {
@@ -57,6 +74,16 @@ fn mesh<'a>() -> Mesh<'a> {
         chunk_first: 0,
         bulk_shift: 0,
         extra: 0,
+        lod_info_body: None,
+        first_index: 0,
+        last_index: 0,
+        weights: [255, 0, 0, 0],
+        first_bone: 0,
+        bulk: [0, 0],
+        per_material_word: 0,
+        last_floats: 4,
+        cut: 0,
+        next_export: false,
     }
 }
 
@@ -66,13 +93,13 @@ fn lod_model(m: &Mesh<'_>, lod: usize, at: usize) -> Vec<u8> {
     // The sections.
     let mut v = words(&[1]);
     v.extend([0u8, 0, 0, 0]);
-    v.extend(words(&[0, m.triangles]));
+    v.extend(words(&[m.first_index, m.triangles]));
     v.push(0);
     // The index buffer.
     v.extend(words(&[1]));
     v.push(2);
     v.extend(words(&[2, 6]));
-    for i in [0u16, 1, 2, 2, 1, 0] {
+    for i in [0u16, 1, 2, 2, 1, m.last_index] {
         v.extend(i.to_le_bytes());
     }
     // The active bones, then one chunk.
@@ -85,7 +112,9 @@ fn lod_model(m: &Mesh<'_>, lod: usize, at: usize) -> Vec<u8> {
     v.extend(words(&[0, 3, 1]));
     v.push(0);
     // The bulk block, naming its own position.
-    v.extend(words(&[0, 0, 0]));
+    v.extend(words(&[0]));
+    v.extend(m.bulk[0].to_le_bytes());
+    v.extend(m.bulk[1].to_le_bytes());
     let here = (at + v.len() + 4) as u32;
     v.extend(words(&[here + m.bulk_shift]));
     // The vertex buffer.
@@ -94,7 +123,14 @@ fn lod_model(m: &Mesh<'_>, lod: usize, at: usize) -> Vec<u8> {
         v.extend(f.to_le_bytes());
     }
     v.extend(words(&[32, 3]));
-    v.extend(vec![0x11u8; 96]);
+    for _ in 0..3 {
+        // Tangents (8), bone indices (4), weights (4), then the rest of the vertex (16).
+        let mut vertex = vec![0x11u8; 8];
+        vertex.extend([m.first_bone, 0, 0, 0]);
+        vertex.extend(m.weights);
+        vertex.extend(vec![0x22u8; 16]);
+        v.extend(vertex);
+    }
     if m.colours {
         v.extend(words(&[4, 3]));
         v.extend(vec![0xFFu8; 12]);
@@ -110,7 +146,9 @@ fn package(m: &Mesh<'_>) -> Package {
     let mat = b.add_import("Core", "Class", 0, "ToyMaterial");
     let mut payload = words(&[0]);
     if let Some(n) = m.lod_info {
-        payload.extend(b.array_tag("LODInfo", n, &vec![0u8; 4 * n.max(0) as usize]));
+        let none = b.none();
+        let body = m.lod_info_body.clone().unwrap_or_else(|| none.repeat(n.max(0) as usize));
+        payload.extend(b.array_tag("LODInfo", n, &body));
     }
     if m.colours_tag {
         payload.extend(b.bool_tag("bHasVertexColors", true));
@@ -140,9 +178,13 @@ fn package(m: &Mesh<'_>) -> Package {
     payload.extend(m.depth.to_le_bytes());
     payload.extend(m.lods.to_le_bytes());
     // The LOD models need their absolute position: a first build finds where the payload lands.
+    let next = words(&[0xDEAD_BEEF; 8]);
     let base = {
         let mut probe = b.clone();
         probe.add_export(cls, "ToyMesh", payload.clone());
+        if m.next_export {
+            probe.add_export(cls, "ToyNext", next.clone());
+        }
         let pkg = Package::from_decoded(Default::default(), "probe".into(), probe.build()).unwrap();
         pkg.object(1).unwrap().offset as usize
     };
@@ -159,12 +201,25 @@ fn package(m: &Mesh<'_>) -> Package {
         payload.extend((bone as i32).to_le_bytes());
     }
     payload.extend(words(&[0, 0, 0, m.materials as u32]));
-    payload.extend(vec![0u8; 4 * m.materials]);
-    payload.extend(words(&[4]));
-    payload.extend(vec![0u8; 16 + m.extra]);
+    for _ in 0..m.materials {
+        payload.extend(words(&[m.per_material_word]));
+    }
+    payload.extend(words(&[m.last_floats]));
+    for _ in 0..m.last_floats {
+        payload.extend(1.0f32.to_le_bytes());
+    }
+    payload.extend(vec![0u8; m.extra]);
+    payload.truncate(payload.len() - m.cut);
+    let length = payload.len();
     b.add_export(cls, "ToyMesh", payload);
+    if m.next_export {
+        b.add_export(cls, "ToyNext", next);
+    }
     let pkg = Package::from_decoded(Default::default(), "probe".into(), b.build()).unwrap();
     assert_eq!(pkg.object(1).unwrap().offset as usize, base, "the payload's place is stable");
+    if m.next_export {
+        assert_eq!(pkg.object(2).unwrap().offset as usize, base + length, "the second export follows at once");
+    }
     pkg
 }
 
@@ -313,4 +368,76 @@ fn the_name_map_and_the_end_are_checked() {
     let mut extra = mesh();
     extra.extra = 3;
     assert_eq!(models(&extra), Err(LodCountError::Leftover { bytes: 3 }));
+}
+
+/// Review r1 of #673, item 1: the decoded `LODInfo` entries are compared, not the declared count. A tag declaring two
+/// entries with an empty body is refused by the walk, and so are bytes that are not two tagged structs.
+#[test]
+fn the_lod_info_entries_must_decode() {
+    let mut empty = mesh();
+    empty.lod_info_body = Some(Vec::new());
+    assert!(matches!(read(&empty), Err(LodCountError::Asset(_))), "{:?}", read(&empty));
+    assert!(matches!(models(&empty), Err(LodCountError::Asset(_))));
+    let mut raw = mesh();
+    raw.lod_info_body = Some(vec![0xEEu8; 8]);
+    assert!(read(&raw).is_err(), "{:?}", read(&raw));
+}
+
+/// Review r1 of #673, item 2: a non-empty bulk block is refused (its elements are not decoded), and so is the
+/// trailer's per-material word or last array in a shape not seen.
+#[test]
+fn undecoded_contents_are_refused() {
+    for (bulk, field) in [([-1, 0], "bulk element count"), ([0, 4], "bulk size")] {
+        let mut m = mesh();
+        m.bulk = bulk;
+        let got = models(&m);
+        assert!(matches!(got, Err(LodCountError::LodModel { lod: 0, field: f, .. }) if f == field), "{got:?}");
+    }
+    let mut word = mesh();
+    word.per_material_word = 7;
+    assert_eq!(models(&word), Err(LodCountError::Trailer(7)));
+    let mut five = mesh();
+    five.last_floats = 5;
+    assert_eq!(models(&five), Err(LodCountError::Trailer(5)));
+}
+
+/// Review r1 of #673, item 3: each section's span must fit the index buffer (checked arithmetic), and every index
+/// must name a vertex of the section's chunk.
+#[test]
+fn each_section_span_and_index_is_checked() {
+    let mut far = mesh();
+    far.first_index = u32::MAX;
+    let got = models(&far);
+    assert!(matches!(got, Err(LodCountError::LodModel { field: "section index span", .. })), "{got:?}");
+    let mut past = mesh();
+    past.last_index = 3;
+    assert_eq!(models(&past), Err(LodCountError::LodModel { lod: 0, field: "section index", found: 3 }));
+}
+
+/// Review r1 of #673, item 2: every vertex's influences are decoded: the weights sum to 255, and a weighted bone
+/// index names an entry of its chunk's bone map.
+#[test]
+fn every_vertex_influence_is_checked() {
+    let mut light = mesh();
+    light.weights = [200, 0, 0, 0];
+    assert_eq!(models(&light), Err(LodCountError::LodModel { lod: 0, field: "vertex weight total", found: 200 }));
+    let mut stray = mesh();
+    stray.first_bone = 1;
+    assert_eq!(models(&stray), Err(LodCountError::LodModel { lod: 0, field: "vertex bone index", found: 1 }));
+}
+
+/// Review r1 of #673: the export boundary holds. With a second export right after the mesh in the file, a mesh cut
+/// short is refused, never read on into the next export; uncut, the same layout reads.
+#[test]
+fn a_cut_export_is_refused_at_its_boundary() {
+    let mut whole = mesh();
+    whole.next_export = true;
+    assert_eq!(models(&whole).unwrap().models.len(), 2);
+    for cut in [4, 16] {
+        let mut m = mesh();
+        m.next_export = true;
+        m.cut = cut;
+        let got = models(&m);
+        assert!(matches!(got, Err(LodCountError::Asset(_))), "cut {cut}: {got:?}");
+    }
 }

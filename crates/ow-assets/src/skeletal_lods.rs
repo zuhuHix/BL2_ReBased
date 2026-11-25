@@ -19,8 +19,10 @@
 //! - every bone name is a valid name-table entry and every position and rotation number is finite;
 //! - bone 0 is its own parent (the root) and every other bone's parent comes before it;
 //! - the stored depth equals the depth the parent chain gives;
-//! - the LOD count is between 1 and 32 and **equals the length of the mesh's own tagged `LODInfo` array** (one entry
-//!   per LOD), which is read independently from the tag stream.
+//! - the LOD count is between 1 and 32 and **equals the number of decoded entries of the mesh's own tagged `LODInfo`
+//!   array** (one entry per LOD), read independently from the tag stream. Each entry is decoded as a tagged
+//!   `SkeletalMeshLODInfo` struct, and the entries must fill the tag's size exactly, so a declared count with a body
+//!   that does not hold that many entries is refused (review r1 of #673, item 1).
 //!
 //! The child counts are not checked. In the census they sum to the bone count less one for every mesh but one
 //! composite (gestalt) mesh, so their meaning there is not settled.
@@ -30,29 +32,37 @@
 //! **The LOD models** ([`read_lod_models`]): one model per LOD, each in this order, with what is checked:
 //! 1. the sections: a count (at least one), then 13 bytes each: a material index (2; not checked, because a
 //!    placeholder cube in the census holds 255 against one material), a chunk index (2; must name a chunk of the
-//!    model), the first index (4), the triangle count (4), a sort byte;
+//!    model), the first index (4), the triangle count (4), a sort byte. After the chunks are read, **each section's
+//!    span** (first index plus three per triangle, in checked arithmetic) must fit the index buffer, and every index
+//!    in it must name a vertex of the section's own chunk;
 //! 2. the index buffer: a CPU-access word (0 or 1), the index width byte (2 or 4), then an array whose element size
-//!    must equal that width and whose length must be **three times the sections' triangles**;
+//!    must equal that width and whose length must be **three times the sections' triangles**. Every index is
+//!    decoded and must name a vertex of the model;
 //! 3. the active bones: a count, then 2-byte bone indices (each a bone of the skeleton);
 //! 4. the chunks: a count, then each: its first vertex (**the sum of the chunks before it**), two vertex arrays that
 //!    must be empty (cooked meshes strip them; a non-empty one is refused, not decoded), a bone map (2-byte bone
 //!    indices), the rigid and soft vertex counts, and an influence count (1 to 4);
-//! 5. a word (not checked), then the vertex count, which must **equal the chunks' vertices**;
+//! 5. **an unidentified word** (not checked; zero in the census), then the vertex count, which must **equal the
+//!    chunks' vertices**;
 //! 6. the required bones: a count, then one bone index byte each;
-//! 7. a bulk-data block: flags (0), an element count, a size, and a position that must be **the block's own position
-//!    in the package**; the `size` bytes after it are skipped;
+//! 7. a bulk-data block: flags (0), an element count (0), a size (0), and a position that must be **the block's own
+//!    position in the package**. The block must be empty, the only state seen: a non-empty one is refused, because
+//!    its elements are not decoded;
 //! 8. the vertex buffer: the UV set count (1 to 4) twice, which must agree, a full-precision UV flag (0, the only
 //!    value seen), a packed-position flag (0 or 1), two finite 3-vectors, then an array whose element size must be
-//!    **28 + 4 per UV set** and whose length must equal the vertex count;
+//!    **28 + 4 per UV set** and whose length must equal the vertex count. **Each vertex's influences are decoded**
+//!    (fitted): four bone-index bytes at byte 8 and four weight bytes after them; the weights must sum to 255, and
+//!    every weighted index must name an entry of the bone map of the chunk that holds the vertex. The vertex's
+//!    other bytes (by fit, tangents, position and UVs) are stepped over inside the element, not decoded;
 //! 9. when the mesh's tagged `bHasVertexColors` is true (and only then), a colour array of 4-byte elements, one per
-//!    vertex;
-//! 10. **the trailing count**: the one LOD-model field whose meaning is not identified. Zero in every census LOD; a
+//!    vertex (every 4-byte value is a colour, so there is nothing to refuse);
+//! 10. **the trailing count**: an unidentified LOD-model field, like item 5's word. Zero in every census LOD; a
 //!     non-zero count is refused ([`LodCountError::TrailingArray`]), because its elements are not decoded.
 //!
 //! After the last model: the bone-name map, one (name, bone) pair per bone, where **each name must be that bone's own
 //! name** in the reference skeleton and each bone appears once; then three words (zero, refused otherwise), an array of
-//! either no entry or one 4-byte entry per material, and an array of 4-byte entries. **The last byte read must be the
-//! export's last.** The LOD models' vertex, index and colour data are stepped over, not decoded.
+//! either no entry or one word per material (each zero, the only value seen, refused otherwise), and an array of
+//! exactly four finite floats (the only shape seen). **The last byte read must be the export's last.**
 
 use std::fmt;
 
@@ -73,6 +83,11 @@ pub const SECTION_BYTES: usize = 13;
 const CHUNK_MIN_BYTES: usize = 28;
 /// A vertex's bytes before its UV sets, each of which adds 4 (fitted from the census, where it holds for every LOD).
 pub const VERTEX_BASE_BYTES: usize = 28;
+/// Where a vertex's four bone-index bytes start, followed by its four weight bytes (fitted from the census: the
+/// weights sum to 255 in every vertex, and every weighted index names an entry of the vertex's chunk bone map).
+pub const VERTEX_INFLUENCE_AT: usize = 8;
+/// The length of the trailer's last array (the only length the census holds).
+const TRAILER_FLOATS: usize = 4;
 
 /// What the reader returns: the counts up to and including the LOD count.
 #[non_exhaustive]
@@ -107,6 +122,8 @@ pub enum LodCountError {
     LodRange(i32),
     /// The mesh has no tagged `LODInfo` array to check the count against.
     NoLodInfo,
+    /// The tagged `LODInfo` array's elements did not decode.
+    LodInfoUndecoded,
     /// The native count and the tagged `LODInfo` length differ.
     LodInfo { native: usize, tagged: i32 },
     /// A LOD-model field outside the fitted layout: the LOD, the field, the value found.
@@ -134,6 +151,7 @@ impl fmt::Display for LodCountError {
             }
             LodCountError::LodRange(n) => write!(f, "a LOD count of {n} (1 to {MAX_LODS} accepted)"),
             LodCountError::NoLodInfo => write!(f, "no tagged LODInfo array to check the LOD count against"),
+            LodCountError::LodInfoUndecoded => write!(f, "the tagged LODInfo array's elements did not decode"),
             LodCountError::LodInfo { native, tagged } => {
                 write!(f, "the LOD count {native} differs from the tagged LODInfo array's {tagged} entries")
             }
@@ -177,6 +195,19 @@ struct Prefix {
     vertex_colors: bool,
 }
 
+/// The caller's array typer, with `LODInfo`'s elements typed as tagged `SkeletalMeshLODInfo` structs, so the walk
+/// decodes them (the struct's own fields are not used here).
+struct LodInfoTyper<'a>(&'a dyn ArrayTyper);
+
+impl ArrayTyper for LodInfoTyper<'_> {
+    fn element(&self, scope: &props::ArrayScope<'_>, property: &str) -> Option<props::ElementType> {
+        if property.eq_ignore_ascii_case("LODInfo") {
+            return Some(props::ElementType::Struct("SkeletalMeshLODInfo".into()));
+        }
+        self.0.element(scope, property)
+    }
+}
+
 fn read_prefix(
     package: &Package,
     index: i32,
@@ -188,15 +219,17 @@ fn read_prefix(
         return Err(LodCountError::NotSkeletalMesh(class));
     }
     let (_, object_end) = props::property_range(package, index, property_offset).map_err(AssetError::from)?;
-    let walked = props::read_tagged(package, index, property_offset, typer).map_err(AssetError::from)?;
-    let tagged = walked
-        .entries
-        .iter()
-        .find(|e| e.name.eq_ignore_ascii_case("LODInfo") && e.index == 0)
-        .and_then(|e| e.tag.as_ref())
-        .and_then(|t| t.array.as_ref())
-        .map(|a| a.count)
-        .ok_or(LodCountError::NoLodInfo)?;
+    let typer = LodInfoTyper(typer);
+    let walked = props::read_tagged(package, index, property_offset, &typer).map_err(AssetError::from)?;
+    // The decoded entries, not the declared count (review r1 of #673, item 1): the walker decodes each element as a
+    // tagged struct and requires the elements to fill the tag's size exactly.
+    let tagged = match walked.entries.iter().find(|e| e.name.eq_ignore_ascii_case("LODInfo") && e.index == 0) {
+        Some(e) => match &e.value {
+            props::PropValue::Array(elements) => i32::try_from(elements.len()).unwrap_or(i32::MAX),
+            _ => return Err(LodCountError::LodInfoUndecoded),
+        },
+        None => return Err(LodCountError::NoLodInfo),
+    };
     let vertex_colors = walked
         .entries
         .iter()
@@ -265,9 +298,9 @@ pub struct LodModel {
     pub uv_sets: usize,
     /// Whether the model carries the per-vertex colour buffer (the mesh's tagged `bHasVertexColors`).
     pub vertex_colors: bool,
-    /// The count word that ends the model: the one LOD-model field whose meaning is not identified. A read that
-    /// succeeds has it at zero, because a non-zero count is refused ([`LodCountError::TrailingArray`]): its elements
-    /// are not decoded.
+    /// The count word that ends the model, an unidentified field (as is the word before the vertex count). A read
+    /// that succeeds has it at zero, because a non-zero count is refused ([`LodCountError::TrailingArray`]): its
+    /// elements are not decoded.
     pub trailing: usize,
 }
 
@@ -314,8 +347,9 @@ pub fn read_lod_models(
             _ => return Err(LodCountError::NameMap { entry }),
         }
     }
-    // The trailer: three words (zero in the census; anything else is refused, not decoded), an array of no entry or
-    // one 4-byte entry per material, and an array of 4-byte entries.
+    // The trailer, every element decoded (review r1 of #673, item 2): three words (zero in the census; anything else
+    // is refused), an array of no entry or one 4-byte word per material (each zero, the only value seen), and an
+    // array of exactly four finite floats (the only shape seen).
     for _ in 0..3 {
         let word = r.u32()?;
         if word != 0 {
@@ -326,9 +360,19 @@ pub fn read_lod_models(
     if per_material != 0 && per_material != prefix.materials {
         return Err(LodCountError::Trailer(per_material as i64));
     }
-    r.skip(4 * per_material)?;
+    for _ in 0..per_material {
+        let word = r.u32()?;
+        if word != 0 {
+            return Err(LodCountError::Trailer(i64::from(word)));
+        }
+    }
     let last = count(&mut r, 4)?;
-    r.skip(4 * last)?;
+    if last != TRAILER_FLOATS {
+        return Err(LodCountError::Trailer(last as i64));
+    }
+    for _ in 0..last {
+        real(&mut r)?;
+    }
     if r.pos() != prefix.object_end {
         return Err(LodCountError::Leftover { bytes: prefix.object_end.saturating_sub(r.pos()) });
     }
@@ -347,22 +391,24 @@ fn bone(index: u16, lod: usize, prefix: &SkeletalLods, field: &'static str) -> R
 
 /// One LOD model (module documentation, "The LOD models").
 fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colors: bool) -> Result<LodModel, LodCountError> {
-    // 1. The sections.
+    // 1. The sections: (chunk, first index, triangles) kept for the span checks after the chunks.
     let sections = count(r, SECTION_BYTES)?;
     if sections == 0 {
         return Err(misfit(lod, "section count", 0));
     }
     let mut triangles = 0usize;
-    let mut section_chunks = Vec::with_capacity(sections);
+    let mut spans = Vec::with_capacity(sections);
     for _ in 0..sections {
         // The material index is not checked: a placeholder cube in the census holds 255 against one material.
         read_u16(r)?;
-        section_chunks.push(read_u16(r)?);
-        r.u32()?;
-        triangles = triangles.saturating_add(r.u32()? as usize);
+        let chunk = usize::from(read_u16(r)?);
+        let first = r.u32()? as usize;
+        let tris = r.u32()? as usize;
+        triangles = triangles.checked_add(tris).ok_or(misfit(lod, "section triangle count", tris as i64))?;
         byte(r)?;
+        spans.push((chunk, first, tris));
     }
-    // 2. The index buffer.
+    // 2. The index buffer, every index decoded.
     let access = r.u32()?;
     if access > 1 {
         return Err(misfit(lod, "index CPU-access word", i64::from(access)));
@@ -375,23 +421,24 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
     if stride != u32::from(width) {
         return Err(misfit(lod, "index stride", i64::from(stride)));
     }
-    let indices = count(r, usize::from(width))?;
-    if Some(indices) != triangles.checked_mul(3) {
-        return Err(misfit(lod, "index count", indices as i64));
+    let count_of_indices = count(r, usize::from(width))?;
+    if Some(count_of_indices) != triangles.checked_mul(3) {
+        return Err(misfit(lod, "index count", count_of_indices as i64));
     }
-    r.skip(indices * usize::from(width))?;
+    let mut indices = Vec::with_capacity(count_of_indices);
+    for _ in 0..count_of_indices {
+        indices.push(if width == 2 { u32::from(read_u16(r)?) } else { r.u32()? } as usize);
+    }
     // 3. The active bones.
     let active = count(r, 2)?;
     for _ in 0..active {
         bone(read_u16(r)?, lod, prefix, "active bone")?;
     }
-    // 4. The chunks, each starting where the one before ends.
-    let chunks = count(r, CHUNK_MIN_BYTES)?;
-    if let Some(&c) = section_chunks.iter().find(|&&c| usize::from(c) >= chunks) {
-        return Err(misfit(lod, "section chunk", i64::from(c)));
-    }
+    // 4. The chunks, each starting where the one before ends: (first vertex, vertex count, bone map length).
+    let chunk_count = count(r, CHUNK_MIN_BYTES)?;
+    let mut chunks = Vec::with_capacity(chunk_count);
     let mut vertices = 0usize;
-    for _ in 0..chunks {
+    for _ in 0..chunk_count {
         let first = r.u32()? as usize;
         if first != vertices {
             return Err(misfit(lod, "chunk first vertex", first as i64));
@@ -406,17 +453,37 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
         for _ in 0..map {
             bone(read_u16(r)?, lod, prefix, "chunk bone map entry")?;
         }
+        let mut own = 0usize;
         for field in ["chunk rigid vertex count", "chunk soft vertex count"] {
             let n = r.i32()?;
             let n = usize::try_from(n).map_err(|_| misfit(lod, field, i64::from(n)))?;
-            vertices = vertices.checked_add(n).ok_or(misfit(lod, field, n as i64))?;
+            own = own.checked_add(n).ok_or(misfit(lod, field, n as i64))?;
         }
+        vertices = vertices.checked_add(own).ok_or(misfit(lod, "chunk vertex count", own as i64))?;
         let influences = r.i32()?;
         if !(1..=4).contains(&influences) {
             return Err(misfit(lod, "chunk influence count", i64::from(influences)));
         }
+        chunks.push((first, own, map));
     }
-    // 5. A word not checked, then the vertex count.
+    // The sections against the index buffer and the chunks (review r1 of #673, item 3): each span fits the index
+    // buffer, with checked arithmetic, and every index it covers names a vertex of the section's own chunk.
+    for &(chunk, first, tris) in &spans {
+        let Some(&(chunk_first, chunk_vertices, _)) = chunks.get(chunk) else {
+            return Err(misfit(lod, "section chunk", chunk as i64));
+        };
+        let end = tris.checked_mul(3).and_then(|n| first.checked_add(n)).filter(|&e| e <= indices.len());
+        let Some(end) = end else {
+            return Err(misfit(lod, "section index span", first as i64));
+        };
+        if let Some(&i) = indices[first..end].iter().find(|&&i| i < chunk_first || i - chunk_first >= chunk_vertices) {
+            return Err(misfit(lod, "section index", i as i64));
+        }
+    }
+    if let Some(&i) = indices.iter().find(|&&i| i >= vertices) {
+        return Err(misfit(lod, "index", i as i64));
+    }
+    // 5. An unidentified word (not checked), then the vertex count.
     r.u32()?;
     let stated = r.u32()? as usize;
     if stated != vertices {
@@ -427,19 +494,24 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
     for _ in 0..required {
         bone(u16::from(byte(r)?), lod, prefix, "required bone")?;
     }
-    // 7. A bulk-data block: flags, element count, size, and its own position in the package.
+    // 7. A bulk-data block: flags, element count, size, and its own position in the package. It must be empty (the
+    // only state seen): its elements are not decoded (review r1 of #673, item 2).
     let flags = r.u32()?;
     if flags != 0 {
         return Err(misfit(lod, "bulk flags", i64::from(flags)));
     }
-    r.i32()?;
+    let elements = r.i32()?;
+    if elements != 0 {
+        return Err(misfit(lod, "bulk element count", i64::from(elements)));
+    }
     let size = r.i32()?;
-    let size = usize::try_from(size).map_err(|_| misfit(lod, "bulk size", i64::from(size)))?;
+    if size != 0 {
+        return Err(misfit(lod, "bulk size", i64::from(size)));
+    }
     let at = r.u32()? as usize;
     if at != r.pos() {
         return Err(misfit(lod, "bulk position", at as i64));
     }
-    r.skip(size)?;
     // 8. The vertex buffer.
     let uv_sets = r.u32()? as usize;
     let again = r.u32()? as usize;
@@ -465,8 +537,24 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
     if buffered != vertices {
         return Err(misfit(lod, "vertex buffer count", buffered as i64));
     }
-    r.skip(buffered * stride)?;
-    // 9. The colour buffer, when the mesh's tag says it has one.
+    // Each vertex's influences decoded (review r1 of #673, item 2): the weights sum to 255, and every weighted bone
+    // index names an entry of the bone map of the chunk that holds the vertex. The vertex's other bytes are stepped
+    // over within the element (not decoded).
+    for &(_, own, map) in &chunks {
+        for _ in 0..own {
+            let vertex = r.take(stride)?;
+            let at = VERTEX_INFLUENCE_AT;
+            let (bones, weights) = (&vertex[at..at + 4], &vertex[at + 4..at + 8]);
+            let total: u32 = weights.iter().map(|&w| u32::from(w)).sum();
+            if total != 255 {
+                return Err(misfit(lod, "vertex weight total", i64::from(total)));
+            }
+            if let Some(k) = (0..4).find(|&k| weights[k] > 0 && usize::from(bones[k]) >= map) {
+                return Err(misfit(lod, "vertex bone index", i64::from(bones[k])));
+            }
+        }
+    }
+    // 9. The colour buffer, when the mesh's tag says it has one: one 4-byte colour per vertex, every value a colour.
     if vertex_colors {
         let stride = r.u32()?;
         let colours = count(r, 4)?;
@@ -480,7 +568,7 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
     if trailing != 0 {
         return Err(LodCountError::TrailingArray { lod, count: trailing });
     }
-    Ok(LodModel { sections, triangles, chunks, vertices, uv_sets, vertex_colors, trailing: 0 })
+    Ok(LodModel { sections, triangles, chunks: chunk_count, vertices, uv_sets, vertex_colors, trailing: 0 })
 }
 
 #[cfg(test)]
