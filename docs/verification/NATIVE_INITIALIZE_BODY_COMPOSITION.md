@@ -413,7 +413,7 @@ item is reached only once everything before it has an answer:
 
 ## 8. Amendment (2026-11-25): the `Parent` link's flag, identified
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-CUSTOMHEAD-PARENT-FLAG (decision 2026-11-25-NNN), analyst only:
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-CUSTOMHEAD-PARENT-FLAG (decision 2026-11-25-51), analyst only:
 **another lane implements this section.** Raw output stays under ignored `local/analysis/parentflag/`. **Every rule
 here is UNVERIFIED in the running game.**
 
