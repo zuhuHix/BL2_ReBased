@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SLICE-GATE-STEP-SHARE (2026-11-25, pc-hummer, on main faa3bbcc):** AI-assisted (Claude Code, Opus 5.5). After its
+JSON rows, `--slice-gate` prints a report to stderr: one line per link, `link <n> <name>: <result>, steps
+<passed>/<total>` (total = the link's own step list; a strict row's stop step does not count as passed), then `links
+ok <P>/14` and `step share X = <sum>/14 = <pct>%` (X = mean of passed/total; a link with no steps counts 1 if ok, else
+0). Stdout, the grading and the exit code are unchanged, and `tools/check_slice_run_off.py` reads the rows as before.
+`cargo test --workspace -j 8` 3,367 passed / 0 failed / 52 ignored; `crate_edges_test.py` 19 OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock): 4 ok / 10 NotYet / 0 error; `links ok 4/14`,
+`step share X = 5.283/14 = 37.7%`, the same as the hand count. A report only: no real-game run.
+
 **LINUX-PATHS (2026-11-25, zuhuPC Linux, on fix/linux-install-paths from main faa3bbc):** AI-assisted (Claude Code,
 Opus 5.5). Windows-cased file joins resolve ignoring case (`ow_core::install`), and `ow-host` accepts Aspyr's
 `steamassets/willowgame/cookedpcconsole` layout. `cargo test --workspace --no-fail-fast`: 3366 passed / 4 failed / 52
