@@ -1,7 +1,7 @@
 ## 2026-11-25: Actor.Trace in Off leaves out primitives the collision hash cannot admit
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-TRACE-HASH-ADMISSION, slice link 9. The file number is a placeholder
-until the landing run numbers it. Coded from docs/verification/NATIVE_ACTOR_TRACE.md section 5 alone (the analyst
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-TRACE-HASH-ADMISSION, slice link 9.
+Coded from docs/verification/NATIVE_ACTOR_TRACE.md section 5 alone (the analyst
 amendment that landed with #659, decision 2026-11-19-265, including its r1 points). Clean room: this lane did not read
 the native and did not write the note. Synthetic fixtures only.
 
