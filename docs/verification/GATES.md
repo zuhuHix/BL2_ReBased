@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINUX-PATHS (2026-11-25, zuhuPC Linux, on fix/linux-install-paths from main faa3bbc):** AI-assisted (Claude Code,
+Opus 5.5). Windows-cased file joins resolve ignoring case (`ow_core::install`), and `ow-host` accepts Aspyr's
+`steamassets/willowgame/cookedpcconsole` layout. `cargo test --workspace --no-fail-fast`: 3366 passed / 4 failed / 52
+ignored (the 4 expected N1 float-oracle failures on Linux); `crate_edges_test.py` OK. On the Aspyr install, under the
+machine lock: `ow-host --game <install>` exit 0, `--game /tmp` exit 1. Installed Off strict `--slice-gate`: 1 ok / 3
+NotYet / 10 error, link 2 ok, links 6, 7 and 9 NotYet. Links 10 to 12 now open their package. All 10 errors are the
+lower-case package names (`Package::load` names a package after its file stem), left for the maintainer. This is not
+the Windows reading (4/10/0). UNVERIFIED in game.
+
 **ANALYST-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-20, pc-hummer, docs only, on docs/native-unlock-class-achievement-2,
 rebased onto main d3c7a13):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md, link 9's next
 stop after the trace amendment. No code changed, so no measured number moved; the slice gate was not run for this lane.

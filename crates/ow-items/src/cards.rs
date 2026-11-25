@@ -442,12 +442,11 @@ impl Localization {
     ) -> Result<Option<String>, ItemError> {
         let package = path.split('.').next().unwrap_or(path).to_string();
         if !self.files.borrow().contains_key(&package) {
-            let file = self
-                .game
-                .join("WillowGame")
-                .join("Localization")
-                .join("INT")
-                .join(format!("{package}.int"));
+            // In its own case and install layout (lane LINUX-PATHS, `ow_core::install`).
+            let case = |e: ow_core::install::PathCaseError| ItemError::BadData(e.to_string());
+            let content = ow_core::install::content_root(&self.game).map_err(case)?;
+            let file = ow_core::install::resolve_or_join(&content, &format!("WillowGame/Localization/INT/{package}.int"))
+                .map_err(case)?;
             let read = Localization::read(&file)?;
             self.files.borrow_mut().insert(package.clone(), read);
         }

@@ -752,8 +752,10 @@ fn run_fire_once(
     ran: &mut [Option<Ran>],
     status: &mut [u8],
 ) -> bool {
-    let source = Path::new(cooked).join(FIRE_SOURCE);
+    // The file in its own case (lane LINUX-PATHS, `ow_core::install`): Aspyr's Linux build names it in lower case.
+    let source = ow_core::install::resolve_or_join(Path::new(cooked), FIRE_SOURCE);
     let setup = || -> Result<(ow_world::world::World, FireMissionSlice), slice::Failure> {
+        let source = source.clone().map_err(|e| slice::Failure::from(e.to_string()))?;
         let package = ow_package::package::Package::load(&source)
             .map_err(|e| slice::Failure::from(e.to_string()))?;
         let name = PackageName::parse(&package.name).map_err(|e| slice::Failure::from(e.to_string()))?;
@@ -848,7 +850,10 @@ fn run_fire(cooked: &str, grading: Grading, ran: &mut [Option<Ran>], status: &mu
     if !run_fire_once(cooked, IdentityPolicy::FirstInScanOrder, grading, ran, status) {
         return;
     }
-    let args = [Path::new(cooked).join(FIRE_SOURCE).to_string_lossy().into_owned()];
+    let Ok(source) = ow_core::install::resolve_or_join(Path::new(cooked), FIRE_SOURCE) else {
+        return; // ambiguous: the first run above has already reported it
+    };
+    let args = [source.to_string_lossy().into_owned()];
     if let Some(set) = slice::load_set(&args) {
         ran.clone_from_slice(&first);
         status.fill(0);

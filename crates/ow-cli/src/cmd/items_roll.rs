@@ -283,13 +283,12 @@ impl Session {
         let census = defs.census().map_err(ow_items::ItemError::from)?;
         let root = defs.packages().root().to_path_buf();
         let input = CensusInput::from_store(census, &root);
-        let package: PathBuf = WEAPON_PACKAGE.split('/').collect();
         let weapons: DetSet<String> = input
             .paths
             .iter()
             .filter(|e| {
                 e.holders.iter().any(|h| {
-                    h.file.ends_with(&package)
+                    ow_core::install::ends_with(&h.file, WEAPON_PACKAGE)
                         && WEAPON_BALANCE_CLASSES
                             .iter()
                             .any(|c| h.class == format!("WillowGame.{c}"))

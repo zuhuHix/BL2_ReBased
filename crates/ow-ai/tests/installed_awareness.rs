@@ -42,7 +42,7 @@ use ow_world::world::{BalanceState, World};
 
 fn cooked() -> Option<PathBuf> {
     let root = std::env::var_os("OPENWILLOW_BL2")?;
-    let p = PathBuf::from(root).join("WillowGame").join("CookedPCConsole");
+    let p = ow_core::install::cooked_or_join(&PathBuf::from(root)).unwrap();
     p.is_dir().then_some(p)
 }
 

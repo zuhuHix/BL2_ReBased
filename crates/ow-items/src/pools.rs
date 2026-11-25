@@ -292,9 +292,8 @@ impl PoolData {
         root: &Path,
         files_in: &[&str],
     ) -> CensusInput {
-        let rels: Vec<std::path::PathBuf> =
-            files_in.iter().map(|f| f.split('/').collect()).collect();
-        let rank = |file: &Path| rels.iter().position(|r| file.ends_with(r));
+        // Each name matched exactly or ignoring case (lane LINUX-PATHS, `ow_core::install::ends_with`).
+        let rank = |file: &Path| files_in.iter().position(|r| ow_core::install::ends_with(file, r));
         let mut rows: Vec<((usize, i32), PathHolders)> = Vec::new();
         let mut found: Vec<(usize, std::path::PathBuf)> = Vec::new();
         for entry in &census.entries {

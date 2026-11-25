@@ -107,7 +107,7 @@ mod tests {
         ) else {
             panic!("set OPENWILLOW_BL2, OW_SKELETAL_EXPORTS and OW_SKELETAL_MESH");
         };
-        let cooked = PathBuf::from(game).join("WillowGame").join("CookedPCConsole");
+        let cooked = ow_core::install::cooked_or_join(&PathBuf::from(game)).unwrap();
         let mut vm = crate::cmd::slice::open(cooked.to_str().unwrap(), ow_core::ParityMode::Off, ow_defs::identity::IdentityPolicy::FirstInScanOrder)
             .unwrap_or_else(|_| panic!("open"));
         let path = ow_core::ObjectPath::parse(&mesh).unwrap();
