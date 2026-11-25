@@ -1893,15 +1893,26 @@ impl DefStore {
     /// `obj`, the store's object for a path, loaded from **file `file`'s own export at that path** when `file` holds
     /// one, in place of the export the identity policy picked (lane LINK1-HEAD-MESH, the hub's ruling; **UNVERIFIED**
     /// that the game resolves it so). It is for a reference followed out of an object loaded from `file`: a cooked
-    /// package holds its own copy of what it references, and the game, which loads that file, has that copy. Only a
-    /// handle not loaded yet is re-pointed. One already loaded from another file's copy is a typed
-    /// `NotYet { NotRead }` naming both files, an identity conflict. A handle whose load failed returns that error
-    /// again. Every other lookup (`find`, `resolve_ref`, `ensure_loaded`, `load`) keeps the policy's holder.
+    /// package holds its own copy of what it references, and the game, which loads that file, has that copy.
+    ///
+    /// Only a handle not loaded yet is re-pointed. The re-point moves the handle, its holder-export entry and the
+    /// path's cached holder to `file`'s export, so **a re-pointed handle is `file`'s copy for everyone afterwards**:
+    /// later overlays and archetype lookups of the path read that copy (ones made before it read the policy's). No
+    /// other lookup (`find`, `resolve_ref`, `ensure_loaded`, `load`) ever re-points. Refused with a typed
+    /// `NotYet { NotRead }`, nothing changed:
+    /// - a handle already loaded from another file's copy (an identity conflict, naming both files);
+    /// - a path an installed overlay patches (its patches are placed by the policy's holder; review of #727).
+    ///
+    /// A handle whose load already failed returns that error again, whichever file is asked. If `file`'s copy fails to
+    /// load, the handle goes back to the policy's holder, and the error is returned.
     pub fn load_export_of_file(&mut self, w: &mut ObjectSpace, obj: ObjRef, file: PackageId) -> Result<FileCopy, DefError> {
         let pkg = self.packages.shared(file);
         let entry = self.handles.borrow().entries.get(&obj).cloned();
+        if let Some(Entry::Failed { error, .. }) = &entry {
+            return Err(error.clone());
+        }
         let (path, loaded_from) = match (&entry, w.heap.get(obj)?.origin) {
-            (Some(Entry::Unloaded { path, .. } | Entry::Failed { path, .. }), _) => (path.clone(), None),
+            (Some(Entry::Unloaded { path, .. }), _) => (path.clone(), None),
             (Some(Entry::Loaded { .. }), Origin::Export { package, index }) => {
                 (full_path(&self.packages.shared(package), index).map_err(package_error)?, Some((package, index)))
             }
@@ -1915,28 +1926,62 @@ impl DefStore {
             return Ok(FileCopy::NotInFile);
         };
         let same_file = |a: PackageId| a == file || self.packages.get(a).source == pkg.source;
+        let refuse = |why: String| DefError::NotYet(NotYet::not_read(format!("the definition store: {path} {why}"), RECORD));
         match (entry, loaded_from) {
             (_, Some((package, i))) if same_file(package) && i == index => Ok(FileCopy::Loaded),
-            (_, Some((package, _))) => Err(DefError::NotYet(NotYet::not_read(
-                format!(
-                    "the definition store: {path} is resident from {}, and {} holds its own copy (an identity conflict)",
-                    self.packages.get(package).name,
-                    pkg.name
-                ),
-                RECORD,
+            (_, Some((package, _))) => Err(refuse(format!(
+                "is resident from {}, and {} holds its own copy (an identity conflict)",
+                self.packages.get(package).name,
+                pkg.name
             ))),
-            (Some(Entry::Unloaded { path, target }), None) => {
-                if !(same_file(target.0) && target.1 == index) {
-                    let mut handles = self.handles.borrow_mut();
-                    handles.by_target.remove(&target);
-                    handles.by_target.insert((file, index), obj);
-                    handles.entries.insert(obj, Entry::Unloaded { path, target: (file, index) });
+            (Some(Entry::Unloaded { path: handle_path, target }), None) => {
+                if same_file(target.0) && target.1 == index {
+                    self.ensure_loaded(w, obj)?;
+                    return Ok(FileCopy::Loaded);
                 }
-                self.ensure_loaded(w, obj)?;
+                let overlaid = self
+                    .overlays
+                    .installed
+                    .iter()
+                    .any(|i| i.overlay.patches.iter().any(|patch| path_key(patch.object.as_str()) == key));
+                if overlaid {
+                    return Err(refuse(format!(
+                        "has an overlay installed, placed by the policy's holder; re-pointing it to {}'s own copy is not \
+                         read",
+                        pkg.name
+                    )));
+                }
+                let old_holder = self.handles.borrow().holders.get(&key).copied();
+                self.repoint(obj, &key, handle_path.clone(), target, (file, index), Some(Some((file, index))));
+                if let Err(e) = self.ensure_loaded(w, obj) {
+                    self.repoint(obj, &key, handle_path, (file, index), target, old_holder);
+                    return Err(e);
+                }
                 Ok(FileCopy::Loaded)
             }
-            _ => self.ensure_loaded(w, obj).map(|()| FileCopy::Loaded),
+            _ => Ok(FileCopy::NotInFile),
         }
+    }
+
+    /// Moves unloaded handle `obj` from holder export `from` to `to`, and the path's cached holder to `holder` (`None`:
+    /// no cache entry).
+    fn repoint(
+        &self,
+        obj: ObjRef,
+        key: &str,
+        path: String,
+        from: (PackageId, i32),
+        to: (PackageId, i32),
+        holder: Option<Option<(PackageId, i32)>>,
+    ) {
+        let mut handles = self.handles.borrow_mut();
+        handles.by_target.remove(&from);
+        handles.by_target.insert(to, obj);
+        handles.entries.insert(obj, Entry::Unloaded { path, target: to });
+        match holder {
+            Some(h) => handles.holders.insert(key.to_string(), h),
+            None => handles.holders.remove(key),
+        };
     }
 
     /// Export `index` of `package`, loaded. Its tags are read from the prefix the store derives for it (module

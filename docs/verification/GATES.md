@@ -4,9 +4,11 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **LINK1-HEAD-MESH (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh from #721 c845ff85):** AI-assisted (Claude
 Code, Opus 5.5). Link 1's set-up walks Maya's body composition templates and their meshes, loading only exports of her
-pawn's streaming package file, and a reference followed from that file loads its own copy of the path
-(`DefStore::load_export_of_file`; UNVERIFIED stand-in and store rule; hub rulings).
-- `cargo test --workspace -j 8 --no-fail-fast`: 3,599 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+pawn's streaming package file, and a store handle reached from that file loads the file's own copy of its path
+(`DefStore::load_export_of_file`; UNVERIFIED stand-in and store rule; hub rulings). Only those handle loads re-point;
+overlays and archetype chains resolved before a re-point keep the policy's holder.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,599 passed / 0 failed / 57 ignored; after review r1 of #727 (on main
+  ca547247), 3,647 / 0 / 57. `crate_edges_test.py`: OK.
 - Installed Off `--slice-gate` strict (release build, under the machine lock):
   - the walk alone (base fc1a46cb, 546b0fd1): 5 ok / 9 NotYet / 0 errors on both; link 1 at "the skeletal mesh data
     layer: the unloaded skeletal mesh CubeForCode" (the store's Assassin copy);
@@ -14,8 +16,12 @@ pawn's streaming package file, and a reference followed from that file loads its
     in `maya:8` at the error "unbound native BodyClassDefinition.GetWeaponHoldDef(name,object,bool,bool)"; links 3, 4,
     5, 13 and 14 report the same. Every other row is unchanged.
 
-No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/filecopy/`, `local/p2/bodywalk/` and
-`local/p2/bodywalk-base/`. Decision 2026-11-25-62.
+  - review r1 of #727, on main ca547247: before (633c5395) and after (fc805f2c), 5 ok / 2 NotYet / 7 errors on both,
+    row for row equal. Link 1 is unchanged; link 8's new error ("WillowWeapon.OnCreate(array)", unbound) is main's
+    (#726's note landed, not its implementation).
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/filecopy/`, `local/p2/filecopy-r1/`,
+`local/p2/filecopy-r1-base/`, `local/p2/bodywalk/` and `local/p2/bodywalk-base/`. Decision 2026-11-25-62.
 
 **IMPL-WEAPON-ONCREATE (2026-11-25, pc-hummer, on fix/rust-psc-setcolorparameter d3c22f85):** AI-assisted (Claude
 Code, Opus 5.5). `WillowWeapon.OnCreate` in Off, from NATIVE_WEAPON_ON_CREATE.md section 4, sharing the broadcast's
