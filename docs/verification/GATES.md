@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-25, zuhu desktop (Linux), on fix/rust-unlock-class-achievement from
+main):** AI-assisted (Claude Code, Opus 5.5). `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet` in
+Off from NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md (#662), bound keep-existing by the inventory globals and the action-skill
+pack. `cargo test --workspace -j 4`: 3,373 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 52
+ignored, 13 new (11 in `ow-inventory`, 2 in `ow-skills`); `crate_edges_test.py` OK. Slice gate: not run (no install
+yet), so link 9's next stop is not measured. No real-game run; UNVERIFIED in game.
+
 **ANALYST-SKELMESH-COMPONENT-CHECK (2026-11-25, pc-hummer, docs only, on docs/native-skelmesh-component-check from
 main 3ad1b86d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_COMPONENT_SKIP_FLAG.md section 6: the bounding
 cylinder's per-component check is true for all 93 native primitive classes (the packages' 96 primitive descendants,

@@ -42,6 +42,7 @@ use crate::equip::{bad, field, object_of, required};
 /// `WillowPlayerController.UnlockAchievementIfConditionsMet`, which reads the globals definition (lane
 /// IMPL-LINK12-UNLOCK-ACHIEVEMENT).
 pub mod achievement;
+pub mod class_achievement;
 
 /// The record these natives follow.
 pub const RECORD: &str = "NATIVE_WILLOW_GLOBALS.md";
@@ -421,7 +422,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
             vm.register_native_for(id, f)?;
         }
     }
-    achievement::register(vm)
+    achievement::register(vm)?;
+    class_achievement::register(vm)
 }
 
 #[cfg(test)]
