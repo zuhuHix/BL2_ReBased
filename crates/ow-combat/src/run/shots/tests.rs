@@ -433,9 +433,9 @@ fn fire_needs_a_player_and_a_held_weapon() {
 }
 
 /// Review r1 of #393: no firing mode is no shot read (`NotYet { NotRead }`, the records disagree); a mode of the
-/// wrong class is bad data. Lane IMPL-GETFIRINGMODEDEFINITION: an elemental part with its own mode and no barrel mode
-/// now answers the elemental part's mode (NATIVE_WEAPON_GET_FIRING_MODE.md section 2, the shared rule), where it was
-/// refused.
+/// wrong class is bad data. Lane IMPL-GETFIRINGMODEDEFINITION: in Off, an elemental part with its own mode and no
+/// barrel mode answers the elemental part's mode (NATIVE_WEAPON_GET_FIRING_MODE.md section 2, the shared rule); in
+/// Reference it is still refused, as before (review of #735).
 #[test]
 fn no_firing_mode_and_a_wrong_class_are_refused_and_the_elemental_mode_answers() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -455,7 +455,13 @@ fn no_firing_mode_and_a_wrong_class_are_refused_and_the_elemental_mode_answers()
         let (mut run, _dir) = armed_run(mode);
         let p = parts(&mut run, Some("Part_ElementalMode"), None);
         let vm = &mut run.world().vm;
-        assert_eq!(shot::firing_mode(vm, &p).unwrap(), Some(def(vm, "ToyWeapons.Mode_Beam")), "{mode:?}");
+        match mode {
+            ParityMode::Off => assert_eq!(shot::firing_mode(vm, &p).unwrap(), Some(def(vm, "ToyWeapons.Mode_Beam"))),
+            _ => match shot::firing_mode(vm, &p) {
+                Err(VmError::NotYet(n)) => assert!(n.to_string().contains("elemental part"), "{n}"),
+                other => panic!("{mode:?}: expected the old NotYet, got {other:?}"),
+            },
+        }
         // A barrel mode settles it whatever the elemental part holds: both records take the barrel's first.
         let p = parts(&mut run, Some("Part_ElementalMode"), Some("Barrel_Suppress"));
         let vm = &mut run.world().vm;
