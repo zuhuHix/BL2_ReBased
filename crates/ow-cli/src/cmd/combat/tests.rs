@@ -620,6 +620,126 @@ fn the_body_walk_loads_the_home_file_s_own_copy_of_a_duplicated_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The walk's weapon-hold part (lane IMPL-GETWEAPONHOLDDEF, the hub's ruling): from the body class along
+/// `WeaponActionParentClass`, each class's `WeaponHoldDefs` entries and `DefaultWeaponHoldDef`, loaded only when they
+/// are exports of the home package file. Invented packages: `GD_ToyHome` holds `Body` (holds `H1` and
+/// `GD_ToyOther.X`, default `D`, parent `Parent`) and `Parent` (default `PD`); `GD_ToyOther` holds `X`. H1, D, Parent
+/// and PD load; X is skipped with a line naming it.
+#[test]
+fn the_body_walk_loads_home_weapon_holds_and_the_parent_chain() {
+    use std::rc::Rc;
+
+    use ow_attr::AttributeSystem;
+    use ow_core::ObjectPath;
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::ObjectSpace;
+    use ow_object::value::Value;
+    use ow_package::testkit::ints;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!("ow-cli-holdwalk-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "ArrayProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let body = t.class("ToyBody", object);
+        let array = t.p.next_export();
+        t.prop("Array", body, "WeaponHoldDefs", 0, array + 1);
+        t.prop("Object", array, "WeaponHoldDefs", 0, object);
+        t.prop("Object", body, "DefaultWeaponHoldDef", 0, object);
+        t.prop("Object", body, "WeaponActionParentClass", 0, object);
+        t.class("ToyHold", object);
+        t.build()
+    };
+    let none_only = |t: &ScriptToy| {
+        let mut p = ints(&[0]);
+        p.extend_from_slice(&t.none);
+        p
+    };
+    let other = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let hold = t.p.add_import("Core", "Class", willow, "ToyHold");
+        let payload = none_only(&t);
+        t.p.add_export(hold, "X", payload);
+        t.build()
+    };
+    let home = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "ArrayProperty"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let body = t.p.add_import("Core", "Class", willow, "ToyBody");
+        let hold = t.p.add_import("Core", "Class", willow, "ToyHold");
+        let other_package = t.p.add_import("Core", "Package", 0, "GD_ToyOther");
+        let x = t.p.add_import("WillowGame", "ToyHold", other_package, "X");
+        let payload = none_only(&t);
+        let h1 = t.p.add_export(hold, "H1", payload.clone());
+        let d = t.p.add_export(hold, "D", payload.clone());
+        let pd = t.p.add_export(hold, "PD", payload);
+        let mut p = ints(&[0]);
+        p.extend(t.p.tag("DefaultWeaponHoldDef", "ObjectProperty", &ints(&[pd])));
+        p.extend_from_slice(&t.none);
+        let parent = t.p.add_export(body, "Parent", p);
+        let mut p = ints(&[0]);
+        p.extend(t.p.array_tag("WeaponHoldDefs", 2, &ints(&[h1, x])));
+        p.extend(t.p.tag("DefaultWeaponHoldDef", "ObjectProperty", &ints(&[d])));
+        p.extend(t.p.tag("WeaponActionParentClass", "ObjectProperty", &ints(&[parent])));
+        p.extend_from_slice(&t.none);
+        t.p.add_export(body, "Body", p);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Core.upk", core.as_slice()),
+        ("WillowGame.upk", willow.as_slice()),
+        ("GD_ToyHome.upk", home.as_slice()),
+        ("GD_ToyOther.upk", other.as_slice()),
+    ];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let body = vm.defs.find(&mut vm.space, &ObjectPath::parse("GD_ToyHome.Body").unwrap()).unwrap().unwrap();
+    let read = |vm: &Vm, o: ow_object::ids::ObjRef, name: &str| {
+        let c = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(c, name).unwrap();
+        vm.space.read(o, ow_object::ids::PropAddr::scalar(p)).unwrap().clone()
+    };
+    let one = |v: Value| match v {
+        Value::Object(Some(x)) => x,
+        other => panic!("{other:?}"),
+    };
+    let holds: Vec<_> = read(&vm, body, "WeaponHoldDefs").elements().unwrap().iter().cloned().map(one).collect();
+    let (h1, x) = (holds[0], holds[1]);
+    let (d, parent) = (one(read(&vm, body, "DefaultWeaponHoldDef")), one(read(&vm, body, "WeaponActionParentClass")));
+    for o in [h1, x, d, parent] {
+        assert!(vm.defs.is_unloaded(&vm.space, o), "every reference starts unloaded");
+    }
+    let home_id = super::file_package(&vm, body).unwrap();
+    let mut walk = super::BodyWalk { home: home_id, package: "GD_ToyHome".into(), visited: Vec::new(), loaded: 0 };
+    super::walk_weapon_holds(&mut vm, &mut walk, body).unwrap();
+    for o in [h1, d, parent] {
+        assert!(!vm.defs.is_unloaded(&vm.space, o), "a home hold, the default and the parent load");
+    }
+    let pd = one(read(&vm, parent, "DefaultWeaponHoldDef"));
+    assert!(!vm.defs.is_unloaded(&vm.space, pd), "and the parent's default");
+    assert!(vm.defs.is_unloaded(&vm.space, x), "the other package's hold is not loaded");
+    assert_eq!(walk.loaded, 4, "H1, D, Parent and PD");
+    assert!(
+        vm.log.iter().any(|l| l.contains("GD_ToyOther.X") && l.contains("is not an export of GD_ToyHome")),
+        "the skipped hold is logged: {:?}",
+        vm.log
+    );
+    assert!(vm.log.iter().any(|l| l.contains("GD_ToyHome.PD") && l.contains("UNVERIFIED")), "each load is labelled");
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--map` parsing (review r1 of #556, item 5; lane MAP-ROUTE-FOLLOWUP): the name and the steps after it, none
 /// without the option, the usage message without a name, `NotYet` outside Off.
 #[test]
