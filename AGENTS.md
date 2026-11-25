@@ -29,6 +29,11 @@ releases or anything published, money, or anything that moves game-derived data.
    needed to describe behaviour, as `docs/verification/` already does.
 2. **No leaked source. No decompiler or disassembler output, and no code pasted, translated or converted from it.**
    Analysing the executable locally is allowed; what may leave `local/` is in "Analysing the executable" below.
+   Exception (maintainer decision 2026-11-19): WGSL translated from the UE3 shader source that ships with the game
+   (`Engine/Shaders/*.usf`) may be committed under `crates/ow-render/shaders/ue3/`, each file headed with its source
+   file name and a notice that it is derived from Epic Games' UE3 shaders and is NOT under the MIT licence. The
+   exception covers only source files headed with an Epic Games copyright; the install's files headed Gearbox,
+   NVIDIA or Scaleform, or with no notice, are not covered. Details: `docs/LEGAL.md`, "License".
 3. **No code from GPL tools** (Legendary Explorer, UE Explorer, UPKUtils and the like). A public reference such as
    UModel / UE Viewer may be run as an external binary or read to learn a format, once its source and licence are in
    `THIRD_PARTY.md`. Copying or translating its code, MIT-licensed or not, is the maintainer's licence decision and

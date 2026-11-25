@@ -10,7 +10,8 @@ your task touches. If this page and a long document disagree, the long document 
    Game-derived output goes under ignored `local/` (`local/analysis/` for native analysis). Names of game objects,
    counts, constants and formulas may be written in docs, as `docs/verification/` already does.
 2. Paste, translate line by line or auto-convert decompiled code. Use leaked source. Copy code from GPL tools
-   (Legendary Explorer, UE Explorer, UPKUtils).
+   (Legendary Explorer, UE Explorer, UPKUtils). The one exception: WGSL translated from the install's Epic-headed
+   UE3 `.usf` shaders, under `crates/ow-render/shaders/ue3/` only (AGENTS.md rule 2, maintainer decision 2026-11-19).
 3. Invent bytecode, struct or serialization offsets. Recover them from the packages and check them with structural
    oracles; label what is fitted rather than proven `UNVERIFIED`.
 4. Loosen a bounds check to make something work. Fix the cause.
