@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-PSC-SETCOLORPARAMETER (2026-11-25, pc-hummer, docs only, on docs/native-psc-setcolorparameter from main
+4464e814):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PSC_SET_COLOR_PARAMETER.md: link 8's next native
+updates or appends one `InstanceParameters` entry and touches no render state. No code changed, so no measured
+number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-SETMATERIAL-AND-GLOW (2026-11-25, pc-hummer, on fix/rust-link8-startup-material b257456f):** AI-assisted
 (Claude Code, Opus 5.5). `MeshComponent.SetMaterial` and `MaterialInterface.GetScalarParameterValue` in Off, from
 NATIVE_INITMESHES_MATERIAL_GLOW.md section 4. `cargo test --workspace -j 8` 3,581 passed / 0 failed / 61 ignored;
