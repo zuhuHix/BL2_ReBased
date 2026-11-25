@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-PSC-SETCOLORPARAMETER (2026-11-25, pc-hummer, on fix/rust-setmaterial-glow a3ac4c13):** AI-assisted (Claude
+Code, Opus 5.5). `ParticleSystemComponent.SetColorParameter` in Off, from NATIVE_PSC_SET_COLOR_PARAMETER.md section 3.
+`cargo test --workspace -j 8` 3,625 passed / 0 failed / 57 ignored; `crate_edges_test.py` 19 OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock): 5 ok / 8 NotYet / 1 error, `links ok 5/14`, `step share X =
+5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`, past `SetColorParameter`, an error at the unbound
+`WillowWeapon.OnCreate(array)`. A reverted probe saw the receiver as the weapon's own runtime copy. No real-game run.
+
 **IMPL-PICKUP-TRACE-ROWS (2026-11-25, pc-hummer, on main 4464e814):** AI-assisted (Claude Code, Opus 5.5).
 `trace_filter::ROWS` gains exact-class `Row::Actor` rows for `Engine.DroppedPickup` and `WillowGame.WillowPickup`
 (NATIVE_TOUCH_PICKUP_TRACE.md section 3.1.1, UNVERIFIED). `cargo test --workspace -j 8` 3,582 passed / 0 failed / 57
