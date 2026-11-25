@@ -184,23 +184,36 @@ pub fn unknown_type(n: u8) -> String {
 
 /// The write tracker's three counters (#518's design; the same as #528's `crate::pools::Counters`, kept here because
 /// this lane does not stack on #528).
+/// Like `crate::pools::Counters`, it also holds the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS) for equality
+/// in tests; [`after_writes`] still reads only #518's three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counters {
     writes: u64,
     draws: u64,
     loads: u64,
+    code_loads: u64,
 }
 
 impl Counters {
     pub fn read(vm: &Vm) -> Self {
-        Counters { writes: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+        Counters {
+            writes: vm.space.heap.committed_writes(),
+            draws: vm.rng.draws(),
+            loads: vm.defs.load_transitions(),
+            code_loads: vm.class_code_loads(),
+        }
+    }
+
+    /// #518's three, without the code loads.
+    fn three(self) -> (u64, u64, u64) {
+        (self.writes, self.draws, self.loads)
     }
 }
 
-/// A `NotYet` returned after a counter moved since `before` is marked "stopped after partial writes", its kind and
-/// record kept; any other error, and a `NotYet` with no write since, is returned as it is.
+/// A `NotYet` returned after one of #518's three counters moved since `before` is marked "stopped after partial
+/// writes", its kind and record kept; any other error, and a `NotYet` with no write since, is returned as it is.
 pub fn after_writes(vm: &Vm, before: Counters, e: VmError) -> VmError {
-    if Counters::read(vm) != before { crate::pools::after_partial_writes(e) } else { e }
+    if Counters::read(vm).three() != before.three() { crate::pools::after_partial_writes(e) } else { e }
 }
 
 fn script(message: String) -> VmError {

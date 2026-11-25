@@ -257,7 +257,7 @@ impl Fx {
     }
 
     fn counters(&self) -> (u64, u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions())
+        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()))
     }
 
     fn run(&mut self, collection: ObjRef, context: Option<ObjRef>) -> Result<Option<ObjRef>, VmError> {
@@ -335,10 +335,28 @@ fn the_effect_handle_is_returned_unloaded_and_nothing_is_written_or_loaded() {
     let b = f.handle("FxB");
     let e1 = f.evaluator("E1", ANSWER, true);
     let c = f.collection(&[(Some(e1), Some(b))]);
-    let before = f.counters();
+    // #518's three only: the code loads this run makes are lane COUNTERS-MISS-CLASS-CODE-LOADS's finding, pinned in the
+    // ignored test below.
+    let three = |f: &Fx| (f.vm.space.heap.committed_writes(), f.vm.rng.draws(), f.vm.defs.load_transitions());
+    let before = three(&f);
     assert_eq!(f.run(c, None).unwrap(), Some(b));
     assert!(f.vm.defs.is_unloaded(&f.vm.space, b), "the effect is not loaded");
-    assert_eq!(f.counters(), before);
+    assert_eq!(three(&f), before);
+}
+
+/// Lane COUNTERS-MISS-CLASS-CODE-LOADS's finding: on this fixture the same run loads class code (the evaluator
+/// dispatch loads `GearboxFramework.ExpressionEvaluator`'s and `GearboxFramework.Object`'s code, three code loads),
+/// which #518's three counters do not see. Ignored until the hub routes it; run with `--ignored` to see it.
+#[test]
+#[ignore = "finding: GetParticleEffect's evaluator dispatch loads cold class code (lane COUNTERS-MISS-CLASS-CODE-LOADS)"]
+fn the_effect_lookup_loads_no_class_code() {
+    let mut f = fx();
+    let b = f.handle("FxB");
+    let e1 = f.evaluator("E1", ANSWER, true);
+    let c = f.collection(&[(Some(e1), Some(b))]);
+    let before = f.vm.class_code_loads();
+    assert_eq!(f.run(c, None).unwrap(), Some(b));
+    assert_eq!(f.vm.class_code_loads(), before, "no class code loaded");
 }
 
 /// Preflight 1: an unloaded collection refuses without loading it.

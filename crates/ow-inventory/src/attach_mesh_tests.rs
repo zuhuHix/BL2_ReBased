@@ -382,7 +382,7 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     let snapshot = |x: &Fx| {
         let layer = format!("{:?}", x.vm.service::<SceneLayer>().unwrap().borrow());
         let space = &x.vm.space;
-        (layer, space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions(), space.names.len())
+        (layer, space.heap.committed_writes(), x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads()), space.names.len())
     };
     let held = (x.written(attached), snapshot(&x));
     let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(attached))]));

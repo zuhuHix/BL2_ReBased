@@ -179,7 +179,7 @@ impl Fx {
     /// #518's three counters: committed heap writes, RNG draws and definition load transitions.
     fn counters(&self) -> [u64; 3] {
         let vm = &self.world.vm;
-        [vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions()]
+        [vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads())]
     }
 
     fn attach(&mut self, actor: ObjRef, component: ObjRef) -> Result<Value, VmError> {

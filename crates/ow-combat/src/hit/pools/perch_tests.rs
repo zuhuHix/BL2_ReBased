@@ -172,7 +172,7 @@ impl Fx {
 
     /// #518's three counters.
     fn counters(&self) -> (u64, u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.defs.load_transitions(), self.vm.rng.draws())
+        (self.vm.space.heap.committed_writes(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()), self.vm.rng.draws())
     }
 
     /// The answer for `pawn` must be nothing, with the counters unchanged.

@@ -351,7 +351,7 @@ fn subclass_virtuals_are_refused_for_all_kinds_before_mutation() {
 /// class, slots and origin and the store's load state: equal before and after means nothing was written, made, loaded
 /// or drawn.
 fn fingerprint(vm: &Vm) -> String {
-    let counters = format!("{} {} {}\n", vm.space.heap.committed_writes(), vm.defs.load_transitions(), vm.rng.draws());
+    let counters = format!("{} {} {}\n", vm.space.heap.committed_writes(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.rng.draws());
     let objects: String = vm
         .space
         .heap
@@ -647,7 +647,7 @@ impl Drop for PhaseEnv {
 
 /// #518's counters: heap committed writes, generator draws and definition-store load transitions.
 fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()))
 }
 
 impl PhaseEnv {

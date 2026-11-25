@@ -198,7 +198,7 @@ impl Toy {
     }
 
     fn counters(&self) -> (u64, u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions())
+        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()))
     }
 
     fn call(&mut self, args: Vec<Value>) -> Result<Value, VmError> {
@@ -327,7 +327,7 @@ fn an_unloaded_destination_refuses_without_loading() {
             ty.unwrap(),
             vec![Value::Float(3.0), Value::Object(None), Value::Object(None), Value::Float(2.0)],
         );
-        let loads = x.w.vm.defs.load_transitions();
+        let loads = (x.w.vm.defs.load_transitions() + x.w.vm.class_code_loads());
         let e = x
             .call("AttributeInitializationDefinition.SetBaseValue", None, vec![Value::Object(Some(arch)), data, Value::Object(None), Value::Object(None)])
             .unwrap_err();
@@ -339,7 +339,7 @@ fn an_unloaded_destination_refuses_without_loading() {
             other => panic!("{other:?}"),
         }
         assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, arch), "nothing was loaded");
-        assert_eq!(x.w.vm.defs.load_transitions(), loads);
+        assert_eq!((x.w.vm.defs.load_transitions() + x.w.vm.class_code_loads()), loads);
     });
 }
 
@@ -408,7 +408,7 @@ fn fixture_data(x: &crate::world::tests::Fx, constant: f32, attribute: Option<Ob
 }
 
 fn counters_of(x: &crate::world::tests::Fx) -> (u64, u64, u64) {
-    (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions())
+    (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), (x.w.vm.defs.load_transitions() + x.w.vm.class_code_loads()))
 }
 
 /// Review r1 of #572, case 2 (made to reach the resolver in review r2): a loaded destination whose context chain
@@ -449,11 +449,11 @@ fn without_the_preflight_the_set_reaches_and_loads_the_resolver() {
     crate::world::tests::run(|| {
         let mut x = crate::world::tests::fx_in(true, ParityMode::Off);
         let (attr, reader, target) = lazy_destination(&mut x);
-        let loads = x.w.vm.defs.load_transitions();
+        let loads = (x.w.vm.defs.load_transitions() + x.w.vm.class_code_loads());
         let attrs = x.w.vm.attrs.clone();
         let set = attrs.set_base(attr, Some(target), 3.0, false, &mut EvalCx::new(&mut x.w.vm)).unwrap();
         assert!(set, "the set reaches the target");
-        assert!(x.w.vm.defs.load_transitions() > loads, "the resolver was loaded");
+        assert!((x.w.vm.defs.load_transitions() + x.w.vm.class_code_loads()) > loads, "the resolver was loaded");
         assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, reader));
         let class = x.w.vm.space.heap.get(target).unwrap().class;
         let p = x.w.vm.space.prop(class, "Toughness").unwrap();
