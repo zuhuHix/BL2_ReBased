@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-HOOK3-ARRAY-CHECK (2026-11-25, pc-hummer, on fix/rust-hook3-array-check from #714 1802cca6):** AI-assisted
+(Claude Code, Opus 5.5). Hook 3 through `SetLightEnvironment`'s planner, and a made static mesh component `NotRead`
+(NATIVE_BODYCOMP_RENDER_HOOKS.md section 7).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,581 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock), base 0bcf365e and this change at
+  9ca895aa (before the test-only rebase onto 1802cca6): 5 ok / 9 NotYet / 0 errors on both. Link 1 moves in `maya:8`
+  from hook 3's "the light-environment step's array check (not identified)" to "InitializeBodyComposition: the Parent
+  link's parent-bone map"; links 3, 4, 5, 13 and 14 report the same. Every other row is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/hook3/` and `local/p2/hook3-base/`.
+Decision 2026-11-25-NNN.
+
 **IMPL-DEFERRED-REATTACH-OWNER (2026-11-25, pc-hummer, on fix/rust-deferred-reattach-owner from main f29f2c8e):**
 AI-assisted (Claude Code, Opus 5.5). The deferred reattach's owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md 2.1.1) for
 every caller; hook 2's plan applied in the body composition's write phase.
