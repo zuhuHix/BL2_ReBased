@@ -13,7 +13,7 @@ AI-assisted (Claude Code, Opus 5.5). The pickup world gets a class-default `Will
   `WillowInventory.GetInventorySpaceRequirement()`, the next lane.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/gameinfo/` and `local/p2/gameinfo-optionA/`.
-Decision 2026-11-25-NNN.
+Decision 2026-11-25-44.
 
 **IMPL-SKELMESH-BOUNDS-SOURCE (2026-11-25, pc-hummer, on fix/rust-skelmesh-bounds-source from
 integration/2026-11-25-c15 25425bb9):** AI-assisted (Claude Code, Opus 5.5). A live skeletal mesh component's bounds
