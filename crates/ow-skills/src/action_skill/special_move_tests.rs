@@ -61,7 +61,7 @@ const AUTHORITY: u8 = 3;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Variant {
     Good,
-    /// `ReplicatedSMData` of another struct (same fields, declared in `SpecialMoveInterface`).
+    /// `ReplicatedSMData` of another struct (same fields, declared in `GearboxPawn`).
     OtherStruct,
     /// No `Duration` field.
     MissingField,
@@ -317,22 +317,24 @@ fn gearbox(variant: Variant) -> Vec<u8> {
     let redirect = t.class("ToyRedirectMove", definition);
     native(&mut t, redirect, "GetSMDToPlay", &[smi()], Some(("Object", vec![definition])));
     t.class("AnimNodeSpecialMoveBlend", blend_base);
-    // GearboxPawn and its replicated record (the note, section 1). `OtherStruct` declares the record with a struct of
-    // the same fields held by `SpecialMoveInterface` instead.
+    // GearboxPawn and its replicated record (the note, section 1), of the struct `SpecialMoveInterface` declares (the
+    // installed path, by the runner's read). `OtherStruct` declares a struct of the same name and fields in
+    // `GearboxPawn` instead.
     let gearbox_pawn = t.class("GearboxPawn", pawn);
-    let holder = if variant == Variant::OtherStruct { interface } else { gearbox_pawn };
+    let holder = if variant == Variant::OtherStruct { gearbox_pawn } else { interface };
     let rep = toy_struct(&mut t, holder, "ReplicatedSpecialMoveData", None);
-    if variant == Variant::SmdNotObject {
-        t.prop("Int", rep, "SMD", 0, 0);
-    } else {
-        t.prop("Object", rep, "SMD", 0, definition);
-    }
+    // The installed member order (the runner's read): Data, PlayRateScale, Duration, DirtyCounter, SMD.
     t.prop("Object", rep, "Data", 0, object);
     t.prop(if variant == Variant::RateNotFloat { "Int" } else { "Float" }, rep, "PlayRateScale", 0, 0);
     if variant != Variant::MissingField {
         t.prop("Float", rep, "Duration", 0, 0);
     }
     t.prop(if variant == Variant::IntCounter { "Int" } else { "Byte" }, rep, "DirtyCounter", 0, 0);
+    if variant == Variant::SmdNotObject {
+        t.prop("Int", rep, "SMD", 0, 0);
+    } else {
+        t.prop("Object", rep, "SMD", 0, definition);
+    }
     if variant == Variant::CallbackFields {
         t.prop("Name", rep, "CallbackName", 0, 0);
         t.prop("Object", rep, "CallbackObject", 0, object);

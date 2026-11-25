@@ -138,9 +138,9 @@ pub const REPLICATED_OWNERS: [&str; 4] = [
     "WillowGame.WillowPlayerPawn",
     "WillowGame.WillowAIPawn",
 ];
-/// `ReplicatedSMData`'s struct. The note names it and says `GearboxPawn` holds the record; that the struct is declared
-/// in `GearboxPawn` is a fit (UNVERIFIED).
-pub const REPLICATED_STRUCT: &str = "GearboxFramework.GearboxPawn.ReplicatedSpecialMoveData";
+/// `ReplicatedSMData`'s struct, by its path in the installed packages: declared in the `SpecialMoveInterface`
+/// interface class, the only struct of that name (the runner's names-only read, 2026-11-25; review r1 of #689).
+pub const REPLICATED_STRUCT: &str = "GearboxFramework.SpecialMoveInterface.ReplicatedSpecialMoveData";
 /// A Play read on an object the store has not loaded.
 pub const NOT_LOADED: &str = "SpecialMoveComponent.Play: an object the store has not loaded (a load is a write)";
 /// A component with an owner interface and no `Owner`.
