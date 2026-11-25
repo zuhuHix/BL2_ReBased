@@ -557,9 +557,9 @@ pub(crate) fn part_mesh_names(x: &Fx, v: &Value) -> usize {
 
 /// Runs one refused native call and checks #518's counters (heap writes, draws, load transitions) did not move.
 pub(crate) fn quiet<T: std::fmt::Debug>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> Result<T, VmError>) -> VmError {
-    let mark = crate::equip::card::load_mark(vm);
+    let mark = crate::equip::card::load_and_code_mark(vm);
     let e = f(vm).unwrap_err();
-    assert_eq!(crate::equip::card::load_mark(vm), mark, "#518's counters moved on a refusal: {e}");
+    assert_eq!(crate::equip::card::load_and_code_mark(vm), mark, "#518's counters moved on a refusal: {e}");
     e
 }
 
@@ -695,9 +695,9 @@ fn each_operand_refuses_in_one_order() {
 fn the_self_copy_the_layer_refusals_and_one_whole_slot_write() {
     let mut x = fx();
     let (c1, c2, mesh_a, mesh_b) = (x.o("ToyComp1"), x.o("ToyComp2"), x.o("ToyMeshA"), x.o("ToyMeshB"));
-    let (mark, names, before) = (crate::equip::card::load_mark(&x.vm), x.vm.space.names.len(), x.snapshot());
+    let (mark, names, before) = (crate::equip::card::load_and_code_mark(&x.vm), x.vm.space.names.len(), x.snapshot());
     init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c1)).unwrap();
-    assert_eq!((crate::equip::card::load_mark(&x.vm), x.vm.space.names.len(), x.snapshot()), (mark, names, before));
+    assert_eq!((crate::equip::card::load_and_code_mark(&x.vm), x.vm.space.names.len(), x.snapshot()), (mark, names, before));
     // The layer's refusals, exactly: a stand-in (F1(ii)) and an undecoded store definition (F1(i)), on either operand.
     let class = x.vm.space.heap.get(c1).unwrap().class;
     let ghost = x.vm.space.alloc_stand_in(class, "ToyGhostComp", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
@@ -779,10 +779,10 @@ fn the_native_answers_the_receiver_before_converting_its_argument() {
     register(&mut x.vm).unwrap();
     let f = declare_init(&mut x);
     let un = x.handle("UnComp");
-    let mark = crate::equip::card::load_mark(&x.vm);
+    let mark = crate::equip::card::load_and_code_mark(&x.vm);
     assert_eq!(not_read(x.vm.call(f, Some(un), vec![Value::Int(1)]).unwrap_err()), RECEIVER_NOT_LOADED);
     assert_eq!(script(x.vm.call(f, None, vec![Value::Int(1)]).unwrap_err()), RECEIVER_NONE);
-    assert_eq!(crate::equip::card::load_mark(&x.vm), mark, "nothing written, drawn or loaded");
+    assert_eq!(crate::equip::card::load_and_code_mark(&x.vm), mark, "nothing written, drawn or loaded");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, un));
     // With a valid receiver the argument's shape is then the error.
     let c = x.o("ToyComp1");

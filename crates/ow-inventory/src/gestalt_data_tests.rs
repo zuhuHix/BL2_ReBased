@@ -288,9 +288,9 @@ fn the_copy_hands_the_value_on_whole() {
     let n = not_yet(e);
     assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, INIT_STAND_IN, DATA_RECORD));
     let before = x.snapshot();
-    let mark = crate::equip::card::load_mark(&x.vm);
+    let mark = crate::equip::card::load_and_code_mark(&x.vm);
     init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c1)).unwrap();
-    assert_eq!((x.snapshot(), crate::equip::card::load_mark(&x.vm)), (before, mark));
+    assert_eq!((x.snapshot(), crate::equip::card::load_and_code_mark(&x.vm)), (before, mark));
 }
 
 /// The fill through `BuildCompositeMesh`: one heap write (the whole slot), no load, no draw; the shared mesh answers.
