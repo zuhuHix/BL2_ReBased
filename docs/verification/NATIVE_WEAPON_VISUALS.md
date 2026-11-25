@@ -49,7 +49,7 @@ the elemental part's linear colour.
 
 ### 1.1 Amendment (2026-11-25): the Off answer for `BuildWeaponMaterial`
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BUILDWEAPONMATERIAL (decision 2026-11-25-NNN), analyst only:
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BUILDWEAPONMATERIAL (decision 2026-11-25-32), analyst only:
 **another lane implements this section.** Raw output stays under ignored `local/analysis/bwm/`. **Every rule here is
 UNVERIFIED in the running game.**
 
