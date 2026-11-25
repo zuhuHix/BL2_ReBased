@@ -1663,15 +1663,19 @@ pub const SETUP_INTERFACE_INPUT: &str = "harness input: set-up interface check";
 
 /// Resolves, at set-up, the interface entries `implements(class, iface)` reads on `class`'s chain, so a later
 /// read-only check answers without a load (lane HARNESS-GEARLIKENESS-SETUP: the body composition's hook 1,
-/// NATIVE_BODYCOMP_RENDER_HOOKS.md). Both classes must be in the packages; each is loaded first if it is not (a
-/// write, as [`preload_class`] reports one).
+/// NATIVE_BODYCOMP_RENDER_HOOKS.md). Both classes must be in the packages; each is loaded first if it is not, and
+/// the line then says the lookup loaded (a write, by the store's load counter, as [`preload_class`] reports one).
 ///
 /// The line says where the answer came from:
 /// - **read:** the chain's bodies decoded, so the answer is the packages' own interface lists, each entry resolved to
 ///   its class. Resolving them at set-up, rather than when the game first asks, is the harness input (a write when an
 ///   entry was not resolved yet);
 /// - **UNVERIFIED stand-in:** a chain whose bodies did not all decode answers by the structural fallback (as
-///   `implements` does), which is not the game's interface list.
+///   `implements` does), which is not the game's interface list;
+/// - **unresolved:** `implements` keeps an entry whose lookup failed as "resolved to nothing", which would read as a
+///   settled answer. So a decoded answer is checked against the strict `implements_declared` (review r1 of #665,
+///   MED 1): when that has no answer (an entry resolves to no class) or disagrees, the line says so and the set-up
+///   answers `NotYet` (`NotRead`), not the packages' answer.
 ///
 /// A class or interface the packages do not hold is reported and nothing is resolved.
 pub fn resolve_interface(
@@ -1680,33 +1684,58 @@ pub fn resolve_interface(
     iface: &str,
 ) -> (String, Result<(), ow_vm::error::VmError>) {
     let found = |vm: &mut ow_vm::api::Vm, path: &str| vm.find_class_if_present(path);
-    let (c, i) = match (found(vm, class), found(vm, iface)) {
+    let loads = vm.defs.load_transitions();
+    let lookup = (found(vm, class), found(vm, iface));
+    let loaded = if vm.defs.load_transitions() != loads { " (the class lookup loaded code: a write)" } else { "" };
+    let (c, i) = match lookup {
         (Ok(Some(c)), Ok(Some(i))) => (c, i),
         (Err(e), _) | (_, Err(e)) => {
             let text = ow_combat::hit::access::error_text(&e);
-            return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: the load failed: {text}"), Err(e));
+            return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}{loaded}: the load failed: {text}"), Err(e));
         }
         _ => {
-            let line = format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: not in the packages, nothing resolved");
+            let line =
+                format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}{loaded}: not in the packages, nothing resolved");
             return (line, Ok(()));
         }
     };
-    let (decoded, before) = {
+    let (ck, ik, decoded, before) = {
         let code = vm.defs.code();
         match (code.key_of(c), code.key_of(i)) {
             (Some(ck), Some(ik)) => (
+                ck,
+                ik,
                 code.class(ik).body_decoded() && code.super_chain(ck).all(|k| code.class(k).body_decoded()),
                 code.implements_resolved(ck, ik),
             ),
             _ => {
                 return (
-                    format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: no code key, nothing resolved"),
+                    format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}{loaded}: no code key, nothing resolved"),
                     Ok(()),
                 );
             }
         }
     };
     let answer = vm.implements(c, i);
+    if decoded {
+        let strict = {
+            let (code, store) = vm.defs.code_mut();
+            code.implements_declared(store, ck, ik)
+        };
+        if !matches!(strict, Ok(Some(b)) if b == answer) {
+            let why = match &strict {
+                Err(e) => format!("an entry's lookup failed ({e})"),
+                Ok(None) => "an entry did not resolve to a class".to_string(),
+                Ok(Some(_)) => "the strict reading disagrees".to_string(),
+            };
+            let line = format!(
+                "{SETUP_INTERFACE_INPUT} {class} implements {iface}{loaded}: unresolved, {why}; no answer from the \
+                 packages' interface lists"
+            );
+            let what = format!("the set-up interface check {class} implements {iface}: {why}");
+            return (line, Err(NotYet::not_read(what, "NATIVE_BODYCOMP_RENDER_HOOKS.md").into()));
+        }
+    }
     let yes_no = if answer { "yes" } else { "no" };
     let source = if !decoded {
         "by the structural fallback (the class bodies did not all decode; UNVERIFIED stand-in for the packages' \
@@ -1717,7 +1746,7 @@ pub fn resolve_interface(
         "read from the packages' interface lists; their entries resolved at set-up (a write; UNVERIFIED stand-in for \
          when the game resolves them)"
     };
-    let line = format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, {source}");
+    let line = format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}{loaded}: {yes_no}, {source}");
     (line, Ok(()))
 }
 

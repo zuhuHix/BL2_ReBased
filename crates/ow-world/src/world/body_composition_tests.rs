@@ -2004,12 +2004,8 @@ fn a_malformed_controller_field_is_a_script_error() {
     let mut e = env_opts(Opts { controller_int: true, ..Opts::default() });
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let p = one_made(&mut e, cyl);
-    let before = Counters::read(&e.vm);
-    match run(&mut e, p).unwrap_err() {
-        VmError::Script { message, .. } => assert!(message.contains("Controller"), "{message}"),
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    // Write-free and intern-free, as every other refusal here (review r1 of #665; #657's LOW 4).
+    script_refusal(&mut e, p, "Controller");
 }
 
 /// A script error before any write, nothing interned, its message naming `needle`.

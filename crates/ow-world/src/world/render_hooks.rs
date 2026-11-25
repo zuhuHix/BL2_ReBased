@@ -79,11 +79,12 @@ fn object_field(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmErro
     }
 }
 
-/// The template's values are settled: it is not a store handle still unloaded (a load is a write). The failed-handle
-/// branch is not reached from the body composition, whose walk refuses a failed template first (its
-/// `failed_template` refusal); it is kept for a direct caller and tested directly (review of #657, LOW 2).
+/// The template's values are settled: it is not a store handle still unloaded (a load is a write). `is_unloaded`
+/// also covers a handle whose load failed (`DefStore::is_unloaded` matches the failed entry too), so no separate
+/// failed check is needed (review r1 of #665, LOW 2). That case is not reached from the body composition, whose walk
+/// refuses a failed template first (its `failed_template` refusal); it is tested directly (review of #657, LOW 2).
 fn settled(vm: &Vm, template: ObjRef) -> Result<(), VmError> {
-    if vm.defs.is_unloaded(&vm.space, template) || vm.defs.is_failed(&vm.space, template) {
+    if vm.defs.is_unloaded(&vm.space, template) {
         return Err(NotYet::not_read(NOT_SETTLED, RECORD).into());
     }
     Ok(())
