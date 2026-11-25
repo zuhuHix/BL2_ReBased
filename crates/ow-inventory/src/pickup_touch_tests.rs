@@ -560,3 +560,60 @@ fn only_the_declared_vector_passes() {
     x.vm.parity = ParityMode::Reference;
     assert!(!x.vm.keeps_struct_none(TOUCH_PICKUP_TRACE), "not after a switch to Reference");
 }
+
+// ---- NATIVE_TOUCH_PICKUP_TRACE.md section 3.1.2 (lane IMPL-PICKUP-TRACE-ROWS): the pickup classes' filter row ----------
+
+/// Tests 0 and 4: a pickup class with no row still refuses, "the trace filter of <class>". That is the refusal a second
+/// `WillowPickup` gave before the rows (main's slice gate recorded it for link 7). With the rows in place, that state
+/// is no longer reachable, so a `WillowPickup` subclass, still unread, stands in for it.
+#[test]
+fn a_pickup_subclass_still_refuses_as_unread() {
+    let mut x = fx(Some(Sweep::Clear));
+    x.blocker("WillowGame.ToyPickupSubclass");
+    let n = not_yet(x.call());
+    assert_eq!(n.missing, Missing::NotRead);
+    assert!(n.what.contains("the trace filter of WillowGame.ToyPickupSubclass"), "{n}");
+}
+
+/// Tests 1 and 3: a second `WillowPickup` or `DroppedPickup` on the segment, not the source, with `bWorldGeometry`
+/// clear, is not tested: the touch answers true.
+#[test]
+fn a_second_pickup_without_world_geometry_is_not_tested() {
+    for class in ["WillowGame.WillowPickup", "Engine.DroppedPickup"] {
+        let mut x = fx(Some(Sweep::Clear));
+        x.blocker(class);
+        assert_eq!(x.call().unwrap(), Value::Bool(true), "{class}");
+    }
+}
+
+/// Test 2: the second pickup with `bWorldGeometry` set is tested by the shortcut: the hash admission, and with the
+/// admission stand-in, its primitive's line test.
+#[test]
+fn a_second_pickup_with_world_geometry_is_tested() {
+    let mut x = fx(Some(Sweep::Clear));
+    let (a, _) = x.blocker("WillowGame.WillowPickup");
+    x.set(a, "bWorldGeometry", Value::Bool(true));
+    assert!(not_read(x.call()).contains(HASH_ADMISSION));
+    let mut x = fx(Some(Sweep::Clear));
+    x.vm.add_service(AdmissionStandIn).unwrap();
+    let (a, _) = x.blocker("WillowGame.WillowPickup");
+    x.set(a, "bWorldGeometry", Value::Bool(true));
+    let what = not_read(x.call());
+    assert!(what.contains(PRIMITIVE_LINE_TEST) && !what.contains(HASH_ADMISSION), "{what}");
+}
+
+/// Test 6: the source pickup's own blocking cylinder on its own line is excluded before any row is read: no refusal,
+/// even with its `bWorldGeometry` set.
+#[test]
+fn the_source_pickup_s_own_cylinder_is_excluded() {
+    let mut x = fx(Some(Sweep::Clear));
+    let c = make(&mut x.vm, "Engine.PrimitiveComponent");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(c, f, Value::Bool(true));
+    }
+    let p = x.pickup;
+    x.set(p, "bCollideActors", Value::Bool(true));
+    x.set(p, "bWorldGeometry", Value::Bool(true));
+    x.set(p, "CollisionComponent", Value::Object(Some(c)));
+    assert_eq!(x.call().unwrap(), Value::Bool(true));
+}

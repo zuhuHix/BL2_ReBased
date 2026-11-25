@@ -105,6 +105,10 @@ fn world() -> World {
     space.classes.define("Engine.KActor", Some(dynamic), vec![]).unwrap();
     space.classes.define("Engine.StaticMeshActor", Some(actor), vec![]).unwrap();
     space.classes.define("Engine.Terrain", Some(actor), vec![]).unwrap();
+    // The pickup classes (NATIVE_TOUCH_PICKUP_TRACE.md section 3.1) and an unread subclass.
+    let dropped = space.classes.define("Engine.DroppedPickup", Some(actor), vec![]).unwrap();
+    let pickup = space.classes.define("WillowGame.WillowPickup", Some(dropped), vec![]).unwrap();
+    space.classes.define("Test.SubPickup", Some(pickup), vec![]).unwrap();
     let mut d = bools(&mut space, &["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors", "CollideActors", "BulletListener"]);
     // The component's own owner field (NATIVE_SPAWN_TRACE_FILTER.md section 2).
     d.push(PropertyDecl::new(space.names.intern("Owner"), PropKind::Object { class: actor }));
@@ -373,4 +377,33 @@ fn a_walked_terrain_refuses_before_a_stale_owner_is_resolved() {
     assert_eq!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
     let walked = w.actor("Engine.StaticMeshActor", &["bWorldGeometry", "bCollideActors"]);
     assert!(tested(&w.space, p, walked, box_test).is_err(), "the stale owner fails its lookup once reached");
+}
+
+/// NATIVE_TOUCH_PICKUP_TRACE.md section 3.1 (lane IMPL-PICKUP-TRACE-ROWS): `DroppedPickup` and `WillowPickup` take the
+/// `Actor` row, exact-class (a subclass has none). Test 5: the spawn's box test (8902, no bit 16) does not test a
+/// pickup's primitive with `bWorldGeometry` clear; a query of bit 16 alone passes the row, as for any `Actor`-row owner,
+/// so the candidate goes on to the hash admission.
+#[test]
+fn the_pickup_classes_take_the_actor_row_exact_class() {
+    let mut w = world();
+    let row = |w: &World, p: &str| row_of(&w.space, w.space.classes.by_path(p).unwrap());
+    assert_eq!(row(&w, "Engine.DroppedPickup"), Some(Row::Actor));
+    assert_eq!(row(&w, "WillowGame.WillowPickup"), Some(Row::Actor));
+    assert_eq!(row(&w, "Test.SubPickup"), None, "a subclass is still unread");
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    assert_eq!(box_test.flags(), 8902);
+    assert_eq!(box_test.flags() & OTHER_ACTORS, 0);
+    let prim = w.primitive;
+    let candidate = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    for p in ["Engine.DroppedPickup", "WillowGame.WillowPickup"] {
+        let owner = w.actor(p, &["bCollideActors"]);
+        assert_eq!(tested(&w.space, candidate, owner, box_test).unwrap(), Candidate::NotTested, "{p}: box test");
+        assert!(owner_tested(Row::Actor, &Owner::default(), false, OTHER_ACTORS), "{p}: bit 16 alone passes the row");
+        let geometry = w.actor(p, &["bCollideActors", "bWorldGeometry"]);
+        assert_eq!(
+            tested(&w.space, candidate, geometry, box_test).unwrap(),
+            Candidate::Unsupported(Unread::HashAdmission),
+            "{p}: with bWorldGeometry the shortcut tests it"
+        );
+    }
 }
