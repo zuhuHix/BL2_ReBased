@@ -303,8 +303,10 @@ pub fn spawn_game_info(world: &mut World, input: &GameInfoInput<'_>) -> Result<G
 }
 
 /// Whether step 3 has written or loaded anything since `mark`: #518's three counters, and the VM's code loads (lane
-/// GAMEINFO-COLLIDER-CODE-LOAD). The class lookup's "loaded once" (NATIVE_MAP_LOAD.md section 3) loads the class's code
-/// as well as its package; that code load is a write too, so a refusal after it is marked.
+/// GAMEINFO-COLLIDER-CODE-LOAD). NATIVE_MAP_LOAD.md section 3 has the routine load and cache the configured class
+/// before spawning it. The port's class lookup also loads that class's code into the VM, a side effect of the host's
+/// lookup (not something the note says the game does), and the module's step-3 rule counts it: a lazy load from step 3
+/// on is a write, so a refusal after it is marked. UNVERIFIED in the running game.
 fn wrote(vm: &Vm, mark: &WriteMark) -> bool {
     !mark.still(vm)
 }

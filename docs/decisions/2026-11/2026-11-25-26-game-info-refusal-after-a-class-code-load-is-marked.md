@@ -9,10 +9,14 @@ fixtures only.
   its class lookup and then, in the spawn, refuses for collision (a placement search with no collision service). The
   refusal was reported unmarked, because the routine's marking read only #518's three counters, which a code load
   does not move.
-- **Why the load stays:** the note has the routine load the configured class itself ("loaded once and cached"), and
-  the module's own rule is that from step 3 on a lazy load counts as a write and marks a later refusal. So the code
-  load is the game's own step, not a stray one, and the collision check belongs to the spawn, after the lookup.
-  - **Not taken, a resident-only lookup:** the hub suggested this at first. It would refuse the game's own load.
+- **Why the load stays:** the note has the routine load and cache the configured class before spawning it ("loaded
+  once and cached"). The port's class lookup, which stands for that step, also loads the class's code into the VM.
+  That code load is a side effect of the host's lookup, not something the note says the game does. The module's
+  step-3 rule counts it anyway: from step 3 on, a lazy load counts as a write and marks a later refusal. So the load
+  belongs to the lookup the note describes, and the collision check belongs to the spawn, after the lookup. The
+  native's behaviour is **UNVERIFIED** in the running game.
+  - **Not taken, a resident-only lookup:** the hub suggested this at first. It would refuse the lookup the note has
+    the routine make.
   - **Not taken, checking collision first:** this would reorder the note's steps.
 
   The real defect was the missing mark (the hub agreed).
