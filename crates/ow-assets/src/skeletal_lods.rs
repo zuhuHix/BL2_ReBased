@@ -5,7 +5,7 @@
 //!
 //! **Fitted, UNVERIFIED** (AGENTS.md rule 4: no public spec). Recovered from the installed packages and checked with
 //! structural oracles, as decision 2026-11-25-NNN records. After the tagged properties, in order:
-//! 1. the bounds: 28 bytes (an origin, a box extent, a sphere radius);
+//! 1. the bounds: 28 bytes (an origin, a box extent, a sphere radius), seven finite floats;
 //! 2. the materials: a count, then one 4-byte object reference each;
 //! 3. the origin and the rotation origin: 12 bytes each;
 //! 4. the reference skeleton: a count, then one 52-byte bone each: a name (an 8-byte name-table entry), 4 bytes of
@@ -50,12 +50,21 @@
 //!    its elements are not decoded;
 //! 8. the vertex buffer: the UV set count (1 to 4) twice, which must agree, a full-precision UV flag (0, the only
 //!    value seen), a packed-position flag (0 or 1), two finite 3-vectors, then an array whose element size must be
-//!    **28 + 4 per UV set** and whose length must equal the vertex count. **Each vertex's influences are decoded**
-//!    (fitted): four bone-index bytes at byte 8 and four weight bytes after them; the weights must sum to 255, and
-//!    every weighted index must name an entry of the bone map of the chunk that holds the vertex. The vertex's
-//!    other bytes (by fit, tangents, position and UVs) are stepped over inside the element, not decoded;
+//!    **28 + 4 per UV set** and whose length must equal the vertex count. **Every vertex is decoded field by field**
+//!    (the layout is fitted from the census; each field's meaning is UNVERIFIED):
+//!    - bytes 0-7, two packed vectors (by fit, the tangent basis' X and Z; a byte `b` stands for `b / 127.5 - 1`):
+//!      each of unit length within 0.02 or a zero vector (shorter than 0.01), with a dot product within 0.03 of 0.
+//!      Byte 3 is 127 or 128, and byte 7 (by fit, the basis' sign) is 0 or 255;
+//!    - bytes 8-15, the influences: four bone indices, then four weights. The weights must sum to 255, and every
+//!      weighted index must name an entry of the bone map of the chunk that holds the vertex;
+//!    - bytes 16-27, the position: three finite floats inside the mesh's bounds (the prefix's origin plus or minus
+//!      its box extent, with a slack of a thousandth of the largest extent);
+//!    - from byte 28, one pair of 16-bit values per UV set. Sets 0 and 1 must be finite half floats. Sets 2 and 3
+//!      are read as fixed-width pairs with no check: three composite (gestalt) meshes of the census hold values there
+//!      that are not finite halves, so what those sets hold is not settled;
 //! 9. when the mesh's tagged `bHasVertexColors` is true (and only then), a colour array of 4-byte elements, one per
-//!    vertex (every 4-byte value is a colour, so there is nothing to refuse);
+//!    vertex, each read as a fixed-width value (every 4-byte value is a colour, so the stride and count checks are
+//!    the checks);
 //! 10. **the trailing count**: an unidentified LOD-model field, like item 5's word. Zero in every census LOD; a
 //!     non-zero count is refused ([`LodCountError::TrailingArray`]), because its elements are not decoded.
 //!
@@ -86,12 +95,20 @@ pub const VERTEX_BASE_BYTES: usize = 28;
 /// Where a vertex's four bone-index bytes start, followed by its four weight bytes (fitted from the census: the
 /// weights sum to 255 in every vertex, and every weighted index names an entry of the vertex's chunk bone map).
 pub const VERTEX_INFLUENCE_AT: usize = 8;
+/// The packed-vector checks of a vertex (fitted from the census): a zero vector is shorter than this.
+const PACKED_ZERO: f32 = 0.01;
+/// A unit vector's length is within this of 1.
+const PACKED_UNIT: f32 = 0.02;
+/// The two packed vectors' dot product is at most this far from 0.
+const PACKED_RIGHT_ANGLE: f32 = 0.03;
+/// The UV sets whose halves must be finite (sets 2 and 3 are read unchecked; [`check_vertex`]).
+const CHECKED_UV_SETS: usize = 2;
 /// The length of the trailer's last array (the only length the census holds).
 const TRAILER_FLOATS: usize = 4;
 
 /// What the reader returns: the counts up to and including the LOD count.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkeletalLods {
     pub materials: usize,
     pub bones: usize,
@@ -101,6 +118,9 @@ pub struct SkeletalLods {
     pub lods_at: usize,
     /// The absolute position where the export's payload ends.
     pub object_end: usize,
+    /// The bounds' origin and box extent (item 1): every vertex position must lie within them.
+    pub bounds_origin: [f32; 3],
+    pub bounds_extent: [f32; 3],
 }
 
 /// Why a `SkeletalMesh` prefix was refused.
@@ -201,7 +221,8 @@ struct LodInfoTyper<'a>(&'a dyn ArrayTyper);
 
 impl ArrayTyper for LodInfoTyper<'_> {
     fn element(&self, scope: &props::ArrayScope<'_>, property: &str) -> Option<props::ElementType> {
-        if property.eq_ignore_ascii_case("LODInfo") {
+        // The export's own root tag only (review r2 of #673): a nested array of that name goes to the caller's typer.
+        if scope.path.is_empty() && property.eq_ignore_ascii_case("LODInfo") {
             return Some(props::ElementType::Struct("SkeletalMeshLODInfo".into()));
         }
         self.0.element(scope, property)
@@ -238,7 +259,11 @@ fn read_prefix(
     let mut r = package.reader();
     r.set_pos(base + walked.end);
     r.set_limit(object_end);
-    r.skip(28)?;
+    let mut bounds = [0f32; 7];
+    for b in &mut bounds {
+        *b = real(&mut r)?;
+    }
+    let (bounds_origin, bounds_extent) = ([bounds[0], bounds[1], bounds[2]], [bounds[3], bounds[4], bounds[5]]);
     let materials = count(&mut r, 4)?;
     for _ in 0..materials {
         let m = r.i32()?;
@@ -282,7 +307,7 @@ fn read_prefix(
     if i32::try_from(lod_count).ok() != Some(tagged) {
         return Err(LodCountError::LodInfo { native: lod_count, tagged });
     }
-    let lods = SkeletalLods { materials, bones, depth: computed, lod_count, lods_at: r.pos(), object_end };
+    let lods = SkeletalLods { materials, bones, depth: computed, lod_count, lods_at: r.pos(), object_end, bounds_origin, bounds_extent };
     Ok(Prefix { lods, bone_names, vertex_colors })
 }
 
@@ -306,7 +331,7 @@ pub struct LodModel {
 
 /// A `SkeletalMesh` export read to its end: the prefix's counts and every LOD model.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkeletalLodModels {
     pub prefix: SkeletalLods,
     pub models: Vec<LodModel>,
@@ -387,6 +412,81 @@ fn byte(r: &mut Reader<'_>) -> Result<u8, LodCountError> {
 /// A bone index that must name a bone of the reference skeleton.
 fn bone(index: u16, lod: usize, prefix: &SkeletalLods, field: &'static str) -> Result<(), LodCountError> {
     if usize::from(index) < prefix.bones { Ok(()) } else { Err(misfit(lod, field, i64::from(index))) }
+}
+
+/// A packed unit-vector byte as a number in -1..=1 (`b / 127.5 - 1`).
+fn unpack(b: u8) -> f32 {
+    f32::from(b) / 127.5 - 1.0
+}
+
+/// The three packed components at `v[at..at + 3]`, and their length.
+fn packed_vector(v: &[u8], at: usize) -> ([f32; 3], f32) {
+    let x = [unpack(v[at]), unpack(v[at + 1]), unpack(v[at + 2])];
+    (x, (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt())
+}
+
+/// A half-precision float's bits hold a finite number (its exponent bits are not all set).
+fn finite_half(bits: u16) -> bool {
+    bits & 0x7C00 != 0x7C00
+}
+
+/// One vertex of the GPU-skin buffer, every field decoded (module documentation, item 8). The meanings are fitted
+/// from the census and UNVERIFIED; the checks are the oracles that fit holds to in every census vertex.
+fn check_vertex(v: &[u8], lod: usize, map: usize, uv_sets: usize, prefix: &SkeletalLods) -> Result<(), LodCountError> {
+    // Bytes 0-7: two packed vectors (by fit, the tangent basis' X and Z), each unit length or a zero vector, at right
+    // angles; byte 3 is 127 or 128, byte 7 (by fit, the basis' sign) 0 or 255.
+    let (x, x_len) = packed_vector(v, 0);
+    let (z, z_len) = packed_vector(v, 4);
+    for (len, field) in [(x_len, "vertex packed vector X"), (z_len, "vertex packed vector Z")] {
+        if !(len < PACKED_ZERO || (len - 1.0).abs() <= PACKED_UNIT) {
+            return Err(misfit(lod, field, (len * 1000.0) as i64));
+        }
+    }
+    let dot = x[0] * z[0] + x[1] * z[1] + x[2] * z[2];
+    if dot.abs() > PACKED_RIGHT_ANGLE {
+        return Err(misfit(lod, "vertex packed vectors' angle", (dot * 1000.0) as i64));
+    }
+    if v[3] != 127 && v[3] != 128 {
+        return Err(misfit(lod, "vertex byte 3", i64::from(v[3])));
+    }
+    if v[7] != 0 && v[7] != 255 {
+        return Err(misfit(lod, "vertex byte 7", i64::from(v[7])));
+    }
+    // Bytes 8-15: the influences. The weights sum to 255, and every weighted index names an entry of the chunk's
+    // bone map.
+    let at = VERTEX_INFLUENCE_AT;
+    let (bones, weights) = (&v[at..at + 4], &v[at + 4..at + 8]);
+    let total: u32 = weights.iter().map(|&w| u32::from(w)).sum();
+    if total != 255 {
+        return Err(misfit(lod, "vertex weight total", i64::from(total)));
+    }
+    if let Some(k) = (0..4).find(|&k| weights[k] > 0 && usize::from(bones[k]) >= map) {
+        return Err(misfit(lod, "vertex bone index", i64::from(bones[k])));
+    }
+    // Bytes 16-27: the position, three finite floats inside the mesh's bounds (origin plus or minus the extent, with
+    // a slack of a thousandth of the largest extent, at least a thousandth of a unit).
+    let o = &prefix.bounds_origin;
+    let e = &prefix.bounds_extent;
+    let slack = 1e-3 * e.iter().fold(1.0f32, |m, &x| m.max(x));
+    for axis in 0..3 {
+        let p = f32::from_le_bytes([v[16 + 4 * axis], v[17 + 4 * axis], v[18 + 4 * axis], v[19 + 4 * axis]]);
+        if !p.is_finite() || (p - o[axis]).abs() > e[axis] + slack {
+            return Err(misfit(lod, "vertex position", axis as i64));
+        }
+    }
+    // Bytes 28 on: one pair of 16-bit values per UV set. Sets 0 and 1 are finite half floats. Sets 2 and 3 are read
+    // as fixed-width 16-bit pairs with no check: in three composite (gestalt) meshes of the census they hold values
+    // that are not finite halves, so their meaning there is not settled.
+    for set in 0..uv_sets {
+        for half in 0..2 {
+            let at = VERTEX_BASE_BYTES + 4 * set + 2 * half;
+            let bits = u16::from_le_bytes([v[at], v[at + 1]]);
+            if set < CHECKED_UV_SETS && !finite_half(bits) {
+                return Err(misfit(lod, "vertex UV", set as i64));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One LOD model (module documentation, "The LOD models").
@@ -537,31 +637,25 @@ fn read_model(r: &mut Reader<'_>, lod: usize, prefix: &SkeletalLods, vertex_colo
     if buffered != vertices {
         return Err(misfit(lod, "vertex buffer count", buffered as i64));
     }
-    // Each vertex's influences decoded (review r1 of #673, item 2): the weights sum to 255, and every weighted bone
-    // index names an entry of the bone map of the chunk that holds the vertex. The vertex's other bytes are stepped
-    // over within the element (not decoded).
+    // Each vertex decoded field by field (fitted, UNVERIFIED meanings; reviews r1 and r2 of #673): module
+    // documentation, item 8.
     for &(_, own, map) in &chunks {
         for _ in 0..own {
             let vertex = r.take(stride)?;
-            let at = VERTEX_INFLUENCE_AT;
-            let (bones, weights) = (&vertex[at..at + 4], &vertex[at + 4..at + 8]);
-            let total: u32 = weights.iter().map(|&w| u32::from(w)).sum();
-            if total != 255 {
-                return Err(misfit(lod, "vertex weight total", i64::from(total)));
-            }
-            if let Some(k) = (0..4).find(|&k| weights[k] > 0 && usize::from(bones[k]) >= map) {
-                return Err(misfit(lod, "vertex bone index", i64::from(bones[k])));
-            }
+            check_vertex(vertex, lod, map, uv_sets, prefix)?;
         }
     }
-    // 9. The colour buffer, when the mesh's tag says it has one: one 4-byte colour per vertex, every value a colour.
+    // 9. The colour buffer, when the mesh's tag says it has one: one 4-byte colour per vertex, each read as a
+    // fixed-width value (every 4-byte value is a colour, so the stride and count checks are the checks).
     if vertex_colors {
         let stride = r.u32()?;
         let colours = count(r, 4)?;
         if stride != 4 || colours != vertices {
             return Err(misfit(lod, "colour buffer count", colours as i64));
         }
-        r.skip(4 * colours)?;
+        for _ in 0..colours {
+            r.u32()?;
+        }
     }
     // 10. The trailing count.
     let trailing = r.i32()?;

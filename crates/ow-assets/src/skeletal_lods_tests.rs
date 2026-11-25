@@ -53,6 +53,10 @@ struct Mesh<'a> {
     /// Bytes cut from the end of the mesh's payload, and whether a second export follows it in the file.
     cut: usize,
     next_export: bool,
+    /// Every vertex's first eight bytes (two packed vectors), its position, and its first UV half's bits.
+    packed: [u8; 8],
+    vertex_position: [f32; 3],
+    uv: u16,
 }
 
 fn mesh<'a>() -> Mesh<'a> {
@@ -84,6 +88,9 @@ fn mesh<'a>() -> Mesh<'a> {
         last_floats: 4,
         cut: 0,
         next_export: false,
+        packed: [255, 128, 128, 128, 128, 128, 255, 255],
+        vertex_position: [1.0, -2.0, 3.0],
+        uv: 0x3C00,
     }
 }
 
@@ -124,11 +131,15 @@ fn lod_model(m: &Mesh<'_>, lod: usize, at: usize) -> Vec<u8> {
     }
     v.extend(words(&[32, 3]));
     for _ in 0..3 {
-        // Tangents (8), bone indices (4), weights (4), then the rest of the vertex (16).
-        let mut vertex = vec![0x11u8; 8];
+        // Two packed vectors (8), bone indices (4), weights (4), the position (12), one UV set (4).
+        let mut vertex = m.packed.to_vec();
         vertex.extend([m.first_bone, 0, 0, 0]);
         vertex.extend(m.weights);
-        vertex.extend(vec![0x22u8; 16]);
+        for p in m.vertex_position {
+            vertex.extend(p.to_le_bytes());
+        }
+        vertex.extend(m.uv.to_le_bytes());
+        vertex.extend(0u16.to_le_bytes());
         v.extend(vertex);
     }
     if m.colours {
@@ -154,7 +165,10 @@ fn package(m: &Mesh<'_>) -> Package {
         payload.extend(b.bool_tag("bHasVertexColors", true));
     }
     payload.extend(b.none());
-    payload.extend(vec![0u8; 28]);
+    // The bounds: origin 0, a box extent of 10 on every axis, a radius of 20.
+    for f in [0.0f32, 0.0, 0.0, 10.0, 10.0, 10.0, 20.0] {
+        payload.extend(f.to_le_bytes());
+    }
     payload.extend(words(&[m.materials as u32]));
     for _ in 0..m.materials {
         payload.extend(m.material.unwrap_or(mat).to_le_bytes());
@@ -440,4 +454,51 @@ fn a_cut_export_is_refused_at_its_boundary() {
         let got = models(&m);
         assert!(matches!(got, Err(LodCountError::Asset(_))), "cut {cut}: {got:?}");
     }
+}
+
+/// Review r2 of #673, item 1: every vertex field is decoded. The packed vectors must be unit or zero and at right
+/// angles, bytes 3 and 7 in their seen values, the position inside the bounds, and UV sets 0 and 1 finite halves.
+#[test]
+fn every_vertex_field_is_checked() {
+    let field = |m: &Mesh<'_>| match models(m) {
+        Err(LodCountError::LodModel { field, .. }) => field,
+        other => panic!("{other:?}"),
+    };
+    let mut short = mesh();
+    short.packed = [200, 128, 128, 128, 128, 128, 255, 255];
+    assert_eq!(field(&short), "vertex packed vector X");
+    let mut zero = mesh();
+    zero.packed = [128, 128, 128, 128, 128, 128, 255, 255];
+    assert!(models(&zero).is_ok(), "a zero vector is accepted: {:?}", models(&zero));
+    let mut slant = mesh();
+    slant.packed = [255, 128, 128, 128, 255, 128, 128, 255];
+    assert_eq!(field(&slant), "vertex packed vectors' angle");
+    let mut third = mesh();
+    third.packed = [255, 128, 128, 5, 128, 128, 255, 255];
+    assert_eq!(field(&third), "vertex byte 3");
+    let mut sign = mesh();
+    sign.packed = [255, 128, 128, 128, 128, 128, 255, 7];
+    assert_eq!(field(&sign), "vertex byte 7");
+    let mut outside = mesh();
+    outside.vertex_position = [1.0, 10.5, 3.0];
+    assert_eq!(models(&outside), Err(LodCountError::LodModel { lod: 0, field: "vertex position", found: 1 }));
+    let mut nan = mesh();
+    nan.vertex_position = [f32::NAN, 0.0, 0.0];
+    assert_eq!(field(&nan), "vertex position");
+    let mut uv = mesh();
+    uv.uv = 0x7C00;
+    assert_eq!(models(&uv), Err(LodCountError::LodModel { lod: 0, field: "vertex UV", found: 0 }));
+}
+
+/// Review r2 of #673, item 2: only the export's own root `LODInfo` tag is typed by the reader; a nested array of that
+/// name goes to the caller's typer.
+#[test]
+fn only_the_root_lod_info_is_typed() {
+    let root = props::StreamRoot::new("SkeletalMesh", None);
+    let typer = LodInfoTyper(&props::NoArrayTypes);
+    let nested = vec!["Outer".to_string()];
+    let at_root = props::ArrayScope::new("SkeletalMesh", None, &[], &root);
+    let inside = props::ArrayScope::new("Outer", None, &nested, &root);
+    assert_eq!(typer.element(&at_root, "LODInfo"), Some(props::ElementType::Struct("SkeletalMeshLODInfo".into())));
+    assert_eq!(typer.element(&inside, "LODInfo"), None, "a nested LODInfo is the caller's");
 }
