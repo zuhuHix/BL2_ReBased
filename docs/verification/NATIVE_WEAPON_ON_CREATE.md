@@ -27,11 +27,13 @@ Read with `research/script_disasm.py`. Link 8's data was read with `ow-package -
 6. `SetElementalFrame` (script). It calls `StaticGetWeaponDamageType`, `GetWillowGlobals` and
    `GetGlobalsDefinition`, all indexed, then writes `ElementalFrame` from the globals' `ElementalFrameNames`;
 7. **`WillowWeapon.OnCreate`** (native, no index row): **this note**;
-8. back in `InitializeInternal`: `GetFiringModeDefinition`. It is a native with a note
-   (NATIVE_WEAPON_TRIGGER_AMMO.md, index row "WillowWeapon.GetFiringModeDefinition"). `ow-combat` has a Rust
+8. back in `InitializeInternal`: `GetFiringModeDefinition`. It is a native with a note,
+   NATIVE_WEAPON_GET_FIRING_MODE.md (2026-11-25; first NATIVE_WEAPON_TRIGGER_AMMO.md, index row
+   "WillowWeapon.GetFiringModeDefinition"). `ow-combat` has a Rust
    `firing_mode` helper, but no Off binding of the native was found. **Predicted next stop: that unbound native;**
 9. the type's `DefaultFiringModeDefinition`, `Bullet_Assault_Default`, has `ExplosionOverrideDefinition` None. So the
-   explosion block (`GetExplosion`, `StoreExplosionInstanceData`, no notes) is skipped, and `InitializeInternal`
+   explosion block (the native `GetExplosion`, then the script `StoreExplosionInstanceData`, no notes; its gate in
+   NATIVE_WEAPON_GET_FIRING_MODE.md section 4) is skipped, and `InitializeInternal`
    returns;
 10. the driver's next step, `bases`: `CalculateWeaponBaseValues`, already run by the equip pack.
 

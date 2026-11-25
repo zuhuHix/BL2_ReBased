@@ -62,13 +62,18 @@ TRIGGER_AMMO was right. The live record never saw that step, because no installe
 
 Bound in `ParityMode::Off` only; Reference keeps the stub policy. Read only, and **load-free**: no store load and no
 class-code load. The checks run in the rule's order and stop where the rule stops:
-1. **The weapon:** its class declares `DefinitionData` as the weapon-definition struct, and the struct holds
-   `BarrelPartDefinition`, `ElementalPartDefinition` and `WeaponTypeDefinition` as objects. Otherwise `VmError::Script`
-   naming the field.
+1. **The weapon:** its class declares `DefinitionData` as a `WillowGame.WillowWeaponTypes.WeaponDefinitionData`,
+   and the struct holds `BarrelPartDefinition`, `ElementalPartDefinition` and `WeaponTypeDefinition` as objects.
+   Otherwise `VmError::Script` naming the field. The port already reads `DefinitionData` fields without a load:
+   `definition_data_object` in `crates/ow-attr/src/value_resolvers/damage_type.rs` and in `manufacturer.rs` (review r1
+   of #731).
 2. **Each object the rule reads, when it reads it** (the barrel, then the elemental part, then the type):
-   - an unloaded or failed store handle: `NotYet { NotRead }`, "WillowWeapon.GetFiringModeDefinition: the
+   - an unloaded store handle: `NotYet { NotRead }`, "WillowWeapon.GetFiringModeDefinition: the
      <barrel part | elemental part | weapon type> <path>, which the store has not loaded (a load is a write)", with
      nothing loaded;
+   - a handle whose load already failed: `NotYet { NotRead }`, "WillowWeapon.GetFiringModeDefinition: the
+     <barrel part | elemental part | weapon type> <path>, whose load failed", with the stored failure kept and nothing
+     retried (review r1 of #731);
    - its class must declare `CustomFiringModeDefinition` (a part) or `DefaultFiringModeDefinition` (the type) as an
      object. Otherwise `VmError::Script` naming it.
 
@@ -79,20 +84,34 @@ class-code load. The checks run in the rule's order and stop where the rule stop
 
 No partial-writes prefix can arise: the native writes nothing.
 
-The existing `hit::shot::firing_mode` helper loads the objects it reads, and refuses the elemental case. The native
-needs neither behaviour. Whether the shot path keeps its own helper or calls the native's rule is the implementer's
-call; the shot path's own rules (NATIVE_WEAPON_TRIGGER_AMMO.md) are not changed by this note.
+**The shot path's helper** (settled in review r1 of #731). `ow-combat`'s `hit::shot::firing_mode` is kept, and it
+takes this rule:
+- its elemental branch answers the elemental part's mode, where it refuses today. Its doc comment changes to say so,
+  and so does the test that asserts the refusal (`crates/ow-combat/src/run/shots/tests.rs`, the `Part_ElementalMode`
+  case), which then expects the elemental mode;
+- the helper calls the native's shared rule, and keeps its own loading around it. A shot is not load-free; the
+  native is;
+- one test runs both on the same parts, resident, and asserts the same answer.
+
+The shot path's other rules (NATIVE_WEAPON_TRIGGER_AMMO.md) are not changed by this note.
 
 ## 4. Link 8's call shape, and what init calls after it
 
-`InitializeInternal` stores the result in a local. When it is not None, it reads the mode's `ExplosionOverrideDefinition`;
-only when that is set does it go on to the explosion block (`StoreExplosionInstanceData`, with the mode's
-`ExplosionOverideInstanceDataName`). Then it returns.
+`InitializeInternal` stores the result in a local (re-read with `research/script_disasm.py`, review r1 of #731).
+It goes on to the explosion block only when all three hold: the mode is not None, its `ExplosionOverrideDefinition`
+is set, and its `ExplosionOverideInstanceDataName` is not `None`. The block:
+1. calls `GetExplosion(self)` on the `ExplosionOverrideDefinition` (`ExplosionCollectionDefinition.GetExplosion`, a
+   native, no note, no index row);
+2. when that answers an object, calls `StoreExplosionInstanceData` (script) with it and the mode's
+   `ExplosionOverideInstanceDataName`.
+
+Then it returns.
 
 What link 8 then meets (a prediction from the data and the script, not a run):
-1. the script reads `Bullet_Assault_Default.ExplosionOverrideDefinition`. If the mode is still a store handle, the
-   VM's script read loads it on demand (a script-side load, after the phase's earlier writes). It is None, so
-   `StoreExplosionInstanceData` (no note, no index row) is not reached;
+1. the script reads `Bullet_Assault_Default`'s `ExplosionOverrideDefinition`. If the mode is still a store
+   handle, the VM's script read loads it on demand (a script-side load, after the phase's earlier writes). The field is
+   None (and its `ExplosionOverideInstanceDataName` is `None` too), so neither `GetExplosion` nor
+   `StoreExplosionInstanceData` is reached;
 2. `InitializeInternal` returns, and the `init` phase ends;
 3. `bases`: `WillowWeapon.CalculateWeaponBaseValues` (script; NATIVE_WEAPON_ON_CREATE.md item 10 notes the equip
    pack already ran it);
@@ -120,7 +139,8 @@ causes no class-code load:
 10. a toy subclass of `WillowWeapon`: the same answer (no native subclass overrides it);
 11. **link 8's call shape:** `InitializeInternal`'s tail on a weapon whose type default is a mode with
     `ExplosionOverrideDefinition` None: the local takes the mode, the explosion block is skipped and the function
-    returns. With the override set, the call reaches `StoreExplosionInstanceData` (the next stop then);
+    returns. With the override set and the name not `None`, the call reaches the unbound `GetExplosion` first (the
+    next stop then); with the override set and the name `None`, the block is skipped too;
 12. Reference: unchanged.
 
 ## Open questions

@@ -25,5 +25,11 @@ UNVERIFIED in the running game, except the barrel and type steps, which lane L7 
   (the class table found from each class's registration and constructor, with a throwaway helper kept under ignored
   `local/`); `tools/ghidra/class_layout.py` for the field names (by fit); `ow-package --def-dump` and `--exports`, and
   `research/script_disasm.py`.
+- **Review r1 (#731):** the note now settles the shot path's helper. `hit::shot::firing_mode` takes the elemental mode,
+  calls the shared rule and keeps its own loading, and a test asserts the two agree; the code change is the
+  implementer's. `InitializeInternal`'s tail was re-read: its explosion block needs the override set and its instance
+  data name not `None`, then calls the native `GetExplosion` and the script `StoreExplosionInstanceData`.
+  NATIVE_WEAPON_ON_CREATE.md items 8 and 9 now point at the note and agree with it. A failed load has its own
+  refusal text, and the weapon's struct and the existing load-free `DefinitionData` readers are named.
 - **Sensitive files:** none. No code changed.
 - **Verified:** the barrel and type steps in the running game (lane L7); nothing else.
