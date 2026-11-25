@@ -1,6 +1,6 @@
 # Links 6 and 7 past the bounds, and the pickup's save rotation: WillowPickup.GetSaveRotation (2026-11-25)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS67-NEXT (decision 2026-11-25-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS67-NEXT (decision 2026-11-25-64), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/links67/`. This note
 is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
