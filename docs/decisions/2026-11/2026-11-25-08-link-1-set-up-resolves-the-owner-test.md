@@ -1,7 +1,7 @@
 ## 2026-11-25: Link 1's set-up resolves the special-move owner test's interface tables (route (a))
 
-AI-assisted (Claude Code, Opus 5.5). Lane ROUTE-A, slice link 1, stacked on #667. The file number is a placeholder
-until the landing run numbers it. Harness only: no game rule changes. It implements the set-up that
+AI-assisted (Claude Code, Opus 5.5). Lane ROUTE-A, slice link 1, stacked on #667.
+Harness only: no game rule changes. It implements the set-up that
 docs/verification/NATIVE_SPECIALMOVE_OWNER.md section 4.1 calls route (a), with the strict cross-check #665's review
 asked for. Synthetic fixtures only.
 
