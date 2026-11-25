@@ -20,6 +20,14 @@ fbfcd3d3, decision 2026-11-25-09).
   The checks the prefix already made still hold: valid names, finite numbers, the root its own parent, parents
   before children, and the stored depth equal to the parent chain's. Together with the LOD models, the bone-name map
   that follows must name every bone by its own name.
+- **Review r1 of #693:**
+  - the bone names stay validated name-table references through the whole read. Their text is built only after every
+    check has held, and only if the names take at most 1 MiB together (checked arithmetic). Many bones naming one long
+    entry are refused before any name is built;
+  - a `.psk` lookup error other than "not found" (permissions, an unreadable folder) is an error naming the path. It
+    no longer counts as a missing export, which would silently fall back to the package;
+  - the installed comparison fails unless at least one comparison ran and nothing was refused or missing. Rerun: 106
+    meshes, 1,398 bones, 106 agree, 0 refused, 0 without an export.
 - **What is not checked:** the stored child count. It equals the bone's actual children in 104 of 106 census meshes;
   the other two (one composite gestalt mesh, one prop) each hold one bone whose stored count differs, so its meaning
   there is not settled. The colour word is read
