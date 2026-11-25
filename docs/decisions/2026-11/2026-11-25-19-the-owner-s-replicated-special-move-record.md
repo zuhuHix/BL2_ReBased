@@ -2,13 +2,13 @@
 
 AI-assisted (Claude Code)
 
-Lane ANALYST-SETREPLICATEDSMDATA, analyst only, with Claude Opus 5.5. Numbers up to 17 for this date are taken on
-open branches, so 18 is used. The maintainer may renumber it. Docs only: no code, no dependency, and no bounds check
+Lane ANALYST-SETREPLICATEDSMDATA, analyst only, with Claude Opus 5.5. The hub numbered it 19 (18 collided with
+#683). Docs only: no code, no dependency, and no bounds check
 changed.
 
 - **Why:** Off's `Play` refuses every authority start at the Play note's step 4.4, "the record the owner keeps of the
   current move for replication" (decision 2026-11-19-52). With the Queue port, link 9 is predicted to stop there.
-- **What:** `docs/verification/NATIVE_SET_REPLICATED_SMDATA.md` and one NATIVE_INDEX row. They come from the script,
+- **What:** `docs/verification/NATIVE_SET_REPLICATED_SMDATA.md`, one NATIVE_INDEX row and one GATES row. They come from the script,
   a local read-only Ghidra reading under the machine lock, and the layout tool. Raw output stays under ignored
   `local/analysis/repsm/`.
 - **Findings** (UNVERIFIED in game):
