@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-BODYCOMP-HOOK2-PAWN-TEST (2026-11-25, pc-hummer, docs only, on docs/native-bodycomp-hook2-pawn-test from
+main 9cb8428f):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 6: hook 2's pawn
+test is `IsPlayerPawn` (always true for `WillowPlayerPawn`), and its controller test is `UsingFirstPersonCamera`
+(not `IsLocalPlayerController`). No code changed, so no measured number moved; the slice gate was not run for this
+lane. UNVERIFIED in game.
+
 **ANALYST-BUILDWEAPONMATERIAL (2026-11-25, pc-hummer, docs only, on docs/native-build-weapon-material from main
 df685fa):** AI-assisted (Claude Code, Opus 5.5). NATIVE_WEAPON_VISUALS.md section 1.1: the Off answer for
 `BuildWeaponMaterial`, link 8's stop. No code changed, so no measured number moved; the slice gate was not run for

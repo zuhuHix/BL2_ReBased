@@ -42,6 +42,9 @@ between hooks 1 and 2.
 
 ### Hook 2: the mode-0 owner-no-see setting
 
+*Superseded in part on 2026-11-25 by section 6:* the pawn virtual is `IsPlayerPawn`, and the controller test
+is `UsingFirstPersonCamera`, not `IsLocalPlayerController`.
+
 - **Gate,** all of:
   - mode 0 only (not mode 3);
   - the made object is a `PrimitiveComponent` (its class chain holds Engine's `PrimitiveComponent`);
@@ -241,11 +244,102 @@ of their driver's 1 step (`maya:8`). The first stop moved from "InitializeBodyCo
 hooks" to "InitializeBodyComposition: the socket and bone tables of Char_Siren.Mesh.Skel_SirenBody" (`LayerAbsent`,
 the skeletal mesh data reader), attachment 1's socket attach. The branch was deleted after.
 
+## 6. Amendment (2026-11-25): hook 2's pawn test and controller test, identified
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BODYCOMP-HOOK2-PAWN-TEST (decision 2026-11-25-NNN), analyst only:
+**another lane implements this section.** Raw output stays under ignored `local/analysis/bcpawn/`. **Every rule here
+is UNVERIFIED in the running game.**
+
+**Why.** With #670 and a UModel export, link 1's `maya:8` stops at "the owner-no-see gate's pawn test (not identified)"
+(section 4, hook 2).
+
+**Evidence.** Ghidra 12.1.4 headless, read-only, under the machine lock:
+- hook 2's gate, in the routine section 1 found, read again;
+- each of its two virtual calls was identified **by the exec stub that calls the same slot**, as section 1 did for
+  the two natives;
+- the slot's bodies, read from the class tables along Maya's chains (found as in NATIVE_COMPONENT_SKIP_FLAG.md
+  section 6);
+- field names from `tools/ghidra/class_layout.py` (a local copy that sizes `MapProperty`). There are no bl-sdk reads.
+
+**The gate, in the game's order** (this replaces section 1's hook 2 gate list):
+1. mode 0;
+2. the made object is a `PrimitiveComponent`;
+3. **the pawn test is `Pawn.IsPlayerPawn()`.** That native's exec calls the same slot. Its bodies:
+   - `Engine.Pawn`, kept by `GearboxPawn`, `WillowPawn` and `WillowAIPawn`: true when the pawn's `Controller` is set
+     and that controller's `bIsPlayer` is set;
+   - **`WillowGame.WillowPlayerPawn` (Maya): always true**, the folded "return true" body;
+   - `Engine.Actor`: false;
+4. the pawn's `Controller`, cast to `Engine.PlayerController`, and then **`PlayerController.UsingFirstPersonCamera()`**.
+   That native's exec calls the same slot. **This corrects section 1's fit, `IsLocalPlayerController`:** that native's
+   exec calls a different slot, and the gate tests no local-player condition at all. Its bodies:
+   - **`WillowGame.WillowPlayerController`: true when both `bBehindView` and `bViewingThirdPersonMenu` are clear.**
+     The two bits sit at their computed places in the same bool word, a strong fit;
+   - `Engine.PlayerController`, kept by `GearboxPlayerController`: a camera test. It is true when the controller has
+     no camera object, or when the camera's style name is `FirstPerson`, and in both cases only if a further test on
+     another controller field passes. That test was not read in detail.
+
+Neither test writes anything. All four checks are conjunctive and read only, so their order changes no answer.
+
+**Purpose** (by fit): a player pawn seen through its own first-person camera hides its own third-person body.
+
+### 6.1 The Off answer (for a separate implementer)
+
+**Every rule below is UNVERIFIED.** It replaces hook 2's `PAWN_TEST` refusal, and its `IsLocalPlayerController`
+check (section 4, hook 2; `ow-world` `render_hooks::owner_no_see`). Reads are loaded-only, by name on resident objects.
+A field of the wrong kind is a `VmError::Script` naming it. A non-resident `Controller` is a `NotYet` of kind
+`NotRead`, "the rendering hooks: an object the store has not loaded (a load is a write)".
+
+**The pawn test**, by the pawn's first native class (the fitted `CLASS_NATIVE` walk):
+- `WillowGame.WillowPlayerPawn`: true;
+- `Engine.Pawn`, `GearboxFramework.GearboxPawn`, `WillowGame.WillowPawn`, `WillowGame.WillowAIPawn`: `Controller` set
+  and its `bIsPlayer` set;
+- any other first native class: a `NotYet` of kind `NotRead`, "the owner-no-see gate's pawn test (IsPlayerPawn) on
+  <class>".
+
+**The controller test.** The `Controller` must be a `PlayerController`, else nothing. Then, by its first native class:
+- `WillowGame.WillowPlayerController`: both `bBehindView` and `bViewingThirdPersonMenu` clear;
+- `Engine.PlayerController` or `GearboxFramework.GearboxPlayerController`: a `NotYet` of kind `NotRead`, "the
+  owner-no-see gate's camera test (UsingFirstPersonCamera of PlayerController)";
+- any other: the same refusal with the class named.
+
+**The order** stays the port's: the known parts first, then the template settled, then the setter's planner. A failed
+test is nothing. Where both pass, the setter's own rule follows (section 4, hook 2): nothing if `bOwnerNoSee` is
+already true, else its deferred-reattach `REATTACH_OWNER` refusal with `Owner` set. **Hook 2 never refuses for the
+pawn test** on the classes listed. The `is_local_player` check leaves hook 2.
+
+**What link 1 would meet** (a prediction, not a run). Maya is a `WillowPlayerPawn`, so the pawn test passes. Her
+controller is a `WillowPlayerController`, whose class defaults have `bBehindView` and `bViewingThirdPersonMenu` clear.
+If they stay clear, the controller test passes too. Then:
+- with her `Mesh` template's `bOwnerNoSee` already true, hook 2 does nothing and the body composition goes on to hook
+  3, whose array check is the next stop;
+- with it clear, the next stop is the setter's `REATTACH_OWNER` (the deferred reattach).
+
+The template value was not read for this note (open question 5).
+
+### 6.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged, and
+causes no class-code load (where #685 has landed):
+1. a toy `WillowPlayerPawn` subclass whose `Controller` has `bIsPlayer` clear: the pawn test still passes (the class
+   rule);
+2. a toy `WillowPawn` subclass: `bIsPlayer` clear fails the pawn test (nothing); `bIsPlayer` set passes; `Controller`
+   None fails;
+3. a `WillowPlayerController`: `bBehindView` set fails (nothing); `bViewingThirdPersonMenu` set fails; both clear
+   passes. A non-local controller (the old `is_local_player` false) with both clear still passes;
+4. a plain `Engine.PlayerController` controller: the camera-test `NotRead`;
+5. an `Engine.Controller` that is not a `PlayerController`: nothing;
+6. both tests pass, `bOwnerNoSee` already true: nothing. Clear, with `Owner` set: `REATTACH_OWNER`;
+7. a pawn of an unlisted native class: the pawn-test `NotRead`;
+8. a lazy `Controller`: the "not loaded" `NotRead`, nothing loaded;
+9. `bIsPlayer` or `bBehindView` not declared as a bool: `VmError::Script` naming it.
+
 ## Open questions
 
 1. **UNVERIFIED:** every rule above.
-2. **Not identified:** the two engine flags of hook 1, hook 2's pawn virtual (`NotRead` where it decides, the hub's ruling on #622), and hook 3's array check (the current stop on its path).
-3. **By fit:** the interface name (`IGearLikenessConsumer`), hook 2's controller test (`IsLocalPlayerController`),
+2. **Not identified:** the two engine flags of hook 1, and hook 3's array check (the current stop on its path).
+   Hook 2's pawn virtual is identified in section 6 (`IsPlayerPawn`).
+3. **By fit:** the interface name (`IGearLikenessConsumer`), hook 2's controller test (corrected in section 6:
+   it is `UsingFirstPersonCamera`, by its exec),
    and hook 3's `bAcceptsLights` and `LightingChannels` fields (the constant shift of #598).
 4. **Not read:** the gear-likeness refresh, and hook 3's lighting-channel virtual.
 5. **Not read for Maya:** her `Mesh` template's `bOwnerNoSee`, `bAcceptsLights` and `LightingChannels`.
