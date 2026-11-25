@@ -27,4 +27,11 @@ check changed.
   - an iterator beside `ItemActors`, with the VM's snapshot model;
   - no revisit refusal (the cap ends a looping chain);
   - tests listed.
+- **Review r1 (#725):**
+  - the None fallback class is found load-free (`classes.by_path`, never `Vm::find_class`), and refuses `NotRead`
+    when not laid out;
+  - the not-loaded-entry check is named and runs before any field read;
+  - `bReadied` is read only on the flag and a class match;
+  - a test pins the port's snapshot answer for a body that unlinks a later entry;
+  - tests 3 and 8 assert `class_code_loads` unchanged.
 - **Clean room:** a different lane implements this note.

@@ -76,17 +76,25 @@ model here:
 1. **The arguments.** `BaseClass` as `ItemActors` reads it, with the VM's null forms meaning None, and None meaning
    `Engine.Inventory`. Not a class: `VmError::Script`. `bOnlyReadied` as a bool, false when omitted. The out
    variable is parameter 1.
+   - **The fallback class is found load-free:** `vm.space.classes.by_path("Engine.Inventory")`, as `manager.rs`'s
+     `is_a` finds classes. Never `Vm::find_class`: it can load class code, and `class_code_loads` counts that as a
+     write;
+   - a class not laid out yet (`by_path` answers None): `NotYet { NotRead }`, "InventoryActors with a None BaseClass:
+     Engine.Inventory is not laid out at set-up (a class load is a write)".
 2. **The receiver.** It is an `Engine.InventoryManager` or below it, declaring `InventoryChain` as an object
    reference. Otherwise `VmError::Script`.
 3. **The list.** Walk `InventoryChain` through each entry's `Inventory`:
    - examine at most 100 entries, counting each one, matching or not;
-   - give an entry when it is `BaseClass` or below it, and, with the flag, when `bReadied` is set;
+   - give an entry when it is `BaseClass` or below it, and, with the flag, when `bReadied` is set. `bReadied` is read
+     only when `bOnlyReadied` is set **and** the class matches, as the `ItemActors` port reads it;
    - a missing `Inventory` or `bReadied`, or one of the wrong kind, on an entry that is read: `VmError::Script`
      naming it;
    - **no revisit refusal.** A chain that loops is given as the cap allows, entries repeating. This is the one place
      the rule differs from `ItemActors`'s port;
    - an entry that is a store handle not loaded yet: `NotYet { NotRead }`, "InventoryActors over an inventory entry
-     not loaded at set-up (a load is a write)".
+     not loaded at set-up (a load is a write)". The check is `DefStore::is_unloaded` (or the slotless check, as
+     `ow-attr` `eval.rs`'s `slotless_refusal` makes it). It runs **before any field read of the entry**, its class
+     test included, and never calls `ensure_loaded`.
 4. **The snapshot** (as `ItemActors`, UNVERIFIED): the list is taken whole when the loop starts. The game reads each
    next link just before running the body. The two agree unless the body changes the chain past the current entry.
    Link 6's body (`DenyPickupQuery`) changes nothing.
@@ -109,16 +117,20 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
 1. a manager with chain A (a toy `WillowWeapon`), B (a toy `Inventory` that is not a `WillowInventory`), C (another
    `WillowWeapon`), walked with `WillowInventory`: A then C;
 2. the same with `bOnlyReadied` true and only C readied: C;
-3. a None `BaseClass`: every `Engine.Inventory` entry, A, B and C;
+3. a None `BaseClass`: every `Engine.Inventory` entry, A, B and C, with `class_code_loads` unchanged. With
+   `Engine.Inventory` not laid out, the fallback's `NotRead`, and `class_code_loads` unchanged;
 4. an empty chain (`InventoryChain` None): nothing, and the out variable None after the loop;
 5. **the cap:** a chain of 150 matching entries: the first 100 only. A chain of 99 non-matching entries then 5
    matching ones: only the first matching one (the 100th examined);
 6. **a looping chain:** A → B → A ... with `Inventory` as the class: entries repeat until 100 have been examined, and
    there is no refusal;
 7. `InventoryChain` or an entry's `Inventory` declared as something other than an object reference: `VmError::Script`;
-8. a lazy entry handle on the chain: the not-loaded `NotRead`, nothing loaded;
+8. a lazy entry handle on the chain: the not-loaded `NotRead`, nothing loaded, and `class_code_loads` unchanged;
 9. a body that unlinks the current entry: the loop still visits the rest (the snapshot, the same as the game for this
    case);
+9a. **a body that unlinks a later entry** (the port's model, labelled so): with chain A, B, C, the body on A sets A's
+    `Inventory` to C. B is still visited, because the list was taken when the loop started. It is skipped only if B
+    has been destroyed, since `IteratorNext` skips destroyed objects. In the game, B would not be visited;
 10. `WillowInventoryManager.HandlePickupQuery` on a toy manager whose chain holds a `WillowWeapon`: the loop does not
     deny, and the call goes on to `ItemActors`;
 11. Reference: unchanged.
