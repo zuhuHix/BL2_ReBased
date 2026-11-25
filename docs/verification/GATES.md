@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK1-TAIL (2026-11-25, pc-hummer, docs only, on docs/native-link1-tail-blend-collision-setters from main
+40d7d957):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK1_TAIL_SETTERS.md walks maya:8's
+`ApplyBodyClassStartingValues` to its end, and reads the next eight natives: the blend lookup and blend target,
+and five component setters whose physics parts act only on existing bodies. Next unread: the pawn's
+`InitializeRBPhysics`. No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game.
+
 **IMPL-AIMOFFSET-SET-PROFILE (2026-11-25, pc-hummer, on fix/rust-getweaponholddef 2910cde2):** AI-assisted (Claude
 Code, Opus 5.5). `AnimNodeAimOffset.SetActiveProfileByName` / `ByIndex` in Off, from NATIVE_AIMOFFSET_SET_PROFILE.md
 section 3 (#730 r1); an empty `Profiles` on the list's owner is `LayerAbsent` (the interim rule).
