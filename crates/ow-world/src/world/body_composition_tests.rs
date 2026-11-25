@@ -51,6 +51,11 @@ struct Env {
     player_controller: ClassId,
     likeness: ClassId,
     reattach_cylinder: ClassId,
+    /// Hook 2's classes (lane IMPL-BODYCOMP-HOOK2-PAWN-TEST, section 6 of the note): `WillowGame.WillowPlayerPawn`,
+    /// hand-declared and marked native (as `WillowGame.WillowPawn` is here), and the package's
+    /// `WillowGame.WillowPlayerController`.
+    player_pawn: ClassId,
+    willow_pc: ClassId,
 }
 
 impl Drop for Env {
@@ -107,17 +112,29 @@ struct Opts {
     light_int: bool,
     /// `PrimitiveComponent`'s `bOwnerNoSee` and `bAcceptsLights` declared as ints.
     flags_int: bool,
+    /// `WillowPlayerController`'s `bBehindView` declared as an int (lane IMPL-BODYCOMP-HOOK2-PAWN-TEST).
+    behind_view_int: bool,
+    /// `WillowPlayerController` declares no `bViewingThirdPersonMenu`.
+    no_third_person_menu: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { reattach: true, head_mesh: true, controller_int: false, light_int: false, flags_int: false }
+        Opts {
+            reattach: true,
+            head_mesh: true,
+            controller_int: false,
+            light_int: false,
+            flags_int: false,
+            behind_view_int: false,
+            no_third_person_menu: false,
+        }
     }
 }
 
 /// [`env_with`] with [`Opts`].
 fn env_opts(opts: Opts) -> Env {
-    let Opts { reattach, head_mesh, controller_int, light_int, flags_int } = opts;
+    let Opts { reattach, head_mesh, controller_int, light_int, flags_int, behind_view_int, no_third_person_menu } = opts;
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -160,6 +177,8 @@ fn env_opts(opts: Opts) -> Env {
             t.prop(if flags_int { "Int" } else { "Bool" }, primitive, flag, 0, 0);
         }
         let controller = t.class("Controller", object);
+        // Hook 2's pawn test reads it (section 6 of the note).
+        t.prop("Bool", controller, "bIsPlayer", 0, 0);
         let player_controller = t.class("PlayerController", controller);
         t.prop("Object", player_controller, "Player", 0, object);
         let cylinder = t.class("CylinderComponent", primitive);
@@ -274,7 +293,7 @@ fn env_opts(opts: Opts) -> Env {
         toy_array_of(&mut t, skeletal, "AnimTickRelevancyArray", "Int", 0);
         toy_array_of(&mut t, skeletal, "AnimTickWeightsArray", "Float", 0);
         let holder = t.class("ToyTemplateHolder", object);
-        for name in ["Skel", "Cyl", "Cycle", "SkelTree"] {
+        for name in ["Skel", "Cyl", "Cycle", "SkelTree", "PC", "WillowPC"] {
             t.prop("Object", holder, name, 0, object);
         }
         t.build()
@@ -288,6 +307,10 @@ fn env_opts(opts: Opts) -> Env {
         let skel_mesh = t.p.add_import("Core", "Class", engine, "SkeletalMesh");
         let socket = t.p.add_import("Core", "Class", engine, "SkeletalMeshSocket");
         let anim_tree = t.p.add_import("Core", "Class", engine, "AnimTree");
+        // Hook 2's lazy controllers (lane IMPL-BODYCOMP-HOOK2-PAWN-TEST): an Engine and a Willow player controller.
+        let pc_class = t.p.add_import("Core", "Class", engine, "PlayerController");
+        let willow_pkg = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let wpc_class = t.p.add_import("Core", "Class", willow_pkg, "WillowPlayerController");
         let component = |t: &mut ScriptToy, class: i32, name: &str| {
             let mut payload = ow_package::testkit::ints(&[0, 0]);
             payload.extend_from_slice(&t.none);
@@ -309,7 +332,9 @@ fn env_opts(opts: Opts) -> Env {
         payload.extend_from_slice(&t.none);
         let skel_tree = t.p.add_export(skeletal, "SkelTreeTemplate", payload);
         let mut payload = ow_package::testkit::ints(&[0]);
-        for (name, r) in [("Skel", skel), ("Cyl", cyl), ("Cycle", cycle_ref), ("SkelTree", skel_tree)] {
+        let pc = component(&mut t, pc_class, "PCTemplate");
+        let wpc = component(&mut t, wpc_class, "WillowPCTemplate");
+        for (name, r) in [("Skel", skel), ("Cyl", cyl), ("Cycle", cycle_ref), ("SkelTree", skel_tree), ("PC", pc), ("WillowPC", wpc)] {
             payload.extend(t.p.object_tag(name, r));
         }
         payload.extend_from_slice(&t.none);
@@ -329,11 +354,19 @@ fn env_opts(opts: Opts) -> Env {
     };
     // The gear-likeness interface and one component that defines its function (hook 1).
     let willow = {
-        let mut t = ScriptToy::with_imports(&["Class", "Function"]);
+        let mut t = ScriptToy::with_imports(&["Class", "Function", "BoolProperty", "IntProperty"]);
         let core = t.p.add_import("Core", "Package", 0, "Core");
         let object = t.p.add_import("Core", "Class", core, "Object");
         let engine = t.p.add_import("Core", "Package", 0, "Engine");
         let component = t.p.add_import("Core", "Class", engine, "ActorComponent");
+        // Hook 2's controller class (lane IMPL-BODYCOMP-HOOK2-PAWN-TEST), a package class so a lazy handle of it stays
+        // unloaded; its body does not decode, so the first-native walk takes it as native.
+        let pc = t.p.add_import("Core", "Class", engine, "PlayerController");
+        let wpc = t.class("WillowPlayerController", pc);
+        t.prop(if behind_view_int { "Int" } else { "Bool" }, wpc, "bBehindView", 0, 0);
+        if !no_third_person_menu {
+            t.prop("Bool", wpc, "bViewingThirdPersonMenu", 0, 0);
+        }
         let iface = t.class("IGearLikenessConsumer", object);
         let likeness = t.class("ToyLikenessComponent", component);
         for owner in [iface, likeness] {
@@ -451,6 +484,12 @@ fn env_opts(opts: Opts) -> Env {
         pawn_props.retain(|(n, _)| *n != "HeadMesh");
     }
     let pawn = class(&mut vm, crate::world::pawn_meshes::WILLOW_PAWN, actor, &pawn_props);
+    // Hook 2's first native classes (section 6 of the note): the pawn class and `WillowPlayerPawn` below it, marked
+    // native as in the game (`WillowPlayerController` is a package class, above).
+    vm.space.classes.mark_native(pawn).unwrap();
+    let player_pawn = class(&mut vm, "WillowGame.WillowPlayerPawn", pawn, &[]);
+    vm.space.classes.mark_native(player_pawn).unwrap();
+    let willow_pc = vm.find_class("WillowGame.WillowPlayerController").unwrap();
     let path = "WillowGame.WillowPawn.InitializePawnMeshes";
     let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), "WillowPawn.InitializePawnMeshes()").with_owner(pawn);
     let wrapper = vm.declare_function(d).unwrap();
@@ -475,6 +514,8 @@ fn env_opts(opts: Opts) -> Env {
         player_controller,
         likeness,
         reattach_cylinder,
+        player_pawn,
+        willow_pc,
     }
 }
 
@@ -1061,6 +1102,17 @@ fn the_script_native_is_not_ported() {
 }
 
 /// The holder's three template handles, unloaded: `Skel`, `Cyl`, `Cycle`.
+/// Hook 2's two lazy controllers, `(Engine.PlayerController, WillowGame.WillowPlayerController)`, still unloaded.
+fn store_controllers(e: &mut Env) -> (ObjRef, ObjRef) {
+    let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let t = (prop_object(e, holder, "PC"), prop_object(e, holder, "WillowPC"));
+    for h in [t.0, t.1] {
+        assert!(e.vm.defs.is_unloaded(&e.vm.space, h), "a store handle, not loaded");
+    }
+    t
+}
+
 fn store_templates(e: &mut Env) -> (ObjRef, ObjRef, ObjRef) {
     let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
     let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
@@ -1711,9 +1763,10 @@ mod socket_tests;
 // ---------------------------------------------------------------------------------------------------------------
 
 use crate::world::render_hooks::{
-    ARRAY_CHECK, GEAR_INTERFACE, GEAR_LIKENESS, GEAR_REFRESH, GEAR_UNRESOLVED, NOT_SETTLED, PAWN_TEST, RECORD as HOOKS_RECORD,
-    RENDER_LAYER as HOOKS_LAYER,
+    ARRAY_CHECK, CAMERA_TEST, GEAR_INTERFACE, GEAR_LIKENESS, GEAR_REFRESH, GEAR_UNRESOLVED, NOT_LOADED, NOT_SETTLED, PAWN_TEST,
+    RECORD as HOOKS_RECORD, RENDER_LAYER as HOOKS_LAYER,
 };
+use crate::world::component_setters::REATTACH_OWNER;
 
 /// Hook 3's array-check stop on the made component from `template`: the pawn's `LightEnvironment` set and the
 /// template's `bAcceptsLights` set.
@@ -1727,18 +1780,13 @@ fn is_light_stop(missing: &Missing, what: &str) -> bool {
     *missing == Missing::NotRead && what == ARRAY_CHECK
 }
 
-/// A player controller for `p`; with `local`, listed as the world's local player (an `Actors` service is added).
-fn controller_for(e: &mut Env, p: ObjRef, local: bool) -> ObjRef {
-    let pc_class = e.player_controller;
-    let pc = make(&mut e.vm, pc_class, "PC_Test");
+/// A `WillowPlayerController` for `p`, `bIsPlayer` set and both camera bits clear: hook 2's pawn test (the pawn
+/// class is `WillowPawn`) and controller test both pass (section 6 of the note).
+fn controller_for(e: &mut Env, p: ObjRef) -> ObjRef {
+    let wpc = e.willow_pc;
+    let pc = make(&mut e.vm, wpc, "PC_Test");
+    put(&mut e.vm, pc, "bIsPlayer", Value::Bool(true));
     put(&mut e.vm, p, "Controller", Value::Object(Some(pc)));
-    if e.vm.service::<crate::actors::Actors>().is_none() {
-        let actor = e.vm.space.classes.by_path("Engine.Actor").unwrap();
-        e.vm.add_service(crate::actors::Actors::new(actor)).unwrap();
-    }
-    if local {
-        e.vm.service::<crate::actors::Actors>().unwrap().borrow_mut().add_local_player(pc).unwrap();
-    }
     pc
 }
 
@@ -1865,27 +1913,29 @@ fn hook_2_a_flag_already_set_is_nothing() {
     let t = make(&mut e.vm, rc, "Cyl_Template");
     put(&mut e.vm, t, "bOwnerNoSee", Value::Bool(true));
     let p = one_made(&mut e, t);
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     run(&mut e, p).unwrap();
     let made = made_of(&e, &entries(&e, p)[0]);
     assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(true));
     assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(false), "no setter ran");
 }
 
-/// Test 6: a local player's pawn, `bOwnerNoSee` clear: the pawn test decides, its `NotRead` before any write and
-/// ahead of the setter's deferred-reattach refusal (the attach sets `Owner`).
+/// Test 6 (section 6 of the note supersedes the pawn-test refusal): both tests pass and `bOwnerNoSee` is clear, so
+/// the setter would write; its deferred reattach refuses first (`REATTACH_OWNER`, the attach sets `Owner`), before any
+/// write.
 #[test]
-fn hook_2_a_clear_flag_is_the_pawn_test_s_not_read() {
+fn hook_2_a_clear_flag_is_the_setter_s_reattach_refusal() {
     let mut e = env();
     let rc = e.reattach_cylinder;
     let t = make(&mut e.vm, rc, "Cyl_Template");
     let p = one_made(&mut e, t);
-    controller_for(&mut e, p, true);
-    hooks_not_read(&mut e, p, PAWN_TEST);
+    controller_for(&mut e, p);
+    hooks_not_read(&mut e, p, REATTACH_OWNER);
 }
 
-/// Test 7: no controller, a controller that is not a `PlayerController`, a non-local one, and a made object that is
-/// not a `PrimitiveComponent`: the gate fails whatever the pawn test says, so nothing. Mode 3 never reaches the hooks
+/// Test 7: no controller, a plain `Engine.Controller` (its `bIsPlayer` clear fails the pawn test), and a made object
+/// that is not a `PrimitiveComponent`: the gate fails, so nothing. The old non-local case is gone with the local-player
+/// check (section 6): see [`hook_2_the_controller_test_reads_the_two_camera_bits`]. Mode 3 never reaches the hooks
 /// (the walk refuses every mode other than 0 first, `MENU_MODES`).
 #[test]
 fn hook_2_a_failing_known_gate_is_nothing() {
@@ -1906,19 +1956,283 @@ fn hook_2_a_failing_known_gate_is_nothing() {
     let ai = make(&mut e.vm, c, "AI_Test");
     put(&mut e.vm, p, "Controller", Value::Object(Some(ai)));
     run(&mut e, p).unwrap();
-    // A player controller that is not local (no Player).
-    let mut e = env();
-    let t = rc_flag_clear(&mut e);
-    let p = one_made(&mut e, t);
-    controller_for(&mut e, p, false);
-    run(&mut e, p).unwrap();
     // A local player, but the made object is not a PrimitiveComponent.
     let mut e = env();
     let ac = e.actor_component;
     let t = make(&mut e.vm, ac, "Plain_Template");
     let p = one_made(&mut e, t);
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     run(&mut e, p).unwrap();
+}
+
+// Hook 2's pawn test and controller test (NATIVE_BODYCOMP_RENDER_HOOKS.md section 6, lane IMPL-BODYCOMP-HOOK2-PAWN-TEST).
+// Numbers are section 6.2's test list. A refusal through the walk goes through `refused` (write-free, intern-free, no
+// load, no class-code load); a direct call through `hook_2_direct`.
+
+/// A reattach-ready cylinder template, `bOwnerNoSee` clear (`set` true: already set).
+fn owner_no_see_template(e: &mut Env, set: bool) -> ObjRef {
+    let rc = e.reattach_cylinder;
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    if set {
+        put(&mut e.vm, t, "bOwnerNoSee", Value::Bool(true));
+    }
+    t
+}
+
+/// A controller of `class` for `p`, its `bIsPlayer` as given.
+fn controller_of(e: &mut Env, p: ObjRef, class: ClassId, is_player: bool) -> ObjRef {
+    let c = make(&mut e.vm, class, "Controller_Test");
+    put(&mut e.vm, c, "bIsPlayer", Value::Bool(is_player));
+    put(&mut e.vm, p, "Controller", Value::Object(Some(c)));
+    c
+}
+
+/// Hook 2 called directly on `pawn` for `template`: its answer, with no write, draw, load, class-code load or intern.
+fn hook_2_direct(e: &Env, pawn: ObjRef, template: ObjRef) -> Result<(), VmError> {
+    let (before, names) = (Counters::read(&e.vm), e.vm.space.names.len());
+    let class = e.vm.space.heap.get(template).unwrap().class;
+    let r = crate::world::render_hooks::owner_no_see(&e.vm, pawn, template, class);
+    assert_eq!((Counters::read(&e.vm), e.vm.space.names.len()), (before, names), "read only");
+    r
+}
+
+fn not_read_text(r: Result<(), VmError>) -> String {
+    let VmError::NotYet(n) = r.unwrap_err() else { panic!() };
+    assert_eq!((n.missing, n.record), (Missing::NotRead, HOOKS_RECORD));
+    n.what.to_string()
+}
+
+/// A pawn of a hand class below `Engine.Actor` whose first native class is itself (not one of the note's), for the
+/// direct calls (the walk runs only on a `WillowPawn`).
+fn unlisted_pawn(e: &mut Env) -> ObjRef {
+    let actor = e.vm.space.classes.by_path("Engine.Actor").unwrap();
+    let object = e.object;
+    let c = class(&mut e.vm, "Test.ToyNativePawn", actor, &[("Controller", PropKind::Object { class: object })]);
+    e.vm.space.classes.mark_native(c).unwrap();
+    make(&mut e.vm, c, "Pawn_Unlisted")
+}
+
+/// 6.2 test 1: a pawn below `WillowPlayerPawn` passes the pawn test whatever its controller's `bIsPlayer` (the class
+/// rule), so a clear flag reaches the setter's reattach refusal.
+#[test]
+fn hook_2_a_player_pawn_passes_the_pawn_test_by_its_class() {
+    let mut e = env();
+    let player_pawn = e.player_pawn;
+    let toy = class(&mut e.vm, "Test.ToyPlayerPawn", player_pawn, &[]);
+    let t = owner_no_see_template(&mut e, false);
+    let a = attachment(&mut e, A { template: Some(t), ..A::default() });
+    let p = pawn_of(&mut e, toy, vec![a]);
+    let wpc = e.willow_pc;
+    controller_of(&mut e, p, wpc, false);
+    hooks_not_read(&mut e, p, REATTACH_OWNER);
+}
+
+/// 6.2 test 2: a pawn below `WillowPawn` reads `Controller.bIsPlayer`: clear fails (nothing), set passes, and a None
+/// `Controller` fails.
+#[test]
+fn hook_2_a_willow_pawn_s_pawn_test_reads_bis_player() {
+    let toy_pawn = |e: &mut Env| {
+        let pawn = e.pawn;
+        let toy = class(&mut e.vm, "Test.ToyWillowPawn", pawn, &[]);
+        let t = owner_no_see_template(e, false);
+        let a = attachment(e, A { template: Some(t), ..A::default() });
+        pawn_of(e, toy, vec![a])
+    };
+    for (is_player, refuses) in [(false, false), (true, true)] {
+        let mut e = env();
+        let p = toy_pawn(&mut e);
+        let wpc = e.willow_pc;
+        controller_of(&mut e, p, wpc, is_player);
+        if refuses {
+            hooks_not_read(&mut e, p, REATTACH_OWNER);
+        } else {
+            run(&mut e, p).unwrap();
+            let made = made_of(&e, &entries(&e, p)[0]);
+            assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(false), "nothing set");
+        }
+    }
+    let mut e = env();
+    let p = toy_pawn(&mut e);
+    run(&mut e, p).unwrap();
+}
+
+/// 6.2 test 3: a `WillowPlayerController` passes only with `bBehindView` and `bViewingThirdPersonMenu` both clear. A
+/// controller with a `Player` set and in no local-player list (the old non-local case) still passes.
+#[test]
+fn hook_2_the_controller_test_reads_the_two_camera_bits() {
+    for (bit, set) in [("bBehindView", true), ("bViewingThirdPersonMenu", true), ("bBehindView", false)] {
+        let mut e = env();
+        let t = owner_no_see_template(&mut e, false);
+        let p = one_made(&mut e, t);
+        let pc = controller_for(&mut e, p);
+        put(&mut e.vm, pc, bit, Value::Bool(set));
+        if set {
+            run(&mut e, p).unwrap();
+        } else {
+            let player = make(&mut e.vm, e.object, "Player_Test");
+            put(&mut e.vm, pc, "Player", Value::Object(Some(player)));
+            hooks_not_read(&mut e, p, REATTACH_OWNER);
+        }
+    }
+}
+
+/// 6.2 test 4: a plain `Engine.PlayerController` is the camera test's `NotRead`, once everything else passes.
+#[test]
+fn hook_2_an_engine_player_controller_is_the_camera_test_s_not_read() {
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    let pc = e.player_controller;
+    controller_of(&mut e, p, pc, true);
+    hooks_not_read(&mut e, p, &format!("{CAMERA_TEST}PlayerController)"));
+}
+
+/// 6.2 test 5: a controller that is not a `PlayerController` (here on a player pawn, whose pawn test passes by class):
+/// nothing.
+#[test]
+fn hook_2_a_controller_that_is_not_a_player_controller_is_nothing() {
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let a = attachment(&mut e, A { template: Some(t), ..A::default() });
+    let player_pawn = e.player_pawn;
+    let p = pawn_of(&mut e, player_pawn, vec![a]);
+    let c = e.vm.find_class("Engine.Controller").unwrap();
+    controller_of(&mut e, p, c, true);
+    run(&mut e, p).unwrap();
+}
+
+/// 6.2 test 6: both tests pass: `bOwnerNoSee` already true is nothing (the made component keeps it, no setter ran);
+/// clear is the setter's `REATTACH_OWNER` ([`hook_2_a_clear_flag_is_the_setter_s_reattach_refusal`]).
+#[test]
+fn hook_2_both_tests_pass_and_the_setter_decides() {
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, true);
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p);
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(false), "no setter ran");
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p);
+    hooks_not_read(&mut e, p, REATTACH_OWNER);
+}
+
+/// 6.2 test 7: a pawn of an unlisted first native class is the pawn test's `NotRead` naming it, raised only when every
+/// other part passes and the setter would write: a flag already true, or a failing controller test, is nothing; an
+/// unsettled template is the not-settled refusal first.
+#[test]
+fn hook_2_an_unlisted_pawn_class_is_the_pawn_test_s_not_read_only_when_it_decides() {
+    let mut e = env();
+    let p = unlisted_pawn(&mut e);
+    let wpc = e.willow_pc;
+    let pc = controller_of(&mut e, p, wpc, true);
+    let clear = owner_no_see_template(&mut e, false);
+    assert_eq!(not_read_text(hook_2_direct(&e, p, clear)), format!("{PAWN_TEST} on Test.ToyNativePawn"));
+    let set = owner_no_see_template(&mut e, true);
+    hook_2_direct(&e, p, set).unwrap();
+    put(&mut e.vm, pc, "bBehindView", Value::Bool(true));
+    hook_2_direct(&e, p, clear).unwrap();
+    put(&mut e.vm, pc, "bBehindView", Value::Bool(false));
+    let (_, cyl, _) = store_templates(&mut e);
+    assert_eq!(not_read_text(hook_2_direct(&e, p, cyl)), NOT_SETTLED);
+    // An undecided pawn test and an undecided camera test: the pawn test's, the first in gate order.
+    let engine_pc = e.player_controller;
+    controller_of(&mut e, p, engine_pc, true);
+    assert_eq!(not_read_text(hook_2_direct(&e, p, clear)), format!("{PAWN_TEST} on Test.ToyNativePawn"));
+    // A plain Engine.PlayerController alone, with a flag already true: nothing.
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, true);
+    let p = one_made(&mut e, t);
+    controller_of(&mut e, p, engine_pc, true);
+    run(&mut e, p).unwrap();
+}
+
+/// 6.2 test 8: a lazy `Controller` that a test must read is the not-loaded `NotRead`, nothing loaded: a `WillowPawn`
+/// pawn (its pawn test reads `bIsPlayer`; the first undecided part in gate order, ahead of the Engine controller's
+/// camera test), and a `WillowPlayerController` on a player pawn (the controller test reads its two bits). With a flag
+/// already true it is nothing; a lazy handle that is not a `PlayerController` fails the cast by its class: nothing.
+#[test]
+fn hook_2_a_lazy_controller_is_not_loaded() {
+    for set in [false, true] {
+        for willow in [false, true] {
+            let mut e = env();
+            let (pc, wpc) = store_controllers(&mut e);
+            let t = owner_no_see_template(&mut e, set);
+            let a = attachment(&mut e, A { template: Some(t), ..A::default() });
+            let class = if willow { e.player_pawn } else { e.pawn };
+            let p = pawn_of(&mut e, class, vec![a]);
+            let c = if willow { wpc } else { pc };
+            put(&mut e.vm, p, "Controller", Value::Object(Some(c)));
+            if set {
+                run(&mut e, p).unwrap();
+            } else {
+                hooks_not_read(&mut e, p, NOT_LOADED);
+            }
+            assert!(e.vm.defs.is_unloaded(&e.vm.space, c), "nothing loaded");
+        }
+    }
+    let mut e = env();
+    let (skel, _, _) = store_templates(&mut e);
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    put(&mut e.vm, p, "Controller", Value::Object(Some(skel)));
+    run(&mut e, p).unwrap();
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, skel), "nothing loaded");
+}
+
+/// 6.2 tests 10 and 11: nothing-cases with an undecided part, and the order against the not-settled refusal.
+#[test]
+fn hook_2_an_undecided_part_waits_for_every_decided_one() {
+    // A camera-test class with a failing pawn test (a WillowPawn whose controller has bIsPlayer clear): nothing.
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    let engine_pc = e.player_controller;
+    controller_of(&mut e, p, engine_pc, false);
+    run(&mut e, p).unwrap();
+    // A pawn of an unlisted native class whose Controller is not a PlayerController: nothing.
+    let mut e = env();
+    let p = unlisted_pawn(&mut e);
+    let c = e.vm.find_class("Engine.Controller").unwrap();
+    controller_of(&mut e, p, c, true);
+    let clear = owner_no_see_template(&mut e, false);
+    hook_2_direct(&e, p, clear).unwrap();
+    // Test 11: an unsettled template with a camera-test class and bOwnerNoSee clear: NOT_SETTLED first.
+    let mut e = env();
+    let (_, cyl, _) = store_templates(&mut e);
+    let p = one_made(&mut e, cyl);
+    let engine_pc = e.player_controller;
+    controller_of(&mut e, p, engine_pc, true);
+    hooks_not_read(&mut e, p, NOT_SETTLED);
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, cyl), "nothing loaded");
+}
+
+/// 6.2 test 9: `bIsPlayer`, `bBehindView` or `bViewingThirdPersonMenu` not declared as a bool (or not declared) is a
+/// script error naming it, before any write.
+#[test]
+fn hook_2_malformed_test_fields_are_script_errors() {
+    // bIsPlayer an int, on a controller class of its own.
+    let mut e = env();
+    let t = owner_no_see_template(&mut e, false);
+    let p = one_made(&mut e, t);
+    let object = e.object;
+    let odd = class(&mut e.vm, "Test.OddController", object, &[("bIsPlayer", PropKind::Int)]);
+    let c = make(&mut e.vm, odd, "Odd_Test");
+    put(&mut e.vm, p, "Controller", Value::Object(Some(c)));
+    script_refusal(&mut e, p, "bIsPlayer");
+    // bBehindView an int; bViewingThirdPersonMenu not declared.
+    for (opts, needle) in [
+        (Opts { behind_view_int: true, ..Opts::default() }, "bBehindView"),
+        (Opts { no_third_person_menu: true, ..Opts::default() }, "bViewingThirdPersonMenu"),
+    ] {
+        let mut e = env_opts(opts);
+        let t = owner_no_see_template(&mut e, false);
+        let p = one_made(&mut e, t);
+        controller_for(&mut e, p);
+        script_refusal(&mut e, p, needle);
+    }
 }
 
 /// Test 8: the setter's planner keeps its order: a component class that declares no deferred-reattach fields is the
@@ -1929,7 +2243,7 @@ fn hook_2_a_malformed_reattach_declaration_is_the_planner_s_error() {
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     put(&mut e.vm, cyl, "bOwnerNoSee", Value::Bool(true));
     let p = one_made(&mut e, cyl);
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     let before = Counters::read(&e.vm);
     match run(&mut e, p).unwrap_err() {
         VmError::Script { message, .. } => assert!(message.contains("Scene"), "{message}"),
@@ -1985,7 +2299,7 @@ fn an_unloaded_template_on_a_hook_path_is_not_settled() {
     let mut e = env();
     let (_, cyl, _) = store_templates(&mut e);
     let p = one_made(&mut e, cyl);
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     hooks_not_read(&mut e, p, NOT_SETTLED);
     assert!(e.vm.defs.is_unloaded(&e.vm.space, cyl), "nothing loaded");
 
@@ -2033,7 +2347,7 @@ fn malformed_light_environment_and_flag_fields_are_script_errors() {
     let rc = e.reattach_cylinder;
     let t = make(&mut e.vm, rc, "Cyl_Template");
     let p = one_made(&mut e, t);
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     script_refusal(&mut e, p, "bOwnerNoSee");
     // bAcceptsLights an int: hook 3 on a mesh with a light environment.
     let mut e = env_opts(Opts { flags_int: true, ..Opts::default() });
@@ -2054,7 +2368,7 @@ fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
     assert!(e.vm.defs.ensure_loaded(&mut e.vm.space, cycle).is_err(), "the cycle export's load fails");
     assert!(e.vm.defs.is_failed(&e.vm.space, cycle));
     let p = pawn_with(&mut e, Vec::new());
-    controller_for(&mut e, p, true);
+    controller_for(&mut e, p);
     let light = make(&mut e.vm, e.object, "Light_Test");
     put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
     let (before, names) = (Counters::read(&e.vm), e.vm.space.names.len());

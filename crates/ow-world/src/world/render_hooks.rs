@@ -4,7 +4,7 @@
 //! **UNVERIFIED** in the running game. AI-assisted (Claude Code).
 //!
 //! Each hook either does nothing or refuses, read only and before any write. Under today's rules none of them writes:
-//! hook 2 would write only where its unidentified pawn test decides, and hook 3 only past its unidentified array check,
+//! hook 2 would write only past the setter's deferred reattach, and hook 3 only past its unidentified array check,
 //! and both are refused there. So the body composition's writes are unchanged.
 //!
 //! 1. **The gear-likeness step** ([`gear_likeness`]), before the custom-head step. The made component's class is asked
@@ -15,12 +15,20 @@
 //!    when it has none; and a class chain whose bodies did not all decode (synthetic packages) answers by the
 //!    structural fallback, as `implements` does. The interface not defined at set-up is [`GEAR_INTERFACE`].
 //!    No: nothing. Yes: the refresh, not read and render-side, is [`GEAR_REFRESH`] (`LayerAbsent`).
-//! 2. **The owner-no-see setting** ([`owner_no_see`]): the gate's known parts first, in the game's order. Not a
-//!    `PrimitiveComponent`; a pawn `Controller` that is None, not an `Engine.PlayerController`, or not local by the Off
-//!    `IsLocalPlayerController` rule (crate::world::is_local_player): nothing. Then the template must be settled
-//!    ([`NOT_SETTLED`]), and `SetOwnerNoSee(true)`'s planner runs on the slots the attach produces. A flag already
-//!    true is nothing. Otherwise the unidentified pawn test decides the outcome, so it is [`PAWN_TEST`] (`NotRead`),
-//!    ahead of the setter's own deferred-reattach refusal.
+//! 2. **The owner-no-see setting** ([`owner_no_see`], section 6 of the note, lane IMPL-BODYCOMP-HOOK2-PAWN-TEST): the
+//!    gate in the game's order. Not a `PrimitiveComponent`: nothing. The pawn test (`Pawn.IsPlayerPawn`, by the pawn's
+//!    first native class): `WillowPlayerPawn` passes; `Pawn`, `GearboxPawn`, `WillowPawn` and `WillowAIPawn` pass when
+//!    `Controller` is set and its `bIsPlayer` is set; any other class is undecided ([`PAWN_TEST`]). The pawn's
+//!    `Controller` None or not an `Engine.PlayerController`: nothing. The controller test
+//!    (`PlayerController.UsingFirstPersonCamera`, by its first native class): `WillowPlayerController` passes when
+//!    `bBehindView` and `bViewingThirdPersonMenu` are both clear; any other class is undecided ([`CAMERA_TEST`]). The
+//!    cast is judged by the class the handle carries, so a lazy `Controller` is judged too; one the store has not loaded
+//!    is undecided ([`NOT_LOADED`]) only where a test must read it (a `Pawn`-body pawn test, or a
+//!    `WillowPlayerController`'s controller test). Then the template must be settled
+//!    ([`NOT_SETTLED`]), and `SetOwnerNoSee(true)`'s planner runs on the slots the attach produces: a flag already true
+//!    is nothing. **A decided failing test answers nothing, and an undecided one is raised (`NotRead`, the first in
+//!    gate order) only when every other part passes and the setter would write.** Where everything passes, the setter's
+//!    deferred reattach refuses first, `REATTACH_OWNER` (the attach sets `Owner`), so hook 2 still never writes.
 //! 3. **The light environment** ([`light_environment`]): the pawn's `LightEnvironment` (declared as an object) None,
 //!    or a made class that is not a `MeshComponent`: nothing. Then the template must be settled, and its
 //!    `bAcceptsLights` (fitted) clear is nothing; set reaches the unidentified array check, [`ARRAY_CHECK`] (`NotRead`).
@@ -44,7 +52,13 @@ pub const GEAR_UNRESOLVED: &str =
 pub const GEAR_REFRESH: &str = "InitializeBodyComposition: the body's rendering hooks (the gear-likeness refresh)";
 pub const RENDER_LAYER: &str = "a rendering layer";
 pub const NOT_SETTLED: &str = "the rendering hooks on a template not loaded at set-up (its values are not settled)";
-pub const PAWN_TEST: &str = "the owner-no-see gate's pawn test (not identified)";
+/// Hook 2's pawn test on a pawn of an unlisted first native class (followed by " on <class>").
+pub const PAWN_TEST: &str = "the owner-no-see gate's pawn test (IsPlayerPawn)";
+/// Hook 2's controller test on a controller whose first native class is not `WillowPlayerController` (followed by
+/// "<class>)"; `PlayerController` for `Engine.PlayerController` and `GearboxFramework.GearboxPlayerController`).
+pub const CAMERA_TEST: &str = "the owner-no-see gate's camera test (UsingFirstPersonCamera of ";
+/// Hook 2 reaching a `Controller` that is a store handle not loaded yet.
+pub const NOT_LOADED: &str = "the rendering hooks: an object the store has not loaded (a load is a write)";
 pub const ARRAY_CHECK: &str = "the light-environment step's array check (not identified)";
 
 const WHAT: &str = "InitializeBodyComposition";
@@ -52,6 +66,12 @@ const OWNER_NO_SEE: &str = "PrimitiveComponent.SetOwnerNoSee(bool)";
 const PRIMITIVE: &str = "Engine.PrimitiveComponent";
 const MESH: &str = "Engine.MeshComponent";
 const PLAYER_CONTROLLER: &str = "Engine.PlayerController";
+const WILLOW_PLAYER_PAWN: &str = "WillowGame.WillowPlayerPawn";
+/// The first native classes whose pawn test reads `Controller.bIsPlayer` (`Engine.Pawn`'s body, kept by these).
+const PAWN_BODY: [&str; 4] = ["Engine.Pawn", "GearboxFramework.GearboxPawn", "WillowGame.WillowPawn", "WillowGame.WillowAIPawn"];
+const WILLOW_PLAYER_CONTROLLER: &str = "WillowGame.WillowPlayerController";
+/// The first native classes whose controller test is the engine's camera test (not read in detail).
+const CAMERA_BODY: [&str; 2] = ["Engine.PlayerController", "GearboxFramework.GearboxPlayerController"];
 
 fn script(message: String) -> VmError {
     VmError::Script { function: WHAT.to_string(), message }
@@ -129,19 +149,127 @@ pub fn gear_likeness(vm: &Vm, class: ClassId) -> Result<(), VmError> {
     Ok(())
 }
 
+/// The path of `class`'s first native class, from `class` up: the fitted native bit of the class body where the code
+/// index holds the class (a body that did not decode counts as native), else the class table's mark, as
+/// `set_physics` walks it. `None` when no class of the chain is native. Reads only: no class code is loaded.
+fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
+    let code = vm.defs.code();
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.get_layout(c)?;
+        let native = match code.key_of(c) {
+            Some(k) => code.class(k).body.as_ref().map_or(true, |b| b.is_native()),
+            None => vm.space.classes.is_native(c),
+        };
+        if native {
+            return Some(layout.path().as_str().to_string());
+        }
+        cursor = layout.super_class();
+    }
+    None
+}
+
+fn is_one_of(path: &str, list: &[&str]) -> bool {
+    list.iter().any(|p| path.eq_ignore_ascii_case(p))
+}
+
+/// `name` on `o`, declared as a bool, else `VmError::Script` naming it.
+fn bool_field(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    component_setters::schemas(vm, o, &[(name, component_setters::Want::Bool)], WHAT)?;
+    component_setters::bool_of(&Slots::of(o).required(vm, name, WHAT)?, name, WHAT)
+}
+
+/// One of hook 2's tests: decided either way, or undecided with the refusal it raises when everything else passes.
+enum Test {
+    Pass,
+    Fail,
+    Undecided(VmError),
+}
+
+/// The pawn's `Controller`: None, a store handle not loaded yet, or a resident object.
+enum Controller {
+    None,
+    NotLoaded,
+    Resident(ObjRef),
+}
+
+fn controller(vm: &Vm, pawn: ObjRef) -> Result<Controller, VmError> {
+    Ok(match object_field(vm, pawn, "Controller")? {
+        None => Controller::None,
+        Some(c) if vm.defs.is_unloaded(&vm.space, c) => Controller::NotLoaded,
+        Some(c) => Controller::Resident(c),
+    })
+}
+
+fn not_loaded() -> VmError {
+    NotYet::not_read(NOT_LOADED, RECORD).into()
+}
+
+/// The pawn test, `Pawn.IsPlayerPawn` (module documentation).
+fn pawn_test(vm: &Vm, pawn: ObjRef) -> Result<Test, VmError> {
+    let class = vm.space.heap.get(pawn)?.class;
+    let native = first_native(vm, class);
+    match native.as_deref() {
+        Some(p) if p.eq_ignore_ascii_case(WILLOW_PLAYER_PAWN) => Ok(Test::Pass),
+        Some(p) if is_one_of(p, &PAWN_BODY) => Ok(match controller(vm, pawn)? {
+            Controller::None => Test::Fail,
+            Controller::NotLoaded => Test::Undecided(not_loaded()),
+            Controller::Resident(c) if bool_field(vm, c, "bIsPlayer")? => Test::Pass,
+            Controller::Resident(_) => Test::Fail,
+        }),
+        other => {
+            let named = other.map_or_else(|| path_of(vm, class), str::to_string);
+            Ok(Test::Undecided(NotYet::not_read(format!("{PAWN_TEST} on {named}"), RECORD).into()))
+        }
+    }
+}
+
+/// The controller test, `PlayerController.UsingFirstPersonCamera` (module documentation), on a `PlayerController`
+/// (resident or a lazy handle: only the `WillowPlayerController` rule reads it).
+fn camera_test(vm: &Vm, pc: ObjRef) -> Result<Test, VmError> {
+    let class = vm.space.heap.get(pc)?.class;
+    let native = first_native(vm, class);
+    let named = match native.as_deref() {
+        Some(p) if p.eq_ignore_ascii_case(WILLOW_PLAYER_CONTROLLER) => {
+            if vm.defs.is_unloaded(&vm.space, pc) {
+                return Ok(Test::Undecided(not_loaded()));
+            }
+            let behind = bool_field(vm, pc, "bBehindView")?;
+            let menu = bool_field(vm, pc, "bViewingThirdPersonMenu")?;
+            return Ok(if behind || menu { Test::Fail } else { Test::Pass });
+        }
+        Some(p) if is_one_of(p, &CAMERA_BODY) => "PlayerController".to_string(),
+        Some(p) => p.to_string(),
+        None => path_of(vm, class),
+    };
+    Ok(Test::Undecided(NotYet::not_read(format!("{CAMERA_TEST}{named})"), RECORD).into()))
+}
+
 /// Hook 2 (module documentation) for the component `template` of `class`, made on `pawn`.
 pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> Result<(), VmError> {
     if !is_a(vm, class, PRIMITIVE) {
         return Ok(());
     }
-    let Some(controller) = object_field(vm, pawn, "Controller")? else {
+    // The first undecided test, raised only once every other part has passed and the setter would write.
+    let mut undecided = None;
+    match pawn_test(vm, pawn)? {
+        Test::Fail => return Ok(()),
+        Test::Undecided(e) => undecided = Some(e),
+        Test::Pass => {}
+    }
+    // The `PlayerController` cast, judged by the class the handle carries, so a lazy handle is judged too.
+    let Some(c) = object_field(vm, pawn, "Controller")? else {
         return Ok(());
     };
-    if !is_a(vm, vm.space.heap.get(controller)?.class, PLAYER_CONTROLLER) {
+    if !is_a(vm, vm.space.heap.get(c)?.class, PLAYER_CONTROLLER) {
         return Ok(());
     }
-    if !crate::world::is_local_player(vm, controller)? {
-        return Ok(());
+    match camera_test(vm, c)? {
+        Test::Fail => return Ok(()),
+        Test::Undecided(e) => {
+            undecided.get_or_insert(e);
+        }
+        Test::Pass => {}
     }
     settled(vm, template)?;
     // The slots the attach produces: `Owner` the pawn, the two update flags cleared.
@@ -151,7 +279,13 @@ pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> 
     if !component_setters::plan_flag(vm, slots, "bOwnerNoSee", true, OWNER_NO_SEE)? {
         return Ok(());
     }
-    Err(NotYet::not_read(PAWN_TEST, RECORD).into())
+    if let Some(e) = undecided {
+        return Err(e);
+    }
+    // The setter's deferred reattach: the attach sets `Owner`, so this is its `REATTACH_OWNER` refusal. The fallback
+    // after it keeps hook 2 write-free should that check ever pass.
+    component_setters::reattach_check(vm, slots, OWNER_NO_SEE)?;
+    Err(NotYet::not_read(component_setters::REATTACH_OWNER, component_setters::RECORD).into())
 }
 
 /// Hook 3 (module documentation) for the component `template` of `class`, made on `pawn`.
