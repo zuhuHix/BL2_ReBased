@@ -430,7 +430,10 @@ parent-bone map is the identity.
     (the routine `SetSkeletalMesh`'s exec reaches) and by one more component routine (not read);
   - the field names come from the local copy of `tools/ghidra/class_layout.py` that sizes `MapProperty`, with one
     constant shift that also places `SkeletalMesh`, `ParentAnimComponent` and `ParentBoneMap` at the places the
-    routine reads. So the names are a strong fit.
+    routine reads. So the names are a strong fit. The tested bit is one bool of the 20-bool word that begins with
+    `bEnableClothSimulation`. `bIsGestaltAccessoryMesh` is the 16th bool declared in that word, and the same shift
+    lands the tested bit exactly on it. Its neighbours (`bCacheAnimSequenceNodes` before it,
+    `bNeedsInstanceWeightUpdate` after it) are ruled out only by that exact bit, not by a separate reading;
 - An instruction search found no immediate set or clear of the flag's bit in the executable. The search covered two
   forms each: the word and the byte, set and clear. It is **not exhaustive**.
 - `research/script_disasm.py`'s decoder was run over every script function of the nine code packages. No script
@@ -539,6 +542,16 @@ name table unchanged, with nothing loaded:
 7. **UNVERIFIED:** the pawn's `PostInitBodyComposition`: the slot-node rebuild, the mesh flag it sets, the
    gear-likeness step and the two rendering steps (section 4.5).
 8. **UNVERIFIED:** the one unidentified native caller (section 1).
+9. **UNVERIFIED side finding, a separate open item:** while checking the gear-likeness interface for section 8, the
+   pawn's hook 1 was found to look up an interface registered as `WillowGame.ISimpleAnimPlayer`, not
+   `IGearLikenessConsumer`. What was read for that:
+   - the lookup's class registration;
+   - the routine it then calls, which the script native `WillowAnimNode_Simple.CacheSimpleAnims` also calls;
+   - the packages' interface tables: only `WillowPawn`, `WillowInteractiveObject` and `WillowPopulationPoint`
+     implement it, and no component class carries any interface table.
+
+   Hook 1 and decision 2026-11-25-03 are unchanged by this note until a separate analyst lane reads it
+   (ANALYST-HOOK1-INTERFACE, NATIVE_BODYCOMP_RENDER_HOOKS.md section 8).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

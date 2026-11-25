@@ -27,4 +27,7 @@ bounds check changed.
   - an unreadable skeleton refuses with its reader's `NotYet`;
   - the writes are `ParentAnimComponent`, then `ParentBoneMap`;
   - tests listed.
+- **Review r1 (#716):**
+  - the flag's rank in its bitfield word is given, with how the neighbouring bools were ruled out;
+  - the hook 1 side finding (`ISimpleAnimPlayer`) is recorded as a separate open item, with hook 1 unchanged here.
 - **Clean room:** a different lane implements this note.
