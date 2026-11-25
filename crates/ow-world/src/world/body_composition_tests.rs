@@ -116,6 +116,8 @@ struct Opts {
     behind_view_int: bool,
     /// `WillowPlayerController` declares no `bViewingThirdPersonMenu`.
     no_third_person_menu: bool,
+    /// `PrimitiveComponent`'s own `LightEnvironment` declared as an int (hook 3's planner, lane IMPL-HOOK3-ARRAY-CHECK).
+    component_light_int: bool,
 }
 
 impl Default for Opts {
@@ -128,13 +130,15 @@ impl Default for Opts {
             flags_int: false,
             behind_view_int: false,
             no_third_person_menu: false,
+            component_light_int: false,
         }
     }
 }
 
 /// [`env_with`] with [`Opts`].
 fn env_opts(opts: Opts) -> Env {
-    let Opts { reattach, head_mesh, controller_int, light_int, flags_int, behind_view_int, no_third_person_menu } = opts;
+    let Opts { reattach, head_mesh, controller_int, light_int, flags_int, behind_view_int, no_third_person_menu, component_light_int } =
+        opts;
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -170,7 +174,13 @@ fn env_opts(opts: Opts) -> Env {
         }
         t.prop("Bool", primitive, "bAcceptsDynamicDecals", 0, 0);
         t.class("DecalComponent", primitive);
-        t.prop("Object", primitive, "LightEnvironment", 0, object);
+        if component_light_int {
+            t.prop("Int", primitive, "LightEnvironment", 0, 0);
+        } else {
+            t.prop("Object", primitive, "LightEnvironment", 0, object);
+        }
+        // The setter's attached path writes it (hook 3 through SetLightEnvironment, lane IMPL-HOOK3-ARRAY-CHECK).
+        t.prop("Object", primitive, "PreviousLightEnvironment", 0, object);
         t.prop("Float", primitive, "Scale", 0, 0);
         // The rendering hooks' flags (NATIVE_BODYCOMP_RENDER_HOOKS.md: hook 2's and hook 3's).
         for flag in ["bOwnerNoSee", "bAcceptsLights"] {
@@ -184,6 +194,8 @@ fn env_opts(opts: Opts) -> Env {
         let cylinder = t.class("CylinderComponent", primitive);
         t.prop("Float", cylinder, "CollisionRadius", 0, 0);
         let mesh = t.class("MeshComponent", primitive);
+        // Hook 3's static-mesh branch (NATIVE_BODYCOMP_RENDER_HOOKS.md section 7.1, lane IMPL-HOOK3-ARRAY-CHECK).
+        t.class("StaticMeshComponent", mesh);
         let skeletal = t.class("SkeletalMeshComponent", mesh);
         t.prop("Object", skeletal, "SkeletalMesh", 0, object);
         // The socket attach's component fields and the mesh and socket classes (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES).
@@ -441,6 +453,17 @@ fn env_opts(opts: Opts) -> Env {
         ("bNeedsReattach", PropKind::Bool),
         ("bNeedsUpdateTransform", PropKind::Bool),
     ]);
+    // Hook 3's mesh components with the deferred reattach's fields (lane IMPL-HOOK3-ARRAY-CHECK): a skeletal one, a
+    // subclass of it standing in for `GearLikenessMeshComponent`, and a static mesh one.
+    let reattach_fields = [
+        ("Scene", PropKind::Struct(scene)),
+        ("bNeedsReattach", PropKind::Bool),
+        ("bNeedsUpdateTransform", PropKind::Bool),
+    ];
+    let reattach_skeletal = class(&mut vm, "Test.ToyReattachSkeletal", skeletal, &reattach_fields);
+    class(&mut vm, "Test.ToyGearLikenessMesh", reattach_skeletal, &[]);
+    let static_mesh = vm.find_class("Engine.StaticMeshComponent").unwrap();
+    class(&mut vm, "Test.ToyReattachStaticMesh", static_mesh, &reattach_fields);
     let actor = class(&mut vm, "Engine.Actor", object, &[
         ("Role", PropKind::Byte { enum_: None }),
         ("bNetDirty", PropKind::Bool),
@@ -978,8 +1001,8 @@ fn the_root_motion_check_follows_the_preflight() {
     stop_at_light(&mut e, p, skel);
     let Value::Object(Some(body)) = prop(&e.vm, p, "BodyClass") else { panic!() };
     put(&mut e.vm, body, "UseRootMotion", Value::Bool(true));
-    let (_, what) = refused(&mut e, p);
-    assert_eq!(what, crate::world::render_hooks::ARRAY_CHECK, "the preflight's refusal comes first");
+    let (missing, what) = refused(&mut e, p);
+    assert!(is_light_stop(&missing, &what), "the preflight's refusal comes first: {what}");
 }
 
 /// Review r1 of #542, item 5: a replicated state without the packing's fields is the build's shape error before any
@@ -1767,21 +1790,25 @@ mod socket_tests;
 // ---------------------------------------------------------------------------------------------------------------
 
 use crate::world::render_hooks::{
-    ARRAY_CHECK, CAMERA_TEST, GEAR_INTERFACE, GEAR_LIKENESS, GEAR_REFRESH, GEAR_UNRESOLVED, NOT_LOADED, NOT_SETTLED, PAWN_TEST,
+    CAMERA_TEST, STATIC_LIGHTMAP, GEAR_INTERFACE, GEAR_LIKENESS, GEAR_REFRESH, GEAR_UNRESOLVED, NOT_LOADED, NOT_SETTLED, PAWN_TEST,
     RECORD as HOOKS_RECORD, RENDER_LAYER as HOOKS_LAYER,
 };
 use crate::world::component_setters::REATTACH_OWNER;
 
-/// Hook 3's array-check stop on the made component from `template`: the pawn's `LightEnvironment` set and the
-/// template's `bAcceptsLights` set.
+/// A write-free stop at hook 3 on the made component from `template`: the pawn's `LightEnvironment` set, the
+/// template's `bAcceptsLights` set and `bAttached` set, and the pawn tick-disabled, so `SetLightEnvironment`'s planner
+/// reaches the deferred reattach and its owner rule refuses (`REATTACH_OWNER`). Since hook 3's array check is read
+/// (section 7.1, lane IMPL-HOOK3-ARRAY-CHECK), that is the hook's preflight refusal these tests stop at.
 fn stop_at_light(e: &mut Env, p: ObjRef, template: ObjRef) {
     let light = make(&mut e.vm, e.object, "Light_Test");
     put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
     put(&mut e.vm, template, "bAcceptsLights", Value::Bool(true));
+    put(&mut e.vm, template, "bAttached", Value::Bool(true));
+    put(&mut e.vm, p, "bTickIsDisabled", Value::Bool(true));
 }
 
 fn is_light_stop(missing: &Missing, what: &str) -> bool {
-    *missing == Missing::NotRead && what == ARRAY_CHECK
+    *missing == Missing::NotRead && what == REATTACH_OWNER
 }
 
 /// A `WillowPlayerController` for `p`, `bIsPlayer` set and both camera bits clear: hook 2's pawn test (the pawn
@@ -2336,14 +2363,146 @@ fn hook_3_nothing_without_a_light_environment_a_mesh_or_accepted_lights() {
     assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None));
 }
 
-/// Test 10: a mesh template with `bAcceptsLights` set reaches the array check: its `NotRead`, before any write.
+// Hook 3 (NATIVE_BODYCOMP_RENDER_HOOKS.md section 7, lane IMPL-HOOK3-ARRAY-CHECK). Numbers are section 7.2's.
+
+/// A skeletal template of `class` with `bAcceptsLights` set, made on a pawn whose `LightEnvironment` is a new object:
+/// (pawn, template, the pawn's light environment).
+fn lit(e: &mut Env, class: ClassId) -> (ObjRef, ObjRef, ObjRef) {
+    let t = make(&mut e.vm, class, "Skel_Template");
+    put(&mut e.vm, t, "bAcceptsLights", Value::Bool(true));
+    let p = one_made(e, t);
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    (p, t, light)
+}
+
+/// 7.2 tests 1 and 3: a made skeletal component (and a toy subclass, standing in for `GearLikenessMeshComponent`),
+/// `bAcceptsLights` set, not attached, its template's `LightEnvironment` different from the pawn's: no refusal; the
+/// made component's `LightEnvironment` is the pawn's, and hook 3 writes nothing else.
 #[test]
-fn hook_3_accepted_lights_reach_the_array_check() {
+fn hook_3_a_skeletal_component_takes_the_pawn_s_light_environment() {
+    for class_path in ["Test.ToyReattachSkeletal", "Test.ToyGearLikenessMesh"] {
+        let mut e = env();
+        let class = e.vm.find_class(class_path).unwrap();
+        let (p, t, light) = lit(&mut e, class);
+        let other = make(&mut e.vm, e.object, "Template_Light");
+        put(&mut e.vm, t, "LightEnvironment", Value::Object(Some(other)));
+        run(&mut e, p).unwrap();
+        let made = made_of(&e, &entries(&e, p)[0]);
+        assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(Some(light)), "{class_path}");
+        assert_eq!(prop(&e.vm, made, "PreviousLightEnvironment"), Value::Object(None), "{class_path}: nothing else");
+    }
+}
+
+/// 7.2 test 2: the template's `LightEnvironment` already the pawn's: nothing.
+#[test]
+fn hook_3_the_same_light_environment_is_nothing() {
     let mut e = env();
-    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
-    let p = one_made(&mut e, skel);
-    stop_at_light(&mut e, p, skel);
-    hooks_not_read(&mut e, p, ARRAY_CHECK);
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let (p, t, light) = lit(&mut e, skeletal);
+    put(&mut e.vm, t, "LightEnvironment", Value::Object(Some(light)));
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(Some(light)));
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(false), "no setter ran");
+}
+
+/// 7.2 tests 4 and 5: a made `StaticMeshComponent` with `bAcceptsLights` set is the static-mesh `NotRead`, before any
+/// write; with `bAcceptsLights` clear it is nothing, and so is a `CylinderComponent` (not a mesh component).
+#[test]
+fn hook_3_a_static_mesh_component_is_not_read() {
+    let mut e = env();
+    let class = e.vm.find_class("Test.ToyReattachStaticMesh").unwrap();
+    let (p, _, _) = lit(&mut e, class);
+    hooks_not_read(&mut e, p, STATIC_LIGHTMAP);
+    let mut e = env();
+    let (p, t, _) = lit(&mut e, class);
+    put(&mut e.vm, t, "bAcceptsLights", Value::Bool(false));
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None));
+    let mut e = env();
+    let cylinder = e.cylinder;
+    let (p, _, _) = lit(&mut e, cylinder);
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None));
+}
+
+/// 7.2 test 6: on one component, hook 2's writes (`bOwnerNoSee`, `bNeedsReattach`) and then hook 3's
+/// `LightEnvironment`, both after the walk's own writes (the entry and the component in the pawn's `Components`).
+#[test]
+fn hook_3_comes_after_hook_2_on_one_component() {
+    let mut e = env();
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let (p, _, light) = lit(&mut e, skeletal);
+    controller_for(&mut e, p);
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(true), "hook 2");
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(true), "hook 2's reattach flag");
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(Some(light)), "hook 3");
+    assert!(prop(&e.vm, p, "Components").elements().unwrap().contains(&Value::Object(Some(made))), "the walk's attach");
+}
+
+/// 7.2 test 8: a template with `bAttached` set: `PreviousLightEnvironment`, `LightEnvironment`, then `bNeedsReattach`
+/// (the owner rule passes for an ordinary pawn); with the pawn tick-disabled, `REATTACH_OWNER`, write-free.
+#[test]
+fn hook_3_an_attached_template_takes_the_setter_s_attached_path() {
+    let mut e = env();
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let (p, t, light) = lit(&mut e, skeletal);
+    let old = make(&mut e.vm, e.object, "Template_Light");
+    put(&mut e.vm, t, "LightEnvironment", Value::Object(Some(old)));
+    put(&mut e.vm, t, "bAttached", Value::Bool(true));
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "PreviousLightEnvironment"), Value::Object(Some(old)));
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(Some(light)));
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(true));
+    let mut e = env();
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let (p, t, _) = lit(&mut e, skeletal);
+    put(&mut e.vm, t, "bAttached", Value::Bool(true));
+    put(&mut e.vm, p, "bTickIsDisabled", Value::Bool(true));
+    hooks_not_read(&mut e, p, REATTACH_OWNER);
+}
+
+/// 7.2 test 7: a component `LightEnvironment` declared as an int, and a component class without the deferred
+/// reattach's fields whose template is attached: the planner's `VmError::Script` naming the field, before any write.
+#[test]
+fn hook_3_a_malformed_component_declaration_is_the_planner_s_error() {
+    let mut e = env_opts(Opts { component_light_int: true, ..Opts::default() });
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let (p, _, _) = lit(&mut e, skeletal);
+    script_refusal(&mut e, p, "LightEnvironment");
+    let mut e = env();
+    let skeletal = e.skeletal;
+    let (p, t, _) = lit(&mut e, skeletal);
+    put(&mut e.vm, t, "bAttached", Value::Bool(true));
+    script_refusal(&mut e, p, "bNeedsReattach");
+}
+
+/// 7.2 test 9: Maya-shaped: a skeletal attachment 0 named `Mesh` with lights accepted, then a skeletal `Parent`
+/// attachment on it. The build passes attachment 0's hooks (hook 3 plans its `LightEnvironment`) and stops at the
+/// `Parent` link's `NotRead`, write-free.
+#[test]
+fn hook_3_a_maya_shaped_build_stops_at_the_parent_link() {
+    let mut e = env();
+    let skeletal = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let body = make(&mut e.vm, skeletal, "Body_Template");
+    put(&mut e.vm, body, "bAcceptsLights", Value::Bool(true));
+    let head = make(&mut e.vm, skeletal, "Head_Template");
+    put(&mut e.vm, head, "bAcceptsLights", Value::Bool(true));
+    let a0 = attachment(&mut e, A { template: Some(body), data_name: "Mesh", ..A::default() });
+    let a1 = attachment(&mut e, A { base: 0, template: Some(head), parent: PARENT_ID, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    // Attachment 0 alone passes hook 3 with its one write.
+    let direct = crate::world::render_hooks::light_environment(&e.vm, p, body, skeletal).unwrap();
+    assert!(matches!(direct, Some(crate::world::component_setters::LightPlan::Detached(_))), "{direct:?}");
+    hooks_not_read(&mut e, p, PARENT_LINK);
 }
 
 /// Test 11: a template the store has not loaded, on a path that needs its values, is the not-settled `NotRead`, with
@@ -2435,6 +2594,6 @@ fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
     // Hook 3 needs a mesh class: the same failed handle asked as one (its class is a cylinder, so the mesh test is
     // the hand-picked skeletal class here).
     let skeletal = e.skeletal;
-    not_settled(light_environment(&e.vm, p, cycle, skeletal));
+    not_settled(light_environment(&e.vm, p, cycle, skeletal).map(|_| ()));
     assert_eq!((Counters::read(&e.vm), e.vm.space.names.len()), (before, names), "read only");
 }

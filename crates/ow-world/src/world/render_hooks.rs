@@ -33,7 +33,10 @@
 //!    composition's write phase, after the custom head and before hook 3.
 //! 3. **The light environment** ([`light_environment`]): the pawn's `LightEnvironment` (declared as an object) None,
 //!    or a made class that is not a `MeshComponent`: nothing. Then the template must be settled, and its
-//!    `bAcceptsLights` (fitted) clear is nothing; set reaches the unidentified array check, [`ARRAY_CHECK`] (`NotRead`).
+//!    `bAcceptsLights` (fitted) clear is nothing. Section 7.1 (lane IMPL-HOOK3-ARRAY-CHECK): a made
+//!    `StaticMeshComponent` is [`STATIC_LIGHTMAP`] (`NotRead`, its `LODData` not decoded); any other mesh component goes
+//!    to `SetLightEnvironment`'s planner with the pawn's `LightEnvironment`, on the slots the attach produces. The plan
+//!    is applied in the body composition's write phase, after hook 2's. [`ARRAY_CHECK`] is no longer raised.
 
 use ow_core::NotYet;
 use ow_object::ids::{ClassId, ObjRef};
@@ -42,7 +45,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use crate::world::component_setters::{self, Slots};
+use crate::world::component_setters::{self, LightPlan, Slots};
 
 /// The record every refusal here carries.
 pub const RECORD: &str = "docs/verification/NATIVE_BODYCOMP_RENDER_HOOKS.md";
@@ -62,6 +65,9 @@ pub const CAMERA_TEST: &str = "the owner-no-see gate's camera test (UsingFirstPe
 /// Hook 2 reaching a `Controller` that is a store handle not loaded yet.
 pub const NOT_LOADED: &str = "the rendering hooks: an object the store has not loaded (a load is a write)";
 pub const ARRAY_CHECK: &str = "the light-environment step's array check (not identified)";
+/// Hook 3 on a made `StaticMeshComponent` (section 7.1 step 2): its first LOD's lightmap, in `LODData`, not decoded.
+pub const STATIC_LIGHTMAP: &str = "the light-environment step on a static mesh component (its first LOD's lightmap)";
+const STATIC_MESH: &str = "Engine.StaticMeshComponent";
 
 const WHAT: &str = "InitializeBodyComposition";
 pub(crate) const OWNER_NO_SEE: &str = "PrimitiveComponent.SetOwnerNoSee(bool)";
@@ -294,15 +300,31 @@ pub fn owner_no_see(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> 
 }
 
 /// Hook 3 (module documentation) for the component `template` of `class`, made on `pawn`.
-pub fn light_environment(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> Result<(), VmError> {
-    if object_field(vm, pawn, "LightEnvironment")?.is_none() || !is_a(vm, class, MESH) {
-        return Ok(());
+pub fn light_environment(vm: &Vm, pawn: ObjRef, template: ObjRef, class: ClassId) -> Result<Option<LightPlan>, VmError> {
+    let Some(environment) = object_field(vm, pawn, "LightEnvironment")? else {
+        return Ok(None);
+    };
+    if !is_a(vm, class, MESH) {
+        return Ok(None);
     }
     settled(vm, template)?;
     let accepts = Slots::of(template).required(vm, "bAcceptsLights", WHAT)?;
     if !component_setters::bool_of(&accepts, "bAcceptsLights", WHAT)? {
-        return Ok(());
+        return Ok(None);
     }
-    Err(NotYet::not_read(ARRAY_CHECK, RECORD).into())
+    // Section 7.1 step 2 (lane IMPL-HOOK3-ARRAY-CHECK): a made static mesh component's first-LOD lightmap test reads
+    // `LODData`, which the port does not decode.
+    if is_a(vm, class, STATIC_MESH) {
+        return Err(NotYet::not_read(STATIC_LIGHTMAP, RECORD).into());
+    }
+    // Step 3: `SetLightEnvironment(Pawn.LightEnvironment)`'s planner, on the slots the attach produces (`Owner` the
+    // pawn, the two update flags cleared; `bAttached` as the template has it).
+    let overrides =
+        [("Owner", Value::Object(Some(pawn))), ("bNeedsReattach", Value::Bool(false)), ("bNeedsUpdateTransform", Value::Bool(false))];
+    let slots = Slots { object: template, overrides: &overrides };
+    match component_setters::plan_light_environment(vm, slots, Some(environment))? {
+        LightPlan::Nothing => Ok(None),
+        plan => Ok(Some(plan)),
+    }
 }
 
