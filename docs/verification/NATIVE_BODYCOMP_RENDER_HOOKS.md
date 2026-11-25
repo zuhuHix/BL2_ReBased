@@ -501,7 +501,7 @@ Section 4's test 10 (the array check's `NotRead` for any mesh component) is repl
 
 ## 8. Amendment (2026-11-25): hook 1 is the simple-anim cache, not a gear-likeness step
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-HOOK1-INTERFACE (decision 2026-11-25-NNN), analyst only: **another
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-HOOK1-INTERFACE (decision 2026-11-25-55), analyst only: **another
 lane implements this section.** Raw output stays under ignored `local/analysis/hook1/`. **Every rule here is UNVERIFIED
 in the running game.**
 
