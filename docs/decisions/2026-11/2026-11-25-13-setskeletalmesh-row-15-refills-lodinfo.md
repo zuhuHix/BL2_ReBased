@@ -78,3 +78,36 @@ component's slots unchanged):
   data (the synthetic sources, and the `ow-world` test with a source answering like the CLI one, which stays).
 - `crates/ow-cli/src/cmd/skeletal_source.rs` is back as #673 left it, and its r1 test is removed with the mapping. All
   110 installed LOD models read a trailing count of 0, so the slice is unaffected.
+
+**Ruling 2, corrected by the hub** (after the runner's read; UNVERIFIED, and the maintainer may overturn it). The
+installed `Engine.SkelMeshComponentLODInfo`, read by the runner from the installed Windows packages (names, kinds and
+script defaults, in declaration order):
+
+| Member | Kind | Script default |
+|---|---|---|
+| `HiddenMaterials` | array of bool | empty |
+| `bNeedsInstanceWeightUpdate` | bool | false |
+| `bAlwaysUseInstanceWeights` | bool | false |
+| `InstanceWeightUsage` | byte (enum `SkeletalMeshComponent.EInstanceWeightUsage`) | 0, `IWU_PartialSwap` |
+| `InstanceWeightIdx` | int | **0** |
+
+The package's own default stream for the struct holds 5 entries. The port reads that stream through a fitted layout.
+
+- **Why it changed:** the note says a refilled entry has index -1, and the script default holds 0. So the native most
+  likely builds new entries with its own constructor rather than the script default, and the earlier check correctly
+  refused link 8 on installed data (the runner's JOB 10).
+- **The corrected ruling:** a refilled entry is the natively constructed entry as the note states it (empty
+  `HiddenMaterials`, both bools false, `InstanceWeightIdx` -1), not the struct's script default. Its
+  `InstanceWeightUsage` byte is unread, the note's gap, and no value is guessed (R3).
+- **The code:**
+  - when `LODInfo`'s length equals the LOD count, there is no `LODInfo` write: the four writes, as before;
+  - when a refill is needed, the entry struct must declare exactly the five members above by name and kind (else
+    `NotYet { NotRead }`, "SetSkeletalMesh: the LOD info entry's declaration");
+  - then the row refuses `NotYet { NotRead }`, "SetSkeletalMesh: the LOD info entry's usage byte (a natively
+    constructed entry; not read yet)", write-free;
+  - the script-default comparison and the planned fifth write are gone.
+- **The tests:** an equal length gives the four writes in order with `LODInfo` kept; every refill case (link 8's 1 LOD
+  against an empty `LODInfo`, 2 against 1, 0 against 1) gives that `NotRead`, write-free; a byte `InstanceWeightIdx`
+  or renamed members give the declaration `NotRead`; `LODInfo` declared as ints is still a script error.
+- **What remains:** the natively constructed entry's usage byte, queued to an analyst (lane F). Until it is read,
+  link 8 stops at row 15's refill, now at this typed `NotRead`.

@@ -3,11 +3,13 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **IMPL-ROW15 (2026-11-25, zuhu desktop (Linux), on fix/rust-setskeletalmesh-row15: main bf9eea7 plus #673's four
-commits):** AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off, on the hub's two rulings (zero
-trailing counts mean no per-LOD data; the default entry is the struct's script default, checked against the note):
-a differing `LODInfo` length is refilled with default entries as a fifth write. `cargo test --workspace -j 4`: 3,389
-passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored; `crate_edges_test.py` OK. Slice gate:
-not run (no install on this PC). Predicted, not run: link 8 passes row 15. No real-game run; UNVERIFIED in game.
+commits):** AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off, on the hub's rulings: zero trailing
+counts mean no per-LOD data; an equal `LODInfo` length needs no write; a refill refuses `NotRead` on the natively
+constructed entry's unread usage byte (ruling 2 as corrected, after the runner's read of the installed struct). `cargo
+test --workspace -j 4` (r0): 3,389 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored;
+after the last round `cargo test -p ow-world` 593 / 0 / 7 and `-p ow-cli` 163 / 0 / 5; `crate_edges_test.py` OK.
+Installed (runner JOB 10, before the correction): link 8 stopped at the default check. Predicted, not run: link 8
+stops at "the LOD info entry's usage byte". No real-game run; UNVERIFIED in game.
 
 **IMPL-COMPONENT-CHECK (2026-11-25, zuhu desktop (Linux), on fix/rust-component-check from main 3ad1b86):**
 AI-assisted (Claude Code, Opus 5.5). The bounding cylinder's per-component check passes for a primitive component's
