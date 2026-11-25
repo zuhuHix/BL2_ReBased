@@ -35,8 +35,15 @@ models).
     - every bone index names a bone;
     - the bulk-data block is empty and records its own package position;
     - the vertex stride is 28 + 4 per UV set;
-    - each vertex's influences are decoded (fitted: four bone-index bytes at byte 8, four weights after them): the
-      weights sum to 255, and every weighted index names an entry of its chunk's bone map;
+    - every vertex is decoded field by field (layout fitted, meanings UNVERIFIED; reviews r1 and r2 of #673). In all
+      343,117 census vertices:
+      - two packed vectors (by fit, the tangent basis) are unit length within 0.02, or zero vectors, and at right
+        angles within 0.03; byte 3 is 127 or 128, and byte 7 is 0 or 255;
+      - four bone indices and four weights: the weights sum to 255, and every weighted index names an entry of its
+        chunk's bone map;
+      - the position is three finite floats inside the mesh's bounds;
+      - UV sets 0 and 1 are finite half floats. Sets 2 and 3 are read unchecked, because three gestalt meshes (the
+        assault rifle's, the SMG's and the sniper rifle's) hold values there that are not finite halves;
     - the colour buffer is there exactly when the tag says so;
   - the bone-name map names every bone by its own name;
   - the trailer's words are decoded: the per-material words are zero and the last array holds four finite floats;
@@ -44,11 +51,13 @@ models).
 
   Nothing is clamped. A value outside the fitted layout is a typed refusal, and so is a non-empty array whose
   elements are not decoded: the chunks' vertex arrays, the bulk-data block and the trailing count (review r1 of
-  #673, item 2). Inside each decoded vertex, the bytes other than the influences (by fit, tangents, position and
-  UVs) are stepped over, not checked.
-- **What is not checked, and why:** the section material index (a 12-triangle placeholder cube, `CubeForCode`, holds
-  255 against one material in four class packages), the child counts (see the prefix), the unidentified word before
-  the vertex count (zero in all 110 census LODs), and the vertices' non-influence bytes.
+  #673, item 2). The colour buffer is read as fixed-width 4-byte values; every value is a colour.
+- **What is not checked, and why:**
+  - the section material index (a 12-triangle placeholder cube, `CubeForCode`, holds 255 against one material in
+    four class packages);
+  - the child counts (see the prefix);
+  - the unidentified word before the vertex count (zero in all 110 census LODs);
+  - UV sets 2 and 3 (see above).
 - **The census** (an ignored installed test in `ow-cli`, `installed_lod_count_census`, counts only; output under
   ignored `local/analysis/skellod/`). It covered twelve packages: Startup, the six class streaming packages,
   Sanctuary, Southern Shelf, Hyperion City, Frost and Ice.
