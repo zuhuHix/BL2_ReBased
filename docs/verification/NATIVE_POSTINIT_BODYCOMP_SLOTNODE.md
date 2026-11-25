@@ -106,6 +106,18 @@ Then the hook sets the new value. The old component is not destroyed here.
    was None or a real no). NATIVE_SPECIALMOVE_OWNER.md (#647 @ 2de44efb) splits these cases further as O1 to O7 and
    gives their rules. **Lifting it is #647's**, not this note's; it needs no further reading of the game.
 
+   > **Edit (2026-11-25, AI-assisted (Claude Code), lane CITATION-POSTINIT-SLOTNODE; the text above is left as the
+   > analyst wrote it).** The blanket refusal quoted in item 2 no longer exists once #667 (IMPL-SPECIALMOVE-OWNER,
+   > decision 2026-11-25-05) lands. Its owner test gives one outcome per case of NATIVE_SPECIALMOVE_OWNER.md
+   > section 4.1 (O1 to O7, and O3'): its own refusal for each unanswerable case, a settled no that leaves `SMI` as
+   > it is, or a yes. In #667's port, an entry whose class lookup found nothing is a refusal too, not a no. #667 also
+   > changes which owner is asked. On the body composition's attach path, the preflight now asks the actor the new
+   > component is attached to, not the component template's own `Owner`. Before, an empty template `Owner` skipped
+   > the test in the preflight, so the refusal came only at the instance, after the writes. That fits item 2's
+   > "stopped after partial writes" prefix (by fit, not probed). Now a refusal there comes before any write. The
+   > set-up that resolves Maya's interface entries (route (a)) is #670, stacked on #667. Neither has been measured on
+   > the installed slice gate, so where the six links stop next is not known. UNVERIFIED in game.
+
 ## 4. Proposed Off answer for the release (for a separate implementer)
 
 **Every rule below is UNVERIFIED.** It replaces the two refusals of steps 1.1 and 2 (`body_composition::releasing_old`, "InitializeBodyComposition:
