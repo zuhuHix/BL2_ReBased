@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ROUTE-A (2026-11-25, zuhuPC Linux, on #667 338f0fcb over main faa3bbc):** AI-assisted (Claude Code, Opus 5.5).
+Link 1's `maya` set-up loads `SpecialMoveInterface` and resolves the interface tables on the pawn archetype's class,
+cross-checked against the strict `implements_declared`, so the owner test answers from resolved entries instead of O5
+(harness only). `cargo test --workspace`: 3,375 passed / 4 failed (the expected Linux N1 float-table tests) / 52
+ignored; `crate_edges_test.py` OK. Not run: `ctest` and
+`verify_packages.py --reader` (no cmake on this machine), and the installed `--slice-gate` (no install yet), so link
+1's next stop is not measured. UNVERIFIED in game.
+
 **SKELMESH-LOD-LAYER (2026-11-25, pc-hummer, on fix/rust-skelmesh-lod-count-2 from main faa3bbcc):** AI-assisted
 (Claude Code, Opus 5.5). The skeletal mesh data layer reads a `SkeletalMesh` export's LOD count and LOD models from
 its package, to the export's last byte (fitted layout, structural oracles; UNVERIFIED).
