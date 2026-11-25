@@ -103,6 +103,59 @@ None of this changes the port's policy, which already holds: **a candidate whose
 unanswered, naming "the trace filter of <class>"** (NATIVE_SPAWN_PLACEMENT.md section 7). Every game class falls
 under it.
 
+### 3.1 Amendment (2026-11-25): the pickup's own filter row
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-PICKUP-TOUCH-TRACE-FILTER (decision 2026-11-25-NNN), analyst only:
+**another lane implements this section.** Raw output stays under ignored `local/analysis/reattach/`. **UNVERIFIED in
+the running game.**
+
+**Why.** With #707, link 7 moves past the skeletal bounds source and stops at "the trace filter of
+WillowGame.WillowPickup". That is the trace filter's `Unread::OwnerClass` (`ow-world` `trace_filter`): the touch line
+meets a primitive whose owner is the pickup itself, and `WillowPickup` has no read row.
+
+**Evidence.** Ghidra 12.1.4 headless, read-only, under the machine lock:
+- the per-actor filter's class-table slot, identified as the only slot where `Actor`, `Pawn`, `Volume` and
+  `InterpActor` each install their own body while `StaticMeshActor` keeps `Actor`'s. The `Actor` body there is the one
+  NATIVE_SPAWN_PLACEMENT.md section 7 reads: the world-geometry shortcut on bit 128, then the other-actors bit 16
+  with the projectile-target (32) and blocking-only (64) narrowings;
+- that slot in the tables of `DroppedPickup` and `WillowPickup` (found as in NATIVE_COMPONENT_SKIP_FLAG.md section 6);
+- in passing: `KActor` installs its own body there. It reads the same tests as `InterpActor`'s, so the port's shared
+  mover row stands.
+
+**The answer.** **`DroppedPickup` and `WillowPickup` both keep `Actor`'s filter body unchanged.** Neither is one of the
+game-class overrides of section 3, so bit 134217728 plays no part for them.
+
+**What that means for the touch line.** The touch's flags (section 2, 134226566) hold neither the other-actors bit 16
+nor bit 1. A `WillowPickup` is tested only through the world-geometry shortcut, which needs its `bWorldGeometry`. The
+class default of `WillowGame.WillowPickup` has `bWorldGeometry` clear (and `bCollideActors` set, `bProjTarget` and
+`bBlockActors` clear). So **a pickup's own primitives are not tested by its touch line**: the pickup does not block the
+trace to itself.
+
+#### 3.1.1 The Off answer (for a separate implementer)
+
+**UNVERIFIED.** Add two rows to `trace_filter::ROWS`, both `Row::Actor`: `Engine.DroppedPickup` and
+`WillowGame.WillowPickup`. The record is this note. Rows stay exact-class: a `WillowPickup` subclass is still
+`Unread::OwnerClass` until its slot is read. Nothing else changes. The `Actor` row already reads `bWorldGeometry` (and,
+only with bit 32, `bProjTarget` and `bBlockActors`), loaded-only, as now. Reference is unchanged.
+
+**What link 7 would meet** (a prediction, not a run). The pickup's candidates (its cylinder and its mesh, owner the
+pickup) are now not tested. Maya's own primitives are excluded as the source actor's. If no other candidate reaches the
+hash-admission step, and the level part answers, the touch line answers, and the touch goes on to tell her controller.
+Any other live actor's primitive on the segment still meets its own row or `HashAdmission`.
+
+#### 3.1.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters and the name table unchanged:
+1. a touch line (`TOUCH_TRACE`) whose only candidate is a colliding, blocking cylinder of a toy
+   `WillowGame.WillowPickup` owner with `bWorldGeometry` clear: not tested, no refusal;
+2. the same owner with `bWorldGeometry` set: tested by the shortcut, so `HashAdmission` (or the line test with the
+   stand-in), as for any accepted primitive;
+3. the same for an `Engine.DroppedPickup` owner;
+4. a toy subclass of `WillowPickup` as the owner: still "the trace filter of <subclass>";
+5. the spawn's box test (8902, which has bit 16) on a pickup's primitive: the `Actor` row's other-actors branch
+   applies, as for any `Actor`-row owner;
+6. Reference: unchanged.
+
 ## 4. The proposed Off answer
 
 The answer needs a collision service and the existing actor walk (`ow_world::placement` and `ow_world::trace_filter`).
