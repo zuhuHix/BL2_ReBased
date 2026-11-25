@@ -89,6 +89,10 @@ fn engine() -> Vec<u8> {
     t.class("Terrain", actor);
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Object", primitive, "Owner", 0, actor);
+    t.prop("Bool", primitive, "CollideActors", 0, 0);
+    // NATIVE_ACTOR_TRACE.md section 5, test 8: a primitive class declaring `CollideActors` as an int.
+    let int_collide = t.class("ToyIntCollidePrimitive", primitive);
+    t.prop("Int", int_collide, "CollideActors", 0, 0);
     let light = t.class("ToyLightComponent", object);
     // A field of the look-alike's type, so the fixture knows the struct.
     t.prop("Struct", light, "ToyShape", 0, lookalike);
@@ -226,11 +230,21 @@ impl Fx {
         list.borrow_mut().place(o).unwrap();
     }
 
-    /// A live `Actor` placed in the level, with one primitive as its `CollisionComponent`: (actor, primitive).
+    /// A live `Actor` placed in the level, with one primitive as its `CollisionComponent`: (actor, primitive). Both
+    /// collide flags are set, so the hash would admit the primitive (NATIVE_ACTOR_TRACE.md section 5).
     fn obstacle(&mut self, class: &str, name: &str) -> (ObjRef, ObjRef) {
+        self.obstacle_of(class, "Engine.PrimitiveComponent", name)
+    }
+
+    /// [`Fx::obstacle`] with a primitive of `primitive_class`.
+    fn obstacle_of(&mut self, class: &str, primitive_class: &str, name: &str) -> (ObjRef, ObjRef) {
         let a = self.live(class, name);
-        let p = self.live("Engine.PrimitiveComponent", &format!("{name}Mesh"));
+        let p = self.live(primitive_class, &format!("{name}Mesh"));
         self.set(a, "CollisionComponent", Value::Object(Some(p)));
+        self.set(a, "bCollideActors", Value::Bool(true));
+        if primitive_class == "Engine.PrimitiveComponent" {
+            self.set(p, "CollideActors", Value::Bool(true));
+        }
         self.place(a);
         (a, p)
     }
@@ -419,8 +433,8 @@ fn an_owned_primitive_is_left_out_and_a_terrain_names_its_handling() {
     x.refuses(t, args, not_read(), &what);
 }
 
-/// Test 5: a primitive with known-disjoint bounds is left out before any filter field is read (its actor declares
-/// no filter flag a read could reach), and a non-primitive component is skipped: the answer is the miss, and the heap
+/// Test 5: a primitive with known-disjoint bounds is left out before any filter field past the two collide flags is
+/// read, and a non-primitive component is skipped: the answer is the miss, and the heap
 /// is untouched (a host call keeps the two outs in its result).
 #[test]
 fn a_disjoint_primitive_is_left_out_unread() {
@@ -680,4 +694,101 @@ fn a_vector_look_alike_is_a_script_error() {
         assert_eq!(x.counters(), before, "argument {at}");
     }
     assert!(toy.asked.borrow().is_empty(), "refused at argument validation, before the service");
+}
+
+/// NATIVE_ACTOR_TRACE.md section 5, tests 1 and 2: a primitive the collision hash cannot admit is left out before its
+/// bounds are asked. With no bounds in the service it would be T5; instead the trace is a miss, and nothing is written,
+/// loaded, drawn or interned. Test 1: the primitive's `CollideActors` clear. Test 2: the owner's `bCollideActors` clear
+/// and the primitive's set.
+#[test]
+fn a_primitive_the_hash_cannot_admit_is_left_out_before_its_bounds() {
+    for (primitive_flag, owner_flag) in [(false, true), (true, false), (false, false)] {
+        let (mut x, _toy) = fx(Some(Toy::default()));
+        let t = x.target();
+        let (a, p) = x.obstacle("Engine.Actor", "NoBounds");
+        x.set(p, "CollideActors", Value::Bool(primitive_flag));
+        x.set(a, "bCollideActors", Value::Bool(owner_flag));
+        let before = x.counters();
+        let args = x.link9([0.0; 3]);
+        let (ret, location, _) = x.call(Some(t), args).unwrap();
+        assert_eq!((ret, location), (Value::Object(None), x.vector([0.0; 3])), "({primitive_flag}, {owner_flag})");
+        assert_eq!(x.counters(), before, "({primitive_flag}, {owner_flag})");
+    }
+}
+
+/// NATIVE_ACTOR_TRACE.md section 5, tests 6 and 7: with both flags set, missing bounds are T5 and meeting bounds
+/// T7, as before.
+#[test]
+fn an_admissible_primitive_keeps_t5_and_t7() {
+    let (mut x, toy) = fx(Some(Toy::default()));
+    let toy = toy.unwrap();
+    let t = x.target();
+    let (_, p) = x.obstacle("Engine.Actor", "Crate");
+    let args = x.link9([0.0; 3]);
+    x.refuses(t, args, layer(BOUNDS_LAYER), NO_BOUNDS);
+    toy.bounds.borrow_mut().insert(p, MEETS);
+    let args = x.link9([0.0; 3]);
+    let what = format!("Actor.Trace: {SOURCE_FILTERS} (the live actor primitive Crate's CrateMesh)");
+    x.refuses(t, args, not_read(), &what);
+}
+
+/// NATIVE_ACTOR_TRACE.md section 5, test 8: a primitive class declaring `CollideActors` as an int is a
+/// `VmError::Script` naming the class, with nothing written, loaded, drawn or interned.
+#[test]
+fn a_collide_flag_of_another_kind_is_a_script_error() {
+    let (mut x, _toy) = fx(Some(Toy::default()));
+    let t = x.target();
+    x.obstacle_of("Engine.Actor", "Engine.ToyIntCollidePrimitive", "Odd");
+    let before = x.counters();
+    let args = x.link9([0.0; 3]);
+    match x.call(Some(t), args) {
+        Err(VmError::Script { message, .. }) => {
+            assert!(message.contains("ToyIntCollidePrimitive") && message.contains("CollideActors"), "{message}")
+        }
+        other => panic!("expected a script error, got {other:?}"),
+    }
+    assert_eq!(x.counters(), before);
+}
+
+/// NATIVE_ACTOR_TRACE.md section 5, tests 3 and 5 (#659 r1): a primitive with the collide flags clear whose bounds
+/// meet the swept box is still a miss (its bounds are never asked); a terrain's primitive with both flags clear is not
+/// skipped, so its meeting bounds name the terrain handling (T7).
+#[test]
+fn a_clear_flag_wins_over_meeting_bounds_but_not_for_terrain() {
+    let (mut x, toy) = fx(Some(Toy::default()));
+    let toy = toy.unwrap();
+    let t = x.target();
+    let (a, p) = x.obstacle("Engine.Actor", "Quiet");
+    x.set(p, "CollideActors", Value::Bool(false));
+    x.set(a, "bCollideActors", Value::Bool(false));
+    toy.bounds.borrow_mut().insert(p, MEETS);
+    let before = x.counters();
+    let args = x.link9([0.0; 3]);
+    assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "meeting bounds, flags clear: a miss");
+    assert_eq!(x.counters(), before);
+    let (ground, gp) = x.obstacle("Engine.Terrain", "Ground");
+    x.set(gp, "CollideActors", Value::Bool(false));
+    x.set(ground, "bCollideActors", Value::Bool(false));
+    toy.bounds.borrow_mut().insert(gp, MEETS);
+    let args = x.link9([0.0; 3]);
+    let what = format!(
+        "Actor.Trace: {} (the live actor primitive Ground's GroundMesh)",
+        crate::trace_filter::TERRAIN_HANDLING
+    );
+    x.refuses(t, args, not_read(), &what);
+}
+
+/// NATIVE_ACTOR_TRACE.md section 5, test 4, order (b): a primitive with `CollideActors` clear whose owner is an
+/// unresident stand-in is T1 naming the owner, so residency comes before the skip, and nothing is loaded.
+#[test]
+fn residency_comes_before_the_skip() {
+    let (mut x, _toy) = fx(Some(Toy::default()));
+    let t = x.target();
+    let actor = x.vm.find_class("Engine.Actor").unwrap();
+    let ghost = x.vm.space.alloc_stand_in(actor, "ToyGhost", Origin::Resource { package: 0, index: -1 }).unwrap();
+    let (_, part) = x.obstacle("Engine.Actor", "Faded");
+    x.set(part, "CollideActors", Value::Bool(false));
+    x.set(part, "Owner", Value::Object(Some(ghost)));
+    let args = x.link9([0.0; 3]);
+    x.refuses(t, args, not_read(), "Actor.Trace: the actor ToyGhost is not loaded (a load is a write)");
 }

@@ -35,12 +35,18 @@
 //! 8. **The actor part**, run whenever the flag word ([`trace_flags`]) reaches the collision hash, which both values of
 //!    `bTraceActors` do. Every live actor's primitive components (its `CollisionComponent`, then its `Components`), in
 //!    the actor list's order, except the source actor's own. For each primitive: it and its owner
-//!    ([`trace_filter::owner_of`]) must be resident (else the T1 refusal naming the object); missing bounds
-//!    (`actor_bounds` None) is **T5**, `LayerAbsent`; bounds that are not finite and ordered are `NotRead`
-//!    ([`BAD_BOUNDS`]; they cannot prove a miss, the port's policy, UNVERIFIED); bounds disjoint from the swept box leave the walk without any
-//!    filter field read; bounds that meet it are **T7**, `NotRead`, naming the first unread rule: the terrain handling
-//!    for a terrain actor, otherwise the owner filters with a source actor ([`SOURCE_FILTERS`]). The note puts the hash
-//!    admission third; it is never reached, since no non-terrain owner gets past the unread source-aware filter.
+//!    ([`trace_filter::owner_of`]) must be resident (else the T1 refusal naming the object); then **the hash
+//!    admission's necessary condition** (NATIVE_ACTOR_TRACE.md section 5, lane IMPL-TRACE-HASH-ADMISSION): the
+//!    primitive's `CollideActors`, then its owner's `bCollideActors`, each declared as a bool (else
+//!    `VmError::Script` naming the class), and either clear leaves the primitive out with nothing more read (its bounds
+//!    unasked, so meeting bounds are a miss too), because the collision hash never admits it (UNVERIFIED). Not when
+//!    the walked actor or the owner is a terrain: the walk goes on as before. `bAttached` and `BulletListener` are not
+//!    read. Missing bounds (`actor_bounds` None) is **T5**, `LayerAbsent`; bounds that are not finite and ordered are
+//!    `NotRead` ([`BAD_BOUNDS`]; they cannot prove a miss, the port's policy, UNVERIFIED); bounds disjoint from the
+//!    swept box leave the walk with no filter field read past the two collide flags; bounds that meet it are **T7**,
+//!    `NotRead`, naming the first unread rule: the terrain handling for a terrain actor, otherwise the owner filters
+//!    with a source actor ([`SOURCE_FILTERS`]). The rest of the hash admission (the note's third filter, past its
+//!    necessary condition above) is never reached, since no non-terrain owner gets past the unread source-aware filter.
 //!
 //! **Nothing is written, loaded or drawn** before the two `set_out` calls of a proven miss, which are the native's
 //! only writes. Every read is of a resident object through lookup-only names (`ObjectSpace::prop`, which never
@@ -371,6 +377,16 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
             if owner == source {
                 continue;
             }
+            // NATIVE_ACTOR_TRACE.md section 5: a primitive the collision hash cannot admit is met by no query. Its own
+            // `CollideActors` first, then its owner's `bCollideActors`; either clear leaves it out, unread further.
+            // Not for terrain: when the walked actor or the owner is a terrain, the walk goes on as before (T7 names
+            // the terrain handling).
+            let terrain_part = is_terrain(actor)? || is_terrain(owner)?;
+            if !terrain_part
+                && (!collide_flag(space, part, "CollideActors")? || !collide_flag(space, owner, "bCollideActors")?)
+            {
+                continue;
+            }
             let Some(bounds) = model.actor_bounds(space, part)? else {
                 return Err(NotYet::layer_absent(NO_BOUNDS, BOUNDS_LAYER, RECORD).into());
             };
@@ -383,13 +399,30 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
             if !bounds.meets(&region) {
                 continue;
             }
-            let rule = if is_terrain(actor)? || is_terrain(owner)? { TERRAIN_HANDLING } else { SOURCE_FILTERS };
+            let rule = if terrain_part { TERRAIN_HANDLING } else { SOURCE_FILTERS };
             let who = space.names.text(space.heap.get(actor)?.name);
             let what = space.names.text(space.heap.get(part)?.name);
             return Err(NotYet::not_read(format!("Actor.Trace: {rule} (the live actor primitive {who}'s {what})"), RECORD).into());
         }
     }
     Ok(())
+}
+
+/// The bool `name` on `o` (NATIVE_ACTOR_TRACE.md section 5): its class must declare it as a bool, else a
+/// `VmError::Script` naming the class. Read-only, through lookup-only names.
+fn collide_flag(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    let class = space.heap.get(o)?.class;
+    let path = || space.classes.layout(class).path().to_string();
+    let Some(p) = space.prop(class, name) else {
+        return Err(script(format!("{} declares no {name}", path())));
+    };
+    if !matches!(space.classes.decl(p).map(|d| &d.kind), Some(ow_object::layout::PropKind::Bool)) {
+        return Err(script(format!("{} declares {name} as something other than a bool", path())));
+    }
+    match space.read(o, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Bool(b) => Ok(*b),
+        other => Err(script(format!("{}.{name} holds {}, not a bool", path(), other.kind_name()))),
+    }
 }
 
 #[cfg(test)]
