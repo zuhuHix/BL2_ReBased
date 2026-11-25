@@ -2,6 +2,19 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK1-HEAD-MESH (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh from #721 69a8063c):** AI-assisted (Claude
+Code, Opus 5.5). Link 1's set-up preloads Maya's head mesh `CD_Heads_Assassin_MainGame.CubeForCode`, an export of her
+pawn's streaming package file (UNVERIFIED stand-in).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,595 passed / 0 failed / 57 ignored. `crate_edges_test.py`: OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock), base 69a8063c and this change at
+  3da6d356: 5 ok / 9 NotYet / 0 errors on both. Link 1 moves in `maya:8` from "the skeletal mesh data layer: the
+  unloaded skeletal mesh CubeForCode" to "InitializeBodyComposition: the mesh of the unloaded component template
+  GD_Siren_Streaming.Pawn_Siren.GearLikenessMeshComponent_2780"; links 3, 4, 5, 13 and 14 report the same. Every other
+  row is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/headmesh/` and `local/p2/headmesh-base/`.
+Decision 2026-11-25-NNN.
+
 **IMPL-WEAPON-ONCREATE (2026-11-25, pc-hummer, on fix/rust-psc-setcolorparameter d3c22f85):** AI-assisted (Claude
 Code, Opus 5.5). `WillowWeapon.OnCreate` in Off, from NATIVE_WEAPON_ON_CREATE.md section 4, sharing the broadcast's
 per-provider step. `cargo test --workspace -j 8` 3,634 passed / 0 failed / 57 ignored; `crate_edges_test.py` 19 OK.
