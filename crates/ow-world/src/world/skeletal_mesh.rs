@@ -41,19 +41,20 @@
 //!     no trailing list, a list of another length, or any non-zero trailing count: `LayerAbsent(`[`LOD_LAYER`]`)`.
 //!     All zero: no LOD has the per-LOD data, so step 16's usage loop does nothing (**UNVERIFIED**: #673's fit that a
 //!     zero trailing count stands for "no such data", ruled by the hub). Then, when `LODInfo`'s length differs from
-//!     N, `LODInfo` is planned as N default entries (D); when it equals N, nothing.
+//!     N, a refill is needed (D); when it equals N, nothing.
 //!
 //! **D. The destinations:** `bAnimTreeInitialised` (a bool), `SkeletalMesh` (an object field taking the new mesh),
 //! `SpaceBases` (an array) and `bHasValidBodies` (a bool), each declared on the component's class with that kind, and
 //! each planned value accepted by the heap's own check. With a new mesh, `LODInfo` too: a dynamic array of a struct.
-//! Anything else is `VmError::Script` naming the field. When row 15 plans the resize, each entry is the struct's script
-//! default, which must hold what the note says a default entry is: one array (no hidden materials) empty, two bools
-//! (the flags) clear, one int (the index) -1, and a byte (the usage byte, taken as the default holds it:
-//! **UNVERIFIED**, the note does not give it), nothing else. Otherwise `NotYet { NotRead }` ([`LOD_DEFAULT`]).
+//! Anything else is `VmError::Script` naming the field. When row 15 needs a refill, the entry struct must declare
+//! exactly [`LOD_ENTRY_MEMBERS`] by name (otherwise `NotYet { NotRead }`, [`LOD_ENTRY`]), and then the refill refuses
+//! `NotYet { NotRead }` ([`LOD_USAGE`]): by the hub's corrected ruling 2 a refilled entry is the natively constructed
+//! one (empty `HiddenMaterials`, both bools false, `InstanceWeightIdx` -1, as the note states; the script default holds
+//! 0 there), and its `InstanceWeightUsage` byte has not been read.
 //!
-//! **The writes**, only after A to D, in the native's order ([4], [6], [7], [11], [16]): `bAnimTreeInitialised` false,
-//! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array, `bHasValidBodies` false, and, when row
-//! 15 planned it, `LODInfo` the N default entries. The first four are written even when unchanged.
+//! **The writes**, only after A to D, in the native's order ([4], [6], [7], [11]): `bAnimTreeInitialised` false,
+//! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array and `bHasValidBodies` false, each
+//! written even when unchanged. `LODInfo` is not written: an equal length needs no write, and a refill refuses.
 //! `MorphTargetIndexMap`, the transform, the native-only field of step 12 and step 17's notification are not
 //! written. A `NotYet` raised after the first write would be marked "stopped after partial
 //! writes: " (none is expected: row 1 settles every slot and D every declaration and value, which is all a heap write
@@ -116,8 +117,19 @@ pub const VALID_BODIES: &str = "SetSkeletalMesh: bHasValidBodies (the PhysicsAss
 pub const MORPH: &str = "SetSkeletalMesh: the morph-target index map";
 /// Row 15's text.
 pub const LOD: &str = "SetSkeletalMesh: the LOD info from the new mesh's LOD models";
-/// D's refusal when `LODInfo`'s entry struct has no default of the shape the note gives.
-pub const LOD_DEFAULT: &str = "SetSkeletalMesh: the LOD info entry's default";
+/// D's refusal when `LODInfo`'s entry struct is not declared with [`LOD_ENTRY_MEMBERS`].
+pub const LOD_ENTRY: &str = "SetSkeletalMesh: the LOD info entry's declaration";
+/// Row 15's refusal of a refill: the natively constructed entry's usage byte was not read (the note's gap).
+pub const LOD_USAGE: &str =
+    "SetSkeletalMesh: the LOD info entry's usage byte (a natively constructed entry; not read yet)";
+/// `Engine.SkelMeshComponentLODInfo`'s members and kinds, as the runner read the installed packages (2026-11-25).
+pub const LOD_ENTRY_MEMBERS: [(&str, &str); 5] = [
+    ("HiddenMaterials", "array"),
+    ("bNeedsInstanceWeightUpdate", "bool"),
+    ("bAlwaysUseInstanceWeights", "bool"),
+    ("InstanceWeightUsage", "byte"),
+    ("InstanceWeightIdx", "int"),
+];
 /// Row 1's text for a receiver with fewer slots than its class's layout.
 pub const CUT: &str =
     "SetSkeletalMesh: the component has fewer slots than its class (a stand-in or a cut object; its fields are not read)";
@@ -177,7 +189,7 @@ fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The mesh change's four or five writes, settled by the preflight (module documentation, D). Private with [`answer`] and
+/// The mesh change's four writes, settled by the preflight (module documentation, D). Private with [`answer`] and
 /// [`Plan::apply`], so no caller can change the receiver between the two (review r1 of #664, item 2).
 #[derive(Debug)]
 struct Plan {
@@ -255,7 +267,7 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
         None => None,
     };
     // D, the destinations.
-    let mut writes = vec![
+    let writes = vec![
         destination(vm, component, "bAnimTreeInitialised", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
         destination(vm, component, "SkeletalMesh", Value::Object(new_mesh), |k| matches!(k, PropKind::Object { .. }))?,
         destination(vm, component, "SpaceBases", Value::array(Vec::new()), |k| matches!(k, PropKind::Array(_)))?,
@@ -263,10 +275,12 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
     ];
     if new_mesh.is_some() {
         let ty = lod_info_struct(vm, component)?;
-        if let Some(n) = resize {
-            let entry = lod_default(vm, ty)?;
-            let value = Value::array(vec![entry; n]);
-            writes.push(destination(vm, component, "LODInfo", value, |k| matches!(k, PropKind::Array(_)))?);
+        if resize.is_some() {
+            // The hub's corrected ruling 2: a refilled entry is the natively constructed one (empty HiddenMaterials,
+            // both bools false, InstanceWeightIdx -1, as the note states), not the script default; its usage byte
+            // is unread, so no entry is built and the refill refuses (no guessed value).
+            lod_entry_shape(vm, ty)?;
+            return Err(NotYet::not_read(LOD_USAGE, CHANGE_RECORD).into());
         }
     }
     Ok(Some(Plan { component, writes }))
@@ -306,51 +320,30 @@ fn lod_info_struct(vm: &Vm, component: ObjRef) -> Result<ow_object::ids::StructI
     }
 }
 
-/// One default `LODInfo` entry: the struct's script default, checked against the note's default entry (module
-/// documentation, D). The two members the note names (fitted) are resolved by name through the layout, in any order:
-/// `InstanceWeightUsage` a byte (its value taken as the default holds it, UNVERIFIED) and `InstanceWeightIdx` an int
-/// holding -1 (review r1 of #678, item 2). The note does not name the other three, so they are checked by kind and
-/// value: exactly one array, empty (no hidden materials), and two bools, clear (the flags). Anything else, a struct
-/// without those names among them, is `NotYet { NotRead }` ([`LOD_DEFAULT`]).
-fn lod_default(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> {
-    let refuse = || -> VmError { NotYet::not_read(LOD_DEFAULT, CHANGE_RECORD).into() };
+/// `LODInfo`'s entry struct, by name (the hub's corrected ruling 2, from the runner's read of the installed
+/// `Engine.SkelMeshComponentLODInfo`): exactly the five members of [`LOD_ENTRY_MEMBERS`], each with its kind and
+/// `array_dim` 1, in any order. Anything else is `NotYet { NotRead }` ([`LOD_ENTRY`]).
+fn lod_entry_shape(vm: &Vm, ty: ow_object::ids::StructId) -> Result<(), VmError> {
+    let refuse = || -> VmError { NotYet::not_read(LOD_ENTRY, CHANGE_RECORD).into() };
     let layout = vm.space.classes.struct_layout(ty).ok_or_else(refuse)?;
-    let value = vm.space.classes.struct_defaults(ty).map_err(|_| refuse())?;
-    let s = value.as_struct().ok_or_else(refuse)?;
-    let named = |name: &str| -> Result<u32, VmError> {
+    if layout.fields().count() != LOD_ENTRY_MEMBERS.len() {
+        return Err(refuse());
+    }
+    for (name, kind) in LOD_ENTRY_MEMBERS {
         let id = vm.space.names.find(name).ok_or_else(refuse)?;
-        let (entry, decl) = layout.field(id).ok_or_else(refuse)?;
-        if decl.array_dim != 1 {
-            return Err(refuse());
-        }
-        Ok(entry)
-    };
-    let (usage, index) = (named("InstanceWeightUsage")?, named("InstanceWeightIdx")?);
-    let (mut arrays, mut bools) = (0, 0);
-    for (entry, decl) in layout.fields() {
-        let v = s.fields.get(entry as usize).ok_or_else(refuse)?;
+        let (_, decl) = layout.field(id).ok_or_else(refuse)?;
         let fits = decl.array_dim == 1
-            && match (&decl.kind, v) {
-                (PropKind::Byte { .. }, Value::Byte(_)) if entry == usage => true,
-                (PropKind::Int, Value::Int(-1)) if entry == index => true,
-                (PropKind::Array(_), v) if entry != usage && entry != index => {
-                    arrays += 1;
-                    v.elements().is_some_and(<[Value]>::is_empty)
-                }
-                (PropKind::Bool, Value::Bool(false)) if entry != usage && entry != index => {
-                    bools += 1;
-                    true
-                }
-                _ => false,
+            && match kind {
+                "array" => matches!(decl.kind, PropKind::Array(_)),
+                "bool" => matches!(decl.kind, PropKind::Bool),
+                "byte" => matches!(decl.kind, PropKind::Byte { .. }),
+                _ => matches!(decl.kind, PropKind::Int),
             };
         if !fits {
             return Err(refuse());
         }
     }
-    if (arrays, bools) != (1, 2) {
-        return Err(refuse());
-    }
-    Ok(value)
+    Ok(())
 }
 
 /// Rows 5 and 6: `mesh` resident. An unloaded or a failed handle is `NotRead` with `unloaded`; one with fewer slots

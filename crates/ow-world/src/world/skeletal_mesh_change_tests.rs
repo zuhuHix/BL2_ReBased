@@ -31,8 +31,6 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 const PATH: &str = "Engine.SkeletalMeshComponent.SetSkeletalMesh";
 const COMPONENT: &str = "Engine.SkeletalMeshComponent";
 const LOD_INFO: &str = "Engine.SkeletalMesh.SkelMeshComponentLODInfo";
-/// The fixture's script-default usage byte (invented, non-zero).
-const DEFAULT_USAGE: u8 = 3;
 
 /// The component's fields, except `bHasValidBodies` (declared per class below).
 /// `lod` is `LODInfo`'s element (kind, type reference).
@@ -106,20 +104,21 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         t.prop("Struct", no_rot, "Origin", 0, vector);
         // IMPL-ROW15: LODInfo's entry struct (its InstanceWeightIdx default -1 is set in `fx_with`), and one of the
         // same shape whose default the fixture leaves at 0.
-        // The two named members (review r1 of #678, item 2) come in another order than the fields before them, and
-        // `ToyRenamedLODInfo` has the same kinds and values under other names. The other three names are invented.
-        let lod_struct = |t: &mut ScriptToy, name: &str, usage: &str, idx: &str| {
+        // The five members of the installed struct, by the runner's read (declared here in another order, so the
+        // check goes by name); `ToyBadLODInfo` declares `InstanceWeightIdx` a byte, and `ToyRenamedLODInfo` has the
+        // same kinds under other names (review r1 of #678, item 2).
+        let lod_struct = |t: &mut ScriptToy, name: &str, usage: &str, idx: (&str, &str)| {
             let s = toy_struct(t, mesh, name, None);
-            t.prop("Int", s, idx, 0, 0);
-            toy_array_of(t, s, "ToyHidden", "Bool", 0);
-            t.prop("Bool", s, "bToyFlagA", 0, 0);
+            t.prop(idx.1, s, idx.0, 0, 0);
+            toy_array_of(t, s, "HiddenMaterials", "Bool", 0);
+            t.prop("Bool", s, "bNeedsInstanceWeightUpdate", 0, 0);
             t.prop("Byte", s, usage, 0, 0);
-            t.prop("Bool", s, "bToyFlagB", 0, 0);
+            t.prop("Bool", s, "bAlwaysUseInstanceWeights", 0, 0);
             s
         };
-        let lod = lod_struct(&mut t, "SkelMeshComponentLODInfo", "InstanceWeightUsage", "InstanceWeightIdx");
-        let bad_lod = lod_struct(&mut t, "ToyBadLODInfo", "InstanceWeightUsage", "InstanceWeightIdx");
-        let renamed_lod = lod_struct(&mut t, "ToyRenamedLODInfo", "ToyUsage", "ToyIdx");
+        let lod = lod_struct(&mut t, "SkelMeshComponentLODInfo", "InstanceWeightUsage", ("InstanceWeightIdx", "Int"));
+        let bad_lod = lod_struct(&mut t, "ToyBadLODInfo", "InstanceWeightUsage", ("InstanceWeightIdx", "Byte"));
+        let renamed_lod = lod_struct(&mut t, "ToyRenamedLODInfo", "ToyUsage", ("ToyIdx", "Int"));
         let good = ("Struct", lod);
         let component = t.class("SkeletalMeshComponent", object);
         component_fields(&mut t, component, object, object, good);
@@ -239,19 +238,6 @@ fn fx_trailing(lods: Option<Vec<(&'static str, usize)>>, trailing: Vec<(&'static
         "Engine.ToyRenamedLodComponent",
     ] {
         vm.find_class(c).unwrap();
-    }
-    // IMPL-ROW15: the entry struct's script default holds the note's index -1 and an invented non-zero usage byte (3,
-    // review r1 of #678, item 3); the renamed lookalike holds the same values under its own names.
-    for (path, usage, idx) in [
-        (LOD_INFO, "InstanceWeightUsage", "InstanceWeightIdx"),
-        ("Engine.SkeletalMesh.ToyRenamedLODInfo", "ToyUsage", "ToyIdx"),
-    ] {
-        let lod = vm.space.classes.struct_by_path(path).unwrap();
-        for (name, v) in [(idx, Value::Int(-1)), (usage, Value::Byte(DEFAULT_USAGE))] {
-            let id = vm.space.names.find(name).unwrap();
-            let (entry, _) = vm.space.classes.struct_layout(lod).unwrap().field(id).unwrap();
-            vm.space.set_struct_default(lod, entry, v).unwrap();
-        }
     }
     let component = vm.space.classes.by_path(COMPONENT).unwrap();
     let mesh = vm.space.classes.by_path("Engine.SkeletalMesh").unwrap();
@@ -523,49 +509,33 @@ fn entries(x: &Fx, n: usize, usage: u8) -> Value {
     Value::array(vec![e; n])
 }
 
-/// Test 7, row 15 on the hub's rulings (IMPL-ROW15): with all trailing counts zero, a length that differs from the
-/// LOD count makes a fifth write, `LODInfo` refilled with that many default entries (index -1, flags clear, no hidden
-/// materials, the default's usage byte); an equal length writes nothing more. N=1 against an empty `LODInfo` is link
-/// 8's shape.
+/// Test 7, row 15 on the hub's rulings (IMPL-ROW15, ruling 2 as corrected): with all trailing counts zero, a
+/// `LODInfo` length equal to the LOD count writes nothing more (the four writes, in order); a length that differs needs
+/// a refill, whose natively constructed entry's usage byte is unread: `NotRead` (`LOD_USAGE`), write-free. N=1 against
+/// an empty `LODInfo` is link 8's shape.
 #[test]
-fn the_lod_row_refills_lod_info_with_default_entries() {
+fn the_lod_row_refill_refuses_on_the_unread_usage_byte() {
     let mut x = fx_with(Some(vec![("Mesh_A", 1), ("Mesh_B", 2), ("Mesh_Zero", 0)]));
     let (a, b, zero) = (x.export("Mesh_A"), x.export("Mesh_B"), x.export("Mesh_Zero"));
-    let ty = x.vm.space.classes.struct_by_path(LOD_INFO).unwrap();
-    let default = x.vm.space.classes.struct_defaults(ty).unwrap();
-    let member = |v: &Value, name: &str| {
-        let id = x.vm.space.names.find(name).unwrap();
-        let (i, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
-        v.as_struct().unwrap().fields[usize::try_from(i).unwrap()].clone()
-    };
-    assert_eq!(member(&default, "InstanceWeightIdx"), Value::Int(-1), "the fixture");
-    assert_eq!(member(&default, "InstanceWeightUsage"), Value::Byte(DEFAULT_USAGE), "the fixture's non-zero byte");
-    // Review r1 of #678, item 3: the planned writes in the native's order, LODInfo after bHasValidBodies.
-    let c = x.component(None);
-    let plan = answer(&x.vm, c, Some(a), false).unwrap().unwrap();
-    let names: Vec<String> = plan
-        .writes
-        .iter()
-        .map(|(p, _)| x.vm.space.names.text(x.vm.space.classes.decl(*p).unwrap().name).to_string())
-        .collect();
-    assert_eq!(names, ["bAnimTreeInitialised", "SkeletalMesh", "SpaceBases", "bHasValidBodies", "LODInfo"]);
-    assert_eq!(plan.writes[4].1, Value::array(vec![default.clone()]), "the refill carries the default's byte");
-    // (new mesh, LODInfo before, writes, LODInfo after)
-    let cases = [
-        (a, Value::array(Vec::new()), 5, Value::array(vec![default.clone()])),
-        (b, entries(&x, 2, 7), 4, entries(&x, 2, 7)),
-        (b, entries(&x, 1, 7), 5, Value::array(vec![default.clone(); 2])),
-        (zero, entries(&x, 1, 7), 5, Value::array(Vec::new())),
-        (zero, Value::array(Vec::new()), 4, Value::array(Vec::new())),
-    ];
-    for (k, (mesh, before, writes, after)) in cases.into_iter().enumerate() {
+    for (mesh, before) in [(b, entries(&x, 2, 7)), (zero, Value::array(Vec::new()))] {
         let c = x.component(None);
-        x.put(c, "LODInfo", before);
+        x.put(c, "LODInfo", before.clone());
+        let plan = answer(&x.vm, c, Some(mesh), false).unwrap().unwrap();
+        let names: Vec<String> = plan
+            .writes
+            .iter()
+            .map(|(p, _)| x.vm.space.names.text(x.vm.space.classes.decl(*p).unwrap().name).to_string())
+            .collect();
+        assert_eq!(names, ["bAnimTreeInitialised", "SkeletalMesh", "SpaceBases", "bHasValidBodies"], "in order");
         let (w, d, l, n) = marks(&x.vm);
         x.call(c, vec![some(mesh)]).unwrap();
-        assert_eq!(marks(&x.vm), (w + writes, d, l, n), "case {k}: the writes, no draw, no load, no name");
-        assert_eq!(x.get(c, "LODInfo"), after, "case {k}");
-        assert_eq!(x.get(c, "SkeletalMesh"), some(mesh), "case {k}");
+        assert_eq!(marks(&x.vm), (w + 4, d, l, n), "four writes, no draw, no load, no name");
+        assert_eq!((x.get(c, "LODInfo"), x.get(c, "SkeletalMesh")), (before, some(mesh)), "LODInfo kept");
+    }
+    for (mesh, before) in [(a, Value::array(Vec::new())), (b, entries(&x, 1, 7)), (zero, entries(&x, 1, 7))] {
+        let c = x.component(None);
+        x.put(c, "LODInfo", before);
+        assert_eq!(kind(x.refused(c, vec![some(mesh)])), (Missing::NotRead, LOD_USAGE.to_string()));
     }
 }
 
@@ -617,21 +587,22 @@ fn a_cli_like_source_s_unsupported_trailing_count_is_layer_absent() {
     assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::LayerAbsent(LOD_LAYER), LOD.to_string()));
 }
 
-/// D's `LODInfo` checks (IMPL-ROW15): an entry struct whose script default is not the note's is `NotRead`
-/// (`LOD_DEFAULT`) when a refill is planned, and not asked when none is; `LODInfo` declared as ints is a script error
-/// naming it with a new mesh, and not read on a clear. Each refusal writes nothing.
+/// D's `LODInfo` checks (IMPL-ROW15): an entry struct that does not declare the five members by name and kind is
+/// `NotRead` (`LOD_ENTRY`) when a refill is needed, before the usage byte's refusal, and not asked when none is;
+/// `LODInfo` declared as ints is a script error naming it with a new mesh, and not read on a clear. Each refusal
+/// writes nothing.
 #[test]
 fn the_lod_info_declaration_and_default_are_checked_before_any_write() {
     let mut x = fx_with(Some(vec![("Mesh_A", 1), ("Mesh_Zero", 0)]));
     let (a, zero) = (x.export("Mesh_A"), x.export("Mesh_Zero"));
     let c = x.component_of("Engine.ToyBadLodComponent", None);
-    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, LOD_DEFAULT.to_string()));
+    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, LOD_ENTRY.to_string()), "a byte index");
     let c = x.component_of("Engine.ToyBadLodComponent", None);
     x.call(c, vec![some(zero)]).unwrap();
-    assert_eq!(x.get(c, "SkeletalMesh"), some(zero), "no refill planned: the default is not asked");
+    assert_eq!(x.get(c, "SkeletalMesh"), some(zero), "no refill needed: the entry is not asked");
     // Review r1 of #678, item 2: the same kinds and values under other names.
     let c = x.component_of("Engine.ToyRenamedLodComponent", None);
-    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, LOD_DEFAULT.to_string()), "renamed members");
+    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, LOD_ENTRY.to_string()), "renamed members");
     let c = x.component_of("Engine.ToyIntLodComponent", None);
     assert!(script_text(x.refused(c, vec![some(zero)])).contains("LODInfo"));
     let c = x.component_of("Engine.ToyIntLodComponent", Some(zero));
