@@ -509,34 +509,85 @@ fn entries(x: &Fx, n: usize, usage: u8) -> Value {
     Value::array(vec![e; n])
 }
 
-/// Test 7, row 15 on the hub's rulings (IMPL-ROW15, ruling 2 as corrected): with all trailing counts zero, a
-/// `LODInfo` length equal to the LOD count writes nothing more (the four writes, in order); a length that differs needs
-/// a refill, whose natively constructed entry's usage byte is unread: `NotRead` (`LOD_USAGE`), write-free. N=1 against
-/// an empty `LODInfo` is link 8's shape.
+/// The natively constructed entry (#687's amendment): empty `HiddenMaterials`, both bools false, usage byte 0, index -1.
+fn constructed(x: &Fx) -> Value {
+    let ty = x.vm.space.classes.struct_by_path(LOD_INFO).unwrap();
+    let mut e = x.vm.space.classes.struct_defaults(ty).unwrap();
+    for (name, v) in [
+        ("HiddenMaterials", Value::array(Vec::new())),
+        ("bNeedsInstanceWeightUpdate", Value::Bool(false)),
+        ("bAlwaysUseInstanceWeights", Value::Bool(false)),
+        ("InstanceWeightUsage", Value::Byte(0)),
+        ("InstanceWeightIdx", Value::Int(-1)),
+    ] {
+        let id = x.vm.space.names.find(name).unwrap();
+        let (i, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        e.struct_mut().unwrap().fields[usize::try_from(i).unwrap()] = v;
+    }
+    e
+}
+
+/// Test 7, row 15 with the refill (#687's amendment, read): with all trailing counts zero, a `LODInfo` length equal to
+/// the LOD count writes nothing more (the four writes, in order); a length that differs is a fifth write after
+/// `bHasValidBodies`, `LODInfo` = N constructed entries. N=1 against an empty `LODInfo` is link 8's shape: one entry,
+/// index -1 and byte 0.
 #[test]
-fn the_lod_row_refill_refuses_on_the_unread_usage_byte() {
+fn the_lod_row_refills_lod_info_with_constructed_entries() {
     let mut x = fx_with(Some(vec![("Mesh_A", 1), ("Mesh_B", 2), ("Mesh_Zero", 0)]));
     let (a, b, zero) = (x.export("Mesh_A"), x.export("Mesh_B"), x.export("Mesh_Zero"));
+    let names = |x: &Fx, plan: &Plan| -> Vec<String> {
+        plan.writes.iter().map(|(p, _)| x.vm.space.names.text(x.vm.space.classes.decl(*p).unwrap().name).to_string()).collect()
+    };
     for (mesh, before) in [(b, entries(&x, 2, 7)), (zero, Value::array(Vec::new()))] {
         let c = x.component(None);
         x.put(c, "LODInfo", before.clone());
         let plan = answer(&x.vm, c, Some(mesh), false).unwrap().unwrap();
-        let names: Vec<String> = plan
-            .writes
-            .iter()
-            .map(|(p, _)| x.vm.space.names.text(x.vm.space.classes.decl(*p).unwrap().name).to_string())
-            .collect();
-        assert_eq!(names, ["bAnimTreeInitialised", "SkeletalMesh", "SpaceBases", "bHasValidBodies"], "in order");
+        assert_eq!(names(&x, &plan), ["bAnimTreeInitialised", "SkeletalMesh", "SpaceBases", "bHasValidBodies"], "in order");
         let (w, d, l, n) = marks(&x.vm);
         x.call(c, vec![some(mesh)]).unwrap();
         assert_eq!(marks(&x.vm), (w + 4, d, l, n), "four writes, no draw, no load, no name");
         assert_eq!((x.get(c, "LODInfo"), x.get(c, "SkeletalMesh")), (before, some(mesh)), "LODInfo kept");
     }
-    for (mesh, before) in [(a, Value::array(Vec::new())), (b, entries(&x, 1, 7)), (zero, entries(&x, 1, 7))] {
+    let one = constructed(&x);
+    for (mesh, before, after) in [
+        (a, Value::array(Vec::new()), Value::array(vec![one.clone()])),
+        (b, entries(&x, 1, 7), Value::array(vec![one.clone(); 2])),
+        (zero, entries(&x, 1, 7), Value::array(Vec::new())),
+    ] {
         let c = x.component(None);
         x.put(c, "LODInfo", before);
-        assert_eq!(kind(x.refused(c, vec![some(mesh)])), (Missing::NotRead, LOD_USAGE.to_string()));
+        let plan = answer(&x.vm, c, Some(mesh), false).unwrap().unwrap();
+        assert_eq!(names(&x, &plan), ["bAnimTreeInitialised", "SkeletalMesh", "SpaceBases", "bHasValidBodies", "LODInfo"]);
+        let (w, d, l, n) = marks(&x.vm);
+        x.call(c, vec![some(mesh)]).unwrap();
+        assert_eq!(marks(&x.vm), (w + 5, d, l, n), "five writes, no draw, no load, no name");
+        assert_eq!(x.get(c, "LODInfo"), after);
     }
+}
+
+/// #687's unit test of entry construction: the built entry has empty `HiddenMaterials`, both bools false, usage byte 0
+/// and index -1, even when the struct's script default holds index 0 and another usage byte, so the default is not
+/// copied.
+#[test]
+fn a_constructed_entry_ignores_the_script_default() {
+    let mut x = fx();
+    let ty = x.vm.space.classes.struct_by_path(LOD_INFO).unwrap();
+    for (name, v) in [("InstanceWeightIdx", Value::Int(0)), ("InstanceWeightUsage", Value::Byte(1))] {
+        let id = x.vm.space.names.find(name).unwrap();
+        let (entry, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        x.vm.space.set_struct_default(ty, entry, v).unwrap();
+    }
+    let built = lod_entry(&x.vm, ty).unwrap();
+    let member = |name: &str| {
+        let id = x.vm.space.names.find(name).unwrap();
+        let (i, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        built.as_struct().unwrap().fields[usize::try_from(i).unwrap()].clone()
+    };
+    assert_eq!(member("HiddenMaterials"), Value::array(Vec::new()));
+    assert_eq!((member("bNeedsInstanceWeightUpdate"), member("bAlwaysUseInstanceWeights")), (Value::Bool(false), Value::Bool(false)));
+    assert_eq!(member("InstanceWeightUsage"), Value::Byte(0));
+    assert_eq!(member("InstanceWeightIdx"), Value::Int(-1));
+    assert_eq!(built, constructed(&x));
 }
 
 /// Test 7's refusals, unchanged and write-free: no layer, a count with no trailing list, a non-zero trailing count,
@@ -588,7 +639,7 @@ fn a_cli_like_source_s_unsupported_trailing_count_is_layer_absent() {
 }
 
 /// D's `LODInfo` checks (IMPL-ROW15): an entry struct that does not declare the five members by name and kind is
-/// `NotRead` (`LOD_ENTRY`) when a refill is needed, before the usage byte's refusal, and not asked when none is;
+/// `NotRead` (`LOD_ENTRY`) when a refill is needed, before any write, and not asked when none is;
 /// `LODInfo` declared as ints is a script error naming it with a new mesh, and not read on a clear. Each refusal
 /// writes nothing.
 #[test]

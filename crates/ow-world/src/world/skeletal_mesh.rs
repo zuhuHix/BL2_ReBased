@@ -47,14 +47,15 @@
 //! `SpaceBases` (an array) and `bHasValidBodies` (a bool), each declared on the component's class with that kind, and
 //! each planned value accepted by the heap's own check. With a new mesh, `LODInfo` too: a dynamic array of a struct.
 //! Anything else is `VmError::Script` naming the field. When row 15 needs a refill, the entry struct must declare
-//! exactly [`LOD_ENTRY_MEMBERS`] by name (otherwise `NotYet { NotRead }`, [`LOD_ENTRY`]), and then the refill refuses
-//! `NotYet { NotRead }` ([`LOD_USAGE`]): by the hub's corrected ruling 2 a refilled entry is the natively constructed
-//! one (empty `HiddenMaterials`, both bools false, `InstanceWeightIdx` -1, as the note states; the script default holds
-//! 0 there), and its `InstanceWeightUsage` byte has not been read.
+//! exactly [`LOD_ENTRY_MEMBERS`] by name (otherwise `NotYet { NotRead }`, [`LOD_ENTRY`]). Each refilled entry is the
+//! natively constructed one, built member by member ([`lod_entry`]; the note's amendment of #687, read): empty
+//! `HiddenMaterials`, both bools false, `InstanceWeightUsage` 0 (`IWU_PartialSwap`) and `InstanceWeightIdx` -1. It is
+//! never the script default, which holds index 0.
 //!
-//! **The writes**, only after A to D, in the native's order ([4], [6], [7], [11]): `bAnimTreeInitialised` false,
+//! **The writes**, only after A to D, in the native's order ([4], [6], [7], [11], [16]): `bAnimTreeInitialised` false,
 //! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array and `bHasValidBodies` false, each
-//! written even when unchanged. `LODInfo` is not written: an equal length needs no write, and a refill refuses.
+//! written even when unchanged; then, when row 15 needs a refill, `LODInfo` = N constructed entries (N = 0 empties
+//! it). An equal length writes no `LODInfo`.
 //! `MorphTargetIndexMap`, the transform, the native-only field of step 12 and step 17's notification are not
 //! written. A `NotYet` raised after the first write would be marked "stopped after partial
 //! writes: " (none is expected: row 1 settles every slot and D every declaration and value, which is all a heap write
@@ -119,9 +120,6 @@ pub const MORPH: &str = "SetSkeletalMesh: the morph-target index map";
 pub const LOD: &str = "SetSkeletalMesh: the LOD info from the new mesh's LOD models";
 /// D's refusal when `LODInfo`'s entry struct is not declared with [`LOD_ENTRY_MEMBERS`].
 pub const LOD_ENTRY: &str = "SetSkeletalMesh: the LOD info entry's declaration";
-/// Row 15's refusal of a refill: the natively constructed entry's usage byte was not read (the note's gap).
-pub const LOD_USAGE: &str =
-    "SetSkeletalMesh: the LOD info entry's usage byte (a natively constructed entry; not read yet)";
 /// `Engine.SkelMeshComponentLODInfo`'s members and kinds, as the runner read the installed packages (2026-11-25).
 pub const LOD_ENTRY_MEMBERS: [(&str, &str); 5] = [
     ("HiddenMaterials", "array"),
@@ -267,7 +265,7 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
         None => None,
     };
     // D, the destinations.
-    let writes = vec![
+    let mut writes = vec![
         destination(vm, component, "bAnimTreeInitialised", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
         destination(vm, component, "SkeletalMesh", Value::Object(new_mesh), |k| matches!(k, PropKind::Object { .. }))?,
         destination(vm, component, "SpaceBases", Value::array(Vec::new()), |k| matches!(k, PropKind::Array(_)))?,
@@ -275,12 +273,11 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
     ];
     if new_mesh.is_some() {
         let ty = lod_info_struct(vm, component)?;
-        if resize.is_some() {
-            // The hub's corrected ruling 2: a refilled entry is the natively constructed one (empty HiddenMaterials,
-            // both bools false, InstanceWeightIdx -1, as the note states), not the script default; its usage byte
-            // is unread, so no entry is built and the refill refuses (no guessed value).
-            lod_entry_shape(vm, ty)?;
-            return Err(NotYet::not_read(LOD_USAGE, CHANGE_RECORD).into());
+        if let Some(n) = resize {
+            // The natively constructed entry (#687's amendment), never the script default.
+            let entry = lod_entry(vm, ty)?;
+            let value = Value::array(vec![entry; n]);
+            writes.push(destination(vm, component, "LODInfo", value, |k| matches!(k, PropKind::Array(_)))?);
         }
     }
     Ok(Some(Plan { component, writes }))
@@ -318,6 +315,32 @@ fn lod_info_struct(vm: &Vm, component: ObjRef) -> Result<ow_object::ids::StructI
         },
         _ => Err(script(format!("{}.LODInfo is not declared as a dynamic array", path()))),
     }
+}
+
+/// One natively constructed `LODInfo` entry of struct `ty` (NATIVE_SKELMESH_MESH_CHANGE.md, the amendment of #687,
+/// read; UNVERIFIED in game): the shape checked by [`lod_entry_shape`], then every member set explicitly, by name:
+/// `HiddenMaterials` empty, `bNeedsInstanceWeightUpdate` and `bAlwaysUseInstanceWeights` false, `InstanceWeightUsage`
+/// 0 (`IWU_PartialSwap`), `InstanceWeightIdx` -1. The script default supplies only the value's shape; all five members
+/// are overwritten, so nothing of it is copied.
+fn lod_entry(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> {
+    lod_entry_shape(vm, ty)?;
+    let refuse = || -> VmError { NotYet::not_read(LOD_ENTRY, CHANGE_RECORD).into() };
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(refuse)?;
+    let mut entry = vm.space.classes.struct_defaults(ty).map_err(|_| refuse())?;
+    let values = [
+        ("HiddenMaterials", Value::array(Vec::new())),
+        ("bNeedsInstanceWeightUpdate", Value::Bool(false)),
+        ("bAlwaysUseInstanceWeights", Value::Bool(false)),
+        ("InstanceWeightUsage", Value::Byte(0)),
+        ("InstanceWeightIdx", Value::Int(-1)),
+    ];
+    for (name, v) in values {
+        let id = vm.space.names.find(name).ok_or_else(refuse)?;
+        let (i, _) = layout.field(id).ok_or_else(refuse)?;
+        let slot = entry.struct_mut().and_then(|s| s.fields.get_mut(i as usize)).ok_or_else(refuse)?;
+        *slot = v;
+    }
+    Ok(entry)
 }
 
 /// `LODInfo`'s entry struct, by name (the hub's corrected ruling 2, from the runner's read of the installed

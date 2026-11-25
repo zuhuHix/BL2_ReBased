@@ -111,3 +111,27 @@ The package's own default stream for the struct holds 5 entries. The port reads 
   or renamed members give the declaration `NotRead`; `LODInfo` declared as ints is still a script error.
 - **What remains:** the natively constructed entry's usage byte, queued to an analyst (lane F). Until it is read,
   link 8 stops at row 15's refill, now at this typed `NotRead`.
+
+**The refill, from #687's amendment (2026-11-25).** The usage byte is no longer a gap. NATIVE_SKELMESH_MESH_CHANGE.md's
+amendment (#687 at de235f7, decision 2026-11-25-22; analyst-read, UNVERIFIED in game) gives the natively constructed
+entry member by member:
+- `HiddenMaterials` empty;
+- `bNeedsInstanceWeightUpdate` and `bAlwaysUseInstanceWeights` false;
+- `InstanceWeightUsage` the byte 0 (`IWU_PartialSwap`);
+- `InstanceWeightIdx` -1.
+
+It differs from the script default only in the index.
+- **The code:** when `LODInfo`'s length differs from the LOD count, the row now plans the refill as the fifth write,
+  after `bHasValidBodies`: `LODInfo` = N such entries, each built explicitly by name (`lod_entry`), never the struct's
+  script default. N = 0 empties it. The by-name shape check of the five members stays, as `NotRead` "the LOD info
+  entry's declaration". An equal length still writes no `LODInfo`. The usage-byte refusal is removed.
+- **The per-LOD loop** stays a no-op by ruling 1 (all trailing counts zero, #673's fit). So every refilled entry keeps
+  -1 and 0, as the amendment says a LOD without the per-LOD data does.
+- **The tests:**
+  - link 8's shape, 1 LOD against an empty `LODInfo`, gives five writes in order and one entry with index -1 and
+    byte 0;
+  - 2 against 1 gives two such entries, and 0 against 1 empties it;
+  - equal lengths give four writes with the entries kept;
+  - the amendment's unit test: an entry built while the struct default holds index 0 and byte 1 still has -1 and 0.
+- **Rebased** onto main 84b6d99 with #673 landed, without its earlier cherry-picks.
+- **Predicted, not run:** link 8 passes row 15 and stops at its next unread step.
