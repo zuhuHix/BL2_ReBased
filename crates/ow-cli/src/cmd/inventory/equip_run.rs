@@ -712,15 +712,16 @@ pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, 
 /// step 4, which the card does not read; review of #491).
 ///
 /// The card's class setup (`equip::card::setup`) runs first, before the world exists and before any object is made
-/// (review r2 of #521, item 5). From there the three counts of `equip::card::load_mark` (heap writes, random draws,
-/// definition loads) are tracked from the first allocation, the `WorldInfo`'s default instantiation included: a
-/// refusal after any of them moved is marked "stopped after partial writes".
+/// (review r2 of #521, item 5). From there the counts of `equip::card::load_and_code_mark` (heap writes, random draws,
+/// definition loads and, since lane RUNTIME-MARK-CODE-LOADS, class code loads) are tracked from the first allocation,
+/// the `WorldInfo`'s default instantiation included: a refusal after any of them moved is marked "stopped after
+/// partial writes".
 pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmError> {
     let mut world = bare_world_t(cooked, ParityMode::Off, true, ow_inventory::equip::card::setup)?;
-    let before = ow_inventory::equip::card::load_mark(&world.vm);
+    let before = ow_inventory::equip::card::load_and_code_mark(&world.vm);
     match equip_world_objects(&mut world) {
         Ok(()) => Ok(world),
-        Err(e) if ow_inventory::equip::card::load_mark(&world.vm) == before => Err(e),
+        Err(e) if ow_inventory::equip::card::load_and_code_mark(&world.vm) == before => Err(e),
         Err(e) => Err(ow_world::pools::after_partial_writes(e)),
     }
 }

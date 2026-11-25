@@ -245,6 +245,13 @@ impl Fx {
         let weapon_class = s.classes.define(WEAPON_CLASS, Some(object), fields).unwrap();
         let weapon = s.alloc(weapon_class, "Weapon_0", None, Origin::Runtime).unwrap();
         let mut vm = Vm::new(s, defs, Rc::new(AttributeSystem::standard().unwrap()), mode);
+        // Standing for `card::setup` (review r1 of #695): in the equip world its ROOTS' lookups load `Core.Object`'s
+        // code before the card runs; this fixture hand-builds its classes and skips `setup`, so with `Core.Object` from
+        // the store its code would otherwise stay cold, and the card's `globals_definition` lookup would load it at run
+        // time (a write that, since lane RUNTIME-MARK-CODE-LOADS, marks a refusal).
+        if core_from_store {
+            vm.find_class("Core.Object").unwrap();
+        }
         let query = ow_world::query::install(&mut vm).unwrap();
         let mut x = Fx { vm, query, weapon, t: weapon, globals: weapon, gd: weapon, aid, effect, priority, mapping, n: 0 };
         x.set(weapon, "Role", Value::Byte(AUTHORITY));
@@ -669,9 +676,6 @@ fn an_unloaded_weapon_type_is_not_read_and_not_loaded() {
     )
     .unwrap();
     let mut x = Fx::with_defs(Schema::Good, ParityMode::Off, defs, true);
-    // `Core.Object`'s code loaded, as the game always has it (this fixture's separate Core package leaves it cold, and
-    // the native's lookups would load it: since lane RUNTIME-MARK-CODE-LOADS that code load marks the refusal).
-    x.vm.find_class("Core.Object").unwrap();
     let holder = x.vm.defs.find(&mut x.vm.space, &ObjectPath::parse("ToyPkg.ToyHolder").unwrap()).unwrap().unwrap();
     let handle = match read_prop(&x.vm, holder, "Type") {
         Some(Value::Object(Some(o))) => o,

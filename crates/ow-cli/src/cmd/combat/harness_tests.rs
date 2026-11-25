@@ -85,8 +85,9 @@ fn fx(mode: ParityMode, archetype_path: &str) -> Fx {
     vm.register_native(
         "WillowPlayerController.ServerPlayerSelectClass(string)",
         Rc::new(move |c: &mut NativeCall<'_>| {
-            let thing = c.vm.find_class("WillowGame.Thing")?;
-            let loaded = c.vm.space.live(thing).next().is_some();
+            // A class-table lookup, not `find_class`: the probe itself must load nothing (lane RUNTIME-MARK-CODE-LOADS:
+            // a code load would mark the refusal). No `Thing` class in the table means no archetype in memory.
+            let loaded = c.vm.space.classes.by_path("WillowGame.Thing").is_some_and(|t| c.vm.space.live(t).next().is_some());
             record.borrow_mut().push((c.vm.log.clone(), loaded));
             if refusing.get() {
                 return Err(ow_core::NotYet::not_read("a toy class select refusal", "toy record").into());
@@ -95,10 +96,6 @@ fn fx(mode: ParityMode, archetype_path: &str) -> Fx {
         }),
     )
     .unwrap();
-    // The toy class select probes `WillowGame.Thing` (`find_class`), which would load that class's code inside the
-    // step; warm it here, so the step's own writes are what the marking sees (lane RUNTIME-MARK-CODE-LOADS: a code
-    // load marks a refusal).
-    vm.find_class("WillowGame.Thing").unwrap();
     let class = vm.find_class("WillowGame.WillowPlayerController").unwrap();
     let controller = ow_vm::interp::instantiate_from_defaults(&mut vm, class).unwrap();
     let dclass = vm.find_class("WillowGame.PlayerClassDefinition").unwrap();
