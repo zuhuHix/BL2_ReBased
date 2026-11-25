@@ -197,6 +197,33 @@ pub(crate) fn install_skeleton_source(vm: &mut Vm, roots: &[std::path::PathBuf])
     ow_world::world::skeletal::SkeletalMeshes::install(vm, Box::new(source))
 }
 
+/// The aim-offset profiles reader (lane IMPL-AIMOFFSET-PROFILES): `ow_assets::aim_profiles` as ow-world's
+/// [`ow_world::world::aim_profiles::ProfileSource`], which the crate edges keep ow-world from calling directly.
+struct AssetProfiles;
+
+impl ow_world::world::aim_profiles::ProfileSource for AssetProfiles {
+    fn profiles_in(
+        &self,
+        package: &ow_package::package::Package,
+        index: i32,
+        property_offset: usize,
+    ) -> Result<ow_world::world::aim_profiles::SourceProfiles, String> {
+        let read = ow_assets::aim_profiles::read_export(package, index, property_offset).map_err(|e| e.to_string())?;
+        Ok((read.profiles.map(|p| p.into_iter().map(|x| x.profile_name).collect()), read.tags_end))
+    }
+}
+
+/// Installs [`AssetProfiles`] as the VM's profiles reader, logged as a harness input (a fitted layout checked by
+/// structural oracles, UNVERIFIED; decision 2026-11-25-NNN).
+pub(crate) fn install_profiles_reader(vm: &mut Vm) -> Result<(), VmError> {
+    vm.log.push(
+        "harness input: the aim-offset profiles reader over the node's own export (ow_assets::aim_profiles, a fitted \
+         layout checked by structural oracles, UNVERIFIED)"
+            .to_string(),
+    );
+    ow_world::world::aim_profiles::AimProfiles::install(vm, Box::new(AssetProfiles))
+}
+
 /// Loads the skeletal mesh at `path` (`what` names it in the log) through the store, logged as a harness input
 /// (UNVERIFIED stand-in for the streaming load of the pawn's package). A path no package holds is logged and skipped; a
 /// load that fails is the step's error.
@@ -802,6 +829,9 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
     // the link shows them.
     if vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_none() {
         install_skeleton_source(vm, &psk_roots())?;
+    }
+    if vm.service::<ow_world::world::aim_profiles::AimProfiles>().is_none() {
+        install_profiles_reader(vm)?;
     }
     preload_mesh(vm, MAYA_MESH_PATH, "Maya's mesh")?;
     crate::cmd::mesh_sockets::preload_mesh_sockets(vm, MAYA_MESH_PATH)?;
