@@ -155,7 +155,13 @@ fn scene_window(
     let Ok(install) = ow_host::find_install(game) else {
         return ExitCode::from(1);
     };
-    let map = &ow_host::movement::sanctuary::resolve_map(&install.cooked, map);
+    let map = &match ow_host::movement::sanctuary::resolve_map(&install.cooked, map) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("ow-host: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let Ok(name) = PackageName::parse(map) else {
         eprintln!("ow-host: {map:?} is not a package name");
         return ExitCode::from(2);
@@ -435,7 +441,13 @@ fn play(
         },
         None => None,
     };
-    let map = sanctuary::resolve_map(&install.cooked, map);
+    let map = match sanctuary::resolve_map(&install.cooked, map) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("ow-host: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let loaded = match sanctuary::load(&install.cooked, &map) {
         Ok(loaded) => loaded,
         Err(e) => {

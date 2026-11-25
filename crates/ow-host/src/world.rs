@@ -927,8 +927,8 @@ pub fn build_installed(cooked: PathBuf, map: String, mode: ParityMode) -> Result
     ow_vm::natives_core::register(&mut vm).map_err(|e| e.to_string())?;
     ow_behavior::handlers::Pack.register(&mut vm).map_err(|e| e.to_string())?;
     if mode != ParityMode::Reference {
-        let game = cooked.parent().and_then(std::path::Path::parent).ok_or("the cooked folder has no install parent")?;
-        let roots = ["Engine", "Gearbox", "WillowGame"].map(|n| game.join(n).join("Localization")).to_vec();
+        // Each root in its own case and install layout (`ow_core::install`, review r1 of #675).
+        let roots = ow_core::install::localization_roots(&cooked).map_err(|e| format!("localization: {e}"))?;
         let backend = ow_world::world::localize::Localization::ready(roots, "INT", false).map_err(|e| e.to_string())?;
         vm.add_service(backend).map_err(|e| e.to_string())?;
     }
