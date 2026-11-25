@@ -32,7 +32,11 @@
 //!    The walk dispatches the direct evaluators through the same resident-only lookup; the composites' own bindings
 //!    look their children up with `find_method`, which, with every node checked warm here, loads nothing. This is a
 //!    loading discipline, not a rule change: with the code loaded, the answer is the same. Composite evaluator classes
-//!    other than these two are not walked (their children, if any, are not known to this preflight).
+//!    other than these two are not walked (their children, if any, are not known to this preflight). A
+//!    `FlagExpressionEvaluator` node is refused, `NotYet { NotRead }`, [`EVALUATOR_CHILDREN_NOT_PROVEN`] (review r2 of
+//!    #686): its binding (`ow-skills` `action_skill::flag_expression`) loads the definitions, expressions and resolvers
+//!    it reaches and dispatches a nested expression through a lookup that can load class code, a graph this preflight
+//!    cannot prove load-free.
 //!
 //! A handle whose load failed (the collection, or an evaluator in that range) is a `VmError::Script`: the note does
 //! not cover it, and reading it as an empty object would hide the failure.
@@ -72,6 +76,13 @@ pub const EVALUATOR_NOT_LOADED: &str = "GetParticleEffect: an entry's evaluator 
 /// Preflight rule 5's refusal text.
 pub const EVALUATOR_CODE_NOT_LOADED: &str =
     "GetParticleEffect: an entry's evaluator class code is not loaded (a load is a write)";
+
+/// Preflight rule 5's refusal for an evaluator whose children it cannot prove load-free (review r2 of #686).
+pub const EVALUATOR_CHILDREN_NOT_PROVEN: &str = "GetParticleEffect: an evaluator whose children this native cannot \
+     dispatch without a load (a FlagExpressionEvaluator; a load is a write)";
+
+/// The evaluator class whose children rule 5 cannot follow read-only (review r2 of #686).
+const FLAG_EVALUATOR: &str = "GearboxFramework.FlagExpressionEvaluator";
 
 /// The collection's one field.
 const EFFECTS: &str = "ParticleEffects";
@@ -190,6 +201,7 @@ const NODE_LIMIT: usize = 1024;
 fn check_dispatch(vm: &Vm, root: ObjRef) -> Result<(), VmError> {
     let composites: Vec<(ow_object::ids::ClassId, &[&str])> =
         COMPOSITES.iter().filter_map(|(path, fields)| vm.space.classes.by_path(path).map(|c| (c, *fields))).collect();
+    let flag = vm.space.classes.by_path(FLAG_EVALUATOR);
     let mut seen = std::collections::BTreeSet::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -206,6 +218,9 @@ fn check_dispatch(vm: &Vm, root: ObjRef) -> Result<(), VmError> {
             return Err(NotYet::not_read(EVALUATOR_NOT_LOADED, RECORD).into());
         }
         let o = vm.space.heap.get(node)?;
+        if flag.is_some_and(|f| vm.space.classes.is_child_of(o.class, f)) {
+            return Err(NotYet::not_read(EVALUATOR_CHILDREN_NOT_PROVEN, RECORD).into());
+        }
         if vm.find_loaded_method(o.class, "Evaluate", o.state).is_none() {
             return Err(NotYet::not_read(EVALUATOR_CODE_NOT_LOADED, RECORD).into());
         }

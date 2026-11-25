@@ -21,6 +21,14 @@ nothing of its own"). Synthetic fixtures only.
     With that checked, the composites' own `find_method` lookups load nothing, so `ow-combat`'s shared dispatch
     (`evaluate_child` / `call_method`) is left unchanged for its other callers. At most 1024 nodes are walked.
     Other composite classes are not walked.
+  - **A flag evaluator is refused (review r2 of #686):** a `FlagExpressionEvaluator` node gets `NotYet { NotRead }`,
+    "an evaluator whose children this native cannot dispatch without a load". Its binding (`ow-skills`
+    `action_skill::flag_expression`) loads the definitions, expressions and resolvers it reaches, by its own rule,
+    and dispatches a definition's `EvaluationExpression` through a lookup that can load class code. Mirroring that
+    graph read-only here (the flag chain, the definitions, context resolvers, nested flag evaluators) could not be
+    proven load-free, so the smallest honest answer is to refuse the node. `ow-skills` is unchanged for its own
+    callers. The note's recorded probe shows attribute evaluators in the slice's collections, so no observed case is
+    expected to hit this; not measured.
   - **Only the cold outcome is refused in the preflight (review r1 of #686):** a class with no `Evaluate` stays the
     walk's script error, raised only when the walk reaches that entry. So an earlier entry that passes still
     answers, as before rule 5.
@@ -43,6 +51,8 @@ nothing of its own"). Synthetic fixtures only.
     - a warm first entry before a cold second one: zero evaluator calls, so the preflight runs before the walk;
     - an entry that passes before a later, warm entry with no `Evaluate`: it answers, and reaching that entry gives
       the walk's script error.
+    - review r2: a warm flag evaluator whose definition's `EvaluationExpression` is a cold evaluator is refused with
+      zero evaluator calls and every counter, code loads included, unchanged; dropping the refusal fails it.
   - **Mutation check:** going back to `find_method`, with no rule 5, fails the pinned test.
 - **Not verified:** nothing in the running game (**UNVERIFIED**). Whether the equip run's world has the evaluator
   code loaded when this native runs is not measured. If it does not, rule 5 is where that run would now stop, which

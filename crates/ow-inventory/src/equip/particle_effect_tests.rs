@@ -27,8 +27,9 @@ use super::*;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// The handles the holder names, in this order.
-const HANDLES: [&str; 14] =
-    ["Coll", "E1", "E2", "E3", "E4", "FxA", "FxB", "FxD", "Bad", "Aee", "Attr", "Res", "Comp", "Cold"];
+const HANDLES: [&str; 16] = [
+    "Coll", "E1", "E2", "E3", "E4", "FxA", "FxB", "FxD", "Bad", "Aee", "Attr", "Res", "Comp", "Cold", "Flag", "FlagDef",
+];
 
 /// `Mode` of a test evaluator: answer `Answer`; write `Hits` then refuse; refuse without a write; answer an int.
 const ANSWER: i32 = 0;
@@ -91,6 +92,14 @@ fn package() -> Vec<u8> {
     t.prop("Object", compound, "Expression2", 0, evaluator);
     native(&mut t, compound, "Evaluate", &context(object), Some(("Bool", 0)));
     let cold = t.class("ToyColdEvaluator", evaluator);
+    // Review r2 of #686: a flag evaluator whose one conditional's definition computes its flag through an
+    // `EvaluationExpression` (the route `ow-skills` follows, loading what it reaches).
+    let flag_definition = t.class("FlagDefinition", object);
+    t.prop("Object", flag_definition, "EvaluationExpression", 0, evaluator);
+    let flag = t.class("FlagExpressionEvaluator", evaluator);
+    let conditional = toy_struct(&mut t, flag, "ToyFlagConditional", None);
+    t.prop("Object", conditional, "FlagDefinition", 0, flag_definition);
+    toy_array_of(&mut t, flag, "FlagChain", "Struct", conditional);
     let collection = t.class("EffectCollectionDefinition", object);
     let entry = toy_struct(&mut t, collection, "ConditionalParticleEffectData", None);
     // Typed as a plain object, not an evaluator, so a test can put a class with no `Evaluate` there (review r1 of
@@ -111,10 +120,11 @@ fn package() -> Vec<u8> {
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&t.none);
     let classes =
-        [collection, evaluator, evaluator, evaluator, evaluator, system, system, system, bad, aee, attribute, unknown, compound, cold];
+        [collection, evaluator, evaluator, evaluator, evaluator, system, system, system, bad, aee, attribute, unknown, compound, cold,
+            flag, flag_definition];
     let names = [
         "ToyColl", "ToyE1", "ToyE2", "ToyE3", "ToyE4", "ToyFxA", "ToyFxB", "ToyFxD", "ToyBad", "ToyAee", "ToyAttr", "ToyRes",
-        "ToyComp", "ToyCold",
+        "ToyComp", "ToyCold", "ToyFlag", "ToyFlagDef",
     ];
     let exports: Vec<i32> = classes.iter().zip(names).map(|(&c, n)| t.p.add_export(c, n, empty.clone())).collect();
     let mut h = 0i32.to_le_bytes().to_vec();
@@ -665,4 +675,32 @@ fn a_later_warm_entry_without_evaluate_does_not_stop_an_earlier_pass() {
     let c = f.collection(&[(Some(e2), Some(a)), (Some(d), Some(a))]);
     let m = script_message(f.run(c, None).unwrap_err());
     assert!(m.contains("has no Evaluate"), "{m}");
+}
+
+/// Review r2 of #686: a warm flag evaluator whose definition's `EvaluationExpression` is a cold evaluator. The flag
+/// evaluator's own route loads what it reaches and dispatches the child through a lookup that can load code, so rule 5
+/// refuses the flag node itself: zero evaluator calls, every counter (code loads included) unchanged, the child cold.
+#[test]
+fn a_warm_flag_evaluator_with_a_cold_child_refuses_before_any_evaluation() {
+    let mut f = fx();
+    f.vm.find_class("GearboxFramework.FlagExpressionEvaluator").unwrap();
+    let a = f.handle("FxA");
+    let (flag, definition, cold) = (f.load("Flag"), f.load("FlagDef"), f.load("Cold"));
+    f.set(definition, "EvaluationExpression", Value::Object(Some(cold)));
+    let class = f.vm.space.heap.get(flag).unwrap().class;
+    let p = f.vm.space.prop(class, "FlagChain").unwrap();
+    let PropKind::Array(inner) = f.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
+    let PropKind::Struct(ty) = *inner else { panic!() };
+    let mut entry = f.vm.space.classes.struct_defaults(ty).unwrap();
+    let at = f.vm.space.classes.struct_layout(ty).unwrap().field(f.vm.space.names.find("FlagDefinition").unwrap()).unwrap().0;
+    entry.struct_mut().unwrap().fields[at as usize] = Value::Object(Some(definition));
+    f.set(flag, "FlagChain", Value::array(vec![entry]));
+    let cold_class = f.vm.space.heap.get(cold).unwrap().class;
+    let c = f.collection(&[(Some(flag), Some(a))]);
+    let before = f.counters();
+    let n = not_yet(f.run(c, None).unwrap_err());
+    assert_eq!((n.what.as_ref(), n.missing, n.record), (EVALUATOR_CHILDREN_NOT_PROVEN, Missing::NotRead, RECORD));
+    assert_eq!(f.counters(), before, "no write, draw, load or code load");
+    assert!(f.calls.borrow().is_empty(), "zero evaluator calls");
+    assert!(!f.vm.class_code_loaded(cold_class), "the child is still cold");
 }
