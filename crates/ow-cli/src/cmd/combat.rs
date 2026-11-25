@@ -148,6 +148,10 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
 /// Maya's skeletal mesh, which the slice harness preloads (lane SLICE-HARNESS-MAYA-MESH, hub ruling): in the game it is
 /// loaded with her pawn.
 pub(crate) const MAYA_MESH_PATH: &str = "Char_Siren.Mesh.Skel_SirenBody";
+/// Maya's head mesh, her `CustomHead` template's `SkeletalMesh` (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8): a
+/// placeholder cube cooked into her pawn's streaming package, `GD_Siren_Streaming_SF`, beside her body mesh (lane
+/// LINK1-HEAD-MESH).
+pub(crate) const MAYA_HEAD_MESH_PATH: &str = "CD_Heads_Assassin_MainGame.CubeForCode";
 /// The skeleton source's export roots (`;`-separated), else [`PSK_ROOTS_DEFAULT`].
 pub(crate) const PSK_ROOTS_VAR: &str = "OPENWILLOW_PSK_EXPORTS";
 /// The default export root, under ignored `local/` of the repository ow-cli was built from (review r1 of #592, item
@@ -195,13 +199,13 @@ pub(crate) fn install_skeleton_source(vm: &mut Vm, roots: &[std::path::PathBuf])
     ow_world::world::skeletal::SkeletalMeshes::install(vm, Box::new(source))
 }
 
-/// Loads the skeletal mesh at `path` through the store, logged as a harness input (UNVERIFIED stand-in for the
-/// streaming load of the pawn's package). A path no package holds is logged and skipped; a load that fails is the
-/// step's error.
-pub(crate) fn preload_mesh(vm: &mut Vm, path: &str) -> Result<(), VmError> {
+/// Loads the skeletal mesh at `path` (`what` names it in the log) through the store, logged as a harness input
+/// (UNVERIFIED stand-in for the streaming load of the pawn's package). A path no package holds is logged and skipped; a
+/// load that fails is the step's error.
+pub(crate) fn preload_mesh(vm: &mut Vm, path: &str, what: &str) -> Result<(), VmError> {
     let parsed = ObjectPath::parse(path)
         .map_err(|e| VmError::Script { function: "combat-run".into(), message: e.to_string() })?;
-    vm.log.push(format!("harness input: preload {path} (Maya's mesh; UNVERIFIED stand-in for the streaming load)"));
+    vm.log.push(format!("harness input: preload {path} ({what}; UNVERIFIED stand-in for the streaming load)"));
     let found = vm.defs.find(&mut vm.space, &parsed);
     vm.log.extend(vm.defs.take_log());
     let mesh = match found {
@@ -499,6 +503,10 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
 /// 5. **Socket preload:** the mesh's unloaded socket objects loaded through the store
 ///    (`crate::cmd::mesh_sockets::preload_mesh_sockets`), an UNVERIFIED stand-in for the same streaming load (hub
 ///    ruling).
+/// 5a. **Head mesh preload** (lane LINK1-HEAD-MESH): Maya's head mesh [`MAYA_HEAD_MESH_PATH`], which the body
+///    composition's `Parent` link reads, loaded the same way ([`preload_mesh`]). It is an export of the same package file
+///    as her pawn archetype, so the same UNVERIFIED stand-in applies: the game's streaming load makes the package
+///    resident, and which exports it loads is not read.
 /// 6. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
@@ -567,8 +575,9 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
     if vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_none() {
         install_skeleton_source(vm, &psk_roots())?;
     }
-    preload_mesh(vm, MAYA_MESH_PATH)?;
+    preload_mesh(vm, MAYA_MESH_PATH, "Maya's mesh")?;
     crate::cmd::mesh_sockets::preload_mesh_sockets(vm, MAYA_MESH_PATH)?;
+    preload_mesh(vm, MAYA_HEAD_MESH_PATH, "Maya's head mesh, cooked into her pawn's streaming package")?;
     gear_likeness_setup(vm)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;

@@ -113,7 +113,7 @@ fn off_preloads_then_selects_the_class_and_logs_both() {
     let mut x = fx(ParityMode::Off, "WillowGame.ToyPawnArchetype");
     apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)).unwrap();
     let lines = harness_lines(&x.vm);
-    assert_eq!(lines.len(), 14, "{lines:?}");
+    assert_eq!(lines.len(), 16, "{lines:?}");
     assert!(lines[0].starts_with("harness input: preload WillowGame.ToyPawnArchetype (UNVERIFIED"), "{lines:?}");
     assert_eq!(lines[1], "harness input: preload WillowGame.ToyPawnArchetype: loaded", "{lines:?}");
     // The owner test's set-up (lane ROUTE-A): the toy packages hold no SpecialMoveInterface, so nothing is resolved.
@@ -135,12 +135,17 @@ fn off_preloads_then_selects_the_class_and_logs_both() {
     // The mesh's sockets (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES): no mesh here either, so logged and skipped.
     assert!(lines[9].starts_with("harness input: preload the sockets of Char_Siren.Mesh.Skel_SirenBody (UNVERIFIED"), "{lines:?}");
     assert_eq!(lines[10], "harness input: preload the sockets of Char_Siren.Mesh.Skel_SirenBody: found nothing", "{lines:?}");
+    // Maya's head mesh (lane LINK1-HEAD-MESH): not in the toy packages either, so logged and skipped.
+    let head = "harness input: preload CD_Heads_Assassin_MainGame.CubeForCode (Maya's head mesh, cooked into her pawn's \
+                streaming package; UNVERIFIED";
+    assert!(lines[11].starts_with(head), "{lines:?}");
+    assert_eq!(lines[12], "harness input: preload CD_Heads_Assassin_MainGame.CubeForCode: found nothing", "{lines:?}");
     // The body composition's hook 1 set-up (lane HARNESS-GEARLIKENESS-SETUP): the toy packages hold neither class.
     let gear = "harness input: set-up class WillowGame.IGearLikenessConsumer: not in the packages, nothing loaded";
-    assert_eq!(lines[11], gear, "{lines:?}");
-    assert!(lines[12].starts_with("harness input: set-up interface check Engine.SkeletalMeshComponent implements"), "{lines:?}");
-    assert!(lines[12].ends_with("not in the packages, nothing resolved"), "{lines:?}");
-    assert!(lines[13].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
+    assert_eq!(lines[13], gear, "{lines:?}");
+    assert!(lines[14].starts_with("harness input: set-up interface check Engine.SkeletalMeshComponent implements"), "{lines:?}");
+    assert!(lines[14].ends_with("not in the packages, nothing resolved"), "{lines:?}");
+    assert!(lines[15].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
     let seen = x.seen.borrow();
     assert_eq!(seen.len(), 1, "the class select ran once");
     let (log_then, loaded_then) = &seen[0];
