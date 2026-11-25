@@ -34,6 +34,7 @@
 //!   0. the first reads, loaded-only (lane IMPL-SET-REPLICATED-SMDATA, as NATIVE_SPECIAL_MOVE_QUEUE.md section 5):
 //!      the component resident; with a `NewSMD` and an `SMI` set, those two and the component's `Owner` resident
 //!      ([`NOT_LOADED`]); `Owner` None ([`NO_OWNER`]) or not the `SMI` actor ([`OTHER_OWNER`]) is `NotYet { NotRead }`.
+//!      After `GetSMDToPlay`, the answered definition resident ([`NOT_LOADED`]; review r1 of #689, item 1).
 //!      The method checks of step 3 look in loaded code only, and code not loaded is `NotYet { NotRead }`;
 //!   1. 0 with no definition or no owner interface (`SMI`); then the definition to play (`GetSMDToPlay`), 0 with none;
 //!   2. the gates, in this order: `IsLocalAuthority`, then the script event `AuthorityCanPlay` (not asked when the
@@ -556,9 +557,11 @@ fn loaded_field(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Value, VmE
 /// `name` as `o`'s class sees it, in loaded code only (lane IMPL-SET-REPLICATED-SMDATA): code on the chain not loaded
 /// yet is `NotYet { NotRead }`. A class with no package code (defined by hand, no code key) falls back to its declared
 /// functions by path, as [`method_of`] does. That lookup cannot load: such a class has no package export, so a path
-/// not declared is a confirmed absence. It is checked anyway (review r1 of #689, item 4): if a store load happened or
-/// a name was interned (as a code load does), the lookup fails as a script error. A lookup error is returned, not
-/// hidden.
+/// not declared is a confirmed absence. A guard backs that up (review r1 of #689, item 4): the lookup fails as a script
+/// error if a store load happened or a name was newly interned during it. The guard does not catch every class-code
+/// load: a code load whose names were already interned, or a package opened by the code layer, moves neither count.
+/// `Vm::class_code_loads` (#685) closes that gap once it lands (review r2 of #689, item A). A lookup error is returned,
+/// not hidden.
 fn loaded_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmError> {
     let class = vm.space.heap.get(o)?.class;
     match vm.find_loaded_method(class, name, None) {
@@ -577,7 +580,8 @@ fn loaded_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, V
         if vm.defs.code().key_of(c).is_some() {
             continue;
         }
-        // A code load interns the names it declares; `Vm::class_code_loads` (#685) joins this check once on main.
+        // Store loads and newly interned names only; not every class-code load (see the doc above). `Vm::class_code_loads`
+        // (#685) joins this check once on main.
         let before = (vm.defs.load_transitions(), vm.space.names.len());
         let found = vm.find_function_if_any(&path)?;
         if (vm.defs.load_transitions(), vm.space.names.len()) != before {
