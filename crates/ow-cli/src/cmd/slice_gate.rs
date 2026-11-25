@@ -12,6 +12,9 @@
 //!
 //! `tools/check_slice_run_off.py` grades the rows; the gate is 14 ok, 0 notyet, 0 error.
 //!
+//! After the rows it prints a report to stderr ([`step_report`], lane SLICE-GATE-STEP-SHARE): each link's steps
+//! `<passed>/<total>`, `links ok <P>/14` and the step share X. Stdout holds only the rows.
+//!
 //! **Drivers.**
 //! - `combat-run` (`ow_combat::run`, over the mission bridge's player as `--combat-run` builds it): links 1, 3, 4, 5,
 //!   13 and 14, in that order on one world. A step `spawn:<kind>:...` binds `{<kind>}` in later steps to the new pawn's
@@ -1822,6 +1825,64 @@ pub fn exit_code(rows: &[Row]) -> u8 {
     }
 }
 
+/// A row's steps `(passed, total)` (lane SLICE-GATE-STEP-SHARE; a report only, not part of the grading). `total` is
+/// the length of the link's own step list in [`LINKS`]. `passed` counts the row's steps that did not stop it:
+/// - strict grading stops at the first stop, so every step but the last passed when the row's stop is that step;
+/// - under past-errors grading, a step whose name is the stop's or an error line's did not pass. A repeated step name
+///   (`tick:1`) that failed once counts as failed each time, so this can undercount there.
+///
+/// A blocked row ran no step, so 0 passed.
+pub fn step_counts(row: &Row) -> (usize, usize) {
+    let total = LINKS
+        .iter()
+        .find(|l| l.name == row.link)
+        .map_or(row.steps.len(), |l| l.steps.len());
+    let stop = row.stop.as_ref().map(|s| s.step.as_str());
+    let passed = match row.grading {
+        Grading::Strict => {
+            let stopped_last = stop.is_some() && row.steps.last().map(String::as_str) == stop;
+            row.steps.len() - usize::from(stopped_last)
+        }
+        Grading::PastErrors => row
+            .steps
+            .iter()
+            .filter(|s| Some(s.as_str()) != stop && !row.error_lines.iter().any(|(e, _)| e == *s))
+            .count(),
+    };
+    (passed.min(total), total)
+}
+
+/// A row's share of the gate's steps: passed over total, or, for a link with no steps of its own, 1 when `ok` and 0
+/// otherwise (lane SLICE-GATE-STEP-SHARE).
+pub fn step_share(row: &Row) -> f64 {
+    match step_counts(row) {
+        (_, 0) => f64::from(u8::from(row.result == Outcome::Ok)),
+        (passed, total) => passed as f64 / total as f64,
+    }
+}
+
+/// The report lines the gate prints to stderr after its rows (lane SLICE-GATE-STEP-SHARE): one per row,
+/// `link <n> <name>: <result>, steps <passed>/<total>`, then `links ok <P>/<N>` and
+/// `step share X = <sum>/<N> = <pct>%`, X being the mean of [`step_share`] over the rows. Stdout keeps only the JSON
+/// rows, which `tools/check_slice_run_off.py` reads line by line; the grading and the exit code do not change.
+pub fn step_report(rows: &[Row]) -> Vec<String> {
+    let mut lines: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            let (passed, total) = step_counts(r);
+            format!("link {} {}: {}, steps {passed}/{total}", r.n, r.link, r.result.name())
+        })
+        .collect();
+    let n = rows.len();
+    let ok = rows.iter().filter(|r| r.result == Outcome::Ok).count();
+    let sum: f64 = rows.iter().map(step_share).sum();
+    let pct = if n == 0 { 0.0 } else { 100.0 * sum / n as f64 };
+    lines.push(format!("links ok {ok}/{n}"));
+    let (sum, pct) = (ow_core::fmt::fmt_f(sum, 3), ow_core::fmt::fmt_f(pct, 1));
+    lines.push(format!("step share X = {sum}/{n} = {pct}%"));
+    lines
+}
+
 /// The command's arguments: the cooked directory, the grading and the `--map <name>` option, which comes last (module
 /// documentation); `None` for any other shape.
 pub(crate) fn parse_args(args: &[String]) -> Option<(String, Grading, Option<String>)> {
@@ -1859,6 +1920,9 @@ pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
         let _ = writeln!(out, "{}", r.json());
     }
     let _ = std::io::stdout().lock().write_all(out.as_bytes());
+    for line in step_report(&rows) {
+        eprintln!("{line}");
+    }
     ExitCode::from(exit_code(&rows))
 }
 

@@ -451,3 +451,96 @@ fn the_map_option_is_parsed_last() {
     assert_eq!(parse(&["--slice-gate", "--cooked", "d", "--map"]), None, "no name");
     assert_eq!(parse(&["--slice-gate", "--map", "Sanctuary_P", "--cooked", "d"]), None);
 }
+
+/// A row of `name` (lane SLICE-GATE-STEP-SHARE): `result`, the steps it ran, and a stop at `stop` when given.
+fn share_row(name: &'static str, result: Outcome, steps: &[&str], stop: Option<&str>) -> Row {
+    Row {
+        n: index(name) + 1,
+        link: name,
+        result,
+        driver: "combat-run",
+        steps: steps.iter().map(|s| (*s).to_string()).collect(),
+        stop: stop.map(|s| Stop {
+            step: s.into(),
+            ..Stop::default()
+        }),
+        blocked_by: None,
+        grading: Grading::Strict,
+        after_errors_in: None,
+        error_lines: Vec::new(),
+        stopped: stop.is_some(),
+        scope: "s",
+        harness: Vec::new(),
+    }
+}
+
+/// The fourteen rows in the shape of main d3c7a13's installed Off strict reading (invented stops; the step names are
+/// the links' own): 4 ok, 10 NotYet.
+fn share_rows() -> Vec<Row> {
+    let all = |name: &str| LINKS[index(name)].steps.to_vec();
+    let ny = Outcome::NotYet;
+    vec![
+        share_row("spawn_maya", ny, &["maya:8"], Some("maya:8")),
+        share_row("reach_fight_area", Outcome::Ok, &all("reach_fight_area"), None),
+        share_row("kill_enemy", ny, &[], Some("maya:8")),
+        share_row("enemy_attacks_maya", ny, &[], Some("maya:8")),
+        share_row("loot_drop_on_kill", ny, &[], Some("maya:8")),
+        share_row("pick_up_gun", ny, &["make", "touch"], Some("touch")),
+        share_row("pick_up_aimed_not_nearest", ny, &["make", "touch"], Some("touch")),
+        share_row("equip_gun", ny, &["make", "init"], Some("init")),
+        share_row("phaselock_enemy", ny, &["spawn", "cast"], Some("cast")),
+        share_row("mission_accept", Outcome::Ok, &all("mission_accept"), None),
+        share_row("mission_objective", Outcome::Ok, &all("mission_objective"), None),
+        share_row("mission_turn_in", Outcome::Ok, &all("mission_turn_in"), None),
+        share_row("go_down", ny, &[], Some("maya:8")),
+        share_row("bleed_out_respawn", ny, &[], Some("maya:8")),
+    ]
+}
+
+#[test]
+fn the_step_totals_are_the_links_own_step_lists() {
+    // The hub's hand-recorded totals, in gate order.
+    let totals: Vec<usize> = share_rows().iter().map(|r| step_counts(r).1).collect();
+    assert_eq!(totals, [2, 4, 2, 2, 0, 3, 4, 5, 2, 8, 8, 6, 4, 1]);
+}
+
+#[test]
+fn the_step_report_gives_main_s_hand_count() {
+    let rows = share_rows();
+    let passed: Vec<usize> = rows.iter().map(|r| step_counts(r).0).collect();
+    assert_eq!(passed, [0, 4, 0, 0, 0, 1, 1, 1, 1, 8, 8, 6, 0, 0]);
+    let lines = step_report(&rows);
+    assert_eq!(lines.len(), 16);
+    assert_eq!(lines[0], "link 1 spawn_maya: notyet, steps 0/2");
+    assert_eq!(lines[4], "link 5 loot_drop_on_kill: notyet, steps 0/0");
+    assert_eq!(lines[7], "link 8 equip_gun: notyet, steps 1/5");
+    assert_eq!(lines[9], "link 10 mission_accept: ok, steps 8/8");
+    assert_eq!(lines[14], "links ok 4/14");
+    // 1 + 1/3 + 1/4 + 1/5 + 1/2 + 3 = 5.283; over 14, 37.7%.
+    assert_eq!(lines[15], "step share X = 5.283/14 = 37.7%");
+}
+
+#[test]
+fn a_link_with_no_steps_counts_one_when_ok_and_the_report_changes_no_grading() {
+    let mut rows = share_rows();
+    let before: Vec<String> = rows.iter().map(Row::json).collect();
+    let code = exit_code(&rows);
+    let _ = step_report(&rows);
+    assert_eq!(rows.iter().map(Row::json).collect::<Vec<_>>(), before, "the rows are unchanged");
+    assert_eq!(exit_code(&rows), code);
+    assert_eq!(step_share(&rows[4]), 0.0, "no steps, notyet: 0");
+    rows[4].result = Outcome::Ok;
+    rows[4].stop = None;
+    assert_eq!(step_share(&rows[4]), 1.0, "no steps, ok: 1");
+}
+
+#[test]
+fn past_errors_grading_drops_the_stop_and_the_error_steps() {
+    let mut r = share_row("mission_turn_in", Outcome::NotYet, &["use", "turnin", "tick:0.1", "tick:1"], Some("turnin"));
+    r.grading = Grading::PastErrors;
+    r.error_lines = vec![("turnin".into(), "e".into()), ("tick:1".into(), "e".into())];
+    assert_eq!(step_counts(&r), (2, 6));
+    // Strict grading: only a stop on the last step is dropped.
+    let s = share_row("mission_turn_in", Outcome::NotYet, &["use", "turnin"], Some("turnin"));
+    assert_eq!(step_counts(&s), (1, 6));
+}
