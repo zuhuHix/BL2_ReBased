@@ -29,4 +29,11 @@ check changed.
   - the `Rotation` off the rigid-body path;
   - on it, `LayerAbsent` by default, or the at-rest stand-in (the `Rotation`) under a hub ruling extending #574;
   - tests listed.
+- **Review r1 (#729):**
+  - option B first needs a decoder change. `ow-script` decodes `New` as four operands, so the template is read as a
+    separate statement;
+  - five operands is UNVERIFIED until a structural check against the census passes, and is flagged as a sensitive
+    bytecode-layout change;
+  - then the interpreter rule, which must stay load-free;
+  - the subobject-instancing ruling (#435) is named for which object the template is.
 - **Clean room:** a different lane implements this note.

@@ -15,16 +15,30 @@ note.
 
 **It is neither a missing data layer nor a load.** It has two parts, and both must hold before the pickup's component
 can carry a mesh:
-1. **The VM's `new` drops its template operand.** `WillowWeapon.AttachMeshToPickup` makes the component with
-   `new(Pickup) class'SkeletalMeshComponent'(ThirdPersonMesh)`. The port's `New` (`ow-vm` `interp/eval.rs`,
-   `new_object`) evaluates the outer and the class operands only, and builds the object from the class defaults
-   (`instantiate_from_defaults`). The template operand is never evaluated.
+1. **The bytecode decoder does not give `New` a template operand; then the interpreter drops it.**
+   `WillowWeapon.AttachMeshToPickup` makes the component with
+   `new(Pickup) class'SkeletalMeshComponent'(ThirdPersonMesh)`:
+   - **the decoder first.** `ow-script`'s opcode table (`ops.rs`) decodes `New` as four expressions: outer, name,
+     flags and class. `research/script_disasm.py` decodes it the same way. So the template expression is read as a
+     separate statement: the disassembly of `AttachMeshToPickup` shows `New(...)` at offset 0 and a bare
+     `InstanceVariable(WillowWeapon.ThirdPersonMesh)` statement at offset 19. Option B therefore needs a **decoder
+     change first**: `New` with five operands, checked structurally against the census (sizes add up, jumps land on
+     statements, totals match). **The five-operand count is UNVERIFIED until that check passes.** It is a sensitive
+     bytecode-layout change (rule 4), for the hub to schedule;
+   - **then the interpreter.** The port's `New` (`ow-vm` `interp/eval.rs`, `new_object`) uses only the outer and the
+     class operands, and builds the object from the class defaults (`instantiate_from_defaults`). With a fifth
+     operand, the rule would be: the new object takes the template's property values instead of the class defaults.
+     The body composition's `make_component` (`ow-world` `body_composition.rs`) copies a template's slots this way.
+     What the game does beyond the copy, such as instancing the template's own subobjects, was not read here;
+   - **load-free.** The template rule must load nothing: a template that is a store handle not loaded yet is
+     `NotYet { NotRead }`. `make_component` itself loads its template (`ensure_loaded`), so that part is not to be
+     copied;
+   - **which object is the template.** Whether the weapon's `ThirdPersonMesh` is its own instanced copy or the shared
+     `Default__WillowWeapon.ThirdPersonWeaponMesh` subobject follows the subobject-instancing ruling (#435, decision
+     2026-11-19-44: Off copies a spawned actor's template components, or refuses, never sharing silently). It depends
+     on how the fixture makes the weapon.
 
-   The template is a resident runtime object: the weapon's own copy of `ThirdPersonMesh`. So honouring it is an
-   interpreter rule, not a load: the new object takes the template's property values instead of the class defaults.
-   The body composition's `make_component` (`ow-world` `body_composition.rs`) already copies a template's slots this
-   way. What the game does beyond the copy, such as instancing the template's own subobjects, was not read here. **A
-   VM change, so the hub's call.**
+   **Both are VM changes, so the hub's call.**
 2. **The template has no mesh on links 6 and 7.** The pickup links prepare their gun with `equip_run::prepare` alone.
    They make the weapon, a pawn, a controller and a manager, and never run the weapon's `init`
    (`InitializeInternal`). So `InitMeshes` never sets `ThirdPersonMesh`'s skeletal mesh.
