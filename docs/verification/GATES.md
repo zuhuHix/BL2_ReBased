@@ -2,8 +2,22 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-SLICE-GATE-READING: hub row to come (the runner's own reading). Link 1's first stop depends on whether a UModel
-export is present (`OPENWILLOW_PSK_EXPORTS`).
+**SLICE-GATE-READING (2026-11-25, pc-hummer runner, written by the hub from the runner's own run):** AI-assisted
+(Claude Code, Opus 5.5). Installed Off strict `ow-package --slice-gate`, release build, under the machine lock, on
+integration/2026-11-25-c16 f496577e (tree c98f8ba6, which landed whole as main ce76c5f): 5 ok / 9 NotYet / 0
+errors; the gate printed "links ok 5/14" and "step share X = 5.783/14 = 41.3%". Links 2, 9, 10, 11, 12 ok. Link 1
+stops at `maya:8` "the deferred reattach: the owner's component update: not read from native code or script yet"
+(NATIVE_ATTACH_MESH_TO_PICKUP.md) with and without a UModel export (`OPENWILLOW_PSK_EXPORTS`), because #693
+reads the reference skeleton from the package; before #693 the first stop depended on the export. Links 3, 4, 5,
+13 and 14 are blocked behind link 1. Link 8 stops in `init` at `BuildWeaponMaterial`'s parent-material `NotRead`.
+Logs under ignored `local/runner/c16_*` on pc-hummer. A reading of the host, not parity; `UNVERIFIED` in game.
+
+**PHASE-0R-READER-CHECK (2026-11-25, pc-hummer runner, main a3b548d):** AI-assisted (Claude Code, Opus 5.5).
+C++ configure (`-T version=14.50`) and Release build, `ctest --test-dir build -C Release --output-on-failure`: 100%
+of 173 passed (174 on 2026-11-13: the UE5 host's removal dropped entries and later lanes added others, net one
+fewer). `tools/verify_packages.py --reader build/Release/ow-package.exe`: 9 packages, 3,339/3,339 class bodies
+exact; the same with the Rust reader (`target/release/ow-package.exe`): 3,339/3,339. Logs under ignored
+`local/runner/job22/` on pc-hummer.
 
 **ANALYST-INITMESHES-SETMATERIAL-GLOW (2026-11-25, pc-hummer, docs only, on docs/native-initmeshes-setmaterial-glow
 from main a3b548d3):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITMESHES_MATERIAL_GLOW.md: `SetMaterial` and

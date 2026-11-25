@@ -73,7 +73,7 @@ UNVERIFIED in the running game)
   [reader](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md)). In lane
   FIX-FIRE-TO-HIT (pc-hummer, 2026-11-19), a run of main 86c28d00 plus that lane's branch, `tools/verify_packages.py`
   read the 9 code packages with 3,339 of 3,339 class bodies exact, with the C++ reader and with the Rust reader
-  ([gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). On current main: <JOB 22 row>. The C++ code in `src/` is
+  ([gates](docs/verification/GATES.md), row FIX-FIRE-TO-HIT). On current main: [gates](docs/verification/GATES.md), row PHASE-0R-READER-CHECK: main a3b548d, 2026-11-25, 3,339 of 3,339 class bodies exact with both readers. The C++ code in `src/` is
   still the reference; none of it has retired yet.
 - **The crates:** the 22 crates of [crates/README.md](crates/README.md) hold the ported reader, object model and
   definition store, a script VM in progress (most of the slice's script runs in Reference only,
@@ -399,13 +399,13 @@ check or a decision, not parity, and nothing here is verified in the running gam
 - [x] Port `ow-container` (LZO1X and the chunk container) to Rust; the same
       synthetic fixtures as the C++ tests give the same results
       ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md);
-      <JOB 22 row>).
+      row PHASE-0R-READER-CHECK).
 - [x] Port `ow-package` (header, name, import and export tables, tagged
       properties), reusing the offsets the C++ reader already recovered and
       checked; nothing about 832/46 is re-derived
-      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); <JOB 22 row>).
+      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); row PHASE-0R-READER-CHECK).
 - [x] `tools/verify_packages.py --reader <the Rust reader>` gives the same
-      counts and exact class bodies as the C++ reader (<JOB 22 row>; an earlier
+      counts and exact class bodies as the C++ reader (row PHASE-0R-READER-CHECK; an earlier
       run: 9 packages, 3,339 of 3,339 class bodies exact with both readers, lane
       FIX-FIRE-TO-HIT, main 86c28d00 plus that lane's branch, pc-hummer,
       2026-11-19; [gates](docs/verification/GATES.md)). Only then does the
@@ -501,11 +501,11 @@ engine route picked from measurements.
       and wgpu and winit joined `ow-host` on 2026-11-16.
 - [x] `ow-container` ported; same results as the C++ code on the same
       synthetic fixtures ([decision](docs/decisions/2026-11/2026-11-15-01-rust-container-decoder-own-lzo1x-full-and-partial-forms.md);
-      <JOB 22 row>)
+      row PHASE-0R-READER-CHECK)
 - [x] `ow-package` ported; same results on the same synthetic fixtures
-      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); <JOB 22 row>)
+      ([decision](docs/decisions/2026-11/2026-11-15-03-rust-package-reader-contract-as-shipped.md); row PHASE-0R-READER-CHECK)
 - [x] `tools/verify_packages.py --reader` on the Rust reader: same counts and
-      exact class bodies as the C++ reader (<JOB 22 row>; an earlier run: 3,339 of
+      exact class bodies as the C++ reader (row PHASE-0R-READER-CHECK; an earlier run: 3,339 of
       3,339, lane FIX-FIRE-TO-HIT, main 86c28d00 plus that lane's branch,
       pc-hummer, 2026-11-19; [gates](docs/verification/GATES.md))
 - [x] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox, the
@@ -519,7 +519,7 @@ engine route picked from measurements.
 recorded, and the maintainer has picked the route.
 
 *Gate: met 2026-11-25 by its wording; a reader check and a decision, not parity; the VM and rules carry into Phases
-2-4* (design agent, maintainer-delegated; [decision](docs/decisions/2026-11/2026-11-25-NNN-phase-0r-gate-read-as-met.md)).
+2-4* (design agent, maintainer-delegated; [decision](docs/decisions/2026-11/2026-11-25-43-phase-0r-gate-read-as-met.md)).
 It is not a verified result in the running game.
 
 ---
