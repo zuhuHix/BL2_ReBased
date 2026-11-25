@@ -261,8 +261,28 @@ fn gearbox() -> Vec<u8> {
     native(&mut t, definition, "ServerStarted", &[smi()], None);
     native(&mut t, definition, "ClientStarted", &[smi(), D("Struct", "SMData", 0, vec![data])], Some(("Float", vec![0])));
     native(&mut t, definition, "ClientFinished", &[smi(), D("Bool", "bInterrupted", 0, vec![0])], None);
-    t.class("ToyMove", definition);
+    let toy_move = t.class("ToyMove", definition);
     t.class("ToyOtherMove", definition);
+    // Queue's residency tests (review r1 of #682): `ToyHolder`, loaded, whose `Move` and `Actor` name two exports the
+    // store leaves as lazy handles, a `ToyMove` and an `Engine.Pawn`.
+    let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
+    let bare = |t: &mut ScriptToy| {
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend_from_slice(&t.none);
+        payload
+    };
+    let payload = bare(&mut t);
+    let lazy_move = t.p.add_export(toy_move, "ToyLazyMove", payload);
+    let payload = bare(&mut t);
+    let lazy_pawn = t.p.add_export(pawn, "ToyLazyPawn", payload);
+    let holder = t.class("ToyHolder", object);
+    t.prop("Object", holder, "Move", 0, definition);
+    t.prop("Object", holder, "Actor", 0, actor);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(t.p.object_tag("Move", lazy_move));
+    payload.extend(t.p.object_tag("Actor", lazy_pawn));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(holder, "Holder", payload);
     t.class("AnimNodeSpecialMoveBlend", blend_base);
     t.build()
 }
@@ -1154,31 +1174,31 @@ fn queue_with_nothing_current_on_the_authority_meets_play_s_refusal() {
     assert!(what.contains(RECORD), "Play's own record: {what}");
 }
 
-/// Test 6, the delegation: nothing current, a component `Owner` at authority and an owner interface (an autonomous
-/// proxy, a definition with `bClientHasAuthority`) whose `Play` starts. Play's path runs with `Data` None: the started
-/// move's `Data` is None though the caller gave one, the other fields as given; Play empties the queue.
+/// Test 6b, the delegation seam: the arguments Queue hands to Play's path are the five as given (an omitted one
+/// omitted) and `Data` None, even when the caller passed a `Data` object.
 #[test]
-fn queue_with_nothing_current_delegates_to_play_with_data_dropped() {
+fn queue_hands_play_the_five_arguments_and_no_data() {
     let mut x = fx(ParityMode::Off);
-    let (interface_owner, component) = x.owner(AUTONOMOUS);
-    let owner = x.obj("Engine.Pawn");
-    x.set(owner, "Role", Value::Byte(AUTHORITY));
-    x.set(component, "Owner", Value::Object(Some(owner)));
-    let waiting = x.definition("GearboxFramework.ToyOtherMove", false);
-    let mut entry = x.get(component, "CurrentSMData");
-    entry = with_field(&x.world.vm, entry, "SMD", Value::Object(Some(waiting)), "test").unwrap();
-    x.set(component, "SMDQueue", Value::array(vec![entry]));
-    let d = x.definition("GearboxFramework.ToyMove", true);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let d = x.definition("GearboxFramework.ToyMove", false);
     let data = x.obj("Engine.Actor");
-    let args = x.six(d, interface_owner, data);
-    assert_eq!(x.queue(component, args).unwrap(), Value::None, "Play's duration is dropped");
-    assert_eq!(x.current(component, "SMD"), Value::Object(Some(d)), "Play started the move");
-    assert_eq!(x.current(component, "Data"), Value::Object(None), "Data passed as None");
-    assert_eq!(x.current(component, "PlayRateScale"), Value::Float(0.5));
-    assert_eq!(x.current(component, "Duration"), Value::Float(3.0));
-    assert_eq!(x.current(component, "CallbackObject"), Value::Object(Some(interface_owner)));
-    assert!(x.queue_entries(component).is_empty(), "Play's start empties the queue");
-    assert!(x.calls().iter().any(|c| c.starts_with("ClientStarted on ToyMove")), "{:?}", x.calls());
+    let given = x.six(d, pawn, data);
+    for supplied in [6, 2] {
+        let args: Vec<ow_vm::api::Arg> =
+            given.iter().take(supplied).map(|v| ow_vm::api::Arg::new(v.clone(), false, true)).collect();
+        let vm = x.vm();
+        let f = vm.find_function(PATHS[7]).unwrap();
+        let c = NativeCall::new(vm, f, Some(component), args);
+        let handed = play_args(&c).unwrap();
+        assert_eq!(handed.len(), 6, "{supplied}");
+        for (i, a) in handed.iter().enumerate().take(5) {
+            assert_eq!(a.supplied, i < supplied, "{supplied}: argument {i}'s presence");
+            if i < supplied {
+                assert_eq!(a.value, given[i], "{supplied}: argument {i} as given");
+            }
+        }
+        assert!(handed[5].supplied && handed[5].value == Value::Object(None), "{supplied}: Data None");
+    }
 }
 
 /// Test 7: `CurrentSMData` not a struct, or `SMDQueue` of another element type: a `VmError::Script` naming the field,
@@ -1209,10 +1229,51 @@ fn queue_on_misshapen_fields_is_a_script_error() {
     }
 }
 
-/// The hub's ask on #680 (loaded-only reads): a definition that is not resident (here a stand-in with no slots) is
-/// refused before anything reads it, nothing loaded or written.
+/// The lazy handles `ToyHolder` names: (a `ToyMove`, an `Engine.Pawn`), both unloaded.
+fn lazy(x: &mut Fx) -> (ObjRef, ObjRef) {
+    let path = ow_core::ObjectPath::parse("GearboxFramework.Holder").unwrap();
+    let vm = x.vm();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let (m, a) = (x.get(holder, "Move"), x.get(holder, "Actor"));
+    let (Value::Object(Some(m)), Value::Object(Some(a))) = (m, a) else { panic!("the holder names both") };
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, m) && x.world.vm.defs.is_unloaded(&x.world.vm.space, a));
+    (m, a)
+}
+
+/// Test 2a: the component's `Owner`, the `SMI` actor, or `NewSMD` as a lazy handle (one case each): the residency
+/// `NotRead`, before anything reads it; nothing loaded or written, and the handle still unloaded.
 #[test]
-fn queue_refuses_an_unloaded_definition_without_loading_it() {
+fn queue_refuses_a_lazy_owner_actor_or_definition_without_loading_it() {
+    for case in ["Owner", "SMI", "NewSMD"] {
+        let mut x = fx(ParityMode::Off);
+        let (pawn, component) = x.owner(AUTHORITY);
+        let (lazy_move, lazy_pawn) = lazy(&mut x);
+        let d = x.definition("GearboxFramework.ToyMove", false);
+        let mut args = x.six(d, pawn, pawn);
+        let handle = match case {
+            "Owner" => {
+                x.set(component, "Owner", Value::Object(Some(lazy_pawn)));
+                lazy_pawn
+            }
+            "SMI" => {
+                x.set(component, "SMI", Value::Interface(Some(lazy_pawn)));
+                lazy_pawn
+            }
+            _ => {
+                args[0] = Value::Object(Some(lazy_move));
+                lazy_move
+            }
+        };
+        let (missing, what) = queue_refused(&mut x, component, args);
+        assert_eq!(missing, Missing::NotRead, "{case}");
+        assert!(what.starts_with(&format!("{QUEUE_NOT_LOADED}: ")) && what.ends_with(&format!("(see {QUEUE_RECORD})")), "{case}: {what}");
+        assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, handle), "{case}: still unloaded");
+    }
+}
+
+/// Test 2a's stand-in case: a definition that is a stand-in with no slots is refused the same way.
+#[test]
+fn queue_refuses_a_stand_in_definition() {
     let mut x = fx(ParityMode::Off);
     let (pawn, component) = x.owner(AUTHORITY);
     let move_class = x.vm().find_class("GearboxFramework.ToyMove").unwrap();
@@ -1224,6 +1285,21 @@ fn queue_refuses_an_unloaded_definition_without_loading_it() {
     let args = x.six(cold, pawn, pawn);
     let (missing, what) = queue_refused(&mut x, component, args);
     assert_eq!(missing, Missing::NotRead);
-    assert!(what.contains("the definition") && what.contains("is not loaded"), "{what}");
-    assert!(x.world.vm.space.heap.get(cold).unwrap().slots.is_empty(), "still a stand-in with no slots");
+    assert!(what.contains(QUEUE_NOT_LOADED), "{what}");
+}
+
+/// Test 2b: the component's `Owner` and the `SMI` actor are two resident actors, both at authority: the mismatch
+/// `NotRead`, nothing written.
+#[test]
+fn queue_refuses_an_owner_that_is_not_the_interface_s_actor() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let other = x.obj("Engine.Pawn");
+    x.set(other, "Role", Value::Byte(AUTHORITY));
+    x.set(component, "Owner", Value::Object(Some(other)));
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let args = x.six(d, pawn, pawn);
+    let (missing, what) = queue_refused(&mut x, component, args);
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.contains(QUEUE_OWNER_MISMATCH), "{what}");
 }
