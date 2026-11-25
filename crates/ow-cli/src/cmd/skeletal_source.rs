@@ -94,18 +94,28 @@ impl SkeletonSource for PskExports {
     /// structural oracles, UNVERIFIED). Not a UModel export: the count needs no `.psk`.
     fn lod_count_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
         let typer = ow_package::schema::SchemaTyper::new_empty();
-        ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer)
-            .map(|l| Some(l.prefix.lod_count))
-            .map_err(|e| e.to_string())
+        known(ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer))
+            .map(|l| l.map(|l| l.prefix.lod_count))
     }
 
     /// Each LOD model's trailing count from the same full read (`ow_assets::skeletal_lods::read_lod_models`, fitted,
     /// UNVERIFIED). A read that succeeds has every count at zero; a non-zero one is refused by the reader.
     fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
         let typer = ow_package::schema::SchemaTyper::new_empty();
-        ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer)
-            .map(|l| Some(l.models.iter().map(|m| m.trailing).collect()))
-            .map_err(|e| e.to_string())
+        known(ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer))
+            .map(|l| l.map(|l| l.models.iter().map(|m| m.trailing).collect()))
+    }
+}
+
+/// A full read as the layer takes it (lane IMPL-ROW15, review r1 of #678, item 1). A non-zero trailing count
+/// ([`LodCountError::TrailingArray`]) is data the reader does not decode, not a broken export, so the source answers
+/// that it does not know (`Ok(None)`): `SetSkeletalMesh`'s row 15 then refuses `LayerAbsent`, write-free, instead of
+/// a script error. Every other refusal of the reader stays an error, with its text.
+fn known<T>(read: Result<T, ow_assets::skeletal_lods::LodCountError>) -> Result<Option<T>, String> {
+    match read {
+        Ok(v) => Ok(Some(v)),
+        Err(ow_assets::skeletal_lods::LodCountError::TrailingArray { .. }) => Ok(None),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -116,6 +126,16 @@ pub const EXPORT_PROPERTY_OFFSET: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review r1 of #678, item 1: a non-zero trailing count is "not known", typed, and other refusals stay errors.
+    #[test]
+    fn a_trailing_array_is_not_known_and_other_refusals_stay_errors() {
+        use ow_assets::skeletal_lods::LodCountError;
+        assert_eq!(known(Ok::<_, LodCountError>(3)), Ok(Some(3)));
+        assert_eq!(known::<usize>(Err(LodCountError::TrailingArray { lod: 0, count: 1 })), Ok(None));
+        let other = LodCountError::Leftover { bytes: 2 };
+        assert_eq!(known::<usize>(Err(other.clone())), Err(other.to_string()));
+    }
 
     /// The installed probe (needs the game and a UModel export, so ignored): `OPENWILLOW_BL2` the install,
     /// `OW_SKELETAL_EXPORTS` the export root, `OW_SKELETAL_MESH` the mesh's object path. It loads the mesh through the
