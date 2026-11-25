@@ -402,3 +402,61 @@ fn a_declared_only_target_stays_cold() {
     assert_eq!(marks(&x.vm), start, "nothing moved");
     assert_eq!(cold(&x.vm), (false, false), "layout and code stay cold");
 }
+
+/// A VM over Engine, GearboxFramework and `willow` (no class warmed), with a `GearboxGlobals` object whose
+/// `TheGlobalsDefinition` is None (lane COLD-LOAD-FIXES, review r1 of #708).
+fn bare_gearbox_globals(willow: &[u8]) -> (Vm, PathBuf, ObjRef) {
+    let dir = std::env::temp_dir().join(format!(
+        "ow-inventory-globals-bare-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (e, g) = (engine(), gearbox());
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("Engine.upk", e.as_slice()), ("GearboxFramework.upk", g.as_slice()), ("WillowGame.upk", willow)],
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let globals = make(&mut vm, "GearboxFramework.GearboxGlobals");
+    (vm, dir, globals)
+}
+
+/// Review r1 of #708: `globals_definition_resident` settles the definition class first, as `globals_definition`'s
+/// `find_class` did. A package set with no `WillowGame.GlobalsDefinition` is the hard "class not found" error, ahead of
+/// the None holder's first-load answer; a class the packages hold but the class table does not (cold) is the named
+/// `NotYet { NotRead }`. Neither loads class code.
+#[test]
+fn the_resident_definition_lookup_keeps_the_missing_class_error() {
+    let other = {
+        let mut t = ScriptToy::with_imports(&IMPORTS);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let object = t.p.add_import("Core", "Class", engine, "Object");
+        t.class("ToyOther", object);
+        t.build()
+    };
+    let (mut vm, dir, globals) = bare_gearbox_globals(&other);
+    let before = vm.class_code_loads();
+    match globals_definition_resident(&mut vm, globals, "test").unwrap_err() {
+        VmError::NotYet(n) => panic!("a missing class is not a NotYet: {n}"),
+        e => assert!(e.to_string().contains("class not found: WillowGame.GlobalsDefinition"), "{e}"),
+    }
+    assert_eq!(vm.class_code_loads(), before, "no class code loaded");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let (mut vm, dir, globals) = bare_gearbox_globals(&willow_game());
+    assert!(vm.space.classes.by_path(GLOBALS_DEFINITION_CLASS).is_none(), "GlobalsDefinition starts cold");
+    let before = vm.class_code_loads();
+    match globals_definition_resident(&mut vm, globals, "test").unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.contains("the class WillowGame.GlobalsDefinition, not loaded"), "{n}");
+        }
+        e => panic!("{e}"),
+    }
+    assert_eq!(vm.class_code_loads(), before, "no class code loaded");
+    let _ = std::fs::remove_dir_all(&dir);
+}
