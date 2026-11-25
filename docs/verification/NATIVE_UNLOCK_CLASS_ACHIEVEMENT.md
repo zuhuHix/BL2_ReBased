@@ -83,7 +83,10 @@ script's increment; that value was not observed.
 **Preflight** (write-free, load-free, RNG-free; the first failure is the answer):
 1. **The receiver** is resident. An unloaded handle is `NotRead`, "UnlockPlayerClassAchievementIfConditionsMet: the
    controller <path> is not loaded (a load is a write)".
-2. **The arguments:** a byte, an int and two bools. Another shape is a `VmError::Script`.
+2. **The arguments:** a byte, an int and two bools. An omitted argument, or one that arrives as `Value::None` (how
+   the VM passes an omitted optional parameter; link 9's caller omits `bCanBeLess`), is its type's zero: 0, or
+   false. This is the sibling port's convention (`conditions` in `globals/achievement.rs`, after `ow-world`'s
+   `arg_bool`). Another shape is a `VmError::Script`.
 3. **The class field:**
    - the receiver's class must declare `PlayerClass` as an object field (`VmError::Script` otherwise);
    - None, or an object whose class is not `WillowGame.PlayerClassDefinition` or a child of it: answer **false**, no
@@ -95,14 +98,19 @@ script's increment; that value was not observed.
 5. **The selection** of section 2, read-only.
 6. **Nothing selected:** answer **false**, nothing written.
 7. **Something selected:** before the first event, the receiver's class must resolve `ClientUnlockAchievement` by name
-   without a load. Reuse the sibling port's lookup and its refusals (`globals/achievement.rs`). Then call it once per
-   kept achievement, in order, and answer **true**. A refusal from inside the event, after an earlier event has run,
-   is marked "stopped after partial writes" through #518's counters, as the sibling port does.
+   without a load: `Vm::find_loaded_method` with the receiver's current class and state, not `find_method` (which
+   loads class code, so the sibling port's lookup is not write-free here). Code on the chain that is not loaded
+   yet is `NotRead`, "UnlockPlayerClassAchievementIfConditionsMet: <class>'s code is not loaded (a load is a
+   write)"; resident code that declares no `ClientUnlockAchievement` is its own refusal (`VmError::Script`, "<class>
+   declares no ClientUnlockAchievement"). Then call it once per kept achievement, in order, and answer **true**.
+8. **Partial writes:** the trigger is the sibling's. Take #518's counters at the native's entry. An error from the
+   event calls is marked "stopped after partial writes" only when the counters moved since that entry: the first
+   event can write and then refuse, and an earlier event can finish without writing.
 
-**Tests** (synthetic classes built with `package()` / `tag()`, every value invented; each refusal with #518's three
-counters and the name table's length unchanged):
+**Tests** (synthetic classes built with `package()` / `tag()`, every value invented; each **preflight** refusal with
+#518's three counters and the name table's length unchanged):
 1. link 9's shape: one entry of type 2 with threshold 100; the call (2, 1, true, false) answers false, no event, no
-   write;
+   write; the same call with `bCanBeLess` omitted, and with it as `Value::None`, answers the same;
 2. the same entry with a count of 100, and of 150: true, with one event carrying the entry's achievement;
 3. `bCanBeLess` set with a count below the threshold: true. Neither flag set and a count different from the threshold:
    false;
@@ -111,8 +119,12 @@ counters and the name table's length unchanged):
 6. the class field None, and an object of another class: false, nothing written;
 7. an unloaded receiver, and an unloaded player class: their refusals, write-free;
 8. a malformed array or argument: `VmError::Script`, write-free;
-9. registration: keep-existing in both packs, either order, one function; under `ParityMode::Reference` nothing new is
-   bound.
+9. the event lookup: a receiver whose class code is not loaded gives `NotRead`, and resident code with no
+   `ClientUnlockAchievement` its own refusal; both before any event, with the counters and the name table unchanged;
+10. partial writes, with a synthetic `ClientUnlockAchievement`: an event that writes and then refuses is marked
+    "stopped after partial writes"; an event that refuses before writing anything is not marked;
+11. registration: keep-existing in both packs, either order, one function; under `ParityMode::Reference` nothing new
+    is bound.
 
 ## Open questions
 
