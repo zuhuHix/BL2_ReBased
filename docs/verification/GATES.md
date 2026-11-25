@@ -5,11 +5,12 @@ Update this file in the commit that changes a number. Paste real output in repor
 **IMPL-TRACE-HASH-ADMISSION (2026-11-25, zuhuPC Linux, on main d3c7a13):** AI-assisted (Claude Code, Opus 5.5).
 `Actor.Trace` in Off leaves out primitives the collision hash cannot admit (NATIVE_ACTOR_TRACE.md section 5, #659).
 `cargo test --workspace` (with #661's path fix picked locally for the run only): 3,365 passed / 4 failed (the
-expected Linux N1 float-table tests) / 52 ignored; `crate_edges_test.py` OK. Installed `--slice-gate`: not run on
-this base (no install yet). An earlier probe of the same change (2026-11-20, pc-hummer, a local merge never pushed,
-with #650, #655 and #616) gave 4 ok / 9 NotYet / 1 error, link 9's `cast` past `Actor.Trace` and stopping with an
-error at the unbound `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet(byte,int,bool,bool)`; it
-was not re-measured here. UNVERIFIED in game.
+expected Linux N1 float-table tests) / 52 ignored; `crate_edges_test.py` OK. Not run: `ctest` and
+`verify_packages.py --reader` (no cmake on this machine), and the installed `--slice-gate` (no install yet). The only
+slice reading is historical and not of this code: a 2026-11-20 probe on pc-hummer (a local merge never pushed, with
+#650, #655 and #616) with a local stand-in of the skip that lacked the terrain exception gave 4 ok / 9 NotYet /
+1 error, link 9's `cast` past `Actor.Trace` and stopping with an error at the unbound
+`WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet(byte,int,bool,bool)`. UNVERIFIED in game.
 
 **ANALYST-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-20, pc-hummer, docs only, on docs/native-unlock-class-achievement-2,
 rebased onto main d3c7a13):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md, link 9's next

@@ -408,15 +408,16 @@ fn answer(vm: &Vm, source: ObjRef, q: &Query) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The bool `name` on `o` (NATIVE_ACTOR_TRACE.md section 5): its class must declare it as a bool, else a
-/// `VmError::Script` naming the class. Read-only, through lookup-only names.
+/// The bool `name` on `o` (NATIVE_ACTOR_TRACE.md section 5): its class must declare it as one bool (not an int, not a
+/// static bool array), else a `VmError::Script` naming the class. Read-only, through lookup-only names.
 fn collide_flag(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, VmError> {
     let class = space.heap.get(o)?.class;
     let path = || space.classes.layout(class).path().to_string();
     let Some(p) = space.prop(class, name) else {
         return Err(script(format!("{} declares no {name}", path())));
     };
-    if !matches!(space.classes.decl(p).map(|d| &d.kind), Some(ow_object::layout::PropKind::Bool)) {
+    // A bool, and one bool: a static bool array (`array_dim` above 1) is another shape (review r1 of #663).
+    if !space.classes.decl(p).is_some_and(|d| matches!(d.kind, ow_object::layout::PropKind::Bool) && d.array_dim <= 1) {
         return Err(script(format!("{} declares {name} as something other than a bool", path())));
     }
     match space.read(o, ow_object::ids::PropAddr::scalar(p))? {
