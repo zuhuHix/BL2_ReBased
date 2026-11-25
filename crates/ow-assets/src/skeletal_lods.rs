@@ -419,10 +419,11 @@ fn unpack(b: u8) -> f32 {
     f32::from(b) / 127.5 - 1.0
 }
 
-/// The three packed components at `v[at..at + 3]`, and their length.
+/// The three packed components at `v[at..at + 3]`, and their squared length (compared against squared bounds, so
+/// no root is taken: rule N3 keeps float functions in `ow_core::num`).
 fn packed_vector(v: &[u8], at: usize) -> ([f32; 3], f32) {
     let x = [unpack(v[at]), unpack(v[at + 1]), unpack(v[at + 2])];
-    (x, (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt())
+    (x, x[0] * x[0] + x[1] * x[1] + x[2] * x[2])
 }
 
 /// A half-precision float's bits hold a finite number (its exponent bits are not all set).
@@ -435,11 +436,13 @@ fn finite_half(bits: u16) -> bool {
 fn check_vertex(v: &[u8], lod: usize, map: usize, uv_sets: usize, prefix: &SkeletalLods) -> Result<(), LodCountError> {
     // Bytes 0-7: two packed vectors (by fit, the tangent basis' X and Z), each unit length or a zero vector, at right
     // angles; byte 3 is 127 or 128, byte 7 (by fit, the basis' sign) 0 or 255.
-    let (x, x_len) = packed_vector(v, 0);
-    let (z, z_len) = packed_vector(v, 4);
-    for (len, field) in [(x_len, "vertex packed vector X"), (z_len, "vertex packed vector Z")] {
-        if !(len < PACKED_ZERO || (len - 1.0).abs() <= PACKED_UNIT) {
-            return Err(misfit(lod, field, (len * 1000.0) as i64));
+    let (x, x_square) = packed_vector(v, 0);
+    let (z, z_square) = packed_vector(v, 4);
+    let (unit_low, unit_high) = ((1.0 - PACKED_UNIT) * (1.0 - PACKED_UNIT), (1.0 + PACKED_UNIT) * (1.0 + PACKED_UNIT));
+    for (square, field) in [(x_square, "vertex packed vector X"), (z_square, "vertex packed vector Z")] {
+        let zero = square < PACKED_ZERO * PACKED_ZERO;
+        if !(zero || (unit_low..=unit_high).contains(&square)) {
+            return Err(misfit(lod, field, (square * 1000.0) as i64));
         }
     }
     let dot = x[0] * z[0] + x[1] * z[1] + x[2] * z[2];
