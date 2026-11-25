@@ -93,6 +93,15 @@ fn engine() -> Vec<u8> {
     // NATIVE_ACTOR_TRACE.md section 5, test 8: a primitive class declaring `CollideActors` as an int.
     let int_collide = t.class("ToyIntCollidePrimitive", primitive);
     t.prop("Int", int_collide, "CollideActors", 0, 0);
+    // Review r1 of #663: a primitive class declaring `CollideActors` as a static `bool[2]`.
+    let pair_collide = t.class("ToyPairCollidePrimitive", primitive);
+    let mut pair = ow_package::testkit::Export::new(
+        t.import("BoolProperty"),
+        "CollideActors",
+        ow_package::testkit::reflect::property_payload(&t.none, 2, 0, &[]),
+    );
+    pair.outer = pair_collide;
+    t.p.add_export_with(pair);
     let light = t.class("ToyLightComponent", object);
     // A field of the look-alike's type, so the fixture knows the struct.
     t.prop("Struct", light, "ToyShape", 0, lookalike);
@@ -141,6 +150,8 @@ struct Toy {
     level: Cell<Option<Sweep>>,
     bounds: RefCell<DetMap<ObjRef, Bounds>>,
     asked: RefCell<Vec<Asked>>,
+    /// Every primitive `actor_bounds` was asked about, in order (review r1 of #663).
+    bounds_asked: RefCell<Vec<ObjRef>>,
 }
 
 impl SpawnCollision for Toy {
@@ -156,6 +167,7 @@ impl SpawnCollision for Toy {
         Ok(self.level.get().unwrap_or(Sweep::Clear))
     }
     fn actor_bounds(&self, _space: &ObjectSpace, primitive: ObjRef) -> Result<Option<Bounds>, VmError> {
+        self.bounds_asked.borrow_mut().push(primitive);
         Ok(self.bounds.borrow().get(&primitive).copied())
     }
 }
@@ -389,6 +401,14 @@ fn own_primitive(x: &Fx, t: ObjRef) -> ObjRef {
     own
 }
 
+/// Sets both collide flags on the source `t` and its own primitive, so that only the source exclusions keep a meeting
+/// primitive of the source out of T7 (review r1 of #663: with the flags clear, the hash skip alone would give the miss).
+fn collide_source(x: &mut Fx, t: ObjRef) {
+    let own = own_primitive(x, t);
+    x.set(t, "bCollideActors", Value::Bool(true));
+    x.set(own, "CollideActors", Value::Bool(true));
+}
+
 const MEETS: Bounds = Bounds { min: [-5.0, -5.0, -150.0], max: [5.0, 5.0, -50.0] };
 const FAR: Bounds = Bounds { min: [500.0, 500.0, 0.0], max: [510.0, 510.0, 10.0] };
 
@@ -401,9 +421,19 @@ fn a_meeting_primitive_is_t7_and_the_source_is_left_out() {
         let (mut x, toy) = fx(Some(Toy::default()));
         let toy = toy.unwrap();
         let t = x.target();
-        toy.bounds.borrow_mut().insert(own_primitive(&x, t), MEETS);
+        collide_source(&mut x, t);
+        let own = own_primitive(&x, t);
+        toy.bounds.borrow_mut().insert(own, MEETS);
         let args = x.link9([0.0; 3]);
         assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "only the source's own primitive");
+        assert!(!toy.bounds_asked.borrow().contains(&own), "the source's own primitive is left out before its bounds");
+        // Its `Owner` naming another colliding actor: only the walk's own skip of the source actor keeps it out.
+        let other = x.live("Engine.Actor", "ToyHolder");
+        x.set(other, "bCollideActors", Value::Bool(true));
+        x.set(own, "Owner", Value::Object(Some(other)));
+        let args = x.link9([0.0; 3]);
+        assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "the source actor's walk is skipped");
+        assert!(!toy.bounds_asked.borrow().contains(&own), "still unasked");
         let (_, near) = x.obstacle("Engine.Actor", "Crate");
         toy.bounds.borrow_mut().insert(near, MEETS);
         let mut args = x.link9([0.0; 3]);
@@ -421,11 +451,13 @@ fn an_owned_primitive_is_left_out_and_a_terrain_names_its_handling() {
     let (mut x, toy) = fx(Some(Toy::default()));
     let toy = toy.unwrap();
     let t = x.target();
+    collide_source(&mut x, t);
     let (_, carried) = x.obstacle("Engine.Actor", "Carrier");
     x.set(carried, "Owner", Value::Object(Some(t)));
     toy.bounds.borrow_mut().insert(carried, MEETS);
     let args = x.link9([0.0; 3]);
     assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None));
+    assert!(!toy.bounds_asked.borrow().contains(&carried), "a primitive the source owns is left out before its bounds");
     let (_, ground) = x.obstacle("Engine.Terrain", "Ground");
     toy.bounds.borrow_mut().insert(ground, MEETS);
     let args = x.link9([0.0; 3]);
@@ -703,7 +735,8 @@ fn a_vector_look_alike_is_a_script_error() {
 #[test]
 fn a_primitive_the_hash_cannot_admit_is_left_out_before_its_bounds() {
     for (primitive_flag, owner_flag) in [(false, true), (true, false), (false, false)] {
-        let (mut x, _toy) = fx(Some(Toy::default()));
+        let (mut x, toy) = fx(Some(Toy::default()));
+        let toy = toy.unwrap();
         let t = x.target();
         let (a, p) = x.obstacle("Engine.Actor", "NoBounds");
         x.set(p, "CollideActors", Value::Bool(primitive_flag));
@@ -713,6 +746,7 @@ fn a_primitive_the_hash_cannot_admit_is_left_out_before_its_bounds() {
         let (ret, location, _) = x.call(Some(t), args).unwrap();
         assert_eq!((ret, location), (Value::Object(None), x.vector([0.0; 3])), "({primitive_flag}, {owner_flag})");
         assert_eq!(x.counters(), before, "({primitive_flag}, {owner_flag})");
+        assert!(!toy.bounds_asked.borrow().contains(&p), "({primitive_flag}, {owner_flag}): its bounds never asked");
     }
 }
 
@@ -732,22 +766,28 @@ fn an_admissible_primitive_keeps_t5_and_t7() {
     x.refuses(t, args, not_read(), &what);
 }
 
-/// NATIVE_ACTOR_TRACE.md section 5, test 8: a primitive class declaring `CollideActors` as an int is a
-/// `VmError::Script` naming the class, with nothing written, loaded, drawn or interned.
+/// NATIVE_ACTOR_TRACE.md section 5, test 8: a primitive class declaring `CollideActors` as an int, or as a static
+/// `bool[2]`, is a `VmError::Script` naming the class, with nothing written, loaded, drawn or interned.
 #[test]
 fn a_collide_flag_of_another_kind_is_a_script_error() {
-    let (mut x, _toy) = fx(Some(Toy::default()));
-    let t = x.target();
-    x.obstacle_of("Engine.Actor", "Engine.ToyIntCollidePrimitive", "Odd");
-    let before = x.counters();
-    let args = x.link9([0.0; 3]);
-    match x.call(Some(t), args) {
-        Err(VmError::Script { message, .. }) => {
-            assert!(message.contains("ToyIntCollidePrimitive") && message.contains("CollideActors"), "{message}")
+    // An int, and (review r1 of #663) a static `bool[2]`.
+    for class in ["ToyIntCollidePrimitive", "ToyPairCollidePrimitive"] {
+        let (mut x, toy) = fx(Some(Toy::default()));
+        let toy = toy.unwrap();
+        let t = x.target();
+        let (_, p) = x.obstacle_of("Engine.Actor", &format!("Engine.{class}"), "Odd");
+        toy.bounds.borrow_mut().insert(p, MEETS);
+        let before = x.counters();
+        let args = x.link9([0.0; 3]);
+        match x.call(Some(t), args) {
+            Err(VmError::Script { message, .. }) => {
+                assert!(message.contains(class) && message.contains("CollideActors"), "{message}")
+            }
+            other => panic!("{class}: expected a script error, got {other:?}"),
         }
-        other => panic!("expected a script error, got {other:?}"),
+        assert_eq!(x.counters(), before, "{class}");
+        assert!(toy.bounds_asked.borrow().is_empty(), "{class}: refused before its bounds");
     }
-    assert_eq!(x.counters(), before);
 }
 
 /// NATIVE_ACTOR_TRACE.md section 5, tests 3 and 5 (#659 r1): a primitive with the collide flags clear whose bounds
@@ -766,6 +806,15 @@ fn a_clear_flag_wins_over_meeting_bounds_but_not_for_terrain() {
     let args = x.link9([0.0; 3]);
     assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "meeting bounds, flags clear: a miss");
     assert_eq!(x.counters(), before);
+    assert!(!toy.bounds_asked.borrow().contains(&p), "a clear flag: its bounds never asked");
+    // Each flag clear on its own, with meeting bounds: a miss too, the bounds still unasked.
+    for (primitive_flag, owner_flag) in [(false, true), (true, false)] {
+        x.set(p, "CollideActors", Value::Bool(primitive_flag));
+        x.set(a, "bCollideActors", Value::Bool(owner_flag));
+        let args = x.link9([0.0; 3]);
+        assert_eq!(x.call(Some(t), args).unwrap().0, Value::Object(None), "({primitive_flag}, {owner_flag})");
+        assert!(!toy.bounds_asked.borrow().contains(&p), "({primitive_flag}, {owner_flag}): its bounds never asked");
+    }
     let (ground, gp) = x.obstacle("Engine.Terrain", "Ground");
     x.set(gp, "CollideActors", Value::Bool(false));
     x.set(ground, "bCollideActors", Value::Bool(false));
@@ -776,6 +825,8 @@ fn a_clear_flag_wins_over_meeting_bounds_but_not_for_terrain() {
         crate::trace_filter::TERRAIN_HANDLING
     );
     x.refuses(t, args, not_read(), &what);
+    assert!(toy.bounds_asked.borrow().contains(&gp), "a terrain's primitive goes on to its bounds");
+    assert!(!toy.bounds_asked.borrow().contains(&p), "the skipped primitive's bounds were still never asked");
 }
 
 /// NATIVE_ACTOR_TRACE.md section 5, test 4, order (b): a primitive with `CollideActors` clear whose owner is an
