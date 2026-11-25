@@ -37,6 +37,20 @@
 //! `NotYet { NotRead }` naming it, and so is a read class without `DefinitionData` or without the selected field. It
 //! never writes, so no refusal can follow a write. `ComputeMonetaryValue` keeps its own choice (the first field its
 //! `DefinitionData` declares), unchanged.
+//!
+//! **`GetInventorySpaceRequirement()`** (lane IMPL-GETINVENTORYSPACEREQUIREMENT, decision 2026-11-25-NNN, from
+//! NATIVE_INVENTORY_EQUIP.md's "Inventory space" row alone; UNVERIFIED in the running game). The inventory "asks the
+//! definition" ([`inventory_definition_of`], so every refusal of `GetInventoryDefinition` comes first), and the
+//! answer goes by that definition's exact class, as the row reads it:
+//! - `WillowGame.WeaponTypeDefinition` and `WillowGame.EquipableItemDefinition` "use the default": **1**;
+//! - `WillowGame.MissionItemDefinition`: **0**;
+//! - `WillowGame.UsableItemDefinition`: 0 when either of "its two low flag bits" is set, else 1. The row does not name
+//!   the field that holds them, so this is a `NotYet { NotRead }` naming the gap;
+//! - no definition, or any other class: `NotYet { NotRead }`. The row gives the base's default (1) but does not say
+//!   which other classes override it, so a subclass of a read class (an artifact, a shield, a class mod) is not
+//!   assumed to inherit it.
+//!
+//! Reads only: nothing is written, loaded or drawn. Reference: unbound, as for the other four.
 
 use std::rc::Rc;
 
@@ -61,6 +75,16 @@ pub const RECORD: &str =
 pub const GENERATE_UNIQUE_ID: &str = "Engine.WillowInventory.GenerateUniqueID";
 pub const COMPUTE_MONETARY_VALUE: &str = "Engine.WillowInventory.ComputeMonetaryValue";
 pub const GET_MANUFACTURER: &str = "Engine.WillowInventory.GetManufacturer";
+/// `GetInventorySpaceRequirement` (lane IMPL-GETINVENTORYSPACEREQUIREMENT), declared on `Engine.WillowInventory`.
+pub const GET_INVENTORY_SPACE_REQUIREMENT: &str = "Engine.WillowInventory.GetInventorySpaceRequirement";
+/// The record of `GetInventorySpaceRequirement`'s rule.
+pub const SPACE_RECORD: &str = "docs/verification/NATIVE_INVENTORY_EQUIP.md (Inventory space)";
+/// The definition classes that take the default requirement of 1, as the row names them.
+pub const DEFAULT_SPACE_CLASSES: [&str; 2] = ["WillowGame.WeaponTypeDefinition", "WillowGame.EquipableItemDefinition"];
+/// The definition class whose requirement is 0.
+pub const MISSION_ITEM_DEFINITION: &str = "WillowGame.MissionItemDefinition";
+/// The definition class whose requirement depends on two flag bits the row does not place.
+pub const USABLE_ITEM_DEFINITION: &str = "WillowGame.UsableItemDefinition";
 
 /// `GetInventoryDefinition` (NATIVE_INVENTORY_DEFINITION.md section 3): under `Engine`, not `WillowGame`.
 pub const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
@@ -86,7 +110,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 4] = [
+    let natives: [(&str, NativeFn); 5] = [
         (
             GENERATE_UNIQUE_ID,
             Rc::new(|c: &mut NativeCall<'_>| Ok(Value::Int(unique_id(c.vm.rng.crt(ID_STREAM))))),
@@ -94,6 +118,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (COMPUTE_MONETARY_VALUE, Rc::new(compute_monetary_value)),
         (GET_MANUFACTURER, Rc::new(get_manufacturer)),
         (GET_INVENTORY_DEFINITION, Rc::new(get_inventory_definition)),
+        (GET_INVENTORY_SPACE_REQUIREMENT, Rc::new(get_inventory_space_requirement)),
     ];
     for (path, f) in natives {
         let Some(id) = vm.find_function_if_any(path)? else {
@@ -398,8 +423,44 @@ fn get_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     inventory_definition_of(c.vm, me).map(Value::Object)
 }
 
+fn space_not_read(what: String) -> VmError {
+    NotYet::not_read(what, SPACE_RECORD).into()
+}
+
+/// `GetInventorySpaceRequirement()`'s answer for the inventory `me` (module documentation). Reads only.
+pub fn space_requirement_of(vm: &Vm, me: ObjRef) -> Result<i32, VmError> {
+    const NATIVE: &str = "GetInventorySpaceRequirement";
+    let Some(definition) = inventory_definition_of(vm, me)? else {
+        return Err(space_not_read(format!("{NATIVE} of an inventory with no definition (not read)")));
+    };
+    let classes = &vm.space.classes;
+    let class = vm.space.heap.get(definition)?.class;
+    let is = |path: &str| classes.by_path(path) == Some(class);
+    if DEFAULT_SPACE_CLASSES.iter().any(|p| is(p)) {
+        return Ok(1);
+    }
+    if is(MISSION_ITEM_DEFINITION) {
+        return Ok(0);
+    }
+    if is(USABLE_ITEM_DEFINITION) {
+        return Err(space_not_read(format!(
+            "{NATIVE} of a {USABLE_ITEM_DEFINITION}: which field holds its two low flag bits is not read"
+        )));
+    }
+    let path = classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string());
+    Err(space_not_read(format!("{NATIVE} of a {path}: whether it overrides the default is not read")))
+}
+
+fn get_inventory_space_requirement(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = this(c, "GetInventorySpaceRequirement")?;
+    space_requirement_of(c.vm, me).map(Value::Int)
+}
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod get_definition_tests;
+
+#[cfg(test)]
+mod space_requirement_tests;

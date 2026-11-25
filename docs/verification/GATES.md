@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-GETINVENTORYSPACEREQUIREMENT (2026-11-25, pc-hummer, on fix/rust-inventory-space-requirement from main
+3aaabe97):** AI-assisted (Claude Code, Opus 5.5). `WillowInventory.GetInventorySpaceRequirement` in Off, from
+NATIVE_INVENTORY_EQUIP.md's row: weapon-type and equipable definitions 1, mission items 0, the rest `NotRead`.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,547 passed / 0 failed / 59 ignored. `crate_edges_test.py`: 19 OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock): 5 ok / 9 NotYet / 0 errors. The native
+  is not reached on main: links 6 and 7 stop at the skeletal bounds before `ValidTouch`.
+- A throwaway local stack (with the pickup game info and #707's first version): link 6 passes this native (1 for the
+  gun's `WeaponTypeDefinition`) and stops at the unbound `InventoryManager.InventoryActors(class,object,bool)`.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/space/` and `local/p2/space-stack/`. Decision
+2026-11-25-NNN.
+
 **LINK-6-PICKUP-GAMEINFO (2026-11-25, pc-hummer, on fix/rust-pickup-world-gameinfo from main 5168bb63):**
 AI-assisted (Claude Code, Opus 5.5). The pickup world gets a class-default `WillowGameInfo` stand-in for
 `WorldInfo.Game`, so `ValidTouch`'s `PickupQuery` runs instead of reading through None.
