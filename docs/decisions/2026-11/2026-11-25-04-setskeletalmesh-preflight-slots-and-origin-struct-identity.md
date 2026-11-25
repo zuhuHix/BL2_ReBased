@@ -45,3 +45,14 @@ All three fail on main's module and pass with the fix.
 
 **Not verified:** anything in the running game. Whether the native can ever meet a cut receiver is not known: the
 port's heap can hold one, and the rule now refuses it.
+
+**Review r1** (Sol 6.2 xhigh, on #664):
+1. **The stored value, not only the declaration.** Row 11 now also requires the slot's struct value to have the
+   declared type before it reads members by index. A lookalike value with zero members put in a correctly declared
+   `Origin` or `RotOrigin` used to let all four writes through. It is now the same script error, tested for both
+   fields with the counters unchanged.
+2. **No split between preflight and writes.** `Plan`, `Plan::apply` and `answer` are private. A caller could
+   otherwise plan, cut the receiver, then apply, which gives three writes and then `SlotMissing`. Nothing outside the
+   module used them.
+3. **A cut resident mesh has its own text.** `OLD_CUT` and `NEW_CUT`, still `NotYet { NotRead }` on the change's
+   record, instead of the unloaded-handle text, which pointed to a load. The test covers both meshes.

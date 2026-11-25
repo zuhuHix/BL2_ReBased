@@ -554,15 +554,37 @@ fn a_receiver_missing_a_slot_writes_nothing() {
     assert_eq!(x.get(c, "SkeletalMesh"), some(b));
 }
 
-/// FIX-645-PREFLIGHT, finding 1 on the meshes: a new mesh with its slots cut is row 6's `NotRead`, before row 11
-/// reads its origin.
+/// FIX-645-PREFLIGHT, finding 1 on the meshes: a resident mesh with its slots cut is row 5's or row 6's `NotRead`
+/// with the cut text (not the unloaded-handle one, review r1 of #664, item 3), before row 11 reads its origin.
 #[test]
 fn a_cut_mesh_is_not_read() {
     let mut x = fx();
-    let b = x.export("Mesh_B");
+    let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
     x.vm.space.heap.get_mut(b).unwrap().slots.truncate(1);
     let c = x.component(None);
-    assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::NotRead, NEW_UNLOADED.to_string()));
+    assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::NotRead, NEW_CUT.to_string()));
+    let c = x.component(Some(b));
+    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, OLD_CUT.to_string()));
+}
+
+/// Review r1 of #664, item 1: a correctly declared `Origin` or `RotOrigin` whose slot holds a value of the
+/// same-named lookalike struct (zero members, put past the heap's checks) is a script error naming the field, with
+/// nothing written; checking the declaration alone let all four writes through.
+#[test]
+fn a_lookalike_value_in_a_declared_origin_is_refused() {
+    for (field, look, expected) in [
+        ("Origin", "Engine.SkeletalMesh.Vector", VECTOR),
+        ("RotOrigin", "Engine.SkeletalMesh.Rotator", ROTATOR),
+    ] {
+        let mut x = fx();
+        let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+        let ty = x.vm.space.classes.struct_by_path(look).unwrap();
+        let zero = x.vm.space.classes.struct_layout(ty).unwrap().zero().clone();
+        x.put(b, field, zero);
+        let c = x.component(Some(a));
+        let e = script_text(x.refused(c, vec![some(b)]));
+        assert!(e.contains(&format!("{field} holds a struct of another type, not a {expected}")), "{field}: {e}");
+    }
 }
 
 /// FIX-645-PREFLIGHT, finding 2: an `Origin` or a `RotOrigin` declared as a struct with the right name and members
