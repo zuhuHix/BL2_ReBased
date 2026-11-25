@@ -1815,6 +1815,23 @@ fn hook_2_applies(e: &mut Env, p: ObjRef) {
     assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(true), "the setter's reattach flag");
 }
 
+/// Review of #714, LOW 1: hook 2's plan passes on attachment 0, and a later attachment's preflight refuses. The
+/// refusal is write-free and unprefixed, so hook 2's writes wait for the write phase (moving them into the preflight
+/// loop fails this test).
+#[test]
+fn hook_2_s_plan_is_not_applied_before_a_later_refusal() {
+    let mut e = env();
+    let rc = e.reattach_cylinder;
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    let a0 = attachment(&mut e, A { template: Some(t), ..A::default() });
+    let a1 = attachment(&mut e, A { ty: ACTOR_TEMPLATE, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    controller_for(&mut e, p);
+    assert!(hook_2_plan(&e, p, t).unwrap(), "attachment 0's hook 2 plans its write");
+    hooks_not_read(&mut e, p, OBJECT_TEMPLATES);
+    assert_eq!(prop(&e.vm, t, "bOwnerNoSee"), Value::Bool(false), "the template untouched");
+}
+
 /// The same pawn shape with its `bTickIsDisabled` set: the owner rule refuses, write-free.
 fn hook_2_refuses_a_tick_disabled_pawn(e: &mut Env, p: ObjRef) {
     put(&mut e.vm, p, "bTickIsDisabled", Value::Bool(true));
