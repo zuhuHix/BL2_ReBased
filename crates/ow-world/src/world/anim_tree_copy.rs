@@ -477,7 +477,13 @@ pub fn plan_with(vm: &Vm, component: ObjRef, template: ObjRef, owner: EventOwner
         // planned steps and their checks (review r1 of #575, item 1).
         let tree: DetSet<ObjRef> = std::iter::once(template).chain(nodes.iter().copied()).collect();
         let planned_order = tick_order(vm, template, &tree, next)?;
-        let (planned_steps, planned_builds) = crate::world::anim_node_init::plan(vm, component, &planned_order)?;
+        // H's owner test asks the owner the instance will have (review r1 of #667, item 1): for an attach, the actor.
+        let h_owner = match owner {
+            EventOwner::Component => object_of(&read(vm, component, "Owner")?),
+            EventOwner::Given(o) => o,
+        };
+        let (planned_steps, planned_builds) =
+            crate::world::anim_node_init::plan(vm, component, &planned_order, h_owner)?;
         order = planned_order;
         steps = planned_steps;
         builds = planned_builds;

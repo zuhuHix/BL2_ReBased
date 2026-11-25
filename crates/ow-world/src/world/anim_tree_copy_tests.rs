@@ -830,7 +830,7 @@ impl Drop for DirGuard {
 use crate::world::anim_node_init::{
     CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_INTERFACE_NO_KEY, OWNER_INTERFACE_NOT_LOADED, OWNER_RECORD,
     RECORD as INIT_RECORD, SEQUENCE_CHANGE, SPECIAL_MOVE_INTERFACE, answer_owner_for_tests, owner_not_decoded,
-    owner_not_resolved, set_active_child, unknown_class,
+    owner_not_resolved, owner_target_missing, set_active_child, unknown_class,
 };
 
 /// The copy of template node `n` on `comp`'s instance (by name, in the component's tick list).
@@ -1238,6 +1238,14 @@ fn owner_refused(x: &mut Fx, comp: ObjRef, root: ObjRef, missing: Missing, what:
     assert_eq!((&*n.what, n.missing, n.record), (what, missing, record));
 }
 
+/// Seeds the template H node's `SMI` with a non-empty handle (review r1 of #667, item 4), so a settled no is seen to
+/// keep that exact handle rather than an empty one.
+fn seed_smi(x: &mut Fx, n: ObjRef) -> Value {
+    let seed = Value::Interface(Some(x.obj(NODE)));
+    x.set(n, "SMI", seed.clone());
+    seed
+}
+
 /// The H copy's `SMI` after a run that answered.
 fn smi_after(x: &mut Fx, comp: ObjRef, root: ObjRef, n: ObjRef) -> Value {
     instance(&mut x.vm, comp, root).unwrap();
@@ -1267,19 +1275,23 @@ fn o1_the_interface_class_not_loaded_refuses() {
 /// O2: the interface class defined, but the world holds no code layer: the plain read-only answer's `LayerAbsent`.
 #[test]
 fn o2_no_code_layer_is_layer_absent() {
-    let mut vm = empty_vm();
-    let object = vm.space.classes.define("Core.Object", None, vec![]).unwrap();
-    class(&mut vm, SPECIAL_MOVE_INTERFACE, object, &[]);
-    class(&mut vm, "Test.ToyHandOwner", object, &[]);
-    let (mut x, comp, root, _, _) = owner_case(vm, "Test.ToyHandOwner");
-    owner_refused(
-        &mut x,
-        comp,
-        root,
-        Missing::LayerAbsent("the code layer (package class exports)"),
-        "the interface table of Test.ToyHandOwner: the world has no code layer (no class export is loaded)",
-        ow_vm::api::DISPATCH_RECORD,
-    );
+    // Review r1 of #667, item 2: a hand class derived from the interface gets O2 too (no ancestry yes before it).
+    for owner in ["Test.ToyHandOwner", "Test.ToyHandDerived"] {
+        let mut vm = empty_vm();
+        let object = vm.space.classes.define("Core.Object", None, vec![]).unwrap();
+        let iface = class(&mut vm, SPECIAL_MOVE_INTERFACE, object, &[]);
+        class(&mut vm, "Test.ToyHandOwner", object, &[]);
+        class(&mut vm, "Test.ToyHandDerived", iface, &[]);
+        let (mut x, comp, root, _, _) = owner_case(vm, owner);
+        owner_refused(
+            &mut x,
+            comp,
+            root,
+            Missing::LayerAbsent("the code layer (package class exports)"),
+            &format!("the interface table of {owner}: the world has no code layer (no class export is loaded)"),
+            ow_vm::api::DISPATCH_RECORD,
+        );
+    }
 }
 
 /// O3: the owner's class has no code key (defined by hand beside a package-backed interface). It implements nothing:
@@ -1292,8 +1304,9 @@ fn o3_a_hand_defined_owner_class() {
     let object = find(&mut vm, "GearboxFramework.Object");
     class(&mut vm, "Test.ToyHandOwner", object, &[]);
     let (mut x, comp, root, n, _) = owner_case(vm, "Test.ToyHandOwner");
+    let seed = seed_smi(&mut x, n);
     let writes = x.vm.space.heap.committed_writes();
-    assert_eq!(smi_after(&mut x, comp, root, n), Value::Interface(None), "a settled no leaves SMI as it is");
+    assert_eq!(smi_after(&mut x, comp, root, n), seed, "a settled no leaves SMI as it is, the same handle");
     assert!(x.vm.space.heap.committed_writes() > writes, "the rest of H ran");
 
     let (mut vm, _dir) = smi_store(true, |_, _, _| {});
@@ -1345,6 +1358,16 @@ fn o4_an_undecoded_chain_refuses() {
     let (mut x, comp, root, _, _) = owner_case(vm, "GearboxFramework.ToyOwner");
     owner_refused(&mut x, comp, root, Missing::NotRead, &owner_not_decoded("GearboxFramework.ToyOwner"), OWNER_RECORD);
     assert_eq!(x.vm.unresolved_interface_entries(owner_class), unresolved, "nothing resolved");
+    // Review r1 of #667, item 2: a package class whose super link is the interface and whose body does not decode is
+    // O4 too, not an ancestry yes.
+    let (mut vm, _dir) = smi_store(true, |d, _, smi| {
+        d.cls("ToyBadChild", smi);
+    });
+    let iface = find(&mut vm, SPECIAL_MOVE_INTERFACE);
+    let child = find(&mut vm, "GearboxFramework.ToyBadChild");
+    assert!(vm.space.classes.is_child_of(child, iface), "the class table links it below the interface");
+    let (mut x, comp, root, _, _) = owner_case(vm, "GearboxFramework.ToyBadChild");
+    owner_refused(&mut x, comp, root, Missing::NotRead, &owner_not_decoded("GearboxFramework.ToyBadChild"), OWNER_RECORD);
 }
 
 /// O5: the owner's entry naming the interface is not resolved yet: `NotRead` naming the class, and the entry is
@@ -1410,7 +1433,20 @@ fn o7_a_resolved_no() {
     let plain = find(&mut vm, "GearboxFramework.ToyPlain");
     assert_eq!(vm.resolve_interface_tables(plain), 1);
     let (mut x, comp, root, n, _) = owner_case(vm, "GearboxFramework.ToyPlain");
-    assert_eq!(smi_after(&mut x, comp, root, n), Value::Interface(None), "a settled no leaves SMI as it is");
+    let seed = seed_smi(&mut x, n);
+    assert_eq!(smi_after(&mut x, comp, root, n), seed, "a settled no leaves SMI as it is, the same handle");
+
+    // Review r1 of #667, item 2: a decoded package class below the interface in the class table, with no entry naming
+    // it: the interface table decides, a no (the ancestry is not taken as the interface answer).
+    let (mut vm, _dir) = smi_store(true, |d, obj, smi| {
+        d.real_class("ToyIfaceChild", smi, obj, 2, &[], None);
+    });
+    let iface = find(&mut vm, SPECIAL_MOVE_INTERFACE);
+    let child = find(&mut vm, "GearboxFramework.ToyIfaceChild");
+    assert!(vm.space.classes.is_child_of(child, iface));
+    let (mut x, comp, root, n, _) = owner_case(vm, "GearboxFramework.ToyIfaceChild");
+    let seed = seed_smi(&mut x, n);
+    assert_eq!(smi_after(&mut x, comp, root, n), seed);
 
     let (mut vm, _dir) = smi_store(true, build);
     find(&mut vm, SPECIAL_MOVE_INTERFACE);
@@ -1421,6 +1457,53 @@ fn o7_a_resolved_no() {
     let e = not_yet(refused_clean(&mut x, comp, root));
     assert_eq!(e.missing, Missing::NotRead);
     assert!(e.what.contains("engine-native class GearboxFramework.ToyPlain"), "{}", e.what);
+}
+
+/// Review r1 of #667, item 3: an entry whose class lookup found nothing is cached as "resolved to nothing"; with no
+/// resolved yes it is `NotRead`, not O7's settled no.
+#[test]
+fn a_failed_interface_target_is_not_a_settled_no() {
+    let (mut vm, _dir) = smi_store(true, |d, obj, _| {
+        let missing = d.p.add_import("Core", "Package", 0, "ToyMissingPkg");
+        let gone = d.p.add_import("Core", "Class", missing, "ToyGoneTarget");
+        d.real_class("ToyGone", obj, obj, 2, &[gone], None);
+    });
+    find(&mut vm, SPECIAL_MOVE_INTERFACE);
+    let gone = find(&mut vm, "GearboxFramework.ToyGone");
+    assert_eq!(vm.resolve_interface_tables(gone), 1);
+    assert_eq!(vm.unresolved_interface_entries(gone), 0, "cached as resolved (to nothing)");
+    let (mut x, comp, root, _, _) = owner_case(vm, "GearboxFramework.ToyGone");
+    owner_refused(&mut x, comp, root, Missing::NotRead, &owner_target_missing("GearboxFramework.ToyGone"), OWNER_RECORD);
+}
+
+/// Review r1 of #667, item 1: the attach's preflight asks the owner the component will have (the actor), not the
+/// template's own empty `Owner`. With a pawn whose interface entry is not resolved, the attach check refuses O5
+/// before any write; with no actor there is no owner test.
+#[test]
+fn an_attach_asks_the_actor_not_the_template_s_owner() {
+    let (mut vm, _dir) = smi_store(true, |d, obj, smi| {
+        d.real_class("ToyOwner", obj, obj, 2, &[smi], None);
+    });
+    find(&mut vm, SPECIAL_MOVE_INTERFACE);
+    find(&mut vm, "GearboxFramework.ToyOwner");
+    let (mut x, comp, root, _, pawn) = owner_case(vm, "GearboxFramework.ToyOwner");
+    x.set(comp, "Owner", Value::Object(None));
+    x.set(comp, "AnimTreeTemplate", Value::Object(Some(root)));
+    let counts = |x: &Fx| {
+        (
+            x.vm.space.heap.committed_writes(),
+            x.vm.space.heap.handles().len(),
+            x.vm.rng.draws(),
+            x.vm.defs.load_transitions(),
+            x.vm.space.names.len(),
+        )
+    };
+    let before = counts(&x);
+    let n = not_yet(attach_check(&x.vm, comp, Some(pawn)).unwrap_err());
+    let want = owner_not_resolved("GearboxFramework.ToyOwner");
+    assert_eq!((&*n.what, n.missing, n.record), (want.as_str(), Missing::NotRead, OWNER_RECORD));
+    assert_eq!(counts(&x), before, "refused before any write");
+    attach_check(&x.vm, comp, None).unwrap();
 }
 
 // ---- Review r2 of #575 ----------------------------------------------------------------------------------------------

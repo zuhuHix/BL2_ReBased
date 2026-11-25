@@ -19,13 +19,28 @@ the note. Synthetic fixtures only.
     O6, a resolved yes, `SMI` := the owner; O7, a resolved no, a settled no or the stand-in's `NotYet`.
   - A settled no leaves `SMI` as it is, and the rest of H runs.
   - The refusals cite the note as their record. Before, a settled no refused; now it is an answer.
-- **Port choice (UNVERIFIED):** a class that derives from the interface in the class table answers yes before O2,
-  as `plain_interface_read_only` does first. The note names that yes under O3 only. No package class derives from an
-  interface class, so only hand-defined classes meet it.
+- **The class-table ancestry (review r1 of #667, item 2):** it is a yes only inside O3, for a hand-defined class with
+  no code key, as the note's O3 row says, after O1 and O2. A package class gets no ancestry yes: the loader does accept
+  a package super link to an interface class, but such a class goes through O4 and the interface table like any other
+  (an undecoded one is O4; a decoded one with no entry naming the interface is O7's no). The stand-in check of O3 and O7
+  is `Vm::is_child_checked`, and only its `NotYet` is used, not its boolean.
+- **A failed interface target (review r1 of #667, item 3; a port policy, UNVERIFIED):** `CodeIndex::implements` and
+  `resolve_interfaces` cache an entry whose class lookup found nothing (or failed) as "resolved to nothing", which
+  `implements_resolved_chain` skips. With no resolved yes, such an entry is `NotRead` (its own text), not O7's
+  settled no: the target was never read. A new read-only `CodeIndex::interface_target_missing` (`ow-object`) finds
+  it; nothing else uses it.
+- **Which owner (review r1 of #667, item 1):** the preflight asks the owner the instance's component will have. For a
+  copy that is the component's own `Owner`. For an attach (`attach_check` / `attach_plan`, the body composition's
+  preflight) it is the actor attached to, not the component template's own `Owner`. Before, an attach with an empty
+  template `Owner` skipped the test in the preflight and refused only at the instance, after the body composition's
+  writes.
 - **Verified (host only):** one test per case on invented packages: O1, O2, O3 (settled no, derived yes, stand-in),
   O3', O4, O5, O6, O6 behind an unresolved entry (where #575's `implements_resolved` gives no answer), and O7 (settled
   no, stand-in). Every refusal goes through `refused_clean` (heap writes, handles, RNG draws, loads and the name table
-  unchanged). O4 and O5 also check that no interface entry was resolved. The test switch `OWNER_ANSWER` stays for the
+  unchanged). O4 and O5 also check that no interface entry was resolved. Review r1 of #667 added: O2 for a hand class
+  derived from the interface; O4 for an undecoded package class linked below the interface; O7's no for a decoded
+  one; a failed target refusing; an attach with an empty template `Owner` and an O5 pawn refusing before any write;
+  and the settled-no cases seed a non-empty `SMI` and check the copy keeps that handle. The test switch `OWNER_ANSWER` stays for the
   hand-built tests of H's other parts.
 - **Not done here:**
   - route (a) (section 4.1's set-up: `preload_class` of the interface and `Vm::resolve_interface_tables` on Maya's
