@@ -13,7 +13,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::{BOUNDING_CYLINDER_OF, EXTENT_RECORD, box_cylinder, extent};
+use super::{Bounds, BOUNDING_CYLINDER_OF, EXTENT_RECORD, Mode, SpawnCollision, Sweep, Test, actor_walk, box_cylinder, extent, trace_filter};
 use crate::world::bounding_cylinder::{BOUNDS_LAYER, REFUSAL_L};
 
 struct Fx {
@@ -321,4 +321,87 @@ fn a_native_stand_in_is_not_read_even_with_no_primitive_class_in_the_table() {
     x.components(t, vec![Some(audio), Some(entry)]);
     let what = not_read(extent(&x.vm, t).unwrap_err());
     assert!(what.contains("engine-native stand-in class") && what.contains("Test.NativeOnlyComponent"), "{what}");
+}
+
+/// A collision service that holds one bounds for every part (or none) and a clear level (lane LIVE-COLLISION-STANDIN).
+struct OneBounds(Option<Bounds>);
+
+impl SpawnCollision for OneBounds {
+    fn box_test(&self, _extent: [f32; 3], _at: [f32; 3], _mode: Mode) -> Result<Test, VmError> {
+        Ok(Test::Clear)
+    }
+    fn box_sweep(&self, _extent: [f32; 3], _start: [f32; 3], _end: [f32; 3]) -> Result<Sweep, VmError> {
+        Ok(Sweep::Clear)
+    }
+    fn point_sweep(&self, _start: [f32; 3], _end: [f32; 3]) -> Result<Sweep, VmError> {
+        Ok(Sweep::Clear)
+    }
+    fn actor_bounds(&self, _space: &ObjectSpace, _part: ObjRef) -> Result<Option<Bounds>, VmError> {
+        Ok(self.0)
+    }
+}
+
+/// A world with no `Engine.PrimitiveComponent` in its class table: an `Actor` (in the actor list) whose
+/// `CollisionComponent` is a native stand-in part. Returns (fixture, actor).
+fn standin_world(primitive: bool) -> (Fx, ObjRef) {
+    let mut s = ObjectSpace::new();
+    let object = s.classes.define("Core.Object", None, vec![]).unwrap();
+    let obj = PropKind::Object { class: object };
+    if primitive {
+        s.classes.define("Engine.PrimitiveComponent", Some(object), vec![]).unwrap();
+    }
+    let decls = vec![
+        PropertyDecl::new(s.names.intern("CollisionComponent"), obj.clone()),
+        PropertyDecl::new(s.names.intern("Components"), PropKind::Array(Box::new(obj))),
+    ];
+    let actor_class = s.classes.define("Engine.Actor", Some(object), decls).unwrap();
+    let native = s.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+    s.classes.mark_native(native).unwrap();
+    let mut x = Fx { vm: vm_of(s) };
+    x.vm.add_service(crate::actors::Actors::new(actor_class)).unwrap();
+    let actor = x.obj("Engine.Actor");
+    let part = x.vm.space.alloc_stand_in(native, "NativePart", Origin::Resource { package: 0, index: -1 }).unwrap();
+    x.set(actor, "CollisionComponent", Value::Object(Some(part)));
+    // The list needs a WorldInfo first; a plain actor with no parts stands in for it.
+    let world_info = x.obj("Engine.Actor");
+    let list = crate::actors::actors_of(&x.vm).unwrap();
+    list.borrow_mut().place_world_info(world_info).unwrap();
+    list.borrow_mut().place(actor).unwrap();
+    (x, actor)
+}
+
+const REGION: Bounds = Bounds { min: [-1.0; 3], max: [1.0; 3] };
+
+/// Review r1 of #683: the source actor's own stand-in part is left out of the touch's walk whatever its class; the same
+/// part on another actor refuses with the query's `NotRead`.
+#[test]
+fn the_source_actor_s_own_stand_in_part_is_left_out() {
+    let (mut x, actor) = standin_world(true);
+    let elsewhere = x.obj("Engine.Actor");
+    let model = OneBounds(Some(REGION));
+    let unloaded = |_: ObjRef| false;
+    let own = trace_filter::Source { actor, unloaded: &unloaded, admission_established: false };
+    let walk = |source| actor_walk(&x.vm, &model, trace_filter::Query::PointLine, REGION, source, "touch", "R");
+    assert!(walk(Some(&own)).unwrap().is_empty(), "the source's own part");
+    let other = trace_filter::Source { actor: elsewhere, unloaded: &unloaded, admission_established: false };
+    let VmError::NotYet(n) = walk(Some(&other)).unwrap_err() else { panic!() };
+    assert_eq!((n.missing, n.record), (Missing::NotRead, "R"));
+    assert!(n.what.contains(trace_filter::STAND_IN_PART), "{}", n.what);
+}
+
+/// Review r1 of #683: with no `PrimitiveComponent` in the table the spawn's walk still runs: a stand-in part whose
+/// bounds meet the query refuses, disjoint bounds leave it out, and with no actor list the walk is `LayerAbsent`.
+#[test]
+fn with_no_primitive_class_the_spawn_walk_still_refuses_a_stand_in_part() {
+    let (x, _) = standin_world(false);
+    assert!(x.vm.space.classes.by_path("Engine.PrimitiveComponent").is_none());
+    let kind = trace_filter::Query::BoxTest { zero_extent: false, complex: false };
+    let meeting = OneBounds(Some(REGION));
+    let VmError::NotYet(n) = actor_walk(&x.vm, &meeting, kind, REGION, None, "spot", "R").unwrap_err() else { panic!() };
+    assert_eq!(n.missing, Missing::NotRead);
+    let far = OneBounds(Some(Bounds { min: [50.0; 3], max: [60.0; 3] }));
+    assert!(actor_walk(&x.vm, &far, kind, REGION, None, "spot", "R").unwrap().is_empty());
+    let bare = Fx { vm: vm_of(ObjectSpace::new()) };
+    let VmError::NotYet(n) = actor_walk(&bare.vm, &far, kind, REGION, None, "spot", "R").unwrap_err() else { panic!() };
+    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n:?}");
 }

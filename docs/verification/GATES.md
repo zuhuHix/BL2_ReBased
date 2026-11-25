@@ -9,6 +9,8 @@ the query, else the query's `NotRead`. Installed Off strict `--slice-gate` on th
 and first stops as main 373fe4b. Cause A limits that install to links 2 and 6-9. Workspace numbers are in the
 hand-back. UNVERIFIED in game.
 
+
+
 **ANALYST-BODYCOMP-HOOK2-PAWN-TEST (2026-11-25, pc-hummer, docs only, on docs/native-bodycomp-hook2-pawn-test from
 main 9cb8428f):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 6: hook 2's pawn
 test is `IsPlayerPawn` (always true for `WillowPlayerPawn`), and its controller test is `UsingFirstPersonCamera`

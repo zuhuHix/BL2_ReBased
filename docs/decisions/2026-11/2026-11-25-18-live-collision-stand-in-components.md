@@ -24,6 +24,18 @@ changed.
     spawn, the touch trace's prefix and record for the pickup, and `Actor.Trace` with `NATIVE_ACTOR_TRACE.md`.
   - With no `PrimitiveComponent` in the table no package part is a primitive, but the walk still runs, so a stand-in
     part is still refused.
+- **Review r1 of #683:**
+  - the source actor's own parts are left out of `placement::actor_walk` whatever their class: the stand-in branch
+    skips a part of the source actor before its bounds, as the filters do for a primitive and as `Actor.Trace`'s walk
+    already does (it skips the source actor first);
+  - dropping the "no `PrimitiveComponent`" shortcut means the walks now run their actor checks even when no stand-in
+    is present. They call `actors_of`, which is `LayerAbsent` with no actor list; `Actor.Trace` refuses a non-resident
+    live actor; and an unreadable `CollisionComponent` or `Components` is refused through `missing_data`. That is
+    sound: an actor whose data cannot be read could hold a stand-in part. Tests: the spawn's walk and `Actor.Trace`
+    each with no `PrimitiveComponent` in the table (a meeting stand-in part refuses, a disjoint one does not), the
+    `LayerAbsent` of a world with no actor list, and the source's own stand-in part left out of the touch walk;
+  - **known gap, pre-existing, not changed here:** the spawn and touch walk takes service bounds that are NaN or
+    inverted as a miss (`Bounds::meets` is false), where `Actor.Trace` refuses them as unsound.
 - **Not changed:** the spawn extent's own preload (`placement.rs` `is_primitive`) keeps selecting known primitives, and
   the bounding cylinder's walk is #681's.
 - **Tests (synthetic):** the spawn's spot search and `Actor.Trace`, each with a live actor whose collision component

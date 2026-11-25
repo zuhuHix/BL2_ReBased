@@ -611,6 +611,11 @@ pub(crate) fn actor_walk(
                 trace_filter::PartClass::Primitive => {}
                 trace_filter::PartClass::Other => continue,
                 trace_filter::PartClass::Uncertain(path) => {
+                    // The source actor's own parts are left out whatever their class (review r1 of #683), as the
+                    // filters leave them out for a primitive.
+                    if source.is_some_and(|s| actor == s.actor) {
+                        continue;
+                    }
                     // A part whose real class chain is not known might block (lane LIVE-COLLISION-STANDIN): it is
                     // ruled out only by service bounds that miss the region, else the query's own NotRead.
                     let bounds = model.actor_bounds(space, part)?;
