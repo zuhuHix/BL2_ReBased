@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**COUNTERS-MISS-CLASS-CODE-LOADS (2026-11-25, zuhuPC Linux, on main 03896e5):** AI-assisted (Claude Code, Opus 5.5).
+Write-free test checks also count class code loads (`Vm::class_code_loads`); runtime partial-write marking unchanged.
+`cargo test --workspace`: 3,403 passed / 4 failed (the expected Linux N1 tests) / 53 ignored. One existing test
+caught a code load; it is pinned as an ignored finding (`ow-inventory` `the_effect_lookup_loads_no_class_code`).
+`crate_edges_test.py` OK. Not run: `ctest`, `verify_packages.py --reader` (no cmake here), the installed
+`--slice-gate` (no install yet).
+
 **ANALYST-SPECIALMOVE-QUEUE (2026-11-25, pc-hummer, docs only, on docs/native-specialmove-queue from main
 4b3e4df6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIAL_MOVE_QUEUE.md: `SpecialMoveComponent.Queue`,
 link 9's stop. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in
