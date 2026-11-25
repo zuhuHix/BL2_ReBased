@@ -74,6 +74,8 @@ pub mod damage_type;
 pub mod weapon_material;
 /// `MeshComponent.SetMaterial` and `MaterialInterface.GetScalarParameterValue` in Off (lane IMPL-SETMATERIAL-AND-GLOW).
 pub mod material_natives;
+// WillowWeapon.GetFiringModeDefinition and the rule the shot helper shares (lane IMPL-GETFIRINGMODEDEFINITION).
+pub mod firing_mode;
 
 /// The records this module reads.
 pub const RECORD: &str = "NATIVE_ATTRIBUTES.md sections 7 and 9; NATIVE_INVENTORY_EQUIP.md (equip); script read 2026-11-16";
