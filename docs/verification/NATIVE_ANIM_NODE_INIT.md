@@ -60,6 +60,9 @@ natives were not read here.
 **On Maya's tree:** her one aim-offset node (`WillowAnimNodeAimOffset_1`) has an empty `Profiles` in the template,
 and so does its class default. So the refresh changes no value on her copy. `TemplateNode` goes from None to the
 template node.
+*Corrected 2026-11-25 by NATIVE_AIMOFFSET_SET_PROFILE.md section 1: the template's `Profiles` holds 7 binary-serialized
+entries that the decoders skip, so it is not empty. The copy's own `Profiles` is still emptied, and `TemplateNode`
+still points at the template node.*
 
 ## 2. The per-node initialisation (question b)
 

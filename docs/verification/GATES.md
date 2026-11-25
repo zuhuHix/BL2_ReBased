@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK1-AFTER-HOLD (2026-11-25, pc-hummer, docs only, on docs/native-link1-after-hold-aimoffset-profile from
+main 5fb7e097):** AI-assisted (Claude Code, Opus 5.5). NATIVE_AIMOFFSET_SET_PROFILE.md: the first unread native past
+`GetWeaponHoldDef`. It switches the aim-offset node's profile through its template node's `Profiles`, which hold 7
+binary entries the decoders skip (correcting NATIVE_ANIM_NODE_INIT.md's "empty"). No code changed, so no
+measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **ANALYST-LINKS67-NEXT (2026-11-25, pc-hummer, docs only, on docs/native-links67-next-save-rotation from main
 79007ec9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PICKUP_SAVE_ROTATION.md: option B needs a VM rule for
 `new`'s template and a pickup fixture whose gun runs its init. Past the bounds, links 6 and 7's touch is covered;
