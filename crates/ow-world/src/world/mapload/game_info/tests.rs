@@ -185,7 +185,8 @@ fn reference_has_no_game_info_routine() {
 
 /// A class that is not there is the note's not-found text with the field left empty; a class `WorldInfo.Game` cannot
 /// hold is a data error before the spawn; a spawn refused for collision (a placement search with no collision service)
-/// is that `NotYet`, unmarked, since nothing was written before it.
+/// is that `NotYet`, marked, because the class lookup loaded the class's code before it (lane
+/// GAMEINFO-COLLIDER-CODE-LOAD; the unmarked warm case is the next test).
 #[test]
 fn a_missing_or_unfit_class_and_a_refused_spawn_leave_the_field_empty() {
     run(|| {
@@ -201,29 +202,46 @@ fn a_missing_or_unfit_class_and_a_refused_spawn_leave_the_field_empty() {
         assert!(matches!(&e, VmError::Script { message, .. } if message.contains("is not a class WorldInfo.Game can hold")), "{e:?}");
         let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
         actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
-        let mark = WriteMark::now(&f.w.vm);
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
-        let what = unmarked(e.unwrap_err(), Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));
-        // #518's three only: the class code load before this refusal is lane COUNTERS-MISS-CLASS-CODE-LOADS's
-        // finding, pinned in the ignored test below.
-        assert!(!mark.moved(&f.w.vm), "{what}");
+        let VmError::NotYet(n) = e.unwrap_err() else { panic!("the collision refusal") };
+        assert!(is_partial_writes(&n.what), "marked after the class code load: {}", n.what);
         assert_eq!((game_of(&f), listed(&f)), (Value::Object(None), before));
     });
 }
 
-/// Review r1 of #685's finding: the spawn refused for collision has already loaded the game class's code (its class
-/// lookup), which #518's three counters do not see. Ignored until the hub routes it; run with `--ignored` to see it.
+/// Lane GAMEINFO-COLLIDER-CODE-LOAD (#685's finding): the configured class's lookup is the game's own load
+/// (NATIVE_MAP_LOAD.md section 3, "loaded once and cached"), and with the class's code cold it loads that code, a
+/// write #518's three counters do not see. The spawn refused for collision after it is therefore marked "stopped after
+/// partial writes", its kind kept.
 #[test]
-#[ignore = "finding: spawn_game_info loads the game class's code before its collision refusal (review r1 of #685)"]
-fn a_refused_spawn_loads_no_class_code() {
+fn a_refused_spawn_after_a_class_code_load_is_marked() {
     run(|| {
         let mut f = fx_in(false, ParityMode::Off);
         let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
         actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
-        let code = f.w.vm.class_code_loads();
+        let (mark, code) = (WriteMark::now(&f.w.vm), f.w.vm.class_code_loads());
+        let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
+        assert!(f.w.vm.class_code_loads() > code, "the lookup loaded the class's code");
+        assert!(!mark.moved(&f.w.vm), "#518's three did not move: only the code load marks it");
+        let VmError::NotYet(n) = e.unwrap_err() else { panic!("the collision refusal") };
+        assert!(is_partial_writes(&n.what), "marked: {}", n.what);
+        assert_eq!(n.missing, Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));
+    });
+}
+
+/// The warm case: with the class's code already loaded, the lookup loads nothing, and the same refusal is unmarked,
+/// as before.
+#[test]
+fn a_refused_spawn_with_the_class_code_loaded_is_unmarked() {
+    run(|| {
+        let mut f = fx_in(false, ParityMode::Off);
+        let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
+        actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
+        f.w.vm.find_class("Engine.Collider").unwrap();
+        let mark = WriteMark::now(&f.w.vm);
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
         unmarked(e.unwrap_err(), Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));
-        assert_eq!(f.w.vm.class_code_loads(), code, "no class code loaded before the collision refusal");
+        assert!(mark.still(&f.w.vm), "nothing written or loaded, code included");
     });
 }
 
