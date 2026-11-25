@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-645-PREFLIGHT (2026-11-25, zuhu desktop (Linux), on fix/rust-skelmesh-preflight from main d3c7a13):**
+AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's mesh change in Off: a receiver with fewer slots than its class
+is row 1's `NotRead` before any write (on main a receiver cut at `bHasValidBodies` committed three writes and then
+failed with an untyped heap error), and row 11's `Origin`/`RotOrigin` must be `Core.Object.Vector`/`Rotator` by
+identity. `cargo test --workspace -j 4` (with #661's path fix applied locally, not in the branch): 3,363 passed / 4
+failed (the expected N1 float-oracle failures on Linux) / 52 ignored, 3 new in `skeletal_mesh_change_tests.rs`;
+`crate_edges_test.py` OK. Slice gate: not run (no install yet). No real-game run; UNVERIFIED in game.
+
 **IMPL-TRACE-HASH-ADMISSION (2026-11-25, zuhuPC Linux, on main d3c7a13):** AI-assisted (Claude Code, Opus 5.5).
 `Actor.Trace` in Off leaves out primitives the collision hash cannot admit (NATIVE_ACTOR_TRACE.md section 5, #659).
 `cargo test --workspace` (with #661's path fix picked locally for the run only): 3,365 passed / 4 failed (the

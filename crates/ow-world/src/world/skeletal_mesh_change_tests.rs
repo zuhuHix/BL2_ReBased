@@ -1,6 +1,7 @@
 //! Tests of `SkeletalMeshComponent.SetSkeletalMesh`'s mesh change in Off (lane IMPL-SKELMESH-MESH-CHANGE,
-//! NATIVE_SKELMESH_MESH_CHANGE.md section 4 and its test list) on invented packages (AGENTS.md rule 9): `Engine.upk`
-//! declares `SkeletalMesh` (with `Origin` and `RotOrigin`), `SkeletalMeshComponent` with the fields the rule reads and
+//! NATIVE_SKELMESH_MESH_CHANGE.md section 4 and its test list) on invented packages (AGENTS.md rule 9): `Core.upk`
+//! declares `Object` with `Vector` and `Rotator`; `Engine.upk` declares `SkeletalMesh` (with `Origin` and `RotOrigin`,
+//! and same-named lookalike structs of its own for FIX-645-PREFLIGHT), `SkeletalMeshComponent` with the fields the rule reads and
 //! writes, and invented variants for the declaration cases; `GD_ToyMesh.upk` holds meshes, a holder whose fields name
 //! unloaded meshes, and a mesh whose payload is cut short (its load fails). The LOD count comes from an in-memory
 //! [`SkeletonSource`](crate::world::skeletal::SkeletonSource). Every value is invented. AI-assisted (Claude Code).
@@ -46,8 +47,16 @@ fn component_fields(t: &mut ScriptToy, c: i32, object: i32, mesh: i32) {
 
 fn packages() -> Vec<(&'static str, Vec<u8>)> {
     let core = {
-        let mut t = ScriptToy::new(&[]);
-        t.class("Object", 0);
+        let mut t = ScriptToy::with_imports(&["Class", "ScriptStruct", "IntProperty", "FloatProperty"]);
+        let object = t.class("Object", 0);
+        let vector = toy_struct(&mut t, object, "Vector", None);
+        for n in ["X", "Y", "Z"] {
+            t.prop("Float", vector, n, 0, 0);
+        }
+        let rotator = toy_struct(&mut t, object, "Rotator", None);
+        for n in ["Pitch", "Yaw", "Roll"] {
+            t.prop("Int", rotator, n, 0, 0);
+        }
         t.build()
     };
     let engine = {
@@ -64,17 +73,26 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         ]);
         let core = t.p.add_import("Core", "Package", 0, "Core");
         let object = t.p.add_import("Core", "Class", core, "Object");
+        let vector = t.p.add_import("Core", "ScriptStruct", object, "Vector");
+        let rotator = t.p.add_import("Core", "ScriptStruct", object, "Rotator");
         let mesh = t.class("SkeletalMesh", object);
-        let vector = toy_struct(&mut t, mesh, "Vector", None);
+        // FIX-645-PREFLIGHT: structs with the members and names of Vector and Rotator that are not Core's.
+        let look_vector = toy_struct(&mut t, mesh, "Vector", None);
         for n in ["X", "Y", "Z"] {
-            t.prop("Float", vector, n, 0, 0);
+            t.prop("Float", look_vector, n, 0, 0);
         }
-        let rotator = toy_struct(&mut t, mesh, "Rotator", None);
+        let look_rotator = toy_struct(&mut t, mesh, "Rotator", None);
         for n in ["Pitch", "Yaw", "Roll"] {
-            t.prop("Int", rotator, n, 0, 0);
+            t.prop("Int", look_rotator, n, 0, 0);
         }
         t.prop("Struct", mesh, "Origin", 0, vector);
         t.prop("Struct", mesh, "RotOrigin", 0, rotator);
+        let look_origin = t.class("ToyLookOriginMesh", object);
+        t.prop("Struct", look_origin, "Origin", 0, look_vector);
+        t.prop("Struct", look_origin, "RotOrigin", 0, rotator);
+        let look_rot = t.class("ToyLookRotMesh", object);
+        t.prop("Struct", look_rot, "Origin", 0, vector);
+        t.prop("Struct", look_rot, "RotOrigin", 0, look_rotator);
         // Row 11's declaration cases: Origin an int; no RotOrigin.
         let int_origin = t.class("ToyIntOriginMesh", object);
         t.prop("Int", int_origin, "Origin", 0, 0);
@@ -90,6 +108,11 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         t.prop("Int", int_bodies, "bHasValidBodies", 0, 0);
         let no_bodies = t.class("ToyNoBodiesComponent", object);
         component_fields(&mut t, no_bodies, object, object);
+        // FIX-645-PREFLIGHT: bHasValidBodies declared first, so it takes the last slot (the toy's slots run in reverse
+        // declaration order) and a cut there leaves every slot the rows read.
+        let late_bodies = t.class("ToyLateBodiesComponent", object);
+        t.prop("Bool", late_bodies, "bHasValidBodies", 0, 0);
+        component_fields(&mut t, late_bodies, object, object);
         let holder = t.class("ToyHolder", object);
         for n in ["Lazy", "Lazy2", "Broken"] {
             t.prop("Object", holder, n, 0, object);
@@ -102,6 +125,8 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         let mesh = t.p.add_import("Core", "Class", engine, "SkeletalMesh");
         let int_origin = t.p.add_import("Core", "Class", engine, "ToyIntOriginMesh");
         let no_rot = t.p.add_import("Core", "Class", engine, "ToyNoRotMesh");
+        let look_origin = t.p.add_import("Core", "Class", engine, "ToyLookOriginMesh");
+        let look_rot = t.p.add_import("Core", "Class", engine, "ToyLookRotMesh");
         let holder = t.p.add_import("Core", "Class", engine, "ToyHolder");
         let mut empty = ints(&[0]);
         empty.extend_from_slice(&t.none);
@@ -110,6 +135,8 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         }
         t.p.add_export(int_origin, "Mesh_IntOrigin", empty.clone());
         t.p.add_export(no_rot, "Mesh_NoRot", empty.clone());
+        t.p.add_export(look_origin, "Mesh_LookOrigin", empty.clone());
+        t.p.add_export(look_rot, "Mesh_LookRot", empty.clone());
         let first = t.p.next_export();
         t.p.add_export(mesh, "Mesh_Lazy", empty.clone());
         t.p.add_export(mesh, "Mesh_Lazy2", empty.clone());
@@ -156,7 +183,13 @@ fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
     let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &refs, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
-    for c in [COMPONENT, "Engine.SkeletalMesh", "Engine.ToyIntBodiesComponent", "Engine.ToyNoBodiesComponent"] {
+    for c in [
+        COMPONENT,
+        "Engine.SkeletalMesh",
+        "Engine.ToyIntBodiesComponent",
+        "Engine.ToyNoBodiesComponent",
+        "Engine.ToyLateBodiesComponent",
+    ] {
         vm.find_class(c).unwrap();
     }
     let component = vm.space.classes.by_path(COMPONENT).unwrap();
@@ -173,7 +206,7 @@ fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
         SkeletalMeshes::install(&mut vm, Box::new(Lods(l))).unwrap();
     }
     let mut x = Fx { vm, dir };
-    for n in ["Mesh_A", "Mesh_B", "Mesh_Zero", "Mesh_IntOrigin", "Mesh_NoRot", "Holder_0"] {
+    for n in ["Mesh_A", "Mesh_B", "Mesh_Zero", "Mesh_IntOrigin", "Mesh_NoRot", "Mesh_LookOrigin", "Mesh_LookRot", "Holder_0"] {
         x.export(n);
     }
     x
@@ -181,7 +214,15 @@ fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
 
 /// The default: every resident mesh of the package answers a known LOD count of zero.
 fn fx() -> Fx {
-    fx_with(Some(vec![("Mesh_A", 0), ("Mesh_B", 0), ("Mesh_Zero", 0), ("Mesh_IntOrigin", 0), ("Mesh_NoRot", 0)]))
+    fx_with(Some(vec![
+        ("Mesh_A", 0),
+        ("Mesh_B", 0),
+        ("Mesh_Zero", 0),
+        ("Mesh_IntOrigin", 0),
+        ("Mesh_NoRot", 0),
+        ("Mesh_LookOrigin", 0),
+        ("Mesh_LookRot", 0),
+    ]))
 }
 
 /// #518's counters, and the name table's length.
@@ -468,6 +509,76 @@ fn an_unwritable_destination_writes_nothing() {
         let e = script_text(x.refused(c, vec![some(b)]));
         assert!(e.contains("bHasValidBodies"), "{class}: {e}");
         assert_eq!(x.get(c, "SkeletalMesh"), Value::Object(None), "{class}: SkeletalMesh unchanged");
+    }
+}
+
+/// FIX-645-PREFLIGHT, finding 1: a receiver missing the slot of any field the rule reads or writes (its slots cut at
+/// that field) is row 1's `NotRead`, with nothing written and no "stopped after partial writes" prefix. On
+/// `ToyLateBodiesComponent` only `bHasValidBodies`'s slot is missing; before the fix that call committed the first
+/// three writes and then failed with an untyped heap error.
+#[test]
+fn a_receiver_missing_a_slot_writes_nothing() {
+    let fields = [
+        "SkeletalMesh",
+        "SpaceBases",
+        "PhysicsAssetInstance",
+        "Animations",
+        "ParentAnimComponent",
+        "PhysicsAsset",
+        "bAttached",
+        "bAnimTreeInitialised",
+        "MorphSets",
+        "MorphTargetIndexMap",
+        "LODInfo",
+        "bHasValidBodies",
+    ];
+    let mut x = fx();
+    let (a, b) = (x.export("Mesh_A"), x.export("Mesh_B"));
+    let cases = fields.iter().map(|f| (COMPONENT, *f)).chain([("Engine.ToyLateBodiesComponent", "bHasValidBodies")]);
+    for (class_path, field) in cases {
+        let class = x.vm.space.classes.by_path(class_path).unwrap();
+        let p = x.vm.space.prop(class, field).unwrap();
+        let slot = x.vm.space.classes.resolve(class, PropAddr::scalar(p)).unwrap();
+        let c = x.component_of(class_path, Some(a));
+        x.vm.space.heap.get_mut(c).unwrap().slots.truncate(slot);
+        match x.refused(c, vec![some(b)]) {
+            VmError::NotYet(n) => {
+                assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, CUT, RECORD), "{class_path}.{field}");
+            }
+            other => panic!("{class_path}.{field}: expected a NotYet, got {other:?}"),
+        }
+    }
+    // The late class whole: the four writes, as on the stock component.
+    let c = x.component_of("Engine.ToyLateBodiesComponent", Some(a));
+    x.call(c, vec![some(b)]).unwrap();
+    assert_eq!(x.get(c, "SkeletalMesh"), some(b));
+}
+
+/// FIX-645-PREFLIGHT, finding 1 on the meshes: a new mesh with its slots cut is row 6's `NotRead`, before row 11
+/// reads its origin.
+#[test]
+fn a_cut_mesh_is_not_read() {
+    let mut x = fx();
+    let b = x.export("Mesh_B");
+    x.vm.space.heap.get_mut(b).unwrap().slots.truncate(1);
+    let c = x.component(None);
+    assert_eq!(kind(x.refused(c, vec![some(b)])), (Missing::NotRead, NEW_UNLOADED.to_string()));
+}
+
+/// FIX-645-PREFLIGHT, finding 2: an `Origin` or a `RotOrigin` declared as a struct with the right name and members
+/// that is not `Core.Object.Vector` / `Core.Object.Rotator` is a script error naming the field, on the new mesh and on
+/// the old, with nothing written.
+#[test]
+fn a_lookalike_origin_struct_is_refused() {
+    let mut x = fx();
+    let a = x.export("Mesh_A");
+    for (leaf, field, expected) in [("Mesh_LookOrigin", "Origin", VECTOR), ("Mesh_LookRot", "RotOrigin", ROTATOR)] {
+        let look = x.export(leaf);
+        for (old, new) in [(a, look), (look, a)] {
+            let c = x.component(Some(old));
+            let e = script_text(x.refused(c, vec![some(new)]));
+            assert!(e.contains(&format!("{field} is a struct of another type, not a {expected}")), "{leaf}: {e}");
+        }
     }
 }
 
