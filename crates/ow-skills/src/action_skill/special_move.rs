@@ -86,7 +86,9 @@
 //!   7. `CurrentSMData` a `SpecialMoveData` struct and `SMDQueue` an array of that struct, else a `VmError::Script`
 //!      naming the field.
 //!
-//!   Each refusal is `NotYet { NotRead }`. Then: **no current move** (`CurrentSMData.SMD` None): `Play`'s own path
+//!   Each refusal is `NotYet { NotRead }`. Then: **no current move** (`CurrentSMData.SMD` None): first, the
+//!   definition's `GetSMDToPlay` must resolve without a load (`Vm::find_loaded_method`), else
+//!   [`QUEUE_CODE_NOT_LOADED`] (review r2 of #682: `Play`'s dispatch would load cold class code); then `Play`'s own path
 //!   here, with the arguments [`play_args`] builds (the first five as given, `Data` None, as the note reads the game),
 //!   its answer dropped; whatever it refuses stands, with its own record and its own "stopped after partial writes"
 //!   rule (Queue writes nothing before it). **A current move:** one `SpecialMoveData` appended at the end of
@@ -114,11 +116,11 @@ pub const RECORD: &str = "NATIVE_SPECIAL_MOVE_PLAY.md";
 /// The record `Queue` follows (lane IMPL-SPECIALMOVE-QUEUE).
 pub const QUEUE_RECORD: &str = "NATIVE_SPECIAL_MOVE_QUEUE.md";
 
-/// The refusal for a component with an owner interface and no `Owner` (the note's preflight step 2).
+/// The refusal for a component with an owner interface and no `Owner` (the note's preflight step 3, at 7dcb5cd).
 pub const QUEUE_NO_OWNER: &str =
     "SpecialMoveComponent.Queue: a component with an owner interface and no Owner (the game reads its Role unchecked)";
 
-/// The refusal for an owner below authority (the note's preflight step 3).
+/// The refusal for an owner below authority (the note's preflight step 5, at 7dcb5cd).
 pub const QUEUE_FORWARD: &str =
     "SpecialMoveComponent.Queue: the forward to the server (ServerSpecialMove_Queue) on an owner below authority";
 
@@ -681,6 +683,12 @@ fn require_queue_of(vm: &Vm, component: ObjRef, ty: StructId, what: &str) -> Res
     }
 }
 
+/// The refusal for a definition whose class code is not loaded, on the delegated path (review r2 of #682): `Play`'s
+/// path looks up `GetSMDToPlay` on it, and that lookup would load the class's code (a write: it registers functions
+/// and interns names).
+pub const QUEUE_CODE_NOT_LOADED: &str = "SpecialMoveComponent.Queue: the definition's class code is not loaded \
+     (Play's GetSMDToPlay lookup would load it; a load is a write)";
+
 /// The residency refusal's text (the note's section 5, "Loaded-only reads").
 pub const QUEUE_NOT_LOADED: &str = "SpecialMoveComponent.Queue: an object the store has not loaded (a load is a write)";
 
@@ -746,7 +754,16 @@ fn queue(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     require_queue_of(c.vm, component, ty, WHAT)?;
     let current = need(c.vm, component, "CurrentSMData")?;
     if object(&field(c.vm, &current, "SMD", WHAT)?, WHAT)?.is_none() {
-        // 3a: Play's path; its answer dropped, its refusals as they are.
+        // 3a: Play's path; its answer dropped, its refusals as they are. Its first step dispatches `GetSMDToPlay` on
+        // the definition, by a lookup that loads cold class code; so the lookup must answer without a load first
+        // (review r2 of #682). With the code loaded, that lookup loads nothing.
+        let (class, state) = {
+            let d = c.vm.space.heap.get(requested)?;
+            (d.class, d.state)
+        };
+        if c.vm.find_loaded_method(class, "GetSMDToPlay", state).is_none() {
+            return Err(NotYet::not_read(QUEUE_CODE_NOT_LOADED, QUEUE_RECORD).into());
+        }
         let f = c.vm.find_function(PATHS[5])?;
         let args = play_args(c)?;
         let mut inner = NativeCall::new(&mut *c.vm, f, Some(component), args);

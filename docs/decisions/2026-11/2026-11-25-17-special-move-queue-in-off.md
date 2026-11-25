@@ -27,6 +27,12 @@ this lane did not read the native, Ghidra or REA output, or `local/analysis/`. S
     it, so a refusal in `Play`'s preflight carries no partial-writes prefix;
   - **a current move:** one `SpecialMoveData` is appended at the end of `SMDQueue`, every field as given (`Data`
     included) and `SMD` the definition as given. That is the only write.
+- **Cold class code (review r2 of #682):** on the delegated path, `Play`'s first step dispatches `GetSMDToPlay` on
+  the definition by a lookup that loads the class's code when it is cold (it registers functions and interns names).
+  So Queue first asks `Vm::find_loaded_method` and refuses `NotYet { NotRead }` when the definition's class code is not
+  loaded. With the code loaded, `Play`'s own lookup loads nothing, so `Play`'s shared logic is unchanged. A test uses a
+  resident definition of a class nothing warmed: refused, its class code still cold. #518's counters alone would not
+  catch the load (without the check they stay unchanged while the class code loads); the test checks the class code.
 - **Owner and `SMI`:** the port now requires them to be the same actor (step 4). The first version did not, and
   review r1 of #682 found the hole: an `Owner` at authority with an autonomous-proxy `SMI` actor passed the forward
   test, and `Play`, reading `SMI`, then committed a start. Which actor the game would follow when they differ is not
@@ -38,7 +44,8 @@ this lane did not read the native, Ghidra or REA output, or `local/analysis/`. S
   1. no definition, and `SMI` None: nothing;
   2. no `Owner`: refused;
   2a. a lazy `Owner`, a lazy `SMI` actor and a lazy definition (store handles that stay unloaded), plus a stand-in
-     definition with no slots: each refused for residency, nothing loaded;
+     definition with no slots: each refused for residency, nothing loaded. A lazy definition is the residency
+     refusal also with a resident owner below authority and with no `Owner` (residency first);
   2b. an `Owner` and an `SMI` actor that are two resident authority pawns: the mismatch;
   3. and 4. the forward refused with and without a current move, and before the gate for an autonomous proxy with
      `bClientHasAuthority`;
@@ -46,6 +53,7 @@ this lane did not read the native, Ghidra or REA output, or `local/analysis/`. S
   6a. nothing current on the authority, with one entry already queued: `Play`'s replication-record `NotRead` stands
      unchanged (its text and record), with no prefix, and the queue and current move are unchanged;
   6b. the seam: the five arguments as given, or omitted, and `Data` None even when the caller passed one;
+  6c. a resident definition with cold class code: refused before `Play`'s path, the class code still unloaded;
   7. the two shape errors;
   8. Reference unbound (`reference_binds_nothing` walks `PATHS`).
 

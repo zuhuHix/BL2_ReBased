@@ -283,6 +283,10 @@ fn gearbox() -> Vec<u8> {
     payload.extend(t.p.object_tag("Actor", lazy_pawn));
     payload.extend_from_slice(&t.none);
     t.p.add_export(holder, "Holder", payload);
+    // Review r2 of #682: `ToyColdMove`, a definition class nothing in the fixture warms, and one loaded object of it.
+    let cold = t.class("ToyColdMove", definition);
+    let payload = bare(&mut t);
+    t.p.add_export(cold, "ToyColdMoveObject", payload);
     t.class("AnimNodeSpecialMoveBlend", blend_base);
     t.build()
 }
@@ -1302,4 +1306,43 @@ fn queue_refuses_an_owner_that_is_not_the_interface_s_actor() {
     let (missing, what) = queue_refused(&mut x, component, args);
     assert_eq!(missing, Missing::NotRead);
     assert!(what.contains(QUEUE_OWNER_MISMATCH), "{what}");
+}
+
+/// Review r2 of #682: nothing current, on the authority, with a resident definition whose class code is cold (its
+/// object loaded through the store, the class never looked up): refused before `Play`'s path dispatches
+/// `GetSMDToPlay`, so the class code stays unloaded, nothing is written and no name is interned.
+#[test]
+fn queue_refuses_a_definition_whose_class_code_is_cold() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTHORITY);
+    let path = ow_core::ObjectPath::parse("GearboxFramework.ToyColdMoveObject").unwrap();
+    let vm = x.vm();
+    let d = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let class = vm.space.heap.get(d).unwrap().class;
+    assert!(!vm.defs.is_unloaded(&vm.space, d), "the definition is resident");
+    assert!(!vm.class_code_loaded(class), "its class code is cold");
+    let args = x.six(d, pawn, pawn);
+    let (missing, what) = queue_refused(&mut x, component, args);
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.contains(QUEUE_CODE_NOT_LOADED), "{what}");
+    assert!(!x.world.vm.class_code_loaded(class), "still cold");
+}
+
+/// Review r2 of #682, test 2a's precedence: a lazy definition is the residency refusal both with a resident owner
+/// below authority (before the forward) and with no `Owner` at all (before the missing-Owner refusal).
+#[test]
+fn queue_residency_comes_before_the_owner_and_forward_refusals() {
+    for case in ["below authority", "no Owner"] {
+        let mut x = fx(ParityMode::Off);
+        let (pawn, component) = x.owner(SIMULATED);
+        if case == "no Owner" {
+            x.set(component, "Owner", Value::Object(None));
+        }
+        let (lazy_move, _) = lazy(&mut x);
+        let args = x.six(lazy_move, pawn, pawn);
+        let (missing, what) = queue_refused(&mut x, component, args);
+        assert_eq!(missing, Missing::NotRead, "{case}");
+        assert!(what.starts_with(&format!("{QUEUE_NOT_LOADED}: ")), "{case}: {what}");
+        assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy_move), "{case}: still unloaded");
+    }
 }
