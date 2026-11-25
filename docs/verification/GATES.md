@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**COUNTERS-MISS-CLASS-CODE-LOADS (2026-11-25, zuhuPC Linux, on main 03896e5):** AI-assisted (Claude Code, Opus 5.5).
+Write-free test checks also count class code loads (`Vm::class_code_loads`); runtime partial-write marking unchanged.
+`cargo test --workspace`: 3,403 passed / 4 failed (the expected Linux N1 tests) / 53 ignored. One existing test
+caught a code load; it is pinned as an ignored finding (`ow-inventory` `the_effect_lookup_loads_no_class_code`).
+`crate_edges_test.py` OK. Not run: `ctest`, `verify_packages.py --reader` (no cmake here), the installed
+`--slice-gate` (no install yet).
+
 **IMPL-ROW15 (2026-11-25, zuhu desktop (Linux), on fix/rust-setskeletalmesh-row15 rebased onto main 84b6d99):**
 AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off. Zero trailing counts mean no per-LOD data (the
 hub's ruling); an equal `LODInfo` length needs no write; a differing length is a fifth write, `LODInfo` = N natively
