@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-ROW15 (2026-11-25, zuhu desktop (Linux), on fix/rust-setskeletalmesh-row15: main bf9eea7 plus #673's four
+commits):** AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's row 15 in Off, on the hub's two rulings (zero
+trailing counts mean no per-LOD data; the default entry is the struct's script default, checked against the note):
+a differing `LODInfo` length is refilled with default entries as a fifth write. `cargo test --workspace -j 4`: 3,389
+passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored; `crate_edges_test.py` OK. Slice gate:
+not run (no install on this PC). Predicted, not run: link 8 passes row 15. No real-game run; UNVERIFIED in game.
+
 **IMPL-COMPONENT-CHECK (2026-11-25, zuhu desktop (Linux), on fix/rust-component-check from main 3ad1b86):**
 AI-assisted (Claude Code, Opus 5.5). The bounding cylinder's per-component check passes for a primitive component's
 class chain (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, #676 at e6ac5e9). Passing every descendant rests on the note's

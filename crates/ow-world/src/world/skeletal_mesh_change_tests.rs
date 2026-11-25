@@ -30,9 +30,11 @@ use crate::world::skeletal::{ReferenceSkeleton, SkeletalMeshes, SkeletonSource};
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const PATH: &str = "Engine.SkeletalMeshComponent.SetSkeletalMesh";
 const COMPONENT: &str = "Engine.SkeletalMeshComponent";
+const LOD_INFO: &str = "Engine.SkeletalMesh.SkelMeshComponentLODInfo";
 
 /// The component's fields, except `bHasValidBodies` (declared per class below).
-fn component_fields(t: &mut ScriptToy, c: i32, object: i32, mesh: i32) {
+/// `lod` is `LODInfo`'s element (kind, type reference).
+fn component_fields(t: &mut ScriptToy, c: i32, object: i32, mesh: i32, lod: (&str, i32)) {
     t.prop("Object", c, "SkeletalMesh", 0, mesh);
     toy_array_of(t, c, "SpaceBases", "Int", 0);
     for (n, k) in [("PhysicsAssetInstance", object), ("Animations", object), ("ParentAnimComponent", object), ("PhysicsAsset", object)] {
@@ -42,7 +44,7 @@ fn component_fields(t: &mut ScriptToy, c: i32, object: i32, mesh: i32) {
     t.prop("Bool", c, "bAnimTreeInitialised", 0, 0);
     toy_array_of(t, c, "MorphSets", "Object", object);
     t.prop_tail("Map", c, "MorphTargetIndexMap", 0, &ints(&[0, 0]));
-    toy_array_of(t, c, "LODInfo", "Int", 0);
+    toy_array_of(t, c, "LODInfo", lod.0, lod.1);
 }
 
 fn packages() -> Vec<(&'static str, Vec<u8>)> {
@@ -70,6 +72,7 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
             "BoolProperty",
             "StructProperty",
             "MapProperty",
+            "ByteProperty",
         ]);
         let core = t.p.add_import("Core", "Package", 0, "Core");
         let object = t.p.add_import("Core", "Class", core, "Object");
@@ -99,20 +102,41 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         t.prop("Struct", int_origin, "RotOrigin", 0, rotator);
         let no_rot = t.class("ToyNoRotMesh", object);
         t.prop("Struct", no_rot, "Origin", 0, vector);
+        // IMPL-ROW15: LODInfo's entry struct (its InstanceWeightIdx default -1 is set in `fx_with`), and one of the
+        // same shape whose default the fixture leaves at 0.
+        let lod_struct = |t: &mut ScriptToy, name: &str| {
+            let s = toy_struct(t, mesh, name, None);
+            toy_array_of(t, s, "HiddenMaterials", "Bool", 0);
+            t.prop("Bool", s, "bForceWireframe", 0, 0);
+            t.prop("Bool", s, "bAlwaysUseInstanceWeights", 0, 0);
+            t.prop("Byte", s, "InstanceWeightUsage", 0, 0);
+            t.prop("Int", s, "InstanceWeightIdx", 0, 0);
+            s
+        };
+        let lod = lod_struct(&mut t, "SkelMeshComponentLODInfo");
+        let bad_lod = lod_struct(&mut t, "ToyBadLODInfo");
+        let good = ("Struct", lod);
         let component = t.class("SkeletalMeshComponent", object);
-        component_fields(&mut t, component, object, object);
+        component_fields(&mut t, component, object, object, good);
         t.prop("Bool", component, "bHasValidBodies", 0, 0);
         // Row D's cases: bHasValidBodies an int; no bHasValidBodies.
         let int_bodies = t.class("ToyIntBodiesComponent", object);
-        component_fields(&mut t, int_bodies, object, object);
+        component_fields(&mut t, int_bodies, object, object, good);
         t.prop("Int", int_bodies, "bHasValidBodies", 0, 0);
         let no_bodies = t.class("ToyNoBodiesComponent", object);
-        component_fields(&mut t, no_bodies, object, object);
+        component_fields(&mut t, no_bodies, object, object, good);
         // FIX-645-PREFLIGHT: bHasValidBodies declared first, so it takes the last slot (the toy's slots run in reverse
         // declaration order) and a cut there leaves every slot the rows read.
         let late_bodies = t.class("ToyLateBodiesComponent", object);
         t.prop("Bool", late_bodies, "bHasValidBodies", 0, 0);
-        component_fields(&mut t, late_bodies, object, object);
+        component_fields(&mut t, late_bodies, object, object, good);
+        // IMPL-ROW15: an entry struct whose default is not the note's, and LODInfo declared as ints.
+        let bad_default = t.class("ToyBadLodComponent", object);
+        component_fields(&mut t, bad_default, object, object, ("Struct", bad_lod));
+        t.prop("Bool", bad_default, "bHasValidBodies", 0, 0);
+        let int_lod = t.class("ToyIntLodComponent", object);
+        component_fields(&mut t, int_lod, object, object, ("Int", 0));
+        t.prop("Bool", int_lod, "bHasValidBodies", 0, 0);
         let holder = t.class("ToyHolder", object);
         for n in ["Lazy", "Lazy2", "Broken"] {
             t.prop("Object", holder, n, 0, object);
@@ -152,8 +176,9 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
     vec![("Core.upk", core), ("Engine.upk", engine), ("GD_ToyMesh.upk", gd)]
 }
 
-/// The LOD counts by mesh leaf; any other leaf has no answer.
-struct Lods(Vec<(&'static str, usize)>);
+/// The LOD counts by mesh leaf (any other leaf has no answer), and the trailing counts by leaf: a leaf listed in the
+/// second list answers it (`None` for no list); any other leaf with a count answers that many zeros.
+struct Lods(Vec<(&'static str, usize)>, Vec<(&'static str, Option<Vec<usize>>)>);
 
 impl SkeletonSource for Lods {
     fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
@@ -161,6 +186,13 @@ impl SkeletonSource for Lods {
     }
     fn lod_count(&self, _: &str, _: &str, leaf: &str) -> Result<Option<usize>, String> {
         Ok(self.0.iter().find(|(l, _)| *l == leaf).map(|(_, n)| *n))
+    }
+    fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
+        let leaf = package.object(index).map_err(|e| e.to_string())?.name.clone();
+        if let Some((_, t)) = self.1.iter().find(|(l, _)| *l == leaf) {
+            return Ok(t.clone());
+        }
+        Ok(self.0.iter().find(|(l, _)| *l == leaf).map(|(_, n)| vec![0; *n]))
     }
 }
 
@@ -175,8 +207,13 @@ impl Drop for Fx {
     }
 }
 
-/// The fixture, with the LOD layer answering `lods` (or not installed with `None`).
+/// The fixture, with the LOD layer answering `lods` (or not installed with `None`), zero trailing counts.
 fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
+    fx_trailing(lods, Vec::new())
+}
+
+/// [`fx_with`], with the trailing counts of `trailing`'s leaves.
+fn fx_trailing(lods: Option<Vec<(&'static str, usize)>>, trailing: Vec<(&'static str, Option<Vec<usize>>)>) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-world-smmc-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let files = packages();
@@ -189,9 +226,16 @@ fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
         "Engine.ToyIntBodiesComponent",
         "Engine.ToyNoBodiesComponent",
         "Engine.ToyLateBodiesComponent",
+        "Engine.ToyBadLodComponent",
+        "Engine.ToyIntLodComponent",
     ] {
         vm.find_class(c).unwrap();
     }
+    // IMPL-ROW15: the entry struct's script default holds the note's index -1.
+    let lod = vm.space.classes.struct_by_path(LOD_INFO).unwrap();
+    let idx = vm.space.names.find("InstanceWeightIdx").unwrap();
+    let (entry, _) = vm.space.classes.struct_layout(lod).unwrap().field(idx).unwrap();
+    vm.space.set_struct_default(lod, entry, Value::Int(-1)).unwrap();
     let component = vm.space.classes.by_path(COMPONENT).unwrap();
     let mesh = vm.space.classes.by_path("Engine.SkeletalMesh").unwrap();
     let d = |vm: &mut Vm, n: &str, k: PropKind| PropertyDecl::new(vm.space.names.intern(n), k);
@@ -203,7 +247,7 @@ fn fx_with(lods: Option<Vec<(&'static str, usize)>>) -> Fx {
     vm.declare_function(f).unwrap();
     register(&mut vm).unwrap();
     if let Some(l) = lods {
-        SkeletalMeshes::install(&mut vm, Box::new(Lods(l))).unwrap();
+        SkeletalMeshes::install(&mut vm, Box::new(Lods(l, trailing))).unwrap();
     }
     let mut x = Fx { vm, dir };
     for n in ["Mesh_A", "Mesh_B", "Mesh_Zero", "Mesh_IntOrigin", "Mesh_NoRot", "Mesh_LookOrigin", "Mesh_LookRot", "Holder_0"] {
@@ -451,29 +495,92 @@ fn origin_declarations_and_negative_zero() {
     assert_eq!(x.get(c, "SkeletalMesh"), some(b), "-0.0 is zero");
 }
 
-/// Test 7: row 15. No layer answer: LayerAbsent; a known zero with an empty `LODInfo`: nothing; a known 2, with two
-/// entries and with none: LayerAbsent; a known zero against a non-empty `LODInfo`: LayerAbsent.
+/// IMPL-ROW15: `n` entries of `LODInfo`'s struct, each its script default with the usage byte set to `usage` (an
+/// invented value that tells a kept entry from a refilled one).
+fn entries(x: &Fx, n: usize, usage: u8) -> Value {
+    let ty = x.vm.space.classes.struct_by_path(LOD_INFO).unwrap();
+    let mut e = x.vm.space.classes.struct_defaults(ty).unwrap();
+    let id = x.vm.space.names.find("InstanceWeightUsage").unwrap();
+    let (i, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+    e.struct_mut().unwrap().fields[usize::try_from(i).unwrap()] = Value::Byte(usage);
+    Value::array(vec![e; n])
+}
+
+/// Test 7, row 15 on the hub's rulings (IMPL-ROW15): with all trailing counts zero, a length that differs from the
+/// LOD count makes a fifth write, `LODInfo` refilled with that many default entries (index -1, flags clear, no hidden
+/// materials, the default's usage byte); an equal length writes nothing more. N=1 against an empty `LODInfo` is link
+/// 8's shape.
 #[test]
-fn the_lod_row() {
-    let mut x = fx_with(Some(vec![("Mesh_A", 0), ("Mesh_B", 2)]));
+fn the_lod_row_refills_lod_info_with_default_entries() {
+    let mut x = fx_with(Some(vec![("Mesh_A", 1), ("Mesh_B", 2), ("Mesh_Zero", 0)]));
     let (a, b, zero) = (x.export("Mesh_A"), x.export("Mesh_B"), x.export("Mesh_Zero"));
-    let c = x.component(None);
-    assert_eq!(kind(x.refused(c, vec![some(zero)])), (Missing::LayerAbsent(LOD_LAYER), LOD.to_string()), "no answer");
-    let c = x.component(None);
-    x.call(c, vec![some(a)]).unwrap();
-    for entries in [vec![Value::Int(0), Value::Int(0)], vec![]] {
+    let default = entries(&x, 1, 0);
+    let default = default.elements().unwrap()[0].clone();
+    let idx = x.vm.space.names.find("InstanceWeightIdx").unwrap();
+    let ty = x.vm.space.classes.struct_by_path(LOD_INFO).unwrap();
+    let (i, _) = x.vm.space.classes.struct_layout(ty).unwrap().field(idx).unwrap();
+    assert_eq!(default.as_struct().unwrap().fields[usize::try_from(i).unwrap()], Value::Int(-1), "the fixture");
+    // (new mesh, LODInfo before, writes, LODInfo after)
+    let cases = [
+        (a, Value::array(Vec::new()), 5, Value::array(vec![default.clone()])),
+        (b, entries(&x, 2, 7), 4, entries(&x, 2, 7)),
+        (b, entries(&x, 1, 7), 5, Value::array(vec![default.clone(); 2])),
+        (zero, entries(&x, 1, 7), 5, Value::array(Vec::new())),
+        (zero, Value::array(Vec::new()), 4, Value::array(Vec::new())),
+    ];
+    for (k, (mesh, before, writes, after)) in cases.into_iter().enumerate() {
         let c = x.component(None);
-        x.put(c, "LODInfo", Value::array(entries));
-        assert_eq!(kind(x.refused(c, vec![some(b)])).0, Missing::LayerAbsent(LOD_LAYER), "a known 2");
+        x.put(c, "LODInfo", before);
+        let (w, d, l, n) = marks(&x.vm);
+        x.call(c, vec![some(mesh)]).unwrap();
+        assert_eq!(marks(&x.vm), (w + writes, d, l, n), "case {k}: the writes, no draw, no load, no name");
+        assert_eq!(x.get(c, "LODInfo"), after, "case {k}");
+        assert_eq!(x.get(c, "SkeletalMesh"), some(mesh), "case {k}");
     }
-    let c = x.component(None);
-    x.put(c, "LODInfo", Value::array(vec![Value::Int(0)]));
-    assert_eq!(kind(x.refused(c, vec![some(a)])).0, Missing::LayerAbsent(LOD_LAYER), "zero against one entry");
-    // No layer installed at all: no answer.
+}
+
+/// Test 7's refusals, unchanged and write-free: no layer, a count with no trailing list, a non-zero trailing count,
+/// and a trailing list of another length are row 15's `LayerAbsent`.
+#[test]
+fn the_lod_row_refuses_without_zero_trailing_counts() {
     let mut y = fx_with(None);
     let a = y.export("Mesh_A");
     let c = y.component(None);
-    assert_eq!(kind(y.refused(c, vec![some(a)])).0, Missing::LayerAbsent(LOD_LAYER));
+    assert_eq!(kind(y.refused(c, vec![some(a)])), (Missing::LayerAbsent(LOD_LAYER), LOD.to_string()), "no layer");
+    let mut x = fx_trailing(
+        Some(vec![("Mesh_A", 1), ("Mesh_B", 2), ("Mesh_Zero", 1)]),
+        vec![("Mesh_A", None), ("Mesh_B", Some(vec![0, 1])), ("Mesh_Zero", Some(vec![0, 0]))],
+    );
+    for leaf in ["Mesh_A", "Mesh_B", "Mesh_Zero"] {
+        let mesh = x.export(leaf);
+        let c = x.component(None);
+        assert_eq!(kind(x.refused(c, vec![some(mesh)])), (Missing::LayerAbsent(LOD_LAYER), LOD.to_string()), "{leaf}");
+    }
+    // A mesh the source has no count for.
+    let mut z = fx_with(Some(vec![("Mesh_A", 1)]));
+    let b = z.export("Mesh_B");
+    let c = z.component(None);
+    assert_eq!(kind(z.refused(c, vec![some(b)])).0, Missing::LayerAbsent(LOD_LAYER), "no count");
+}
+
+/// D's `LODInfo` checks (IMPL-ROW15): an entry struct whose script default is not the note's is `NotRead`
+/// (`LOD_DEFAULT`) when a refill is planned, and not asked when none is; `LODInfo` declared as ints is a script error
+/// naming it with a new mesh, and not read on a clear. Each refusal writes nothing.
+#[test]
+fn the_lod_info_declaration_and_default_are_checked_before_any_write() {
+    let mut x = fx_with(Some(vec![("Mesh_A", 1), ("Mesh_Zero", 0)]));
+    let (a, zero) = (x.export("Mesh_A"), x.export("Mesh_Zero"));
+    let c = x.component_of("Engine.ToyBadLodComponent", None);
+    assert_eq!(kind(x.refused(c, vec![some(a)])), (Missing::NotRead, LOD_DEFAULT.to_string()));
+    let c = x.component_of("Engine.ToyBadLodComponent", None);
+    x.call(c, vec![some(zero)]).unwrap();
+    assert_eq!(x.get(c, "SkeletalMesh"), some(zero), "no refill planned: the default is not asked");
+    let c = x.component_of("Engine.ToyIntLodComponent", None);
+    assert!(script_text(x.refused(c, vec![some(zero)])).contains("LODInfo"));
+    let c = x.component_of("Engine.ToyIntLodComponent", Some(zero));
+    let (w, ..) = marks(&x.vm);
+    x.call(c, vec![Value::Object(None)]).unwrap();
+    assert_eq!(marks(&x.vm).0, w + 4, "a clear does not read LODInfo");
 }
 
 /// Test 9: the clear (a set mesh to None): an unloaded old mesh is row 5; a resident old mesh at zero origin gives the
@@ -487,12 +594,13 @@ fn the_clear() {
     assert_eq!(kind(x.refused(c, vec![Value::Object(None)])).1, OLD_UNLOADED);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy));
     let c = x.component(Some(a));
-    x.put(c, "LODInfo", Value::array(vec![Value::Int(5)]));
+    let kept = entries(&x, 1, 5);
+    x.put(c, "LODInfo", kept.clone());
     let (w, ..) = marks(&x.vm);
     x.call(c, vec![Value::Object(None)]).unwrap();
     assert_eq!(marks(&x.vm).0, w + 4);
     assert_eq!(x.get(c, "SkeletalMesh"), Value::Object(None));
-    assert_eq!(x.get(c, "LODInfo"), Value::array(vec![Value::Int(5)]), "a clear leaves LODInfo");
+    assert_eq!(x.get(c, "LODInfo"), kept, "a clear leaves LODInfo");
     x.put_member(a, "RotOrigin", "Roll", Value::Int(1));
     let c = x.component(Some(a));
     assert_eq!(kind(x.refused(c, vec![Value::Object(None)])).0, Missing::LayerAbsent(TRANSFORM_LAYER));

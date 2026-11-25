@@ -36,18 +36,26 @@
 //! 12. [10] a set `ParentAnimComponent`: `LayerAbsent(`[`BONE_NAMES_LAYER`]`)`, the parent bone map;
 //! 13. [11] a set `PhysicsAsset`: the same layer, for `bHasValidBodies`;
 //! 14. [15] a non-empty `MorphSets`, or a `MorphTargetIndexMap` that is not None: `NotPorted` ([`MORPH`]);
-//! 15. [16] a new mesh only: the LOD count from the skeletal mesh data layer (`skeletal::lod_count`). No count, or a
-//!     known count other than zero against an empty `LODInfo`: `LayerAbsent(`[`LOD_LAYER`]`)`. A known zero with an
-//!     empty `LODInfo`: nothing.
+//! 15. [16] a new mesh only (lane IMPL-ROW15, on the hub's two rulings): the LOD count N
+//!     (`skeletal::lod_count`) and each LOD model's trailing count (`skeletal::lod_trailing_counts`, #673). No count,
+//!     no trailing list, a list of another length, or any non-zero trailing count: `LayerAbsent(`[`LOD_LAYER`]`)`.
+//!     All zero: no LOD has the per-LOD data, so step 16's usage loop does nothing (**UNVERIFIED**: #673's fit that a
+//!     zero trailing count stands for "no such data", ruled by the hub). Then, when `LODInfo`'s length differs from
+//!     N, `LODInfo` is planned as N default entries (D); when it equals N, nothing.
 //!
 //! **D. The destinations:** `bAnimTreeInitialised` (a bool), `SkeletalMesh` (an object field taking the new mesh),
 //! `SpaceBases` (an array) and `bHasValidBodies` (a bool), each declared on the component's class with that kind, and
-//! each planned value accepted by the heap's own check. Anything else is `VmError::Script` naming the field.
+//! each planned value accepted by the heap's own check. With a new mesh, `LODInfo` too: a dynamic array of a struct.
+//! Anything else is `VmError::Script` naming the field. When row 15 plans the resize, each entry is the struct's script
+//! default, which must hold what the note says a default entry is: one array (no hidden materials) empty, two bools
+//! (the flags) clear, one int (the index) -1, and a byte (the usage byte, taken as the default holds it:
+//! **UNVERIFIED**, the note does not give it), nothing else. Otherwise `NotYet { NotRead }` ([`LOD_DEFAULT`]).
 //!
-//! **The writes**, only after A to D: four, in the native's order ([4], [6], [7], [11]): `bAnimTreeInitialised` false,
-//! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array, `bHasValidBodies` false. Each is written
-//! even when unchanged. `MorphTargetIndexMap`, `LODInfo`, the transform, the native-only field of step 12 and step
-//! 17's notification are not written. A `NotYet` raised after the first write would be marked "stopped after partial
+//! **The writes**, only after A to D, in the native's order ([4], [6], [7], [11], [16]): `bAnimTreeInitialised` false,
+//! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array, `bHasValidBodies` false, and, when row
+//! 15 planned it, `LODInfo` the N default entries. The first four are written even when unchanged.
+//! `MorphTargetIndexMap`, the transform, the native-only field of step 12 and step 17's notification are not
+//! written. A `NotYet` raised after the first write would be marked "stopped after partial
 //! writes: " (none is expected: row 1 settles every slot and D every declaration and value, which is all a heap write
 //! checks).
 
@@ -108,6 +116,8 @@ pub const VALID_BODIES: &str = "SetSkeletalMesh: bHasValidBodies (the PhysicsAss
 pub const MORPH: &str = "SetSkeletalMesh: the morph-target index map";
 /// Row 15's text.
 pub const LOD: &str = "SetSkeletalMesh: the LOD info from the new mesh's LOD models";
+/// D's refusal when `LODInfo`'s entry struct has no default of the shape the note gives.
+pub const LOD_DEFAULT: &str = "SetSkeletalMesh: the LOD info entry's default";
 /// Row 1's text for a receiver with fewer slots than its class's layout.
 pub const CUT: &str =
     "SetSkeletalMesh: the component has fewer slots than its class (a stand-in or a cut object; its fields are not read)";
@@ -167,12 +177,12 @@ fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The mesh change's four writes, settled by the preflight (module documentation, D). Private with [`answer`] and
+/// The mesh change's four or five writes, settled by the preflight (module documentation, D). Private with [`answer`] and
 /// [`Plan::apply`], so no caller can change the receiver between the two (review r1 of #664, item 2).
 #[derive(Debug)]
 struct Plan {
     component: ObjRef,
-    writes: [(PropId, Value); 4],
+    writes: Vec<(PropId, Value)>,
 }
 
 impl Plan {
@@ -239,20 +249,26 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
     {
         return Err(NotYet::not_ported(MORPH, CHANGE_RECORD).into());
     }
-    // Row 15, a new mesh only.
-    if let Some(new) = new_mesh {
-        let count = crate::world::skeletal::lod_count(vm, new)?;
-        if count != Some(0) || array_len(vm, component, "LODInfo")? != 0 {
-            return Err(NotYet::layer_absent(LOD, LOD_LAYER, CHANGE_RECORD).into());
-        }
-    }
+    // Row 15, a new mesh only: Some(N) when LODInfo is to be refilled with N default entries.
+    let resize = match new_mesh {
+        Some(new) => lod_resize(vm, component, new)?,
+        None => None,
+    };
     // D, the destinations.
-    let writes = [
+    let mut writes = vec![
         destination(vm, component, "bAnimTreeInitialised", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
         destination(vm, component, "SkeletalMesh", Value::Object(new_mesh), |k| matches!(k, PropKind::Object { .. }))?,
         destination(vm, component, "SpaceBases", Value::array(Vec::new()), |k| matches!(k, PropKind::Array(_)))?,
         destination(vm, component, "bHasValidBodies", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
     ];
+    if new_mesh.is_some() {
+        let ty = lod_info_struct(vm, component)?;
+        if let Some(n) = resize {
+            let entry = lod_default(vm, ty)?;
+            let value = Value::array(vec![entry; n]);
+            writes.push(destination(vm, component, "LODInfo", value, |k| matches!(k, PropKind::Array(_)))?);
+        }
+    }
     Ok(Some(Plan { component, writes }))
 }
 
@@ -260,6 +276,62 @@ fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases
 fn short(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     let x = vm.space.heap.get(o)?;
     Ok(vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize))
+}
+
+/// Row 15 on the new mesh (module documentation): `Ok(Some(n))` when `LODInfo` is to be refilled with `n` default
+/// entries, `Ok(None)` when its length is already the LOD count. Reads only.
+fn lod_resize(vm: &Vm, component: ObjRef, new: ObjRef) -> Result<Option<usize>, VmError> {
+    let absent = || -> VmError { NotYet::layer_absent(LOD, LOD_LAYER, CHANGE_RECORD).into() };
+    let count = crate::world::skeletal::lod_count(vm, new)?.ok_or_else(absent)?;
+    let trailing = crate::world::skeletal::lod_trailing_counts(vm, new)?.ok_or_else(absent)?;
+    // The hub's ruling (UNVERIFIED, #673's fit): a zero trailing count stands for "no per-LOD data".
+    if trailing.len() != count || trailing.iter().any(|&t| t != 0) {
+        return Err(absent());
+    }
+    Ok((array_len(vm, component, "LODInfo")? != count).then_some(count))
+}
+
+/// D for `LODInfo` (module documentation): declared on the component's class as a dynamic array of a struct; its
+/// struct. Anything else is `VmError::Script` naming the field.
+fn lod_info_struct(vm: &Vm, component: ObjRef) -> Result<ow_object::ids::StructId, VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let path = || vm.space.classes.layout(class).path().to_string();
+    let p = vm.space.prop(class, "LODInfo").ok_or_else(|| script(format!("{} declares no LODInfo", path())))?;
+    match vm.space.classes.decl(p).map(|d| (&d.kind, d.array_dim)) {
+        Some((PropKind::Array(inner), 1)) => match **inner {
+            PropKind::Struct(ty) => Ok(ty),
+            ref k => Err(script(format!("{}.LODInfo holds {}, not a struct", path(), k.kind_name()))),
+        },
+        _ => Err(script(format!("{}.LODInfo is not declared as a dynamic array", path()))),
+    }
+}
+
+/// One default `LODInfo` entry: the struct's script default, checked against the note's default entry (module
+/// documentation, D). A struct of another shape, or a default that differs, is `NotYet { NotRead }` ([`LOD_DEFAULT`]).
+fn lod_default(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> {
+    let refuse = || -> VmError { NotYet::not_read(LOD_DEFAULT, CHANGE_RECORD).into() };
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(refuse)?;
+    let value = vm.space.classes.struct_defaults(ty).map_err(|_| refuse())?;
+    let s = value.as_struct().ok_or_else(refuse)?;
+    let (mut arrays, mut bools, mut ints, mut bytes) = (0, 0, 0, 0);
+    for (entry, decl) in layout.fields() {
+        let v = s.fields.get(entry as usize).ok_or_else(refuse)?;
+        let count = match (&decl.kind, v) {
+            (PropKind::Array(_), v) if v.elements().is_some_and(<[Value]>::is_empty) => &mut arrays,
+            (PropKind::Bool, Value::Bool(false)) => &mut bools,
+            (PropKind::Int, Value::Int(-1)) => &mut ints,
+            (PropKind::Byte { .. }, Value::Byte(_)) => &mut bytes,
+            _ => return Err(refuse()),
+        };
+        if decl.array_dim != 1 {
+            return Err(refuse());
+        }
+        *count += 1;
+    }
+    if (arrays, bools, ints, bytes) != (1, 2, 1, 1) {
+        return Err(refuse());
+    }
+    Ok(value)
 }
 
 /// Rows 5 and 6: `mesh` resident. An unloaded or a failed handle is `NotRead` with `unloaded`; one with fewer slots
