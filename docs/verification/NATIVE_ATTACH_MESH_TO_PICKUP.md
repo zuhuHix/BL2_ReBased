@@ -120,7 +120,7 @@ The scene layer leaves `bAttached` as it was, so that last case does not arise o
 
 ### 2.1 Amendment (2026-11-25): the owner branch, read
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-DEFERRED-REATTACH-OWNER (decision 2026-11-25-NNN), analyst only:
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-DEFERRED-REATTACH-OWNER (decision 2026-11-25-45), analyst only:
 **another lane implements this section.** Raw output stays under ignored `local/analysis/reattach/`. **Every rule
 here is UNVERIFIED in the running game.**
 
