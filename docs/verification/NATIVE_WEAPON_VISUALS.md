@@ -69,9 +69,12 @@ already reads its behaviour. This amendment re-reads it for the edge cases an Of
   outer (a default outer when none is passed), no name and no template. **The class is not checked**: a None
   `MaterialClass` is read through unchecked;
 - **its parent:** set through the material's own parent setter, a virtual (by fit `SetParent`; not read in detail);
-- **the parts:** each of the eleven part slots in order (the two name parts end the walk) applies its own parameters to
-  the instance, through a part virtual. That is section 1's `MaterialVectorParameterValues` step; the virtual was not
-  re-read;
+- **the parts:** the nine non-name part slots, in section 1's order (Body, Grip, Barrel, Sight, Stock, Elemental,
+  Accessory 1, Accessory 2, Material), skipping empty slots and the two name parts. Each part applies its own
+  parameters to the instance through a part virtual. That is section 1's `MaterialVectorParameterValues` step; the
+  virtual was not re-read. Section 1's "a later part overwrites an earlier one with the same name" is a reading of
+  behaviour only. The instance's full vector-parameter setter (whether it appends a new name, and any render update)
+  stays unread;
 - **the answer:** the instance.
 
 **Loads.** The native itself loads nothing. It reads the definition data's objects, which the weapon's set-up has made
@@ -90,6 +93,8 @@ section as record. Reference is unchanged.
 `NotYet` of kind `NotRead`, "BuildWeaponMaterial: an object the store has not loaded (a load is a write)". A field of
 the wrong kind is a `VmError::Script` naming it. In order:
 1. `WeaponTypeDefinition` None: answer None. Nothing more is read;
+1a. **the outer:** the weapon argument None is a `NotYet` of kind `NotRead`, "BuildWeaponMaterial: the default outer
+    (used when no weapon is passed) is not read". `InitMeshes` always passes `Self`;
 2. **the parent:**
    - with the Material part set and its `Material` set: the parent is that `Material`;
    - with no such `Material` and a mesh component passed: a `NotYet` of kind `NotRead`, "BuildWeaponMaterial: the
@@ -97,7 +102,17 @@ the wrong kind is a `VmError::Script` naming it. In order:
    - with neither: the parent is None;
 3. **the class:** `WeaponTypeDefinition.MaterialClass` None is a `NotYet` of kind `NotRead`, "BuildWeaponMaterial: a
    weapon type with no MaterialClass (the game constructs it unchecked)". A class that does not descend from
-   `Engine.MaterialInstanceConstant` is the same kind of refusal, naming the class (only that family was seen);
+   `Engine.MaterialInstanceConstant` is the same kind of refusal, naming the class (only that family was seen).
+   **Both classes must be ready with no load:**
+   - `MaterialClass` and `Engine.MaterialInstanceConstant` each pass the `ready_class` rule (`ow-inventory`
+     `globals::ready_class`: a defined layout and loaded function and state code), so the descent check reads loaded
+     classes only;
+   - `MaterialClass`'s class default object is already resident, found by a load-free lookup, because the commit
+     creates the instance from it.
+
+   Otherwise a `NotYet` of kind `NotRead`, "BuildWeaponMaterial: the class <path>, not loaded (a class load is a
+   write)". Without this, the commit's creation (the VM's `instantiate_from_defaults`, which reaches `class_default`)
+   could load the default object or register class code during the commit;
 4. **the parts' parameters:** for each part slot in order, skipping empty slots and the name parts, read the part's
    `MaterialVectorParameterValues` (an array of `ParameterName`, `ParameterValue`). Any entry at all is a `NotYet` of
    kind `NotRead`, "BuildWeaponMaterial: the material instance's vector-parameter setter (not read)". The setter's
@@ -107,8 +122,11 @@ the wrong kind is a `VmError::Script` naming it. In order:
 **Commit** (only when the preflight passes):
 1. create one object of `MaterialClass` with the weapon as its outer, no name and no template, through the VM's own
    object creation (as a script `new` does);
-2. its `Parent` = the parent of step 2. This is by fit to the parent setter. Its render side is not ported, and
-   nothing else is written;
+2. its `Parent` = the parent of step 2. **UNVERIFIED by name:** the parent setter's state effect was not read in
+   detail. The write assumes the setter's only script-visible effect is the `Parent` field its name targets. Its render
+   work is not ported. The guess is safe for the slice because nothing in the port reads material render state, and the
+   one later script read of the instance (`GetScalarParameterValue`) is a separate native with its own rule. If a
+   later reading shows other state, this step changes;
 3. answer the instance.
 
 Creating the object is the first write. A refusal after it cannot happen here, because every check is in the
@@ -125,17 +143,24 @@ candidate stop, and after it `GetScalarParameterValue` on the instance. An eleme
 Synthetic, with `package()` / `tag()`. Each preflight refusal leaves #518's three counters and the name table
 unchanged, and causes no class-code load (where #685 has landed):
 1. definition data with no `WeaponTypeDefinition`: None, and nothing created;
-2. a Material part with a `Material`, and a toy `MaterialClass` deriving from `MaterialInstanceConstant`: one new
-   object of that class, its outer the weapon, its `Parent` that `Material`. The heap grows by one object, and nothing
-   else changes;
+2. link 8's call shape: a weapon, a mesh component passed (as `InitMeshes` passes `FirstPersonMesh`), a Material
+   part with a `Material`, and a ready toy `MaterialClass` deriving from `MaterialInstanceConstant` with a resident
+   default object. There is no refusal: one new object of that class, its outer the weapon, its `Parent` that
+   `Material`. The heap grows by one object, and nothing else changes;
 3. no Material part, no mesh component: an instance with `Parent` None;
-4. no Material part, a mesh component passed: the material-0 `NotRead`, nothing created;
+4. no Material part, a mesh component passed: the material-0 `NotRead`, nothing created. The same with a Material
+   part whose `Material` is None;
 5. `MaterialClass` None: the class `NotRead`, nothing created. A class outside the `MaterialInstanceConstant` family:
    the same refusal, naming it;
 6. an elemental part with one `p_EmissiveColor` entry: the setter's `NotRead`, nothing created;
 7. a lazy Material part, or a lazy `Material`: the "not loaded" `NotRead`, nothing loaded;
 8. `MaterialVectorParameterValues` not declared as an array of that struct: `VmError::Script` naming it;
-9. Reference: unchanged.
+9. a name part (`PrefixPartDefinition` or `TitlePartDefinition`) carrying a `MaterialVectorParameterValues` entry, and
+   an empty slot: neither is walked, and nothing is refused (test 2's answer);
+10. a cold `MaterialClass` (layout or code not loaded, or no resident default object): the class `NotRead`, no
+    class-code load, counters unchanged, nothing created;
+11. a None weapon argument: the default-outer `NotRead`, nothing created;
+12. Reference: unchanged.
 
 ## 2. Glow scale and the firing impulse (native, per tick)
 

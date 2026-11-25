@@ -19,4 +19,10 @@ bounds check changed.
   Then one object is created with its `Parent`, and that is the answer. Reference unchanged; tests listed.
 - **On link 8:** with a Material part and no elemental part, the native answers a new instance, and `SetMaterial` is
   the next candidate stop.
+- **Review r1 (#698):**
+  - `MaterialClass` and `MaterialInstanceConstant` must be ready classes, with a resident default object;
+  - a None weapon is the default-outer `NotRead`;
+  - the `Parent` write is labelled UNVERIFIED by name, with why it is safe;
+  - the setter's overwrite reading is behaviour only, and the nine walked slots are named;
+  - tests for link 8's call shape, a None `Material`, name parts, a cold class and a None weapon.
 - **Clean room:** a different lane implements this note.
