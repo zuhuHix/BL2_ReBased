@@ -171,6 +171,32 @@ fn startup() -> Vec<u8> {
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export(expression, "ToyExpr_C", payload);
+    // The walk's cap (review of #712, delta r1): `ToyPart_Many` names `ToyMat_Many`, a Material with 70 Startup
+    // expressions; `ToyMat_NoneOnly`'s only expression entry is None.
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Many", payload);
+    let refs: Vec<i32> = (0..70).map(|i| next + 2 + i).collect();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.array_tag("Expressions", 70, &ints(&refs)));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(toy_material, "ToyMat_Many", payload);
+    for i in 0..70 {
+        let mut payload = ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(expression, &format!("ToyExpr_Many{i}"), payload);
+    }
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_NoneOnly", payload);
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.array_tag("Expressions", 1, &ints(&[0])));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(toy_material, "ToyMat_NoneOnly", payload);
     // `ToyHolder_0` names `ToyPart_Mat`, so the part is a store handle not loaded yet when reached through it.
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Part", part_mat));
@@ -261,7 +287,11 @@ fn off_loads_the_material_part_s_material_and_logs_it() {
     assert!(lines[2].contains("the parent chain ends at Startup.ToyMati_0 (no Parent)"), "{}", lines[2]);
     let (before, n) = (x.counts(), x.vm.log.len());
     preload_material_part_material(&mut x.vm, weapon).unwrap();
-    assert_eq!((x.counts(), x.vm.log.len()), (before, n), "already loaded: nothing");
+    assert_eq!(x.counts(), before, "already loaded: no load");
+    // The graph is walked again (review of #712, delta r1): only its chain-end line is new.
+    let new: Vec<&String> = x.vm.log[n..].iter().collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert!(new[0].contains("the parent chain ends at Startup.ToyMati_0 (no Parent)"), "{}", new[0]);
 }
 
 /// No part, a part with no material, and a part that is itself an unloaded handle: nothing, no line, no load.
@@ -538,4 +568,51 @@ fn the_scalar_expression_class_is_warmed_only_for_a_material_with_expressions() 
     preload_material_classes(&mut x.vm, weapon).unwrap();
     assert!(x.vm.space.classes.by_path(SCALAR_EXPRESSION_CLASS).is_none(), "no expressions: not warmed");
     assert!(x.class_lines().iter().all(|l| !l.contains(SCALAR_EXPRESSION_CLASS)));
+}
+
+/// Review of #712 (delta r1): the walk's total cap. A Material with 70 Startup expressions: the walk visits 64 objects
+/// (the material and 63 expressions), logs the cap, and the 64th expression on stays unloaded.
+#[test]
+fn the_walk_stops_at_its_cap_with_a_line() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Many");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let many = x.material_of(part);
+    let expressions = expressions_of(&x, many);
+    assert_eq!(expressions.len(), 70);
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, expressions[62]), "the 63rd expression is loaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, expressions[63]), "the 64th expression (65th object) stays unloaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, expressions[69]));
+    assert!(x.lines().iter().any(|l| l.contains("the material walk stopped at its cap of 64 objects")), "{:?}", x.lines());
+}
+
+/// Review of #712 (delta r1): a Material-part material already resident is not loaded again, but its graph is still
+/// walked: its Startup parent is loaded.
+#[test]
+fn an_already_resident_material_still_has_its_graph_walked() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Glow");
+    let weapon = x.weapon(Some(part));
+    let g0 = x.material_of(part);
+    x.vm.defs.ensure_loaded(&mut x.vm.space, g0).unwrap();
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let master = match ow_inventory::equip::read_prop(&x.vm, g0, "Parent") {
+        Some(Value::Object(Some(p))) => p,
+        other => panic!("Parent: {other:?}"),
+    };
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, master), "the parent was loaded by the walk");
+    assert!(x.lines().iter().all(|l| !l.ends_with("Startup.ToyMati_G0: loaded")), "the material itself is not loaded again");
+}
+
+/// Review of #712 (delta r1): a Material whose only expression entry is None does not warm the scalar-expression
+/// class.
+#[test]
+fn only_none_expression_entries_do_not_warm_the_scalar_class() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_NoneOnly");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    preload_material_classes(&mut x.vm, weapon).unwrap();
+    assert!(x.vm.space.classes.by_path(SCALAR_EXPRESSION_CLASS).is_none(), "not warmed");
 }

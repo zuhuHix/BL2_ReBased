@@ -886,8 +886,9 @@ pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Res
     let Some(Value::Object(Some(material))) = ow_inventory::equip::read_prop(vm, part, "Material") else {
         return Ok(());
     };
+    // A material already resident is not loaded again, but its graph is still walked (review of #712, delta r1).
     if !vm.defs.is_unloaded(&vm.space, material) {
-        return Ok(());
+        return preload_material_graph(vm, material);
     }
     let name = ow_vm::path_name::path_name(vm, material).unwrap_or_else(|_| format!("{material:?}"));
     let export = match vm.defs.handle_source(material) {
@@ -1069,8 +1070,8 @@ pub(crate) fn preload_material_classes(vm: &mut Vm, weapon: ObjRef) -> Result<()
 /// 4.2, by fit).
 pub(crate) const SCALAR_EXPRESSION_CLASS: &str = "Engine.MaterialExpressionScalarParameter";
 
-/// Whether the Material-part material's resident `Parent` chain (the material included) holds an object with a
-/// non-empty `Expressions`, read only. [`preload_material_part_material`]'s walk has loaded what it could by then.
+/// Whether the Material-part material's resident `Parent` chain (the material included) holds an object whose
+/// `Expressions` has an entry that is set (`Object(Some)`; None entries do not count), read only. [`preload_material_part_material`]'s walk has loaded what it could by then.
 fn material_chain_has_expressions(vm: &Vm, weapon: ObjRef) -> bool {
     let Some(data) = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData") else {
         return false;
@@ -1092,7 +1093,7 @@ fn material_chain_has_expressions(vm: &Vm, weapon: ObjRef) -> bool {
         }
         seen.push(o);
         if ow_inventory::equip::read_prop(vm, o, "Expressions")
-            .and_then(|v| v.elements().map(|e| !e.is_empty()))
+            .and_then(|v| v.elements().map(|e| e.iter().any(|x| matches!(x, Value::Object(Some(_))))))
             .unwrap_or(false)
         {
             return true;

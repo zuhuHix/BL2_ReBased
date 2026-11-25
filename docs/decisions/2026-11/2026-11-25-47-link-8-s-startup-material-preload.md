@@ -95,3 +95,11 @@ step 1 runs, and the native answers those cases itself. `BuildWeaponMaterial`'s 
   Steps 2 and 3 logged nothing, so both were already satisfied. That fits the weapon type's `MaterialClass` being
   `MaterialInstanceConstant` itself, with its default object built by the material's load; this was not checked
   further.
+
+**Review of #712's delta (LOWs, a sixth commit; rebased onto integration/2026-11-25-c21):**
+- a Material-part material already resident is not loaded again, but its graph is still walked;
+- the scalar-expression class is warmed only when some `Expressions` entry is set (`Object(Some)`); None entries do
+  not count;
+- new tests: the walk's cap (a Material with 70 Startup expressions: 64 objects visited, the cap logged, the 64th
+  expression on unloaded); an already-resident material's graph is walked; only-None expressions do not warm the
+  class.
