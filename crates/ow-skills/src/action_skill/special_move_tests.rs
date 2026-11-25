@@ -1908,9 +1908,9 @@ fn cold_is_playing_class_loads_no_code() {
     assert_eq!(got.unwrap(), Value::Bool(true));
 }
 
-/// `GetSMNode` on a tree whose `SpecialMoveBlend` node is of a cold class.
+/// `GetSMNode` on a tree whose `SpecialMoveBlend` node is of a cold class (lane GETSMNODE-CODE-LOAD lifted the ignore:
+/// the class test reads the class table only).
 #[test]
-#[ignore = "COLD-CLASS-AUDIT: GetSMNode calls vm.find_class(AnimNodeSpecialMoveBlend), which loads that class's code when cold"]
 fn cold_get_sm_node_loads_no_code() {
     let mut x = fx(ParityMode::Off);
     let (pawn, component) = x.owner(AUTONOMOUS);
@@ -1921,6 +1921,27 @@ fn cold_get_sm_node_loads_no_code() {
     x.set(node, "NodeName", n);
     x.set(mesh, "Animations", Value::Object(Some(node)));
     let before = x.world.vm.class_code_loads();
-    let _ = x.call(PATHS[4], component, vec![]);
+    let got = x.call(PATHS[4], component, vec![]);
     assert_eq!(x.world.vm.class_code_loads(), before, "no class code loaded");
+    assert_eq!(got.unwrap(), Value::Object(None), "a node of another class: the note's None");
+}
+
+/// Lane GETSMNODE-CODE-LOAD: a `SpecialMoveBlend` node of the blend class itself, that class's code not loaded: the
+/// node is answered and cached as when warm (the class test reads the class table only), and no class code is loaded.
+#[test]
+fn a_cold_blend_class_node_is_answered_without_a_code_load() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTONOMOUS);
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(pawn, "Mesh", Value::Object(Some(mesh)));
+    let node = x.cold("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let n = x.name("SpecialMoveBlend");
+    x.set(node, "NodeName", n);
+    x.set(mesh, "Animations", Value::Object(Some(node)));
+    let class = x.world.vm.space.heap.get(node).unwrap().class;
+    let before = x.world.vm.class_code_loads();
+    assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)));
+    assert_eq!(x.world.vm.class_code_loads(), before, "no class code loaded");
+    assert!(!x.world.vm.class_code_loaded(class), "the blend class is still cold");
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(Some(node)), "cached, as when warm");
 }

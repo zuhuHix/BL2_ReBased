@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**GETSMNODE-CODE-LOAD (2026-11-25, zuhu desktop (Linux), on fix/rust-getsmnode-no-code-load stacked on
+fix/rust-cold-class-audit-skills 01016c1):** AI-assisted (Claude Code, Opus 5.5). `GetSMNode`'s class test reads the
+class table (`by_path`), not `find_class`, so a cold blend class's code is never loaded; the answer is the note's,
+unchanged. The audit's `GetSMNode` test is un-ignored. `cargo test -p ow-skills -j 4`: 162 passed / 0 failed / 3 ignored
+(the audit's two `Play`/`PlayLocal` ignores, and one that was already there); `crate_edges_test.py` OK. No real-game
+run; UNVERIFIED in game.
+
 **COLD-CLASS-AUDIT-SKILLS (2026-11-25, zuhu desktop (Linux), on fix/rust-cold-class-audit-skills stacked on
 fix/rust-class-code-load-counter 1a22658, #685):** AI-assisted (Claude Code, Opus 5.5). Tests only. Some of
 ow-skills' package-backed Off natives are called with an object whose class has a layout but no loaded code. Exactly
