@@ -1177,22 +1177,23 @@ pub fn load_mark(vm: &Vm) -> (u64, u64, u64) {
     (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
 }
 
-/// [`load_mark`] with the VM's code loads added (lane COUNTERS-MISS-CLASS-CODE-LOADS), for the tests' write-free
-/// checks; [`marked_after_loads`] still reads only [`load_mark`]'s three.
+/// [`load_mark`] with the VM's code loads added (lane COUNTERS-MISS-CLASS-CODE-LOADS); [`marked_after_loads`] marks on
+/// it (lane RUNTIME-MARK-CODE-LOADS).
 pub fn load_and_code_mark(vm: &Vm) -> (u64, u64, u64, u64) {
     let (w, d, l) = load_mark(vm);
     (w, d, l, vm.class_code_loads())
 }
 
-/// `f`'s result, a failure marked "stopped after partial writes" when any of the three counts of [`load_mark`] moved
-/// before it (review r2 of #521, item 1): a heap write, a random draw (an effect's variance, for one) or a definition
-/// load, the ones attribute evaluation makes included.
+/// `f`'s result, a failure marked "stopped after partial writes" when any count of [`load_and_code_mark`] moved before
+/// it (review r2 of #521, item 1; lane RUNTIME-MARK-CODE-LOADS): a heap write, a random draw (an effect's variance, for
+/// one), a definition load, the ones attribute evaluation makes included, or a class code load.
 pub(crate) fn marked_after_loads<T>(
     vm: &mut Vm,
     f: impl FnOnce(&mut Vm) -> Result<T, VmError>,
 ) -> Result<T, VmError> {
-    let before = load_mark(vm);
-    f(vm).map_err(|e| if load_mark(vm) == before { e } else { ow_world::pools::after_partial_writes(e) })
+    // A code load is a write too (lane RUNTIME-MARK-CODE-LOADS).
+    let before = load_and_code_mark(vm);
+    f(vm).map_err(|e| if load_and_code_mark(vm) == before { e } else { ow_world::pools::after_partial_writes(e) })
 }
 
 /// `CacheWeaponCard` on `weapon` in Off (module documentation): compute, then write. A `NotYet` with nothing written is

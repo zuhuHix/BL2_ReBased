@@ -344,11 +344,13 @@ struct WriteCounters {
     heap: u64,
     draws: u64,
     loads: u64,
+    /// The VM's code loads: a load is a write (lane RUNTIME-MARK-CODE-LOADS).
+    code_loads: u64,
 }
 
 impl WriteCounters {
     fn of(vm: &Vm) -> Self {
-        WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+        WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions(), code_loads: vm.class_code_loads() }
     }
 
     fn moved(&self, vm: &Vm) -> bool {

@@ -51,7 +51,8 @@
 //! decision 2026-11-19-97's "every W1 failure is marked"). It reads three monotonic counters at the start, each bumped
 //! when its event commits: the heap's committed writes (`Heap::committed_writes`), the generator's draws
 //! (`GameRng::draws`) and the definition store's load transitions (`DefStore::load_transitions`: a handle loaded or
-//! failed; a cached failure's retry does not move it). A refusal is marked iff one of them moved. So in W1 a removal
+//! failed; a cached failure's retry does not move it), and since lane RUNTIME-MARK-CODE-LOADS the VM's class code
+//! loads (`Vm::class_code_loads`). A refusal is marked iff one of them moved. So in W1 a removal
 //! that refuses in its change notification with nothing written (a plain attribute's removal writes nothing before it
 //! notifies) is unmarked, and one whose notification's script wrote something, even a write it later reversed, is
 //! marked. Each W3 record is appended at once to the live out
@@ -383,8 +384,9 @@ fn native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Int(i) => *i,
         other => return Err(bad(INTERNAL_SLOTS, format!("MaxSlotsActivated holds a {}, not an int", other.kind_name()))),
     };
-    // The write-tracker (the hub's ruling in review r2 of #518): three monotonic counters read at the start; a
-    // refusal is marked iff one moved (a committed heap write, a draw, a load transition).
+    // The write-tracker (the hub's ruling in review r2 of #518): monotonic counters read at the start; a refusal is
+    // marked iff one moved (a committed heap write, a draw, a load transition, or, since lane RUNTIME-MARK-CODE-LOADS,
+    // a class code load).
     let start = Counters::read(call.vm);
     let result = run(call, item, flag, max);
     let wrote = Counters::read(call.vm) != start;
@@ -400,6 +402,8 @@ struct Counters {
     writes: u64,
     draws: u64,
     loads: u64,
+    /// The VM's code loads: a load is a write (lane RUNTIME-MARK-CODE-LOADS).
+    code_loads: u64,
 }
 
 impl Counters {
@@ -407,7 +411,7 @@ impl Counters {
         Counters {
             writes: vm.space.heap.committed_writes(),
             draws: vm.rng.draws(),
-            loads: vm.defs.load_transitions(),
+            loads: vm.defs.load_transitions(), code_loads: vm.class_code_loads(),
         }
     }
 }

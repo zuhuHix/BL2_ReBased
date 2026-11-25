@@ -49,10 +49,12 @@ struct Counters {
     heap: u64,
     draws: u64,
     loads: u64,
+    /// The VM's code loads: a load is a write (lane RUNTIME-MARK-CODE-LOADS).
+    code_loads: u64,
 }
 
 fn counters(vm: &Vm) -> Counters {
-    Counters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+    Counters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions(), code_loads: vm.class_code_loads() }
 }
 
 /// The native's body: preflight, evaluation, set.

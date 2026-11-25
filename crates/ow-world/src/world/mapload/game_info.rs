@@ -28,11 +28,12 @@
 //!
 //! **Writes and marking** (the hub's rules): steps 1 and 2 read only. From step 3 on, a lazy load counts as a write.
 //! #518's three counters (the heap's committed writes, the definition store's load transitions and the game RNG's
-//! draws, [`WriteMark`]) are read before step 3; any `NotYet` returned after one moved is marked "stopped after partial
-//! writes", its kind and record kept ([`crate::actors::after_writes`]). The not-found stop is marked with the same
-//! prefix when a lazy load already ran (review r1 of #537); it is a `VmError::Script`, so the mark sits at the start of
-//! its message, after the function name ("the game info routine"), not at the start of the error's text. Other errors
-//! are returned as they are.
+//! draws, [`WriteMark`]) and the VM's code loads (lane GAMEINFO-COLLIDER-CODE-LOAD: the class lookup loads the class's
+//! code, which #518's counters do not see) are read before step 3; any `NotYet` returned after one moved is marked
+//! "stopped after partial writes", its kind and record kept ([`crate::actors::after_writes`]). The not-found stop is
+//! marked with the same prefix when a lazy load already ran (review r1 of #537); it is a `VmError::Script`, so the mark
+//! sits at the start of its message, after the function name ("the game info routine"), not at the start of the error's
+//! text. Other errors are returned as they are.
 //!
 //! **The ini reader refuses instead of guessing** (review r1 of #537): a quoted value, a prefixed key (`+`, `-`, `.`,
 //! `!`, the ini's array and removal operators) and a second `DefaultGame` in the section are `NotYet { NotRead }`. A
@@ -164,8 +165,8 @@ pub fn game_option(options: &str) -> Option<&str> {
 /// The three counters a write moves (#518): the heap's committed writes, the store's load transitions and the game
 /// RNG's draws (a draw is a write, review r1 of #537).
 ///
-/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS) for [`WriteMark::still`], the tests'
-/// "nothing moved" check; [`WriteMark::moved`], which marks a runtime refusal, still reads only #518's three.
+/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS); since lane RUNTIME-MARK-CODE-LOADS
+/// [`WriteMark::moved`], which marks a runtime refusal, reads them too, and [`WriteMark::still`] is its negation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMark {
     heap: u64,
@@ -185,10 +186,9 @@ impl WriteMark {
         }
     }
 
-    /// Whether one of #518's three counters moved since this mark (not the code loads: see the type).
+    /// Whether anything was written or loaded since this mark, a code load included (see the type).
     pub fn moved(&self, vm: &Vm) -> bool {
-        let now = WriteMark::now(vm);
-        (now.heap, now.loads, now.draws) != (self.heap, self.loads, self.draws)
+        *self != WriteMark::now(vm)
     }
 
     /// Whether nothing moved since this mark, the code loads included: the tests' write-free check.
@@ -296,13 +296,23 @@ pub fn spawn_game_info(world: &mut World, input: &GameInfoInput<'_>) -> Result<G
     };
     let vm = &mut world.vm;
     let mark = WriteMark::now(vm);
-    configured(vm, &mark, info, &path, game_class).map_err(|e| mark.mark(vm, e))
+    configured(vm, &mark, info, &path, game_class)
+        .map_err(|e| if wrote(vm, &mark) { after_writes(e) } else { e })
+}
+
+/// Whether step 3 has written or loaded anything since `mark`: #518's three counters, and the VM's code loads (lane
+/// GAMEINFO-COLLIDER-CODE-LOAD). NATIVE_MAP_LOAD.md section 3 has the routine load and cache the configured class
+/// before spawning it. The port's class lookup also loads that class's code into the VM, a side effect of the host's
+/// lookup (not something the note says the game does), and the module's step-3 rule counts it: a lazy load from step 3
+/// on is a write, so a refusal after it is marked. UNVERIFIED in the running game.
+fn wrote(vm: &Vm, mark: &WriteMark) -> bool {
+    !mark.still(vm)
 }
 
 /// The not-found stop (module documentation, step 3), marked when something was written or loaded since `mark`.
 fn not_found(vm: &Vm, mark: &WriteMark, path: &str) -> VmError {
     let text = not_found_text(path);
-    data_error(if mark.moved(vm) { ow_core::notyet::mark_partial_writes(&text) } else { text })
+    data_error(if wrote(vm, mark) { ow_core::notyet::mark_partial_writes(&text) } else { text })
 }
 
 /// Step 3: the lookup, the spawn and the store.

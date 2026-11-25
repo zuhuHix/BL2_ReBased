@@ -2,6 +2,19 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**RUNTIME-MARK-CODE-LOADS (2026-11-25, zuhuPC Linux, after review r1 of #695: on #686 a89c4b1 with #692's commits
+cherry-picked, over #685 bd8f3934):** AI-assisted (Claude Code, Opus 5.5). Counter-based runtime partial-write marks
+count class code loads (the hub's ruling 0b). `cargo test --workspace`: 3,412 passed / 4 failed (the expected Linux N1
+tests) / 52 ignored. `crate_edges_test.py` OK. Not run: `ctest`, `verify_packages.py --reader` (no cmake here), the
+installed `--slice-gate` (no install yet). UNVERIFIED in game.
+
+**GAMEINFO-COLLIDER-CODE-LOAD (2026-11-25, zuhuPC Linux, on #685 bd8f3934 over main 03896e5):** AI-assisted (Claude
+Code, Opus 5.5). The game info's refusal after its class lookup loaded class code is marked (the routine's marking
+counts code loads). `cargo test --workspace`: 3,405 passed / 4 failed (the expected Linux N1 tests) / 53 ignored
+(#685's spawn finding is un-ignored and passes; its particle-effect finding, fixed by #686, is not under this branch).
+`crate_edges_test.py` OK. Not run: `ctest`, `verify_packages.py --reader` (no cmake here), the installed
+`--slice-gate` (no install yet). UNVERIFIED in game.
+
 **PARTICLE-EFFECT-CODE-LOAD (2026-11-25, zuhuPC Linux, on #685 bd8f3934 over main 03896e5; after review r1 of
 #686):** AI-assisted (Claude Code, Opus 5.5). `GetParticleEffect` dispatches `Evaluate` without loading class code
 (preflight rule 5 over the reachable evaluators and their `ExpressionTree` / `CompoundExpressionEvaluator` children;

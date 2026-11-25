@@ -87,9 +87,10 @@ const FLAG_EVALUATOR: &str = "GearboxFramework.FlagExpressionEvaluator";
 /// The collection's one field.
 const EFFECTS: &str = "ParticleEffects";
 
-/// The #518 counters: committed writes, random draws, load transitions.
-fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+/// The #518 counters: committed writes, random draws, load transitions; and the VM's code loads (a load is a write,
+/// lane RUNTIME-MARK-CODE-LOADS).
+fn counters(vm: &Vm) -> (u64, u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.class_code_loads())
 }
 
 /// One entry as the walk reads it: `(Expression, ParticleEffect)`.
