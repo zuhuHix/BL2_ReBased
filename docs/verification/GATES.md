@@ -2,14 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**SKELMESH-LOD-LAYER (2026-11-20, pc-hummer, on #651 da91849b):** AI-assisted (Claude Code, Opus 5.5). A
-`SkeletalMesh` export's LOD model count, read from its package (fitted layout, structural oracles; UNVERIFIED).
-`cargo test --workspace --locked -j 2 --no-fail-fast` 3,217 passed / 0 failed / 52 ignored; `crate_edges_test.py` OK.
-The installed census (`ow-cli` `installed_lod_count_census`, nine packages) read 90 meshes and refused 0. Installed Off
-`--slice-gate` strict, under the machine lock: 4 ok / 9 NotYet / 1 error, the same row for row as the stack's base.
-Link 8 passes `make` (1 of 5 steps) and stops in `init` at `SetSkeletalMesh`'s LOD row, now with the count known (1
-LOD): the row refuses a positive count by its own rule (the per-LOD usage byte). No real-game run; `UNVERIFIED` in
-game. Decision 2026-11-19-NNN.
+**SKELMESH-LOD-LAYER (2026-11-25, pc-hummer, on fix/rust-skelmesh-lod-count-2 from main faa3bbcc):** AI-assisted
+(Claude Code, Opus 5.5). The skeletal mesh data layer reads a `SkeletalMesh` export's LOD count and LOD models from
+its package, to the export's last byte (fitted layout, structural oracles; UNVERIFIED).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,375 passed / 0 failed / 53 ignored. `crate_edges_test.py`: 19 OK.
+- The installed census (`ow-cli` `installed_lod_count_census`, twelve packages): 106 meshes and 110 LOD models read,
+  0 refused. 25 LOD models have the colour buffer, and the trailing count is 0 in all 110.
+- Installed Off `--slice-gate` strict (release build, under the machine lock): 4 ok / 10 NotYet / 0 errors, the same
+  as main's last reading. Link 8 passes `make` and stops in `init` at `SetSkeletalMesh`'s LOD row
+  ("the LOD info from the new mesh's LOD models"). Its log reads 1 LOD model and trailing counts [0] for
+  `GestaltDef_AssaultRifle_GestaltSkeletalMesh`. The row itself (lane A's file) is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/skellod/`. Decision 2026-11-25-NNN.
 
 **ANALYST-SPECIALMOVE-QUEUE (2026-11-25, pc-hummer, docs only, on docs/native-specialmove-queue from main
 4b3e4df6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIAL_MOVE_QUEUE.md: `SpecialMoveComponent.Queue`,

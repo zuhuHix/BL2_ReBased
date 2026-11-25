@@ -807,7 +807,7 @@ fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
 }
 
 /// The text of [`install_mesh_layer`]'s line.
-pub(crate) const LOD_LAYER_LINE: &str = "harness input: the skeletal mesh data layer reads a mesh's LOD model count from its own package \
+pub(crate) const LOD_LAYER_LINE: &str = "harness input: the skeletal mesh data layer reads a mesh's LOD models from its own package \
      export (ow_assets::skeletal_lods; a fitted layout checked by structural oracles, UNVERIFIED)";
 
 /// Lane SKELMESH-LOD-LAYER: in Off, the equip world gets the skeletal mesh data layer, as the combat run's does
@@ -833,7 +833,11 @@ pub(crate) fn install_mesh_layer(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmEr
     let name = ow_vm::path_name::path_name(vm, mesh).unwrap_or_else(|_| format!("{mesh:?}"));
     // A refusal or a parse failure is logged, not raised: `SetSkeletalMesh`'s LOD row asks again and reports it.
     let shown = match ow_world::world::skeletal::lod_count(vm, mesh) {
-        Ok(Some(n)) => format!("{n} LOD model(s)"),
+        Ok(Some(n)) => match ow_world::world::skeletal::lod_trailing_counts(vm, mesh) {
+            Ok(Some(t)) => format!("{n} LOD model(s), trailing counts {t:?}"),
+            Ok(None) => format!("{n} LOD model(s), trailing counts not read"),
+            Err(e) => format!("{n} LOD model(s), trailing counts not read ({e})"),
+        },
         Ok(None) => "no answer".to_string(),
         Err(e) => format!("no answer ({e})"),
     };
