@@ -538,6 +538,9 @@ impl NativePack for Pack {
             // SkeletalMeshComponent.ForceSkelUpdate and UpdateAnimations (NATIVE_BONE_TRANSFORM_LAYER.md, UNVERIFIED;
             // lane IMPL-BONE-TRANSFORM-LAYER): keep-existing per key, Off only.
             bone_transform::register(vm)?;
+            // Actor.SetPhysics (NATIVE_ACTOR_SET_PHYSICS.md, UNVERIFIED; lane IMPL-ACTOR-SETPHYSICS): keep-existing by
+            // key, Off only; ow-combat's hit pack keeps its byte-write stand-in for Reference only.
+            set_physics::register(vm)?;
         }
         Ok(())
     }
@@ -681,6 +684,7 @@ pub mod set_base_value;
 pub mod bounding_cylinder;
 /// `Actor.Trace` in Off, shared by the Phaselock and go-down binding sites (lane IMPL-ACTOR-TRACE).
 pub mod actor_trace;
+pub mod set_physics;
 
 #[cfg(test)]
 mod tests;

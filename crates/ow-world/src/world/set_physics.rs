@@ -1,0 +1,331 @@
+//! Owner: lane IMPL-ACTOR-SETPHYSICS. `Actor.SetPhysics(byte)` in `ParityMode::Off`, coded from
+//! docs/verification/NATIVE_ACTOR_SET_PHYSICS.md section 3 alone (#688 at f361007, decision 2026-11-25-23). Clean
+//! room: the analyst lane read the native, this lane did not. AI-assisted (Claude Code). **Every rule is UNVERIFIED in
+//! the running game.** Reference binds nothing here: `ow-combat`'s hit pack keeps its plain `Physics` byte write there
+//! (and only there).
+//!
+//! **The layers by class.** From the actor's class up to its first native class (the fitted native bit, as
+//! `ow-combat`'s `pawn_interface` walk takes it): `WillowGame.WillowAIPawn` has the AI, `WillowPawn`, `Pawn` and
+//! `Actor` layers; `WillowGame.WillowPawn` the last three; `GearboxFramework.GearboxPawn` and `Engine.Pawn` the `Pawn`
+//! and `Actor` layers; `Engine.Actor` the `Actor` layer only. Any other first native class (`WillowPlayerPawn`
+//! included) is `NotYet { NotRead }`, "Actor.SetPhysics: the physics change of <class>".
+//!
+//! **Preflight, write-free and load-free** (reads by name lookup on resident objects; each field read must have its
+//! declared kind, else `VmError::Script` naming it). The actor itself must be resident. The mode is the argument's low
+//! byte. A referenced object (`PhysicsVolume`, `Base`, `CollisionComponent`) is checked for residency only on a path
+//! that uses it ([`NOT_LOADED`]). In order:
+//! 1. the AI layer: `PHYS_NavMeshWalking` (12) is `NotRead` ([`NAV_MESH`]); `PHYS_RigidBody` (10) with `bTearOff`
+//!    clear and `Role` not `ROLE_Authority` is `NotRead` ([`RIGID_EVENT`]); `bHardAttach` set and the mode not
+//!    `PHYS_Interpolating` (7) answers at once, with nothing changed;
+//! 2. the same mode as now answers at once, with nothing changed;
+//! 3. the transition refusals: into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider` (0, 1, 5, 8) is
+//!    `NotRead` ([`BASE_SEARCH`]); into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
+//!    ([`BASE_CLEAR`]); into or out of `PHYS_RigidBody` with a `CollisionComponent` set is `LayerAbsent`
+//!    ([`RIGID_BODY`], [`RIGID_LAYER`]);
+//! 4. every script event the commit will call is resolved now, state-aware and in loaded code only: with a
+//!    `PhysicsVolume`, its `PhysicsChangedFor(actor)` on the volume's class; on the `WillowPawn` layer, each of
+//!    `StoppedFalling()`, `BeganFalling(byte)`, `BeganWalking(byte)` and `StoppedWalking()` whose condition will hold
+//!    (walking is `PHYS_Walking` or `PHYS_NavMeshWalking`), on the actor's class. Code not loaded is `NotRead`
+//!    ([`code_not_loaded`]); a missing event, or one declared with other parameters, is `VmError::Script`.
+//!
+//! The note's commit step 1 (`bForceFloorCheck` set on a transition into `PHYS_Walking`) is never reached in the port:
+//! every transition into `PHYS_Walking` is refused at step 3 (the base search), so it is not written here.
+//!
+//! **Commit, in the game's order:** `Physics` = the mode; with a `PhysicsVolume`, its `PhysicsChangedFor(actor)`; the
+//! four `WillowPawn` events, in that order, each when its condition holds (`BeganFalling` and `BeganWalking` get the
+//! old mode). A refusal after the write is marked "stopped after partial writes: " when #518's counters moved
+//! ([`crate::pools::after_partial_writes`]); `Vm::class_code_loads` (#685) is not on this lane's base.
+
+use std::rc::Rc;
+
+use ow_core::NotYet;
+use ow_object::ids::{FuncId, ObjRef, PropAddr};
+use ow_object::layout::PropKind;
+use ow_object::value::Value;
+use ow_vm::api::{NativeCall, Vm};
+use ow_vm::error::VmError;
+
+/// The record of the rule.
+pub const RECORD: &str = "docs/verification/NATIVE_ACTOR_SET_PHYSICS.md";
+/// The native key.
+pub const KEY: &str = "Actor.SetPhysics(byte)";
+/// A read on an object the store has not loaded.
+pub const NOT_LOADED: &str = "Actor.SetPhysics: an object the store has not loaded (a load is a write)";
+/// Step 1's nav-mesh check.
+pub const NAV_MESH: &str = "Actor.SetPhysics: a WillowAIPawn's nav-mesh walking check";
+/// Step 1's rigid-body event.
+pub const RIGID_EVENT: &str = "Actor.SetPhysics: a WillowAIPawn's rigid-body event";
+/// Step 3's base search.
+pub const BASE_SEARCH: &str = "Actor.SetPhysics: the base search for a walking-type mode";
+/// Step 3's base clearing.
+pub const BASE_CLEAR: &str = "Actor.SetPhysics: clearing the base (the base setter is not ported)";
+/// Step 3's rigid body, and its layer.
+pub const RIGID_BODY: &str = "Actor.SetPhysics: the collision component's rigid body";
+pub const RIGID_LAYER: &str = "rigid-body physics (the headless world has none)";
+const WHAT: &str = "Actor.SetPhysics";
+
+const PHYS_NONE: u8 = 0;
+const PHYS_WALKING: u8 = 1;
+const PHYS_FALLING: u8 = 2;
+const PHYS_ROTATING: u8 = 5;
+const PHYS_INTERPOLATING: u8 = 7;
+const PHYS_SPIDER: u8 = 8;
+const PHYS_RIGID_BODY: u8 = 10;
+const PHYS_NAV_MESH_WALKING: u8 = 12;
+
+/// Step 4's text for an event whose code is not loaded.
+pub fn code_not_loaded(event: &str, class: &str) -> String {
+    format!("Actor.SetPhysics: the code of {event} on {class} is not loaded")
+}
+
+/// The layers of a class (module documentation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Layers {
+    ai: bool,
+    willow: bool,
+    pawn: bool,
+}
+
+/// Binds the rule in Off, keep-existing by key; nothing under Reference (the caller binds in Off only).
+pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
+    if !vm.has_native(KEY) {
+        vm.register_native(KEY, Rc::new(set_physics))?;
+    }
+    Ok(())
+}
+
+fn script(message: String) -> VmError {
+    VmError::Script { function: WHAT.to_string(), message: format!("{WHAT}: {message}") }
+}
+
+/// `NotYet { NotRead }` ([`NOT_LOADED`]) unless `o` is resident: not a store handle still unloaded (or failed), and not
+/// a stand-in with fewer slots than its class.
+fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        return Err(NotYet::not_read(NOT_LOADED, RECORD).into());
+    }
+    Ok(())
+}
+
+/// Field `name` of the resident `o`, by name lookup, with its declaration; a class that declares none is a script
+/// error naming it.
+fn field(vm: &Vm, o: ObjRef, name: &str) -> Result<(PropKind, Value), VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} declares no {name}", class_path(vm, o))))?;
+    let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| script(format!("{name} has no declaration")))?;
+    Ok((kind, vm.space.read(o, PropAddr::scalar(p))?.clone()))
+}
+
+fn byte(vm: &Vm, o: ObjRef, name: &str) -> Result<u8, VmError> {
+    match field(vm, o, name)? {
+        (PropKind::Byte { .. }, Value::Byte(b)) => Ok(b),
+        (k, _) => Err(script(format!("{name} is declared as {}, not a byte", k.kind_name()))),
+    }
+}
+
+fn flag(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    match field(vm, o, name)? {
+        (PropKind::Bool, Value::Bool(b)) => Ok(b),
+        (k, _) => Err(script(format!("{name} is declared as {}, not a bool", k.kind_name()))),
+    }
+}
+
+fn object(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    match field(vm, o, name)? {
+        (PropKind::Object { .. }, Value::Object(x)) => Ok(x),
+        (k, _) => Err(script(format!("{name} is declared as {}, not an object", k.kind_name()))),
+    }
+}
+
+fn class_path(vm: &Vm, o: ObjRef) -> String {
+    vm.space.heap.get(o).map(|x| vm.space.classes.layout(x.class).path().to_string()).unwrap_or_default()
+}
+
+/// The layers of `o`'s class, from its first native class.
+fn layers(vm: &Vm, o: ObjRef) -> Result<Layers, VmError> {
+    let code = vm.defs.code();
+    let mut cursor = Some(vm.space.heap.get(o)?.class);
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.layout(c);
+        let native = match code.key_of(c) {
+            Some(k) => code.class(k).body.as_ref().map_or(true, |b| b.is_native()),
+            None => vm.space.classes.is_native(c),
+        };
+        if native {
+            let path = layout.path().to_string();
+            let is = |p: &str| path.eq_ignore_ascii_case(p);
+            return match () {
+                _ if is("WillowGame.WillowAIPawn") => Ok(Layers { ai: true, willow: true, pawn: true }),
+                _ if is("WillowGame.WillowPawn") => Ok(Layers { ai: false, willow: true, pawn: true }),
+                _ if is("GearboxFramework.GearboxPawn") || is("Engine.Pawn") => {
+                    Ok(Layers { ai: false, willow: false, pawn: true })
+                }
+                _ if is("Engine.Actor") => Ok(Layers { ai: false, willow: false, pawn: false }),
+                _ => Err(NotYet::not_read(format!("Actor.SetPhysics: the physics change of {path}"), RECORD).into()),
+            };
+        }
+        cursor = layout.super_class();
+    }
+    Err(NotYet::not_read(format!("Actor.SetPhysics: the physics change of {}", class_path(vm, o)), RECORD).into())
+}
+
+/// Whether `o`'s `Role` is exactly `ROLE_Authority`, by the `Role` property's enum.
+fn authority(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    let (kind, value) = field(vm, o, "Role")?;
+    let (PropKind::Byte { enum_: Some(e) }, Value::Byte(raw)) = (kind, value) else {
+        return Err(script("Role is not declared as an enum byte".to_string()));
+    };
+    let index = vm
+        .space
+        .names
+        .find("ROLE_Authority")
+        .and_then(|id| vm.space.classes.enum_layout(e).and_then(|l| l.index_of(id)))
+        .ok_or_else(|| script("Role's enum has no ROLE_Authority".to_string()))?;
+    Ok(usize::from(raw) == index)
+}
+
+/// Which parameters an event must declare.
+#[derive(Clone, Copy)]
+enum Shape {
+    None,
+    Byte,
+    Object,
+}
+
+/// Step 4: the event `name` on `o`'s class and state, in loaded code only, with the parameters `shape`.
+fn event(vm: &Vm, o: ObjRef, name: &str, shape: Shape) -> Result<FuncId, VmError> {
+    let x = vm.space.heap.get(o)?;
+    let class = class_path(vm, o);
+    let f = match vm.find_loaded_method(x.class, name, x.state) {
+        None => return Err(NotYet::not_read(code_not_loaded(name, &class), RECORD).into()),
+        Some(None) => return Err(script(format!("{class} declares no {name}"))),
+        Some(Some(f)) => f,
+    };
+    let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
+    let fits = match (shape, params.as_slice()) {
+        (Shape::None, []) => true,
+        (Shape::Byte, [p]) => matches!(p.kind, PropKind::Byte { .. }),
+        (Shape::Object, [p]) => matches!(p.kind, PropKind::Object { .. }),
+        _ => false,
+    };
+    if !fits {
+        return Err(script(format!("{class}.{name} is declared with other parameters than the rule calls")));
+    }
+    Ok(f)
+}
+
+/// What the commit does, every check passed.
+struct Plan {
+    actor: ObjRef,
+    mode: u8,
+    volume: Option<(ObjRef, FuncId)>,
+    /// The `WillowPawn` events to fire, in order, with their arguments.
+    events: Vec<(FuncId, Vec<Value>)>,
+}
+
+/// The preflight (module documentation): `Ok(None)` when nothing changes. Reads only.
+fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> {
+    resident(vm, actor)?;
+    let layers = layers(vm, actor)?;
+    let old = byte(vm, actor, "Physics")?;
+    // Step 1, the AI layer.
+    if layers.ai {
+        if mode == PHYS_NAV_MESH_WALKING {
+            return Err(NotYet::not_read(NAV_MESH, RECORD).into());
+        }
+        if mode == PHYS_RIGID_BODY && !flag(vm, actor, "bTearOff")? && !authority(vm, actor)? {
+            return Err(NotYet::not_read(RIGID_EVENT, RECORD).into());
+        }
+        if flag(vm, actor, "bHardAttach")? && mode != PHYS_INTERPOLATING {
+            return Ok(None);
+        }
+    }
+    // Step 2.
+    if mode == old {
+        return Ok(None);
+    }
+    // Step 3.
+    if matches!(mode, PHYS_NONE | PHYS_WALKING | PHYS_ROTATING | PHYS_SPIDER) {
+        return Err(NotYet::not_read(BASE_SEARCH, RECORD).into());
+    }
+    if mode != PHYS_INTERPOLATING
+        && let Some(base) = object(vm, actor, "Base")?
+    {
+        resident(vm, base)?;
+        return Err(NotYet::not_read(BASE_CLEAR, RECORD).into());
+    }
+    if (mode == PHYS_RIGID_BODY || old == PHYS_RIGID_BODY)
+        && let Some(component) = object(vm, actor, "CollisionComponent")?
+    {
+        resident(vm, component)?;
+        return Err(NotYet::layer_absent(RIGID_BODY, RIGID_LAYER, RECORD).into());
+    }
+    // Step 4, the events the commit will call.
+    let volume = match object(vm, actor, "PhysicsVolume")? {
+        Some(v) => {
+            resident(vm, v)?;
+            Some((v, event(vm, v, "PhysicsChangedFor", Shape::Object)?))
+        }
+        None => None,
+    };
+    let mut events = Vec::new();
+    if layers.willow {
+        let walking = |m: u8| m == PHYS_WALKING || m == PHYS_NAV_MESH_WALKING;
+        let old_arg = || vec![Value::Byte(old)];
+        let cases: [(&str, &str, bool, Shape, Vec<Value>); 4] = [
+            ("bNotifyStopFalling", "StoppedFalling", old == PHYS_FALLING && mode != PHYS_FALLING, Shape::None, vec![]),
+            ("bNotifyBeginFalling", "BeganFalling", old != PHYS_FALLING && mode == PHYS_FALLING, Shape::Byte, old_arg()),
+            ("bNotifyBeginWalking", "BeganWalking", !walking(old) && walking(mode), Shape::Byte, old_arg()),
+            ("bNotifyStopWalking", "StoppedWalking", walking(old) && !walking(mode), Shape::None, vec![]),
+        ];
+        for (notify, name, transition, shape, args) in cases {
+            if transition && flag(vm, actor, notify)? {
+                events.push((event(vm, actor, name, shape)?, args));
+            }
+        }
+    }
+    Ok(Some(Plan { actor, mode, volume, events }))
+}
+
+/// #518's counters.
+fn marks(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+}
+
+/// The native (module documentation).
+fn set_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let actor = c.this.ok_or_else(|| script("called with no actor".to_string()))?;
+    let mode = match c.arg(0)? {
+        Value::Byte(b) => *b,
+        Value::Int(i) => (*i & 0xFF) as u8,
+        other => return Err(script(format!("the mode is {}, not a byte", other.kind_name()))),
+    };
+    let Some(plan) = preflight(c.vm, actor, mode)? else {
+        return Ok(Value::None);
+    };
+    let entry = marks(c.vm);
+    let result = commit(c, &plan);
+    match result {
+        Err(e) if marks(c.vm) != entry => Err(crate::pools::after_partial_writes(e)),
+        other => other,
+    }
+}
+
+fn commit(c: &mut NativeCall<'_>, plan: &Plan) -> Result<Value, VmError> {
+    let class = c.vm.space.heap.get(plan.actor)?.class;
+    let p = c.vm.space.prop(class, "Physics").ok_or_else(|| script("the class declares no Physics".to_string()))?;
+    c.vm.space.write(plan.actor, PropAddr::scalar(p), Value::Byte(plan.mode))?;
+    if let Some((volume, f)) = plan.volume {
+        c.call_script(f, Some(volume), vec![Value::Object(Some(plan.actor))])?;
+    }
+    for (f, args) in &plan.events {
+        c.call_script(*f, Some(plan.actor), args.clone())?;
+    }
+    Ok(Value::None)
+}
+
+#[cfg(test)]
+#[path = "set_physics_tests.rs"]
+mod tests;

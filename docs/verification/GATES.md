@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-ACTOR-SETPHYSICS (2026-11-25, zuhu desktop (Linux), on fix/rust-actor-setphysics from main 84b6d99):**
+AI-assisted (Claude Code, Opus 5.5). `Actor.SetPhysics(byte)` in Off from NATIVE_ACTOR_SET_PHYSICS.md (#688 at f361007),
+bound by the world pack; the hit pack's byte-write stand-in is Reference-only. `cargo test --workspace -j 4`: 3,435
+passed / 4 failed (the expected N1 float-oracle failures on Linux) / 53 ignored, 13 new (11 in `ow-world`, 2 in
+`ow-combat`); `crate_edges_test.py` OK. Slice gate: not run (no install on this PC). Predicted, not run: link 9's
+`LiftTarget` call writes `Physics` 14 on a target at its class defaults and the cast goes on. No real-game run;
+UNVERIFIED in game.
+
 **ANALYST-ACTOR-SETPHYSICS (2026-11-25, pc-hummer, docs only, on docs/native-actor-setphysics from main 03896e55):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_ACTOR_SET_PHYSICS.md: `Actor.SetPhysics`, link 9's stop (`LiftTarget`, the
 inferred caller, asks for `PHYS_Custom`). No code changed, so no measured number moved; the slice gate was not run for this lane.

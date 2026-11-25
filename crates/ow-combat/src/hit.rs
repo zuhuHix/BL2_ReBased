@@ -861,14 +861,19 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
             }
         }
     }
-    // Actor.SetPhysics(newPhysics): the physics mode is the actor's Physics byte.
-    bind_fn(vm, "Engine.Actor.SetPhysics", |c| {
-        let me = this(c, "SetPhysics")?;
-        // A byte argument; the C++ makeByte keeps the low 8 bits.
-        let mode = access::low_u8(integer(c.arg(0)?));
-        set(c.vm, me, "Physics", Value::Byte(mode))?;
-        Ok(Value::None)
-    })?;
+    // Actor.SetPhysics(newPhysics): the C++ stand-in, the physics mode as the actor's Physics byte, Reference only
+    // (R3). Off has NATIVE_ACTOR_SET_PHYSICS.md's rule (`ow_world::world::set_physics`, lane IMPL-ACTOR-SETPHYSICS),
+    // which the world binds first; binding the stand-in in Off would win in a world that registers this pack before
+    // the world's natives.
+    if vm.parity == ParityMode::Reference {
+        bind_fn(vm, "Engine.Actor.SetPhysics", |c| {
+            let me = this(c, "SetPhysics")?;
+            // A byte argument; the C++ makeByte keeps the low 8 bits.
+            let mode = access::low_u8(integer(c.arg(0)?));
+            set(c.vm, me, "Physics", Value::Byte(mode))?;
+            Ok(Value::None)
+        })?;
+    }
 
     // Reference only (R3): the C++ stand-ins of the AI component's demigod hold and of GetAIComponent. The installed
     // Behavior_AIHold script calls HoldDemigod / ReleaseDemigod for its type 3; the C++ keeps the hold as a list of
@@ -1675,3 +1680,5 @@ pub fn swing(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod set_physics_pack_tests;
