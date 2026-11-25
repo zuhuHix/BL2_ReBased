@@ -21,7 +21,7 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::ints;
-use ow_package::testkit::reflect::toy_struct;
+use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 
@@ -42,7 +42,7 @@ fn engine() -> Vec<u8> {
 }
 
 fn package() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "StructProperty", "ScriptStruct", "ClassProperty"]);
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "StructProperty", "ScriptStruct", "ClassProperty", "ArrayProperty"]);
     let object = t.class("Object", 0);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let interface = t.p.add_import("Core", "Class", engine, "MaterialInterface");
@@ -50,6 +50,9 @@ fn package() -> Vec<u8> {
     t.prop_tail("Class", weapon_type, "MaterialClass", 0, &ints(&[object, interface]));
     let material = t.class("ToyMaterialInstance", object);
     t.prop("Object", material, "Parent", 0, material);
+    let expression = t.class("ToyExpression", object);
+    let toy_material = t.class("ToyMaterial", material);
+    toy_array_of(&mut t, toy_material, "Expressions", "Object", expression);
     let part = t.class("ToyMaterialPart", object);
     t.prop("Object", part, "Material", 0, material);
     let holder = t.class("ToyPartHolder", object);
@@ -68,6 +71,9 @@ fn package() -> Vec<u8> {
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export(material, "ToyMati_Local", payload);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(expression, "ToyExpr_Local", payload);
     t.p.build()
 }
 
@@ -126,6 +132,41 @@ fn startup() -> Vec<u8> {
     payload.extend(t.p.object_tag("Parent", local));
     payload.extend_from_slice(&t.none);
     t.p.add_export(material, "ToyMati_L0", payload);
+    // `ToyPart_Glow` names `ToyMati_G0`, whose Parent is `ToyMat_Master`, a Material with two Startup expressions.
+    let toy_material = t.p.add_import("WillowGame", "Class", willow, "ToyMaterial");
+    let expression = t.p.add_import("WillowGame", "Class", willow, "ToyExpression");
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Glow", payload);
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Parent", next + 2));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(material, "ToyMati_G0", payload);
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.array_tag("Expressions", 2, &ints(&[next + 3, next + 4])));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(toy_material, "ToyMat_Master", payload);
+    for name in ["ToyExpr_A", "ToyExpr_B"] {
+        let mut payload = ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(expression, name, payload);
+    }
+    // `ToyPart_Mixed` names `ToyMat_Mixed`, a Material whose expressions are a Startup one and `WillowGame.ToyExpr_Local`.
+    let local_expr = t.p.add_import("WillowGame", "ToyExpression", willow, "ToyExpr_Local");
+    let next = t.p.next_export();
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Material", next + 1));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(part, "ToyPart_Mixed", payload);
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.array_tag("Expressions", 2, &ints(&[next + 2, local_expr])));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(toy_material, "ToyMat_Mixed", payload);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(expression, "ToyExpr_C", payload);
     // `ToyHolder_0` names `ToyPart_Mat`, so the part is a store handle not loaded yet when reached through it.
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Part", part_mat));
@@ -415,5 +456,54 @@ fn a_parent_outside_startup_stops_the_walk() {
     assert!(x.vm.defs.is_unloaded(&x.vm.space, local), "the WillowGame parent is not loaded");
     let lines = x.lines();
     assert_eq!(lines.len(), 3, "{lines:?}");
-    assert!(lines[2].contains("the parent chain stops at WillowGame.ToyMati_Local (WillowGame export"), "{}", lines[2]);
+    assert!(lines[2].contains("the walk stops at WillowGame.ToyMati_Local (WillowGame export"), "{}", lines[2]);
+}
+
+fn expressions_of(x: &Fx, material: ObjRef) -> Vec<ObjRef> {
+    match ow_inventory::equip::read_prop(&x.vm, material, "Expressions") {
+        Some(v) => v.elements().unwrap().iter().map(|e| match e {
+            Value::Object(Some(o)) => *o,
+            other => panic!("{other:?}"),
+        }).collect(),
+        other => panic!("Expressions: {other:?}"),
+    }
+}
+
+/// The hub's ruling on a Material's expressions: the parent Material's two Startup expressions are both loaded,
+/// each logged before and after.
+#[test]
+fn a_material_s_startup_expressions_are_loaded() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Glow");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let g0 = x.material_of(part);
+    let master = match ow_inventory::equip::read_prop(&x.vm, g0, "Parent") {
+        Some(Value::Object(Some(p))) => p,
+        other => panic!("Parent: {other:?}"),
+    };
+    let expressions = expressions_of(&x, master);
+    assert_eq!(expressions.len(), 2);
+    for e in expressions {
+        assert!(!x.vm.defs.is_unloaded(&x.vm.space, e), "expression loaded");
+    }
+    let lines = x.lines();
+    assert!(lines.iter().any(|l| l.ends_with("expression Startup.ToyMat_Master.ToyExpr_A: loaded")
+        || l.ends_with("expression Startup.ToyExpr_A: loaded")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("expression") && l.contains("ToyExpr_B") && l.ends_with(": loaded")), "{lines:?}");
+}
+
+/// A non-Startup expression is skipped with a line and stays unloaded; the Startup one beside it is loaded.
+#[test]
+fn a_non_startup_expression_is_skipped_with_a_line() {
+    let mut x = fx(ParityMode::Off);
+    let part = x.find("Startup.ToyPart_Mixed");
+    let weapon = x.weapon(Some(part));
+    preload_material_part_material(&mut x.vm, weapon).unwrap();
+    let mixed = x.material_of(part);
+    let expressions = expressions_of(&x, mixed);
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, expressions[0]), "the Startup expression is loaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, expressions[1]), "the WillowGame expression is not");
+    let lines = x.lines();
+    assert!(lines.iter().any(|l| l.contains("the walk stops at WillowGame.ToyExpr_Local (WillowGame export")), "{lines:?}");
 }

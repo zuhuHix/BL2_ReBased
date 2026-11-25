@@ -911,57 +911,82 @@ pub(crate) fn preload_material_part_material(vm: &mut Vm, weapon: ObjRef) -> Res
         Err(e) => vm.log.push(format!("{MATERIAL_INPUT} {name}: failed ({e})")),
     }
     loaded.map_err(VmError::from)?;
-    preload_parent_chain(vm, material)
+    preload_material_graph(vm, material)
 }
 
-/// How many `Parent` links [`preload_parent_chain`] follows at most.
-pub(crate) const PARENT_CHAIN_CAP: usize = 8;
+/// How many objects [`preload_material_graph`] visits at most (the hub's ruling on #712: a total cap).
+pub(crate) const MATERIAL_WALK_CAP: usize = 64;
 
-/// The rest of [`preload_material_part_material`] (the hub's ruling on #712's parent chain): from the loaded
-/// material, its `Parent` chain, each parent loaded **only while it is a Startup export** (`DefStore::handle_source`),
-/// by the same rule as the material itself. The glow read (`GetScalarParameterValue`) walks that chain and refuses a
-/// parent that is not resident. A parent already resident is walked through with no load. The walk stops, with a
-/// logged line, at:
-/// - a None `Parent`, or an object that declares none (the chain's end);
-/// - the first parent that is not a Startup export (left for the native to refuse);
-/// - [`PARENT_CHAIN_CAP`] links (a cap; hitting it is logged).
+/// The rest of [`preload_material_part_material`] (the hub's rulings on #712's parent chain and on a `Material`'s
+/// expressions). From the loaded material, the walk visits what the glow read (`GetScalarParameterValue`) may read:
+/// - each visited object's `Parent`;
+/// - for an object that declares `Expressions` (a `Material`), each entry, in order. A None entry is skipped, as the
+///   glow read skips it.
 ///
-/// Each load is logged before and after; a failed load keeps its error. **UNVERIFIED stand-in**, as the material's.
-fn preload_parent_chain(vm: &mut Vm, material: ObjRef) -> Result<(), VmError> {
-    let mut current = material;
-    for _ in 0..PARENT_CHAIN_CAP {
-        let here = ow_vm::path_name::path_name(vm, current).unwrap_or_else(|_| format!("{current:?}"));
-        let Some(Value::Object(Some(parent))) = ow_inventory::equip::read_prop(vm, current, "Parent") else {
-            vm.log.push(format!("{MATERIAL_INPUT}: the parent chain ends at {here} (no Parent)"));
+/// An object is loaded **only if it is a Startup export** (`DefStore::handle_source`), by the same rule as the material
+/// itself. In the game `Startup` is resident from boot (decision 2026-11-25-36, UNVERIFIED), so any Startup export the
+/// walk reaches is resident there. An object already resident is visited with no load. A branch stops, with a logged
+/// line, at a None `Parent` (or an object that declares none) and at the first object that is not a Startup export,
+/// which is left for the native to refuse. Each object is visited once. After [`MATERIAL_WALK_CAP`] visits the walk
+/// stops, and that is logged. Each load is logged before and after; a failed load keeps its error. It is an
+/// **UNVERIFIED stand-in**, as the material's load is.
+fn preload_material_graph(vm: &mut Vm, material: ObjRef) -> Result<(), VmError> {
+    // Each entry: the object and how the walk reached it (the material itself and its parents, or an expression).
+    let mut queue = std::collections::VecDeque::from([(material, "parent")]);
+    let mut seen: Vec<ObjRef> = vec![material];
+    let mut visits = 0usize;
+    while let Some((current, via)) = queue.pop_front() {
+        if visits == MATERIAL_WALK_CAP {
+            vm.log.push(format!("{MATERIAL_INPUT}: the material walk stopped at its cap of {MATERIAL_WALK_CAP} objects"));
             return Ok(());
-        };
-        if !vm.defs.is_unloaded(&vm.space, parent) {
-            current = parent;
-            continue;
         }
-        let name = ow_vm::path_name::path_name(vm, parent).unwrap_or_else(|_| format!("{parent:?}"));
-        let export = match vm.defs.handle_source(parent) {
-            Some((package, index)) if package.eq_ignore_ascii_case(STARTUP_PACKAGE) => index,
-            other => {
-                let from = other.map_or_else(|| "an unknown package".to_string(), |(p, i)| format!("{p} export {i}"));
-                vm.log.push(format!(
-                    "{MATERIAL_INPUT}: the parent chain stops at {name} ({from}, not a Startup export; the glow read's \
-                     refusal stands)"
-                ));
-                return Ok(());
+        visits += 1;
+        if vm.defs.is_unloaded(&vm.space, current) {
+            let name = ow_vm::path_name::path_name(vm, current).unwrap_or_else(|_| format!("{current:?}"));
+            let export = match vm.defs.handle_source(current) {
+                Some((package, index)) if package.eq_ignore_ascii_case(STARTUP_PACKAGE) => index,
+                other => {
+                    let from = other.map_or_else(|| "an unknown package".to_string(), |(p, i)| format!("{p} export {i}"));
+                    vm.log.push(format!(
+                        "{MATERIAL_INPUT}: the walk stops at {name} ({from}, not a Startup export; the glow read's \
+                         refusal stands)"
+                    ));
+                    continue;
+                }
+            };
+            vm.log.push(format!("{MATERIAL_INPUT}: {via} {name} (Startup export {export}; UNVERIFIED stand-in)"));
+            let loaded = vm.defs.ensure_loaded(&mut vm.space, current);
+            vm.log.extend(vm.defs.take_log());
+            match &loaded {
+                Ok(()) => vm.log.push(format!("{MATERIAL_INPUT}: {via} {name}: loaded")),
+                Err(e) => vm.log.push(format!("{MATERIAL_INPUT}: {via} {name}: failed ({e})")),
             }
-        };
-        vm.log.push(format!("{MATERIAL_INPUT}: parent {name} (Startup export {export}; UNVERIFIED stand-in)"));
-        let loaded = vm.defs.ensure_loaded(&mut vm.space, parent);
-        vm.log.extend(vm.defs.take_log());
-        match &loaded {
-            Ok(()) => vm.log.push(format!("{MATERIAL_INPUT}: parent {name}: loaded")),
-            Err(e) => vm.log.push(format!("{MATERIAL_INPUT}: parent {name}: failed ({e})")),
+            loaded.map_err(VmError::from)?;
         }
-        loaded.map_err(VmError::from)?;
-        current = parent;
+        let mut next: Vec<(ObjRef, &'static str)> = Vec::new();
+        match ow_inventory::equip::read_prop(vm, current, "Parent") {
+            Some(Value::Object(Some(parent))) => next.push((parent, "parent")),
+            _ if via == "parent" => {
+                let here = ow_vm::path_name::path_name(vm, current).unwrap_or_else(|_| format!("{current:?}"));
+                vm.log.push(format!("{MATERIAL_INPUT}: the parent chain ends at {here} (no Parent)"));
+            }
+            _ => {}
+        }
+        if let Some(list) = ow_inventory::equip::read_prop(vm, current, "Expressions")
+            && let Some(entries) = list.elements()
+        {
+            next.extend(entries.iter().filter_map(|e| match e {
+                Value::Object(Some(o)) => Some((*o, "expression")),
+                _ => None,
+            }));
+        }
+        for (o, how) in next {
+            if !seen.contains(&o) {
+                seen.push(o);
+                queue.push_back((o, how));
+            }
+        }
     }
-    vm.log.push(format!("{MATERIAL_INPUT}: the parent chain walk stopped at its cap of {PARENT_CHAIN_CAP} links"));
     Ok(())
 }
 
