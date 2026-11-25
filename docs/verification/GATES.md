@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**HARNESS-GEARLIKENESS-SETUP (2026-11-25, zuhuPC Linux, on fix/rust-gearlikeness-setup-2 from main d3c7a13):**
+AI-assisted (Claude Code, Opus 5.5). The Maya set-up loads `WillowGame.IGearLikenessConsumer` and resolves the made
+Mesh class's interface entries (body composition hook 1), plus #657's four LOW fixes. `cargo build --workspace` OK.
+`cargo test --workspace --no-fail-fast` (with #661's path fix picked locally, not in the branch): 3365 passed / 4
+failed / 52 ignored; the 4 are the expected N1 float-oracle failures on Linux. `crate_edges_test.py` OK. Slice gate
+not run here (no install yet); the 2026-11-20 pc-hummer reading on the #657 stack is in the decision file.
+UNVERIFIED in game.
+
 **FIX-645-PREFLIGHT (2026-11-25, zuhu desktop (Linux), on fix/rust-skelmesh-preflight from main d3c7a13):**
 AI-assisted (Claude Code, Opus 5.5). SetSkeletalMesh's mesh change in Off: a receiver with fewer slots than its class
 is row 1's `NotRead` before any write (on main a receiver cut at `bHasValidBodies` committed three writes and then
