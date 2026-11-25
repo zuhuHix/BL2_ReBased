@@ -1,7 +1,7 @@
 ## 2026-11-25: The skeletal mesh data layer reads the reference skeleton from the mesh's package export
 
 AI-assisted (Claude Code, Opus 5.5). Lane SKELMESH-REFSKELETON, stacked on #673 (fix/rust-skelmesh-lod-count-2,
-fbfcd3d3, decision 2026-11-25-09). The decision number is pending from the hub; NNN is a placeholder.
+fbfcd3d3, decision 2026-11-25-09).
 
 - **What was decided:** `ow-assets` `skeletal_lods::read_lod_models` now also returns the reference skeleton, as
   `RefBone`s: name, parent, rotation, position, stored child count, colour. It is given only by a read of the whole
