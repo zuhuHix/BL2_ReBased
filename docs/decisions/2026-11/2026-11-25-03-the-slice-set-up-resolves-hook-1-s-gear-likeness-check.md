@@ -23,15 +23,18 @@ mesh preload) does two things:
      stack (below); not re-measured on the current base.
      Since review r1 of #665 (MED 1) the answer is cross-checked with the strict `CodeIndex::implements_declared`:
      `implements` caches an entry whose lookup failed as "resolved to nothing", which would read as a settled no.
-     When the strict reading has no answer or disagrees, the line says "unresolved, an entry did not resolve to a
-     class" (or names the lookup error) and the set-up answers `NotYet` (`NotRead`). `CodeIndex::implements` itself
-     is not changed here; Resolving the entries at set-up, rather than
+     When the strict reading has no answer, the line says "unresolved, the strict reading has no answer (an entry or
+     a class chain did not resolve)"; when it fails or disagrees, the line names that and the set-up answers `NotYet`
+     (`NotRead`). `CodeIndex::implements` itself
+     is not changed here; resolving the entries at set-up, rather than
      when the game first asks, is labelled the harness input ("a write; UNVERIFIED stand-in for when the game
      resolves them");
    - **UNVERIFIED stand-in** when the bodies did not all decode (synthetic packages): the structural fallback, which
      is not the game's interface list;
    - a class the packages do not hold resolves nothing;
-   - when the class lookup itself loaded code (by the store's load counter), the line says so (a write).
+   - when the class lookup itself loaded code (each class's layout and code state before and after the lookup, as
+   `preload_class`
+     measures it), the line says so (a write).
 3. **Only attachment 0.** The set-up resolves the entries for `Engine.SkeletalMeshComponent` only (Maya's mesh,
    attachment 0), but hook 1 runs for every made component. A later attachment of another class may stop at
    `GEAR_UNRESOLVED` (`NotRead`), which is an honest `NotYet`, not a fault of this set-up.
