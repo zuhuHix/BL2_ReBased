@@ -73,6 +73,8 @@ use ow_world::world::component_setters::{REATTACH_FIELDS, Slots, Want, bool_of, 
 pub mod particle_activation;
 pub mod pickup_particles;
 pub mod pickup_rb;
+/// `ParticleSystemComponent.SetColorParameter` in Off (lane IMPL-PSC-SETCOLORPARAMETER).
+pub mod psc_color;
 
 /// The record these natives follow.
 pub const RECORD: &str = "docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md";
@@ -331,10 +333,12 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     // Part 2's keys, first wins (review r1 of #520): a key an earlier pack bound keeps its handler, and the others are
     // still registered.
-    let part2: [(&str, NativeFn); 3] = [
+    let part2: [(&str, NativeFn); 4] = [
         (SET_LIGHT_ENVIRONMENT, light_environment_native),
         (INIT_RB_PHYSICS, rb_physics_native),
         (SPAWN_PICKUP_PARTICLES, particles_native),
+        // Lane IMPL-PSC-SETCOLORPARAMETER (NATIVE_PSC_SET_COLOR_PARAMETER.md section 3).
+        (psc_color::SET_COLOR_PARAMETER, psc_color::set_color_parameter),
     ];
     for (key, f) in part2 {
         if !vm.has_native(key) {
