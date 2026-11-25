@@ -139,10 +139,10 @@ fn reference_does_nothing() {
 #[test]
 fn a_missing_mesh_is_logged_and_skipped() {
     let mut e = env(ParityMode::Off);
-    let loads = e.vm.defs.load_transitions();
+    let loads = (e.vm.defs.load_transitions() + e.vm.class_code_loads());
     preload_mesh_sockets(&mut e.vm, "GD_ToyMesh.NoSuchMesh").unwrap();
     assert!(harness_lines(&e.vm).last().unwrap().ends_with(": found nothing"));
-    assert_eq!(e.vm.defs.load_transitions(), loads);
+    assert_eq!((e.vm.defs.load_transitions() + e.vm.class_code_loads()), loads);
 }
 
 /// A socket whose load fails keeps its error: logged, returned, and the earlier socket stays loaded.

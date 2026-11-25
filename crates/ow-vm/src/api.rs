@@ -663,6 +663,14 @@ impl Vm {
         crate::interp::find_class(self, path)
     }
 
+    /// How many code loads the VM has made: each class whose functions and states were loaded, and each package
+    /// function declared (lane COUNTERS-MISS-CLASS-CODE-LOADS). A count that only grows. A code load registers
+    /// functions and can intern names, so it is a write; neither the heap's committed writes nor the store's
+    /// `load_transitions` move for it, so a write-free check reads this too.
+    pub fn class_code_loads(&self) -> u64 {
+        self.code.code_loads
+    }
+
     /// Whether `class`'s function and state code is loaded (a read: it loads nothing). A class whose layout another
     /// load defined can still have no code loaded (review r2 of #579).
     pub fn class_code_loaded(&self, class: ClassId) -> bool {

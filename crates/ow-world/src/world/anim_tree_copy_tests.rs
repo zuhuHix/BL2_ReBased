@@ -380,7 +380,7 @@ fn refused_clean(x: &mut Fx, component: ObjRef, template: ObjRef) -> VmError {
             x.vm.space.heap.committed_writes(),
             x.vm.space.heap.handles().len(),
             x.vm.rng.draws(),
-            x.vm.defs.load_transitions(),
+            (x.vm.defs.load_transitions() + x.vm.class_code_loads()),
             x.vm.space.names.len(),
         )
     };
@@ -734,12 +734,12 @@ fn an_unloaded_template_is_the_lookup_s_layer_absent_with_nothing_loaded() {
     assert!(s.vm.defs.is_unloaded(&s.vm.space, tree));
     let comp_class = s.vm.find_class("Engine.SkeletalMeshComponent").unwrap();
     let comp = s.vm.space.alloc(comp_class, "Comp", None, Origin::Runtime).unwrap();
-    let (loads, writes) = (s.vm.defs.load_transitions(), s.vm.space.heap.committed_writes());
+    let (loads, writes) = ((s.vm.defs.load_transitions() + s.vm.class_code_loads()), s.vm.space.heap.committed_writes());
     let n = not_yet(instance(&mut s.vm, comp, tree).unwrap_err());
     assert_eq!(n.missing, Missing::LayerAbsent(ANIM_LAYER));
     assert_eq!(&*n.what, ANIM_NODES);
     assert!(!n.what.contains("partial writes"));
-    assert_eq!((s.vm.defs.load_transitions(), s.vm.space.heap.committed_writes()), (loads, writes), "nothing loaded or written");
+    assert_eq!(((s.vm.defs.load_transitions() + s.vm.class_code_loads()), s.vm.space.heap.committed_writes()), (loads, writes), "nothing loaded or written");
     assert!(s.vm.defs.is_unloaded(&s.vm.space, tree));
 }
 
@@ -809,10 +809,10 @@ fn an_unloaded_node_or_control_in_a_loaded_tree_is_rule_1_s_refusal() {
             x.set(t.k2, "NextControl", Value::Object(Some(control)));
         }
         let comp = x.component();
-        let loads = x.vm.defs.load_transitions();
+        let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
         let n = not_yet(refused_clean(&mut x, comp, t.root));
         assert_eq!((&*n.what, n.missing), (ANIM_NODES, Missing::LayerAbsent(ANIM_LAYER)), "{which}");
-        assert_eq!(x.vm.defs.load_transitions(), loads, "{which}: nothing loaded");
+        assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), loads, "{which}: nothing loaded");
     }
 }
 
@@ -1494,7 +1494,7 @@ fn an_attach_asks_the_actor_not_the_template_s_owner() {
             x.vm.space.heap.committed_writes(),
             x.vm.space.heap.handles().len(),
             x.vm.rng.draws(),
-            x.vm.defs.load_transitions(),
+            (x.vm.defs.load_transitions() + x.vm.class_code_loads()),
             x.vm.space.names.len(),
         )
     };
@@ -2203,7 +2203,7 @@ fn named(x: &mut Fx, o: ObjRef, name: &str) {
 
 /// The lookups over `t`'s planned copy on `comp`, with the counters unchanged.
 fn looked_up(x: &Fx, comp: ObjRef, root: ObjRef, body: Option<ObjRef>) -> Result<Settled, VmError> {
-    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads()));
     let before = counts(x);
     let p = plan(&x.vm, comp, root).unwrap();
     let r = lookups(&x.vm, &p, body);
@@ -2777,7 +2777,7 @@ fn the_attach_check_plans_the_passed_owner_s_event() {
         (
             x.vm.space.heap.committed_writes(),
             x.vm.space.heap.handles().len(),
-            x.vm.defs.load_transitions(),
+            (x.vm.defs.load_transitions() + x.vm.class_code_loads()),
             x.vm.space.names.len(),
             x.vm.rng.draws(),
         )

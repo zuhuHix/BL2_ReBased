@@ -1293,14 +1293,14 @@ fn a_draw_then_a_refusal_through_the_binding_is_marked() {
     let t = x.t;
     x.set(t, "WeaponAttributeEffects", Value::array(vec![effect]));
     x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
-    let (writes, draws, loads) = (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let (writes, draws, loads) = (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads()));
     let w = x.weapon;
     let n = not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err());
     assert_eq!(n.what, format!("stopped after partial writes: {UNORDERED}"));
     assert_eq!(n.missing, Missing::NotRead);
     assert_eq!(n.record, REST_RECORD);
     assert_eq!(x.vm.rng.draws(), draws + 1, "one variance draw");
-    assert_eq!((x.vm.space.heap.committed_writes(), x.vm.defs.load_transitions()), (writes, loads), "no heap write, no load");
+    assert_eq!((x.vm.space.heap.committed_writes(), (x.vm.defs.load_transitions() + x.vm.class_code_loads())), (writes, loads), "no heap write, no load");
     x.untouched();
     // Without the draw the same refusal is unmarked.
     let mut x = Fx::new();

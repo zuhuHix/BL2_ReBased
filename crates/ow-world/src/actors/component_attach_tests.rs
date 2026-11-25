@@ -121,7 +121,7 @@ impl Fx {
 
     /// #518's three counters.
     fn counters(&self) -> (u64, u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.defs.load_transitions(), self.vm.rng.draws())
+        (self.vm.space.heap.committed_writes(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()), self.vm.rng.draws())
     }
 
     /// The whole attach record (its `Debug` text, or none without a scene layer) and the name table's length (review

@@ -218,7 +218,7 @@ fn an_object(t: &Toy) -> ObjRef {
 }
 
 fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()))
 }
 
 /// Calls setter `i` from the host and returns the variable as it stands after the call.

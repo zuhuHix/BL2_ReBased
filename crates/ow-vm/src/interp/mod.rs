@@ -167,6 +167,9 @@ pub(crate) struct CodeState {
     code: FixedHashMap<FuncId, Rc<FuncCode>>,
     /// Classes whose functions and states are loaded.
     classes: FixedHashMap<ClassId, Rc<ClassCode>>,
+    /// Code loads so far: each class whose functions and states were loaded, and each package function declared (lane
+    /// COUNTERS-MISS-CLASS-CODE-LOADS). Only grows. #518's three counters do not see these loads.
+    pub(crate) code_loads: u64,
     /// Native index -> the native (or why it could not be loaded), built on first use over the code packages.
     natives: Option<Rc<FixedHashMap<u32, Result<FuncId, String>>>>,
     /// (filed package, outer export) -> the typed child declarations of that export, for property references.

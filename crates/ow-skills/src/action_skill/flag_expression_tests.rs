@@ -976,12 +976,12 @@ fn a_cold_receiver_waits_for_the_rule_engine_search() {
     assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry starts unresolved");
     let context = x.vm.space.alloc(context_class, "Context", None, Origin::Runtime).unwrap();
     let cold = x.cold_evaluator();
-    let loads = x.vm.defs.load_transitions();
+    let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
     let start = WriteCounters::of(&x.vm);
     let text = not_read(x.eval(cold, Some(context)), "has an entry not resolved (resolving it is a load)");
     assert!(!text.starts_with("stopped after partial writes: "), "{text}");
     assert!(!start.moved(&x.vm), "write-free");
-    assert_eq!(x.vm.defs.load_transitions(), loads, "no load transition");
+    assert_eq!((x.vm.defs.load_transitions() + x.vm.class_code_loads()), loads, "no load transition");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the receiver was not loaded");
     assert_eq!(x.vm.implements_read_only(context_class, owner).unwrap(), None, "the entry stays cold");
     assert!(x.vm.implements_checked(context_class, owner).unwrap(), "the caching lookup resolves it");

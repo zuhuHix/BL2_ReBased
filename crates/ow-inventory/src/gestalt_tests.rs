@@ -718,10 +718,10 @@ fn the_self_copy_the_layer_refusals_and_one_whole_slot_write() {
     value.struct_mut().unwrap().fields[at] = some(mesh_a);
     x.vm.space.write(c1, PropAddr::scalar(p), value.clone()).unwrap();
     let writes = x.vm.space.heap.committed_writes();
-    let (draws, loads) = (x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let (draws, loads) = (x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads()));
     init_gestalt_mesh_data(&mut x.vm, Some(c2), Some(c1)).unwrap();
     assert_eq!(x.vm.space.heap.committed_writes(), writes + 1, "one whole-slot write");
-    assert_eq!((x.vm.rng.draws(), x.vm.defs.load_transitions()), (draws, loads), "no draw, no load");
+    assert_eq!((x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads())), (draws, loads), "no draw, no load");
     assert_eq!(x.vm.space.read(c2, PropAddr::scalar(p)).unwrap(), &value, "the argument's value, its objects the same");
     assert_eq!(x.o("ToyComp2"), c2, "the receiver keeps its identity");
     assert_eq!(crate::equip::read_prop(&x.vm, c2, "SkeletalMesh"), Some(some(mesh_b)), "its own mesh unchanged");

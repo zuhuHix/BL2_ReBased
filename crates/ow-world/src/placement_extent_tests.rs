@@ -152,7 +152,7 @@ fn an_attached_colliding_primitive_reads_the_skip_flag() {
     let t = x.obj("Engine.Actor");
     let p = x.primitive(true, true);
     x.components(t, vec![Some(p)]);
-    let marks = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions(), x.vm.space.names.len());
+    let marks = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), (x.vm.defs.load_transitions() + x.vm.class_code_loads()), x.vm.space.names.len());
     let before = marks(&x);
     match extent(&x.vm, t).unwrap_err() {
         VmError::NotYet(n) => {

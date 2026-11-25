@@ -251,6 +251,7 @@ fn load_class_code(vm: &mut Vm, class: ClassId) -> Result<(), VmError> {
         loaded.states.insert(key, in_state);
     }
     vm.code.classes.insert(class, Rc::new(loaded));
+    vm.code.code_loads += 1;
     Ok(())
 }
 
@@ -334,6 +335,7 @@ fn declare_package_function(
     if let Some(&f) = vm.code.functions.get(&(package, export)) {
         return Ok(f);
     }
+    vm.code.code_loads += 1;
     let (name, path, info, decls, failure) = {
         let (code, store) = vm.defs.code_mut();
         let pkg = store.shared(package);

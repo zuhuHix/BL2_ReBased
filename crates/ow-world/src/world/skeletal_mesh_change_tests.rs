@@ -227,7 +227,7 @@ fn fx() -> Fx {
 
 /// #518's counters, and the name table's length.
 fn marks(vm: &Vm) -> (u64, u64, u64, usize) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len())
 }
 
 impl Fx {

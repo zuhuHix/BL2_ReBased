@@ -424,7 +424,7 @@ impl Fx {
     /// The pickup's and the defaults' values, the heap size and #518's three counters.
     fn state(&self) -> (Vec<Value>, Vec<Value>, usize, [u64; 3]) {
         let all = |o: ObjRef| -> Vec<Value> { self.vm.space.heap.get(o).unwrap().slots.to_vec() };
-        let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions()];
+        let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), (self.vm.defs.load_transitions() + self.vm.class_code_loads())];
         (all(self.pickup), all(self.defaults), self.vm.space.heap.handles().len(), counters)
     }
 
