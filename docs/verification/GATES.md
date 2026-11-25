@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-CUSTOMHEAD-PARENT-FLAG (2026-11-25, pc-hummer, docs only, on docs/native-customhead-parent-flag from
+main 258a7335):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8: the
+`Parent` link's identity-map flag is `bIsGestaltAccessoryMesh` (by fit). Maya's head template has it false, on a
+different mesh from her body, so her map is the by-name one. Off answer proposed for the hub's revisit of ruling 3.
+No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-HOOK3-ARRAY-CHECK (2026-11-25, pc-hummer, on fix/rust-hook3-array-check from #714 1802cca6):** AI-assisted
 (Claude Code, Opus 5.5). Hook 3 through `SetLightEnvironment`'s planner, and a made static mesh component `NotRead`
 (NATIVE_BODYCOMP_RENDER_HOOKS.md section 7).

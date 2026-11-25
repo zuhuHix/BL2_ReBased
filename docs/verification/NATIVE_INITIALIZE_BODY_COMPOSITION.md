@@ -191,7 +191,8 @@ from `Data`**: the packages hold `i` + 1 there, so the entry carries `i` + 1.
    - then its parent-bone map (by fit `ParentBoneMap`) is rebuilt:
      - it is emptied, and filled only when both components have a skeletal mesh asset;
      - it gets one slot per bone of the new component's mesh;
-     - when both use the same mesh asset, or a flag of the new component is set (not identified), slot `k` holds `k`;
+     - when both use the same mesh asset, or a flag of the new component is set (not identified), slot `k` holds `k`
+       *(identified 2026-11-25 in section 8: `bIsGestaltAccessoryMesh`)*;
      - otherwise slot `k` holds the parent mesh's bone index with the same name as bone `k`, or the no-match index;
    - **hub ruling 3:** `NotRead` in Off (section 7).
 
@@ -350,7 +351,8 @@ inside the gate, it keeps the root-motion writes: `Mesh.RootMotionMode` = 3 when
      the Parent link's parent-bone map" (hub ruling 3). Maya's attachment 1 meets this, but only after attachment 0
      and attachment 1's socket attach have passed ("Where Maya stops", below). The reading in section 4.1, step 7 is whole except for one flag of the component. A port answer is
      possible if the hub revisits ruling 3: set the link, and fill the map from the two meshes' bone tables, with the
-     same mesh-data layer as the socket attach;
+     same mesh-data layer as the socket attach. *Section 8.1 (2026-11-25) gives that answer, with the flag
+     identified, for the hub's revisit;*
    - **the pawn's `PostInitBodyComposition`** (section 4.5):
      - **the release of the old field**, for identifier `Mesh` or `CylinderComponent`, when the old `Pawn.Mesh` or
        `Pawn.CylinderComponent` is set and attached (or the port cannot tell whether it is attached) →
@@ -409,13 +411,128 @@ item is reached only once everything before it has an answer:
 
 **Reference** keeps the stub policy.
 
+## 8. Amendment (2026-11-25): the `Parent` link's flag, identified
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-CUSTOMHEAD-PARENT-FLAG (decision 2026-11-25-NNN), analyst only:
+**another lane implements this section.** Raw output stays under ignored `local/analysis/parentflag/`. **Every rule
+here is UNVERIFIED in the running game.**
+
+**Why.** NATIVE_BODYCOMP_RENDER_HOOKS.md section 7 (#715) predicts that link 1's next stop is Maya's attachment 1
+(`CustomHead`): the `Parent` link, `NotYet { NotRead }` under hub ruling 3 (section 0, the hub's rulings on #529).
+Section 4.1 step 7 had read the link whole except one flag of the new component. That flag decides whether the
+parent-bone map is the identity.
+
+**Evidence.**
+- Ghidra 12.1.4 headless, read-only, under the machine lock:
+  - the body composition's component case calls the engine's own `SetParentAnimComponent` routine, when the
+    identifier is `Parent` and both objects are `SkeletalMeshComponent`s. That routine is the one the script natives
+    `SkeletalMeshComponent.SetParentAnimComponent` and `UpdateParentBoneMap` call. It is also called by the mesh change
+    (the routine `SetSkeletalMesh`'s exec reaches) and by one more component routine (not read);
+  - the field names come from the local copy of `tools/ghidra/class_layout.py` that sizes `MapProperty`, with one
+    constant shift that also places `SkeletalMesh`, `ParentAnimComponent` and `ParentBoneMap` at the places the
+    routine reads. So the names are a strong fit.
+- An instruction search found no immediate set or clear of the flag's bit in the executable. The search covered two
+  forms each: the word and the byte, set and clear. It is **not exhaustive**.
+- `research/script_disasm.py`'s decoder was run over every script function of the nine code packages. No script
+  function reads or writes the flag or `ParentAnimComponent`, and none calls `SetParentAnimComponent` or
+  `UpdateParentBoneMap`.
+- Maya's template was read with
+  `ow-package --def-dump GD_Siren_Streaming.Pawn_Siren.CustomSkeletalMeshComponent_191 --cooked <CookedPCConsole>`, the
+  merged values from the installed packages (output under ignored `local/analysis/link1next/`). Her body template was
+  read the same way: `GD_Siren_Streaming.Pawn_Siren.SkeletalMeshComponent_7134`.
+- There are no bl-sdk reads.
+
+**The flag is `SkeletalMeshComponent.bIsGestaltAccessoryMesh`** (by fit, high). This replaces "a flag of the new
+component (not identified)" in section 4.1 step 7.
+
+**What sets it.**
+- Only the component's own value: its template's value as made, or the class default. The made component copies its
+  template's slots.
+- Nothing in the body composition, the attach or the link writes it, as far as read. No script touches it. The
+  instruction search found no native write (not exhaustive).
+
+**The link, in order** (section 4.1 step 7, now whole):
+1. the new component's `ParentAnimComponent` = the parent component;
+2. its `ParentBoneMap` is emptied;
+3. when the new component's `SkeletalMesh`, the parent and the parent's `SkeletalMesh` are all set, the map gets
+   one slot per bone of the new component's mesh (its reference skeleton's count). Otherwise it stays empty;
+4. **when the two `SkeletalMesh` objects are the same, or `bIsGestaltAccessoryMesh` is set:** slot `k` holds `k`;
+5. **otherwise:** slot `k` holds the index of the bone of the parent's mesh with the same name as bone `k`, looked up
+   through the parent mesh's name-to-index table. A name it lacks gives the engine's no-index value, -1.
+
+When a skeleton has two bones with the same name, which index the table keeps was not read. The port's `find_bone`
+takes the first, an **UNVERIFIED** choice.
+
+**What Maya takes.**
+- Attachment 1's template (`CustomSkeletalMeshComponent_191`) has `bIsGestaltAccessoryMesh` false.
+- Its `SkeletalMesh` is `CD_Heads_Assassin_MainGame.CubeForCode`, the placeholder cube decision 2026-11-25-09 names.
+  Attachment 0's is `Char_Siren.Mesh.Skel_SirenBody`.
+- So the meshes differ and the flag is clear: **her map is the by-name one** (step 5), over `CubeForCode`'s bones
+  against `Skel_SirenBody`'s. No stand-in is needed for the flag.
+- The custom head entry (attachment 16) applies nothing in the port (ruling 2). In the game, a later head-mesh change
+  would rebuild the map through the mesh change; that is not on `maya:8`'s path in the port.
+
+### 8.1 The Off answer (proposed for the hub's revisit of ruling 3)
+
+**Every rule below is UNVERIFIED.** If the hub revisits ruling 3, it replaces the `PARENT_LINK` refusal
+(`body_composition::PARENT_LINK`, section 7's walk). The gate is unchanged: identifier `Parent`, the parent a made
+`SkeletalMeshComponent` and the new component one too.
+
+**Preflight** (read only, after the attachment's socket attach is planned, before the pawn's hooks):
+1. **Declarations:** the new component's class declares `ParentAnimComponent` (an object or component reference that
+   takes the parent), `ParentBoneMap` (an array of ints) and `bIsGestaltAccessoryMesh` (a bool). Otherwise
+   `VmError::Script` naming it.
+2. **The meshes:** the new component's `SkeletalMesh` from its template, as made; the parent's from the parent's
+   template. Either None: the map will be empty, and nothing more is read.
+3. **The same mesh, or the flag set:** the new mesh's reference skeleton (`skeletal::reference_skeleton`) for its
+   count. The map is `0..n`.
+4. **Otherwise:** both reference skeletons. Slot `k` is `skeletal::find_bone(parent mesh, name of bone k)`, or -1 when
+   it answers None. A name text the name table does not hold is no match, as `find_bone` does.
+5. A skeleton that cannot be read refuses with that reader's own `NotYet`, before any write. For example: no skeleton
+   source is installed, the mesh is not loaded, or a name is not flat. The reader's kind and record are kept, and
+   nothing is loaded.
+
+**Writes** (in the walk's writes, after the attachment's socket attach and before the pawn's `PostInitBodyComposition`
+writes for it):
+1. `ParentAnimComponent` = the parent made object;
+2. then `ParentBoneMap` = the planned ints.
+
+A failure after the first write is marked "stopped after partial writes: " by #518's counters.
+
+**Not in scope:** the script natives `SetParentAnimComponent` and `UpdateParentBoneMap` share this rule, and could be
+bound from it; no slice link calls them. The mesh change's own rebuild belongs to NATIVE_SKELMESH_MESH_CHANGE.md.
+
+**What link 1 would meet** (a prediction, not a run). With the link answered, attachment 1 needs `CubeForCode`'s
+reference skeleton as well as `Skel_SirenBody`'s. If the slice's skeleton source does not hold `CubeForCode`, that
+reader's refusal is her next stop. Otherwise she goes on to attachment 1's rendering hooks.
+
+### 8.2 Tests for the implementer
+
+Synthetic, with `package()` / `tag()` and a test skeleton source. Each refusal leaves #518's three counters and the
+name table unchanged, with nothing loaded:
+1. a `Parent` attachment whose child and parent templates share one mesh of 3 bones: after the build,
+   `ParentAnimComponent` is the parent made object and `ParentBoneMap` is `[0, 1, 2]`;
+2. different meshes, the flag clear: the child's bones `A, B, C`, the parent's `C, A`: the map is `[1, -1, 0]`;
+3. different meshes, the flag set: the identity over the child's count;
+4. the child's or the parent's `SkeletalMesh` None: the link is set and the map is empty. A template map with entries
+   is emptied too;
+5. the child's skeleton not readable (no source installed): the reader's `LayerAbsent`, before any write;
+6. a child bone name the name table lacks: -1 in that slot, and nothing is interned;
+7. `ParentBoneMap` not an int array, or `bIsGestaltAccessoryMesh` not a bool: `VmError::Script` naming it;
+8. a non-skeletal parent or child, or another identifier: no link (as now);
+9. order: the link's two writes come after the socket attach's writes and before the hooks' writes for the same
+   attachment;
+10. the existing `PARENT_LINK` refusal test is replaced by tests 1 to 4;
+11. Reference: unchanged.
+
 ## Open questions
 
 1. **UNVERIFIED:** the made component's validity check (ruled valid for the port).
 2. **UNVERIFIED:** the component flags of the collision table: named by bit position against the layout tool.
 3. **UNVERIFIED:** the engine class of an actor's own named socket components.
-4. **UNVERIFIED:** the `Parent` link: the component flag that forces the identity map, and the field names (`ParentAnimComponent`,
-   `ParentBoneMap`) by fit.
+4. **UNVERIFIED:** the `Parent` link: the component flag that forces the identity map (`bIsGestaltAccessoryMesh`, by
+   fit, section 8), and the field names (`ParentAnimComponent`, `ParentBoneMap`) by fit. Which index the parent's
+   name table keeps for a duplicated bone name was not read.
 5. **UNVERIFIED:** the per-entry step on the existing entries of a rebuild, and the replay onto new entries (refused in
    Off).
 6. **UNVERIFIED:** what the head and skin customization apply writes (ruled "nothing" for the port).
