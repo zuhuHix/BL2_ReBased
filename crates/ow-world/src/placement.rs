@@ -346,8 +346,8 @@ fn actor_rule(vm: &Vm, template: ObjRef, class: &str) -> Result<[f32; 3], VmErro
     let space = &vm.space;
     let primitive = space.classes.by_path("Engine.PrimitiveComponent");
     for c in objects(space, template, "Components")?.into_iter().flatten() {
-        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS).
-        let Some(primitive) = primitive else { continue };
+        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS), also
+        // when the table has no PrimitiveComponent (review r1 of #681).
         let prefix = format!("{BOUNDING_CYLINDER_OF} {class}");
         if !crate::world::bounding_cylinder::primitive_class(space, space.heap.get(c)?.class, primitive, &prefix, EXTENT_RECORD)? {
             continue;

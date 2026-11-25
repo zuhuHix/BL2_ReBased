@@ -22,6 +22,10 @@ check changed.
   whether it is a primitive is not known: <class>"), on `NATIVE_GET_BOUNDING_CYLINDER.md` for the bounding cylinder
   and `NATIVE_SPAWN_EXTENT.md` for the spawn extent. It comes before any other check of the entry and is read only.
   The end of a chain of package classes is no, and that entry is skipped as before.
+- **Review r1 of #681:** both walks call the class test for every entry, also when the class table has no
+  `Engine.PrimitiveComponent` (the helper takes it as an `Option`). Before, the callers skipped every entry first in
+  that case, so a stand-in still gave a silent zero. Without the class no package entry is a primitive, but a chain
+  through a stand-in is still `NotRead`. A regression test for each walk covers it.
 - **Only the class-test lines changed**, so the change rebases over #677.
 - **Tests (synthetic):** both walks refuse a native stand-in entry with `NotRead` naming it, with the heap, the RNG,
   #518's counters and the name table unchanged. A package class that is not a primitive is still skipped, and a

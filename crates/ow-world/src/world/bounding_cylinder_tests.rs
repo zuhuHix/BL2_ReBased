@@ -904,3 +904,23 @@ fn a_native_stand_in_component_class_is_not_read() {
     x.components(pickup, vec![Some(light)]);
     assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0), "a defined non-primitive is skipped");
 }
+
+/// Review r1 of #681: the class test with no `PrimitiveComponent` id (the caller found none in the table) still
+/// refuses a chain through a native stand-in, and answers no for a package class.
+#[test]
+fn the_class_test_refuses_a_stand_in_with_no_primitive_id() {
+    let mut x = fx();
+    let mut object = x.vm.find_class("Engine.PrimitiveComponent").unwrap();
+    while let Some(up) = x.vm.space.classes.get_layout(object).and_then(|l| l.super_class()) {
+        object = up;
+    }
+    let native = x.vm.space.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+    x.vm.space.classes.mark_native(native).unwrap();
+    let light = x.vm.find_class("Engine.DynamicLightEnvironmentComponent").unwrap();
+    let space = &x.vm.space;
+    assert_eq!(primitive_class(space, light, None, "Actor.GetBoundingCylinder", RECORD).unwrap(), false);
+    let Err(VmError::NotYet(n)) = primitive_class(space, native, None, "Actor.GetBoundingCylinder", RECORD) else {
+        panic!("a stand-in must be refused")
+    };
+    assert_eq!(n.missing, Missing::NotRead);
+}

@@ -109,18 +109,20 @@ pub const NATIVE_STAND_IN_CLASS: &str = "a Components entry whose class runs thr
 /// export, which the definition store defines directly under `Core.Object`, decision 2026-11-15-08) is
 /// `NotYet { NotRead }` with `prefix`, the class and `record`: its real super chain is not known, so the game might
 /// count the entry, and the VM's casts answer the same (`interp::is_child`). The end of a chain of package classes
-/// is no. A class that is only declared cannot reach here: the heap makes no object of one, and a class is defined
+/// is no. `primitive` is `None` when the class table has no `Engine.PrimitiveComponent`: no package class can then be
+/// a primitive, but a stand-in on the chain is still refused (review r1 of #681). A class that is only declared
+/// cannot reach here: the heap makes no object of one, and a class is defined
 /// only after its super class. Read only.
 pub fn primitive_class(
     space: &ObjectSpace,
     class: ow_object::ids::ClassId,
-    primitive: ow_object::ids::ClassId,
+    primitive: Option<ow_object::ids::ClassId>,
     prefix: &str,
     record: &'static str,
 ) -> Result<bool, VmError> {
     let mut cursor = Some(class);
     while let Some(c) = cursor {
-        if c == primitive {
+        if Some(c) == primitive {
             return Ok(true);
         }
         let Some(layout) = space.classes.get_layout(c) else {
@@ -260,8 +262,8 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
     let mut boxes = Vec::new();
     for c in objects(space, this, "Components")?.into_iter().flatten() {
         let class = space.heap.get(c)?.class;
-        let Some(primitive) = primitive else { continue };
-        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS).
+        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS), also
+        // when the table has no PrimitiveComponent (review r1 of #681).
         if !primitive_class(space, class, primitive, "Actor.GetBoundingCylinder", RECORD)? {
             continue;
         }
