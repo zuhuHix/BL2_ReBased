@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-SKELMESH-COMPONENT-CHECK (2026-11-25, pc-hummer, docs only, on docs/native-skelmesh-component-check from
+main 3ad1b86d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_COMPONENT_SKIP_FLAG.md section 6: the bounding
+cylinder's per-component check, read for 145 native component classes, is true for every primitive class and false for
+the rest. Links 6 and 7's predicted next stop is the skeletal bounds source. No code changed, so no measured number
+moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **HARNESS-GEARLIKENESS-SETUP (2026-11-25, zuhuPC Linux, on fix/rust-gearlikeness-setup-2, base main faa3bbc):**
 AI-assisted (Claude Code, Opus 5.5). The Maya set-up loads `WillowGame.IGearLikenessConsumer` and resolves the made
 Mesh class's interface entries (body composition hook 1), plus #657's four LOW fixes. `cargo build --workspace` OK.
