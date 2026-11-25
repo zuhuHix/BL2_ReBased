@@ -126,6 +126,9 @@ struct Opts {
     /// The pawn's `HeadMesh` takes only a `CylinderComponent`: the custom-head write fails in the write phase, a seam for
     /// the write-order test.
     head_mesh_cylinder: bool,
+    /// The actor's `Components` takes only `Test.ToyReattachSkeletal` components: the actor attach of any other class
+    /// fails in the write phase, a seam for the `Parent` link's order test (review of #721, MED).
+    components_reattach_only: bool,
 }
 
 impl Default for Opts {
@@ -142,6 +145,7 @@ impl Default for Opts {
             parent_map_int: false,
             gestalt_flag_int: false,
             head_mesh_cylinder: false,
+            components_reattach_only: false,
         }
     }
 }
@@ -160,6 +164,7 @@ fn env_opts(opts: Opts) -> Env {
         parent_map_int,
         gestalt_flag_int,
         head_mesh_cylinder,
+        components_reattach_only,
     } = opts;
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
@@ -504,7 +509,11 @@ fn env_opts(opts: Opts) -> Env {
         ("bBlockActors", PropKind::Bool),
         ("bPushedByEncroachers", PropKind::Bool),
         ("CollisionComponent", o.clone()),
-        ("Components", PropKind::Array(Box::new(o.clone()))),
+        ("Components", PropKind::Array(Box::new(if components_reattach_only {
+            PropKind::Object { class: reattach_skeletal }
+        } else {
+            o.clone()
+        }))),
         // The deferred reattach's owner rule (NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1).
         ("bStatic", PropKind::Bool),
         ("bTickIsDisabled", PropKind::Bool),

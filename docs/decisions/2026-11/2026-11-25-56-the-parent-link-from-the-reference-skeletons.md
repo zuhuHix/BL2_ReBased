@@ -1,7 +1,7 @@
 ## 2026-11-25: The body composition's Parent link, from the two reference skeletons
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CUSTOMHEAD-PARENT-LINK, stacked on fix/rust-hook3-array-check 85687ab6
-(#717). Coded from NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8 alone (#716, analyst lane
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CUSTOMHEAD-PARENT-LINK, on main 5d20247f (the hub rebased it there
+after #714 and #717 landed; written stacked on #717 at 85687ab6). Coded from NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8 alone (#716, analyst lane
 ANALYST-CUSTOMHEAD-PARENT-FLAG, decision 2026-11-25-51). Clean room: this lane is not its analyst, and no native code
 or analysis output was opened. Every rule is UNVERIFIED in the running game.
 
@@ -23,7 +23,8 @@ or analysis output was opened. Every rule is UNVERIFIED in the running game.
   before the pawn's `PostInitBodyComposition` writes for it.
 - **One guard the note does not list:** the link reads the new component's mesh from its template. So a child
   template the store has not loaded is the walk's existing `lazy_template` `NotRead`, with nothing loaded, as the parent
-  template already is.
+  template already is. Step 1's declaration checks, which need only the class, come before this guard (review of
+  #721).
 - **Tests** (`body_composition_parent_tests.rs`, section 8.2):
   - the same mesh gives the identity, and different meshes map by name, `[1, -1, 0]` (tests 1 and 2);
   - the flag gives the identity without reading the parent's skeleton (3);
@@ -33,7 +34,8 @@ or analysis output was opened. Every rule is UNVERIFIED in the running game.
   - malformed `ParentBoneMap` and flag declarations are script errors (7);
   - a non-skeletal child or another identifier makes no link (8);
   - the write order, through an injected `HeadMesh` write failure: the attach and the link are in, and hook 2's write
-    is not (9);
+    is not (9). The other side (review of #721): an injected failure of the child's actor attach leaves both link fields
+    unwritten. Moving the link before the attach fails that test;
   - an unloaded child template is refused, as above.
 
   The old `PARENT_LINK` case of the named-refusals test is replaced by tests 1 to 4 (10), and Reference is unchanged

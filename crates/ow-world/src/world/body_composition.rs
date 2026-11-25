@@ -413,20 +413,10 @@ struct ParentLink {
     map: Vec<i32>,
 }
 
-/// The `Parent` link's preflight (section 8.1, lane IMPL-CUSTOMHEAD-PARENT-LINK; **UNVERIFIED**): reads only, loads
-/// nothing. `parent` is the parent attachment's index and `pt` its template; `template` and `class` are the new
-/// component's. In order:
-/// 1. the new class declares `ParentAnimComponent` (taking the parent), `ParentBoneMap` (an array of ints) and
-///    `bIsGestaltAccessoryMesh` (a bool), else `VmError::Script` naming it;
-/// 2. the meshes as made: the new component's `SkeletalMesh` from its template, the parent's from `pt`. Either None:
-///    the map is empty, and nothing more is read;
-/// 3. the same mesh, or `bIsGestaltAccessoryMesh` set: the identity over the new mesh's reference skeleton;
-/// 4. otherwise slot `k` is the parent mesh's bone with bone `k`'s name (`skeletal::find_bone`, which takes the first
-///    of two equal names, an UNVERIFIED choice), or -1. A name the name table does not hold is no match; nothing is
-///    interned.
-///
-/// A skeleton that cannot be read refuses with its reader's own `NotYet`, before any write.
-fn parent_link_plan(vm: &Vm, parent: usize, pt: ObjRef, template: ObjRef, class: ClassId) -> Result<ParentLink, VmError> {
+/// Section 8.1 step 1, from `class` alone (`pt`, the parent's template, stands in for the made parent): the new class
+/// declares `ParentAnimComponent` taking the parent, `ParentBoneMap` an array of ints, and `bIsGestaltAccessoryMesh` a
+/// bool, else `VmError::Script` naming it.
+fn parent_link_declarations(vm: &Vm, pt: ObjRef, class: ClassId) -> Result<(), VmError> {
     let path = class_path(vm, class);
     let decl = |name: &str| -> Result<PropKind, VmError> {
         let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{path} has no {name} (the Parent link)")))?;
@@ -444,6 +434,23 @@ fn parent_link_plan(vm: &Vm, parent: usize, pt: ObjRef, template: ObjRef, class:
     if !matches!(decl("bIsGestaltAccessoryMesh")?, PropKind::Bool) {
         return Err(script(format!("{path}.bIsGestaltAccessoryMesh is not a bool")));
     }
+    Ok(())
+}
+
+/// The `Parent` link's preflight (section 8.1, lane IMPL-CUSTOMHEAD-PARENT-LINK; **UNVERIFIED**): reads only, loads
+/// nothing. `parent` is the parent attachment's index and `pt` its template; `template` and `class` are the new
+/// component's. In order:
+/// 1. the declarations: the walk checks them first ([`parent_link_declarations`]), before its unloaded-template guard;
+/// 2. the meshes as made: the new component's `SkeletalMesh` from its template, the parent's from `pt`. Either None:
+///    the map is empty, and nothing more is read;
+/// 3. the same mesh, or `bIsGestaltAccessoryMesh` set: the identity over the new mesh's reference skeleton;
+/// 4. otherwise slot `k` is the parent mesh's bone with bone `k`'s name (`skeletal::find_bone`, which takes the first
+///    of two equal names, an UNVERIFIED choice), or -1. A name the name table does not hold is no match; nothing is
+///    interned.
+///
+/// A skeleton that cannot be read refuses with its reader's own `NotYet`, before any write.
+fn parent_link_plan(vm: &Vm, parent: usize, pt: ObjRef, template: ObjRef, class: ClassId) -> Result<ParentLink, VmError> {
+    let path = class_path(vm, class);
     let mesh_of = |o: ObjRef| -> Result<Option<ObjRef>, VmError> {
         match read_prop(vm, o, "SkeletalMesh")? {
             Some(Value::Object(m)) => Ok(m),
@@ -1010,7 +1017,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         let Made::Component { template: pt, .. } = &made[b] else {
                             unreachable!("a component parent's record is a component")
                         };
-                        // The new component's mesh is read from its template, which must be resident.
+                        // Step 1, the declarations, from the class alone; then the new component's mesh is read
+                        // from its template, which must be resident (review of #721, LOW).
+                        parent_link_declarations(vm, *pt, class)?;
                         if vm.defs.is_unloaded(&vm.space, template) {
                             return Err(not_read(lazy_template(&crate::world::pawn_meshes::handle_path(vm, template))));
                         }

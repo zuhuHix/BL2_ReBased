@@ -259,3 +259,30 @@ fn an_unloaded_child_template_is_not_read() {
     assert_eq!((missing, what), (Missing::NotRead, lazy_template("GD_ToyBody.SkelTemplate")));
     assert!(e.vm.defs.is_unloaded(&e.vm.space, skel_handle), "nothing loaded");
 }
+
+/// Test 9, the other side (review of #721, MED): the link comes after the attach. The actor's `Components` here takes
+/// only the parent's class, so the child's actor attach (the owner retry; no socket name) fails in the write phase.
+/// The link has not run: the child's `ParentAnimComponent` is still None, and its `ParentBoneMap` still the template's.
+#[test]
+fn a_failed_attach_leaves_the_link_unwritten() {
+    let mut e = env_opts(Opts { components_reattach_only: true, ..Opts::default() });
+    let m = mesh(&mut e, BODY);
+    source(&mut e, vec![(BODY, vec!["Root", "Head"])], &["Root", "Head"]);
+    let reattach = e.vm.find_class("Test.ToyReattachSkeletal").unwrap();
+    let pt = make(&mut e.vm, reattach, "Body_Template");
+    put(&mut e.vm, pt, "SkeletalMesh", Value::Object(Some(m)));
+    let skel = e.skeletal;
+    let ct = make(&mut e.vm, skel, "Head_Template");
+    put(&mut e.vm, ct, "SkeletalMesh", Value::Object(Some(m)));
+    put(&mut e.vm, ct, "ParentBoneMap", ints(&[7]));
+    let a0 = attachment(&mut e, A { template: Some(pt), ..A::default() });
+    let a1 = attachment(&mut e, A { base: 0, template: Some(ct), parent: PARENT_ID, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    let err = run(&mut e, p).unwrap_err();
+    assert!(matches!(err, VmError::Heap(_)), "the child's actor attach fails: {err:?}");
+    let (parent, child) = made_pair(&e, p);
+    assert!(prop(&e.vm, p, "Components").elements().unwrap().contains(&Value::Object(Some(parent))), "the parent's attach");
+    assert_eq!(prop(&e.vm, child, "Owner"), Value::Object(Some(p)), "the child's attach began");
+    assert_eq!(prop(&e.vm, child, "ParentAnimComponent"), Value::Object(None), "no link write");
+    assert_eq!(map_of(&e, child), vec![7], "the template's map, unwritten");
+}
