@@ -37,8 +37,7 @@ output. Synthetic fixtures only. Off only; Reference binds nothing, as before.
     "stopped after partial writes".
 
 **Fits, UNVERIFIED:**
-- that the struct's path is `GearboxFramework.GearboxPawn.ReplicatedSpecialMoveData`. The note names the struct and
-  says `GearboxPawn` holds the record; where the struct is declared is this lane's fit;
+- (corrected in review r1, item 6) the struct's path is no longer a fit, see review r1 below;
 - the first-native walk's native bit, as `ow-combat`'s read-only walk takes it;
 - everything the note marks UNVERIFIED.
 
@@ -97,3 +96,15 @@ The existing authority refusals now expect the class `NotRead` for the fixture's
 5. **Test 8 can fail now.** The `CallbackFields` variant gives the record's struct `CallbackName` and
    `CallbackObject` fields. A start with a callback leaves both at their defaults while the move itself carries the
    callback.
+6. **The struct's path, read** (the runner's names-only probe of the installed packages, 2026-11-25). The struct is
+   `GearboxFramework.SpecialMoveInterface.ReplicatedSpecialMoveData`: its outer is the `SpecialMoveInterface`
+   interface class, and it is the only struct of that name. Its members, in order: `Data` (an object, `Core.Object`),
+   `PlayRateScale` (a float), `Duration` (a float), `DirtyCounter` (a byte with no enum) and `SMD` (an object,
+   `GearboxFramework.SpecialMoveDefinition`). The identity check uses that path; the earlier guess,
+   `GearboxPawn.ReplicatedSpecialMoveData`, was wrong. The fixture now declares the struct in `SpecialMoveInterface`,
+   and the `OtherStruct` variant puts a lookalike in `GearboxPawn`.
+   - **Three classes declare `ReplicatedSMData` of that type:** `GearboxFramework.GearboxPawn`,
+     `WillowGame.WillowInteractiveObject` and `WillowGame.WillowVehicle`. The note's owner rule reads only the four
+     pawn classes, so an interactive object or a vehicle as the `SMI` actor gets the class `NotRead` ("the replicated
+     record of <class>"). The note lists `WillowInteractiveObject`'s own body as not read (its open question 1) and
+     says nothing of `WillowVehicle`.
