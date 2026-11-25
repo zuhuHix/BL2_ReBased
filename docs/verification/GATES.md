@@ -2,6 +2,22 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SKELMESH-BOUNDS-SOURCE (2026-11-25, pc-hummer, on fix/rust-skelmesh-bounds-source from
+integration/2026-11-25-c15 25425bb9):** AI-assisted (Claude Code, Opus 5.5). A live skeletal mesh component's bounds
+in `Actor.GetBoundingCylinder`, from NATIVE_COMPONENT_BOUNDS.md section 9.6, plus the mesh-bounds accessor; option A of
+the note's template question (the hub's ruling is pending).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,497 passed / 0 failed / 55 ignored. `crate_edges_test.py`: 19 OK.
+- Installed Off `--slice-gate` strict (release build, under the machine lock): head 5 ok / 7 NotYet / 2 errors, base
+  25425bb9 5 ok / 8 NotYet / 1 error.
+  - Link 7 moves from "a skeletal mesh component's bounds source" to the touch trace filter of `WillowPickup`.
+  - **Link 6 now runs `make`, `touch` and `key` and is an error**: the driver's evidence check "the weapon is the
+    pawn's own afterwards (its Owner)" fails. A throwaway run with a 1-unit base box gives the same error, so it is a
+    later gap, not the box's size.
+  - Every other row is unchanged.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/skelbounds/`, `local/p2/skelbounds-base/` and
+`local/p2/skelbounds-probe/`. Decision 2026-11-25-NNN.
+
 **ANALYST-PICKUP-TOUCH-TRACE-FILTER (2026-11-25, pc-hummer, docs only, on docs/native-pickup-touch-trace-filter
 from main 3aaabe97):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_PICKUP_TRACE.md section 3.1:
 `DroppedPickup` and `WillowPickup` keep `Actor`'s trace filter, so a touch line does not test another pickup on
