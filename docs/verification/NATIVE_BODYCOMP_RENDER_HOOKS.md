@@ -387,7 +387,7 @@ causes no class-code load (where #685 has landed):
 
 ## 7. Amendment (2026-11-25): hook 3's array check, identified
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK1-NEXT (decision 2026-11-25-NNN), analyst only: **another lane
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK1-NEXT (decision 2026-11-25-50), analyst only: **another lane
 implements this section.** Raw output stays under ignored `local/analysis/link1next/`. **Every rule here is
 UNVERIFIED in the running game.**
 
