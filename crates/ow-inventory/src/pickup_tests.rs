@@ -332,9 +332,8 @@ fn marks(vm: &Vm) -> (u64, u64, u64, u64, usize) {
 }
 
 /// `GetInventoryPawn` with a pawn whose class's code is cold (and the player pawn class not warmed): the refusal for
-/// a player pawn subclass. Ignored: the native looks the player pawn class up with `find_class`, which loads its code.
+/// a player pawn subclass, with no class code loaded (lane COLD-LOAD-FIXES: the class table by path, not `find_class`).
 #[test]
-#[ignore = "finding: GetInventoryPawn's find_class(WillowPlayerPawn) loads cold class code (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn get_inventory_pawn_on_a_cold_pawn_loads_no_code() {
     let mut x = fx(ParityMode::Off);
     let controller = x.obj("WillowGame.WillowPlayerController");

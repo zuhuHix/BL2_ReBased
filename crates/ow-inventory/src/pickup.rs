@@ -6,8 +6,9 @@
 //! - **`WillowPlayerController.GetInventoryPawn()`** (section 7's table, medium confidence; the Off contract): the
 //!   controller's `Pawn`, None without one. Only a plain player pawn is supported: one of the concrete class
 //!   `WillowPlayerPawn`, which answers as no vehicle. Any other pawn, a subclass included, is `NotYet { NotRead }`,
-//!   because the note leaves the vehicle test open (question 4) and a vehicle gives its `Driver` instead. A failed
-//!   class lookup is that error, not the refusal (review r2 of #452).
+//!   because the note leaves the vehicle test open (question 4) and a vehicle gives its `Driver` instead. The class
+//!   is compared through the class table by path, so no class code is loaded (lane COLD-LOAD-FIXES); a table that does
+//!   not hold `WillowPlayerPawn` answers the refusal.
 //! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (lane IMPL-TOUCH-PICKUP-TRACE, decision 2026-11-19-250),
 //!   coded from NATIVE_TOUCH_PICKUP_TRACE.md section 4 alone (#624, accepted at 6dbdea1e; clean room: analyst lane
 //!   ANALYST-LINKS-6-7-PAST-TOUCH read the native, this lane did not), UNVERIFIED. It replaces the earlier
@@ -174,9 +175,11 @@ fn get_inventory_pawn(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(pawn) = object_of(&required(c.vm, controller, "Pawn", WHAT)?, WHAT)? else {
         return Ok(Value::Object(None));
     };
-    let player = c.vm.find_class("WillowGame.WillowPlayerPawn")?;
+    // The class table by path, read only (lane COLD-LOAD-FIXES): the pawn's class is resident, so when it is
+    // `WillowPlayerPawn` the table holds that path; a table without it means the pawn is another class. No class code
+    // is loaded.
     let class = c.vm.space.heap.get(pawn)?.class;
-    if class != player {
+    if c.vm.space.classes.by_path("WillowGame.WillowPlayerPawn") != Some(class) {
         return Err(NotYet::not_read(
             format!(
                 "GetInventoryPawn on a {} (only a plain player pawn is supported: the vehicle test, and so whether its \
