@@ -325,6 +325,28 @@ pub fn globals_definition_loaded(vm: &Vm, globals: ObjRef, what: &str) -> Result
     definition_of_class(vm, d, class)
 }
 
+/// [`globals_definition`] with no class lookup that loads (lane COLD-LOAD-FIXES), for a read-only path: both classes
+/// are taken from the class table by path, because only their identity and the class chain are used (a declared type
+/// and `is_child_of`, layout questions), not their code. A class the table does not hold cannot be one an existing
+/// declaration or object names, so the same refusals follow without a load:
+/// - no `GearboxGlobalsDefinition` in the table: the declaration names another class, a data error;
+/// - no `GlobalsDefinition`: the held definition is not one, the first-load refusal.
+pub fn globals_definition_resident(vm: &Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
+    let gearbox = vm.space.classes.by_path(GEARBOX_GLOBALS_DEFINITION);
+    declared_reference_to(vm, globals, "TheGlobalsDefinition", gearbox, GEARBOX_GLOBALS_DEFINITION, what)?;
+    if gearbox.is_none() {
+        return Err(bad(
+            what,
+            format!("TheGlobalsDefinition is declared as a reference to a class other than {GEARBOX_GLOBALS_DEFINITION}"),
+        ));
+    }
+    let d = held_definition(vm, globals, what)?;
+    match vm.space.classes.by_path(GLOBALS_DEFINITION_CLASS) {
+        Some(class) => definition_of_class(vm, d, class),
+        None => Err(first_load()),
+    }
+}
+
 fn definition_of_class(vm: &Vm, d: ObjRef, class: ClassId) -> Result<ObjRef, VmError> {
     if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) { Ok(d) } else { Err(first_load()) }
 }
