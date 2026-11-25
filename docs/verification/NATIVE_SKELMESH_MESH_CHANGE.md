@@ -257,6 +257,48 @@ Synthetic packages through `package()`/`tag()`. Each refusal leaves the heap wri
     `SpaceBases` stay unchanged, and no counter moves;
 11. Reference: unchanged.
 
+## Amendment (2026-11-25): the entry the LOD-info refill constructs
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LODINFO-CONSTRUCTED-ENTRY (decision 2026-11-25-19),
+analyst only: **lane A implements it.** Raw output stays under ignored `local/analysis/lodinfo/`. **UNVERIFIED in the
+running game.**
+
+**The question.** Step 16 (row 15) says the refill adds default entries: "no hidden materials, both flags clear, index
+-1". The installed packages' script default of `SkelMeshComponentLODInfo` has `InstanceWeightIdx` 0 and
+`InstanceWeightUsage` 0. Does the native use its own constructor, and what does each member get?
+
+**Evidence.** Ghidra 12.1.4 headless, read-only, under the machine lock: `SetSkeletalMesh`'s LOD-info step, the same
+routine section 2 step 16 read. The struct layout comes from `tools/ghidra/class_layout.py`, with
+`SkeletalMeshComponent`'s `MapProperty` given a stand-in size in a local copy. The enum's value names come from the
+`EInstanceWeightUsage` export of `Engine.upk`.
+
+**The answer.** The native does not copy the script default. When the lengths differ, it empties `LODInfo`, reserving
+room for the mesh's LOD count, then appends that many entries. Each new entry is set member by member:
+
+| Member | Constructed value | Script default (for comparison) |
+|---|---|---|
+| `HiddenMaterials` | empty (no elements) | empty |
+| `bNeedsInstanceWeightUpdate` | false | false |
+| `bAlwaysUseInstanceWeights` | false | false |
+| `InstanceWeightUsage` | the byte **0** = `IWU_PartialSwap` (the enum's names are `IWU_PartialSwap`, `IWU_FullSwap`, `IWU_MAX`) | 0 (`IWU_PartialSwap`) |
+| `InstanceWeightIdx` | **-1** (confirmed) | 0 |
+
+So the constructed entry differs from the script default in **one member only, `InstanceWeightIdx`: -1, not 0**.
+
+The two flags share a bool word. The native clears just those two bits, and the word holds no other declared field, so
+nothing else is affected. Then the per-LOD loop of step 16 runs over every LOD, whether the lengths differed or not. For
+a LOD whose model has the unidentified data, it overwrites `InstanceWeightUsage` (from the model) and sets
+`InstanceWeightIdx` to 0. A constructed entry keeps -1 only for a LOD without that data.
+
+**For the implementer (lane A).** Build each refill entry explicitly with the five values above. Do not take
+`SkelMeshComponentLODInfo`'s struct default from the packages: that would give index 0. Row 15's refusals are
+unchanged.
+
+**Test.** A synthetic component whose `LODInfo` is shorter than a known LOD count of 2, with no per-LOD data, gets two
+entries, each with empty `HiddenMaterials`, both flags false, `InstanceWeightUsage` 0 and `InstanceWeightIdx` -1. The
+same fixture with the struct default present in the synthetic package still gives -1, which proves the default is not
+copied.
+
 ## Open questions
 
 1. **UNVERIFIED:** every field name of section 2 (by fit); the component flag of step 3; step 12's field; step 17's

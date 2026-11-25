@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LODINFO-CONSTRUCTED-ENTRY (2026-11-25, pc-hummer, docs only, on docs/native-lodinfo-constructed-entry
+from main 373fe4b0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SKELMESH_MESH_CHANGE.md, amendment: the
+LOD-info refill's constructed entry (index -1, usage 0 = `IWU_PartialSwap`). No code changed, so no measured number
+moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-ACTOR-SETPHYSICS (2026-11-25, zuhu desktop (Linux), on fix/rust-actor-setphysics from main 84b6d99):**
 AI-assisted (Claude Code, Opus 5.5). `Actor.SetPhysics(byte)` in Off from NATIVE_ACTOR_SET_PHYSICS.md (#688 at f361007),
 bound by the world pack; the hit pack's byte-write stand-in is Reference-only. `cargo test --workspace -j 4`: 3,435
