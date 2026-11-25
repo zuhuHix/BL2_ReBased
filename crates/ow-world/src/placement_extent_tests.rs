@@ -295,3 +295,30 @@ fn a_native_stand_in_component_class_is_not_read_and_a_package_one_is_decided() 
     x.components(t, vec![Some(audio), Some(quiet)]);
     assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3]);
 }
+
+/// Review r1 of #681: with no `Engine.PrimitiveComponent` in the class table, a native stand-in entry is still
+/// `NotRead`, not a silent zero extent; a package entry is skipped (nothing can be a primitive then).
+#[test]
+fn a_native_stand_in_is_not_read_even_with_no_primitive_class_in_the_table() {
+    let mut s = ObjectSpace::new();
+    let object = s.classes.define("Core.Object", None, vec![]).unwrap();
+    let obj = PropKind::Object { class: object };
+    let decls = vec![
+        PropertyDecl::new(s.names.intern("CollisionComponent"), obj.clone()),
+        PropertyDecl::new(s.names.intern("Components"), PropKind::Array(Box::new(obj))),
+    ];
+    s.classes.define("Engine.Actor", Some(object), decls).unwrap();
+    s.classes.define("Test.AudioComponent", Some(object), vec![]).unwrap();
+    let native = s.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+    s.classes.mark_native(native).unwrap();
+    let mut x = Fx { vm: vm_of(s) };
+    assert!(x.vm.space.classes.by_path("Engine.PrimitiveComponent").is_none());
+    let t = x.obj("Engine.Actor");
+    let audio = x.obj("Test.AudioComponent");
+    let entry = x.vm.space.alloc_stand_in(native, "Native", Origin::Resource { package: 0, index: -1 }).unwrap();
+    x.components(t, vec![Some(audio)]);
+    assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3], "a package entry is skipped");
+    x.components(t, vec![Some(audio), Some(entry)]);
+    let what = not_read(extent(&x.vm, t).unwrap_err());
+    assert!(what.contains("engine-native stand-in class") && what.contains("Test.NativeOnlyComponent"), "{what}");
+}
