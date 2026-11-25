@@ -583,6 +583,7 @@ pub(crate) fn preload_body_composition(vm: &mut Vm, archetype: ObjRef) -> Result
             Some(templates) => walk_templates(vm, &mut walk, &templates)?,
         }
     }
+    walk_weapon_holds(vm, &mut walk, body)?;
     vm.log.push(format!("harness input: body-composition walk: {} loaded, {} visited", walk.loaded, walk.visited.len()));
     Ok(())
 }
@@ -654,6 +655,46 @@ impl BodyWalk {
             }
         }
     }
+}
+
+/// The weapon-hold part of the walk (lane IMPL-GETWEAPONHOLDDEF, the hub's ruling: `GetWeaponHoldDef` reads them and
+/// loads nothing, NATIVE_GET_WEAPON_HOLD_DEF.md section 3). From `body`, and then along each class's
+/// `WeaponActionParentClass`: the body class itself, its `WeaponHoldDefs` entries in order and its
+/// `DefaultWeaponHoldDef`, each by [`BodyWalk::visit`], so the same rule holds: only exports of the pawn's package
+/// file (or that file's own copy of the path) are loaded, and the rest stays for the native to refuse. A class whose
+/// visit leaves it unloaded stops its branch. UNVERIFIED stand-in for the streaming load, as the rest of the walk.
+pub(crate) fn walk_weapon_holds(vm: &mut Vm, walk: &mut BodyWalk, body: ObjRef) -> Result<(), VmError> {
+    let mut bodies = vec![body];
+    let mut next = 0;
+    while let Some(&b) = bodies.get(next) {
+        next += 1;
+        if walk.visited.len() >= BODY_WALK_CAP {
+            vm.log.push(format!("harness input: body-composition walk: stopped at the cap of {BODY_WALK_CAP} objects"));
+            break;
+        }
+        if !walk.visit(vm, b)? {
+            continue;
+        }
+        let class = vm.space.heap.get(b)?.class;
+        let holds: Vec<ObjRef> = match vm.space.prop(class, "WeaponHoldDefs") {
+            Some(p) => vm
+                .space
+                .read(b, ow_object::ids::PropAddr::scalar(p))?
+                .elements()
+                .map(|items| items.iter().filter_map(|v| if let Value::Object(Some(o)) = v { Some(*o) } else { None }).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        for h in holds.into_iter().chain(object_slot(vm, b, "DefaultWeaponHoldDef")?) {
+            walk.visit(vm, h)?;
+        }
+        if let Some(parent) = object_slot(vm, b, "WeaponActionParentClass")?
+            && !bodies.contains(&parent)
+        {
+            bodies.push(parent);
+        }
+    }
+    Ok(())
 }
 
 /// The walk over `templates` and each one's `SkeletalMesh` (module function so the tests can drive it).

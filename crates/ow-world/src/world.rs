@@ -541,6 +541,9 @@ impl NativePack for Pack {
             // Actor.SetPhysics (NATIVE_ACTOR_SET_PHYSICS.md, UNVERIFIED; lane IMPL-ACTOR-SETPHYSICS): keep-existing by
             // key, Off only; ow-combat's hit pack keeps its byte-write stand-in for Reference only.
             set_physics::register(vm)?;
+            // BodyClassDefinition.GetWeaponHoldDef (NATIVE_GET_WEAPON_HOLD_DEF.md, UNVERIFIED; lane
+            // IMPL-GETWEAPONHOLDDEF): a pure read of the body class's weapon holds; keep-existing by key, Off only.
+            weapon_hold::register(vm)?;
         }
         Ok(())
     }
@@ -686,6 +689,7 @@ pub mod skeletal_bounds;
 /// `Actor.Trace` in Off, shared by the Phaselock and go-down binding sites (lane IMPL-ACTOR-TRACE).
 pub mod actor_trace;
 pub mod set_physics;
+pub mod weapon_hold;
 
 #[cfg(test)]
 mod tests;
