@@ -187,7 +187,8 @@ pub(crate) fn install_skeleton_source(vm: &mut Vm, roots: &[std::path::PathBuf])
         .collect();
     vm.log.push(format!(
         "harness input: the skeleton source over UModel .psk exports in {} (file-package layout; UNVERIFIED \
-         stand-in for the engine's mesh data)",
+         stand-in for the engine's mesh data); a mesh with no export is read from its own package export \
+         (ow_assets::skeletal_lods, a fitted layout checked by structural oracles, UNVERIFIED)",
         shown.join(";")
     ));
     let source = crate::cmd::skeletal_source::PskExports::new(roots.to_vec());

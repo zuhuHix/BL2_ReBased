@@ -485,3 +485,84 @@ fn same_named_meshes_get_their_own_in_package_answers() {
     }
     assert_eq!(by_name.get(), 0, "the name-based method is not asked for a twin");
 }
+
+/// Lane SKELMESH-REFSKELETON: the source's in-package skeleton (`skeleton_in`, asked by the mesh's export) answers
+/// when the name-based one (a `.psk` export) has none; the name-based answer wins when both exist; twins, which the
+/// flat-name guard keeps from the name-based method, get their own export's skeleton; an in-package parse failure is
+/// `VmError::Script`; and with neither answer the layer is `LayerAbsent` as before. Nothing is written.
+#[test]
+fn the_package_skeleton_answers_when_no_export_does() {
+    /// A chain of `n` bones, each the child of the one before.
+    fn chain(n: usize) -> ReferenceSkeleton {
+        bones(&std::iter::once(None).chain((1..n).map(|i| Some(i - 1))).collect::<Vec<_>>())
+    }
+    struct Both {
+        named: Option<usize>,
+        in_package: Result<Option<usize>, String>,
+        asked: Rc<Cell<(u32, u32)>>,
+    }
+    impl SkeletonSource for Both {
+        fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+            let (a, b) = self.asked.get();
+            self.asked.set((a + 1, b));
+            Ok(self.named.map(chain))
+        }
+        fn skeleton_in(&self, _: &ow_package::package::Package, index: i32) -> Result<Option<ReferenceSkeleton>, String> {
+            let (a, b) = self.asked.get();
+            self.asked.set((a, b + 1));
+            match &self.in_package {
+                // A chain of `n` bones, plus one per export index so twins can be told apart.
+                Ok(Some(n)) => Ok(Some(chain(n + index as usize))),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e.clone()),
+            }
+        }
+    }
+    let install = |e: &mut Env, named, in_package| {
+        let asked = Rc::new(Cell::new((0, 0)));
+        SkeletalMeshes::install(&mut e.vm, Box::new(Both { named, in_package, asked: asked.clone() })).unwrap();
+        asked
+    };
+    let index = |e: &Env, o| match e.vm.space.heap.get(o).unwrap().origin {
+        Origin::Export { index, .. } | Origin::Resource { index, .. } => index as usize,
+        other => panic!("{other:?}"),
+    };
+    // No export: the package answers.
+    let mut e = env();
+    let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+    let asked = install(&mut e, None, Ok(Some(2)));
+    let heap = format!("{:?}", e.vm.space.heap);
+    assert_eq!(reference_skeleton(&e.vm, mesh).unwrap().len(), 2 + index(&e, mesh));
+    assert_eq!(asked.get(), (1, 1), "the export first, then the package");
+    assert_eq!(format!("{:?}", e.vm.space.heap), heap, "nothing written");
+    // Both: the export wins and the package is not asked.
+    let mut e = env();
+    let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+    let asked = install(&mut e, Some(3), Ok(Some(2)));
+    assert_eq!(reference_skeleton(&e.vm, mesh).unwrap().len(), 3);
+    assert_eq!(asked.get(), (1, 0));
+    // Twins: the name-based method is not asked; each gets its own export's skeleton.
+    let mut e = env();
+    let (left, right) = (find(&mut e, "GD_ToyMesh.Left.Twin"), find(&mut e, "GD_ToyMesh.Right.Twin"));
+    let asked = install(&mut e, Some(3), Ok(Some(1)));
+    assert_eq!(reference_skeleton(&e.vm, left).unwrap().len(), 1 + index(&e, left));
+    assert_eq!(reference_skeleton(&e.vm, right).unwrap().len(), 1 + index(&e, right));
+    assert_eq!(asked.get().0, 0, "the flat-name guard still keeps the name-based method out");
+    // A parse failure names the mesh.
+    let mut e = env();
+    let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+    install(&mut e, None, Err("a toy misfit".into()));
+    match reference_skeleton(&e.vm, mesh) {
+        Err(VmError::Script { message, .. }) => {
+            assert!(message.contains("GD_ToyMesh.Mesh_A") && message.contains("a toy misfit"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Neither: LayerAbsent with the layer's text.
+    let mut e = env();
+    let mesh = find(&mut e, "GD_ToyMesh.Mesh_A");
+    install(&mut e, None, Ok(None));
+    let n = not_yet(reference_skeleton(&e.vm, mesh));
+    assert!(matches!(&n.missing, Missing::LayerAbsent(l) if *l == LAYER), "{n}");
+    assert!(n.what.contains("no reference skeleton for GD_ToyMesh.Mesh_A"), "{n}");
+}
