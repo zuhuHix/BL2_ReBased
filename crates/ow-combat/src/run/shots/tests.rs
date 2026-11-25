@@ -159,7 +159,7 @@ fn toy_weapons() -> Vec<u8> {
         let body = payload(&mut p, tags);
         p.add_export(part_class, name, body);
     }
-    // An elemental part with its own firing mode: the two records disagree on it (review r1 of #393).
+    // An elemental part with its own firing mode: the elemental step NATIVE_WEAPON_GET_FIRING_MODE.md settles.
     let tags = vec![p.object_tag("CustomFiringModeDefinition", beam)];
     let body = payload(&mut p, tags);
     p.add_export(part_class, "Part_ElementalMode", body);
@@ -432,10 +432,12 @@ fn fire_needs_a_player_and_a_held_weapon() {
     assert!(!result_of(&text, "weapon:no/such/file.txt").contains("\"state\""), "{text}");
 }
 
-/// Review r1 of #393: no firing mode is no shot read (`NotYet { NotRead }`, the records disagree); an elemental part
-/// with its own mode and no barrel mode is the records' other disagreement; a mode of the wrong class is bad data.
+/// Review r1 of #393: no firing mode is no shot read (`NotYet { NotRead }`, the records disagree); a mode of the
+/// wrong class is bad data. Lane IMPL-GETFIRINGMODEDEFINITION: an elemental part with its own mode and no barrel mode
+/// now answers the elemental part's mode (NATIVE_WEAPON_GET_FIRING_MODE.md section 2, the shared rule), where it was
+/// refused.
 #[test]
-fn no_firing_mode_the_elemental_conflict_and_a_wrong_class_are_refused() {
+fn no_firing_mode_and_a_wrong_class_are_refused_and_the_elemental_mode_answers() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let (mut run, _dir) = armed_run(mode);
         let weapon = toy_weapon(&mut run, 10.0);
@@ -452,10 +454,8 @@ fn no_firing_mode_the_elemental_conflict_and_a_wrong_class_are_refused() {
 
         let (mut run, _dir) = armed_run(mode);
         let p = parts(&mut run, Some("Part_ElementalMode"), None);
-        match shot::firing_mode(&mut run.world().vm, &p) {
-            Err(VmError::NotYet(n)) => assert!(n.to_string().contains("elemental part"), "{n}"),
-            other => panic!("{mode:?}: expected a NotYet, got {other:?}"),
-        }
+        let vm = &mut run.world().vm;
+        assert_eq!(shot::firing_mode(vm, &p).unwrap(), Some(def(vm, "ToyWeapons.Mode_Beam")), "{mode:?}");
         // A barrel mode settles it whatever the elemental part holds: both records take the barrel's first.
         let p = parts(&mut run, Some("Part_ElementalMode"), Some("Barrel_Suppress"));
         let vm = &mut run.world().vm;
@@ -485,4 +485,25 @@ fn the_causer_follows_the_declared_parameter_kind() {
     assert_eq!(arg(vm, PropKind::Interface { class }), Value::Interface(Some(weapon)));
     assert_eq!(arg(vm, PropKind::Object { class }), Value::Object(Some(weapon)));
     assert_eq!(arg(vm, PropKind::Int), Value::Int(0));
+}
+
+/// Lane IMPL-GETFIRINGMODEDEFINITION (NATIVE_WEAPON_GET_FIRING_MODE.md section 3, the shot helper): the shot helper and
+/// the Off native's load-free rule give the same answer on the same parts once they are resident, for each of the
+/// rule's steps (barrel, elemental part, type default).
+#[test]
+fn the_shot_helper_and_the_native_s_rule_agree_on_resident_parts() {
+    use ow_inventory::equip::firing_mode::{resident, rule};
+    let (mut run, _dir) = armed_run(ParityMode::Off);
+    for (elemental, barrel) in [
+        (None, Some("Barrel_Suppress")),
+        (Some("Part_ElementalMode"), None),
+        (Some("Part_Plain"), None),
+        (None, None),
+    ] {
+        let p = parts(&mut run, elemental, barrel);
+        let vm = &mut run.world().vm;
+        let shot_answer = shot::firing_mode(vm, &p).unwrap();
+        let native_answer = rule(vm, p.barrel, p.elemental, Some(p.weapon_type), &mut resident).unwrap();
+        assert_eq!(shot_answer, native_answer, "{elemental:?} {barrel:?}");
+    }
 }
