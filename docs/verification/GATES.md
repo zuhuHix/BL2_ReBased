@@ -8,7 +8,10 @@ record (`SetReplicatedSMData`) on an exact-authority `Owner`, at the start and a
 NATIVE_SET_REPLICATED_SMDATA.md (#684 at fa346d2); its first reads and method checks are loaded-only. `cargo test
 --workspace -j 4`: 3,411 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 52 ignored;
 `crate_edges_test.py` OK. Slice gate: not run (no install on this PC); link 9 stops before this today (the runner:
-`Actor.SetPhysics` after `Queue`). No real-game run; UNVERIFIED in game.
+`Actor.SetPhysics` after `Queue`). Review r1: the definition `GetSMDToPlay` answers is residency-checked, `PlayLocal` keeps
+main's loading lookup, and the hand-declared fallback returns errors; `cargo test -p ow-skills` 166 / 0 / 1.
+Prediction (r1): once link 9 reaches `Play`, the next stop may be the loaded-only refusal on the definition's class
+code; a set-up preload like decision 2026-11-19-185's may be needed. No real-game run; UNVERIFIED in game.
 
 **GAMEINFO-COLLIDER-CODE-LOAD (2026-11-25, zuhuPC Linux, on #685 bd8f3934 over main 03896e5):** AI-assisted (Claude
 Code, Opus 5.5). The game info's refusal after its class lookup loaded class code is marked (the routine's marking

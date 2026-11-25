@@ -43,8 +43,7 @@ output. Synthetic fixtures only. Off only; Reference binds nothing, as before.
 - everything the note marks UNVERIFIED.
 
 **Side effects to know:**
-- `PlayLocal` shares `GetSMDToPlay`'s loaded-only lookup, so a definition class whose code is not loaded is now
-  `NotRead` there too, where it used to be loaded;
+- `PlayLocal` keeps main's loading lookup of `GetSMDToPlay` (review r1, item 3, below), so it is unchanged;
 - the stop's half-clear changes what `CurrentSMData` holds after any stop, not only on the authority. Every reader in
   the port tests only its `SMD`.
 
@@ -76,3 +75,25 @@ note's tests:
 The existing authority refusals now expect the class `NotRead` for the fixture's plain `Engine.Pawn` owner.
 
 **Not verified:** anything in the running game.
+
+**Review r1** (Opus high, on #689):
+1. **The definition `GetSMDToPlay` answers must be resident.** A script override can answer another definition, and
+   reading it through the loading helpers would load it before a later refusal. `Play` now checks it right after
+   `GetSMDToPlay`. Test: a toy `ToyRedirectMove` whose `GetSMDToPlay` answers a lazy definition gives the residency
+   `NotRead`, with the handle still unloaded and nothing written. The test fails without the check.
+2. **The loaded-only lookups refuse cold class code on every role**, including the autonomous path that used to work
+   by loading the code. The strictness is kept: a refusal stays load-free, as in #570 and decision 2026-11-19-185.
+   **The prediction changes:** once link 9 reaches `Play`, its next stop may be "<function> on <class>: the class's
+   code is not loaded" on the definition's class. A set-up preload like decision 2026-11-19-185's (a labelled harness
+   input) may then be needed.
+3. **`PlayLocal` gets main's lookup back.** It has no write-free preflight, and its `ServerStarted` and
+   `ClientStarted` go through the loading lookup anyway. A loaded-only `GetSMDToPlay` would only add a new `NotRead`.
+   Test: `PlayLocal` on a cold definition class loads that code and plays, as on main; `Play` refuses the same
+   definition write-free.
+4. **The hand-declared fallback.** For a class with no code key, `loaded_method` looks up the declared function by
+   path with `Vm::find_function_if_any`. Such a class has no package export, so that lookup cannot load. Errors are
+   now returned instead of hidden behind `if let Ok`. The lookup also fails as a script error if the store's load
+   count or the name table moved during it. `Vm::class_code_loads` (#685) can join that check once it is on main.
+5. **Test 8 can fail now.** The `CallbackFields` variant gives the record's struct `CallbackName` and
+   `CallbackObject` fields. A start with a callback leaves both at their defaults while the move itself carries the
+   callback.

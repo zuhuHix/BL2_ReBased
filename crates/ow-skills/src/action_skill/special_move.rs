@@ -489,11 +489,20 @@ fn request(c: &NativeCall<'_>, component: ObjRef, smd: ObjRef, what: &str) -> Re
 }
 
 /// The definition `Play` and `PlayLocal` start, with the owner: None for the note's 0 answers.
-fn to_play(c: &mut NativeCall<'_>, component: ObjRef, what: &str) -> Result<Option<(ObjRef, ObjRef)>, VmError> {
+fn to_play(
+    c: &mut NativeCall<'_>,
+    component: ObjRef,
+    loaded_only: bool,
+    what: &str,
+) -> Result<Option<(ObjRef, ObjRef)>, VmError> {
     let Some(requested) = object(c.arg(0)?, what)? else { return Ok(None) };
     let Some(owner) = owner_of(c.vm, component, what)? else { return Ok(None) };
-    // Looked up in loaded code only, so a cold definition class is refused, not loaded (lane IMPL-SET-REPLICATED-SMDATA).
-    require_method(c.vm, requested, "GetSMDToPlay")?;
+    // Play looks it up in loaded code only, so a cold definition class is refused, not loaded (lane
+    // IMPL-SET-REPLICATED-SMDATA). PlayLocal has no write-free preflight and calls its events through the loading
+    // lookup anyway, so it keeps that lookup here too (review r1 of #689, item 3).
+    if loaded_only {
+        require_method(c.vm, requested, "GetSMDToPlay")?;
+    }
     let smd = object(&call(c.vm, requested, "GetSMDToPlay", vec![interface(owner)])?, what)?;
     Ok(smd.map(|s| (s, owner)))
 }
@@ -545,8 +554,11 @@ fn loaded_field(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Value, VmE
 }
 
 /// `name` as `o`'s class sees it, in loaded code only (lane IMPL-SET-REPLICATED-SMDATA): code on the chain not loaded
-/// yet is `NotYet { NotRead }`. A class with no package code (defined by hand) falls back to its declared functions,
-/// as [`method_of`] does.
+/// yet is `NotYet { NotRead }`. A class with no package code (defined by hand, no code key) falls back to its declared
+/// functions by path, as [`method_of`] does. That lookup cannot load: such a class has no package export, so a path
+/// not declared is a confirmed absence. It is checked anyway (review r1 of #689, item 4): if a store load happened or
+/// a name was interned (as a code load does), the lookup fails as a script error. A lookup error is returned, not
+/// hidden.
 fn loaded_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmError> {
     let class = vm.space.heap.get(o)?.class;
     match vm.find_loaded_method(class, name, None) {
@@ -562,9 +574,16 @@ fn loaded_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, V
         let layout = vm.space.classes.layout(c);
         let path = format!("{}.{name}", layout.path().as_str());
         cursor = layout.super_class();
-        if vm.defs.code().key_of(c).is_none()
-            && let Ok(f) = vm.find_function(&path)
-        {
+        if vm.defs.code().key_of(c).is_some() {
+            continue;
+        }
+        // A code load interns the names it declares; `Vm::class_code_loads` (#685) joins this check once on main.
+        let before = (vm.defs.load_transitions(), vm.space.names.len());
+        let found = vm.find_function_if_any(&path)?;
+        if (vm.defs.load_transitions(), vm.space.names.len()) != before {
+            return Err(script_error("SpecialMoveComponent.Play", format!("looking up {path} loaded code")));
+        }
+        if let Some(f) = found {
             return Ok(Some(f));
         }
     }
@@ -818,9 +837,12 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Some(o) if o != smi_actor => return Err(NotYet::not_read(OTHER_OWNER, RECORD_REPLICATED).into()),
         Some(_) => {}
     }
-    let Some((smd, owner)) = to_play(c, component, WHAT)? else {
+    let Some((smd, owner)) = to_play(c, component, true, WHAT)? else {
         return Ok(Value::Float(0.0));
     };
+    // The definition GetSMDToPlay answers: a script override can name another one, which must be resident too before
+    // any read of it (review r1 of #689, item 1).
+    resident(c.vm, smd)?;
     let smi = interface(owner);
     // Every refusal that can be decided is decided before the first event and before any write (module
     // documentation, step 3; review r2 of #437).
@@ -887,7 +909,7 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 fn play_local(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "SpecialMoveComponent.PlayLocal";
     let component = this(c, WHAT)?;
-    let Some((smd, owner)) = to_play(c, component, WHAT)? else {
+    let Some((smd, owner)) = to_play(c, component, false, WHAT)? else {
         return Ok(Value::Float(0.0));
     };
     let data = request(c, component, smd, WHAT)?;

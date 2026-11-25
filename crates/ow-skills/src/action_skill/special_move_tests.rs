@@ -75,6 +75,8 @@ enum Variant {
     RateNotFloat,
     /// The definition class declares no `ServerStarted`.
     NoServerStarted,
+    /// The record's struct also has `CallbackName` and `CallbackObject` fields (review r1 of #689, item 5).
+    CallbackFields,
 }
 
 /// One declared parameter: kind (without `Property`), name, extra flags, the property's tail words.
@@ -311,6 +313,9 @@ fn gearbox(variant: Variant) -> Vec<u8> {
     let cold = t.class("ToyColdMove", definition);
     let payload = bare(&mut t);
     t.p.add_export(cold, "ToyColdMoveObject", payload);
+    // A definition whose own GetSMDToPlay a test binds to answer another definition (review r1 of #689, item 1).
+    let redirect = t.class("ToyRedirectMove", definition);
+    native(&mut t, redirect, "GetSMDToPlay", &[smi()], Some(("Object", vec![definition])));
     t.class("AnimNodeSpecialMoveBlend", blend_base);
     // GearboxPawn and its replicated record (the note, section 1). `OtherStruct` declares the record with a struct of
     // the same fields held by `SpecialMoveInterface` instead.
@@ -328,6 +333,10 @@ fn gearbox(variant: Variant) -> Vec<u8> {
         t.prop("Float", rep, "Duration", 0, 0);
     }
     t.prop(if variant == Variant::IntCounter { "Int" } else { "Byte" }, rep, "DirtyCounter", 0, 0);
+    if variant == Variant::CallbackFields {
+        t.prop("Name", rep, "CallbackName", 0, 0);
+        t.prop("Object", rep, "CallbackObject", 0, object);
+    }
     t.prop("Struct", gearbox_pawn, "ReplicatedSMData", 0, rep);
     // A native class below GearboxPawn whose record was not read (the note's test 6).
     t.class("ToyNativePawn", gearbox_pawn);
@@ -1753,4 +1762,64 @@ fn a_server_started_failure_after_the_commit_is_terminal() {
     assert_eq!((x.record(pawn, "SMD"), x.record(pawn, "DirtyCounter")), (Value::Object(Some(d)), Value::Byte(1)));
     assert_eq!(x.current(component, "SMD"), Value::Object(Some(d)));
     assert!(x.calls().iter().all(|c| !c.starts_with("ClientStarted")), "{:?}", x.calls());
+}
+
+/// Review r1 of #689, item 1: a definition whose `GetSMDToPlay` answers another definition the store has not loaded is
+/// the residency `NotRead`, before any read of it; the answered definition stays unloaded and nothing is written.
+#[test]
+fn a_redirected_definition_must_be_resident() {
+    let mut x = fx(ParityMode::Off);
+    let path = ow_core::ObjectPath::parse("GearboxFramework.ToyMoveHolderObject").unwrap();
+    let vm = x.vm();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let lazy = match x.get(holder, "Move") {
+        Value::Object(Some(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    let f = x.vm().find_function("GearboxFramework.ToyRedirectMove.GetSMDToPlay").unwrap();
+    let key = x.vm().function(f).unwrap().native_key.clone().unwrap();
+    x.vm().register_native(&key, Rc::new(move |_: &mut NativeCall<'_>| Ok(Value::Object(Some(lazy))))).unwrap();
+    let d = x.definition("GearboxFramework.ToyRedirectMove", true);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTONOMOUS);
+    let (missing, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.contains(NOT_LOADED), "{text}");
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy), "still unloaded");
+}
+
+/// Review r1 of #689, item 3: `PlayLocal` keeps the loading lookup (it has no write-free preflight; its events go
+/// through it anyway). On a definition whose class code is not loaded, it loads that code and plays, as before this
+/// lane; `Play` refuses the same definition write-free (`the_first_reads_are_loaded_only`).
+#[test]
+fn play_local_loads_a_cold_definition_class_as_before() {
+    let mut x = fx(ParityMode::Off);
+    let (_, component) = x.owner(AUTONOMOUS);
+    let cold = {
+        let vm = x.vm();
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, "GearboxFramework.ToyColdMove").unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        vm.space.alloc(c, "Cold_0", None, ow_object::heap::Origin::Runtime).unwrap()
+    };
+    let class = x.world.vm.space.heap.get(cold).unwrap().class;
+    assert!(!x.world.vm.class_code_loaded(class));
+    assert_eq!(x.call(PATHS[6], component, vec![Value::Object(Some(cold))]).unwrap(), Value::Float(2.5));
+    assert!(x.world.vm.class_code_loaded(class), "PlayLocal loaded the class's code, as main does");
+    assert_eq!(x.calls(), vec!["ServerStarted on ToyColdMove(_)", "ClientStarted on ToyColdMove(_,data)"]);
+}
+
+/// Review r1 of #689, item 5: with a record struct that has `CallbackName` and `CallbackObject` fields, a start with a
+/// callback leaves both at their defaults: the callback is not copied.
+#[test]
+fn the_callback_is_not_copied_into_the_record() {
+    let mut x = fx_variant(ParityMode::Off, &[&crate::action_skill::Pack], Variant::CallbackFields);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    let before = (x.record(pawn, "CallbackName"), x.record(pawn, "CallbackObject"));
+    let done = x.name("ToyDone");
+    let args = vec![Value::Object(Some(d)), Value::Float(1.0), Value::Float(0.0), done, Value::Object(Some(pawn))];
+    assert_eq!(x.play(component, args).unwrap(), Value::Float(2.5));
+    assert_eq!(x.record(pawn, "SMD"), Value::Object(Some(d)), "the record was written");
+    assert_eq!((x.record(pawn, "CallbackName"), x.record(pawn, "CallbackObject")), before, "not copied");
+    assert_ne!(x.current(component, "CallbackName"), before.0, "the move itself has the callback");
 }
