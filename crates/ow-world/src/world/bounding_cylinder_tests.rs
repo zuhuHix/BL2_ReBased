@@ -59,6 +59,8 @@ fn engine() -> Vec<u8> {
     t.class("StaticMeshComponent", primitive);
     t.class("ParticleSystemComponent", primitive);
     t.class("ToyCylinderKind", cylinder);
+    // Lane IMPL-COMPONENT-CHECK: a script-only primitive subclass.
+    t.class("ToyPrimitiveKind", primitive);
     // Review r1 of #660, item 2: a primitive whose BulletListener is declared as an int.
     let int_skip = t.class("ToyIntSkipComponent", primitive);
     t.prop("Int", int_skip, "BulletListener", 0, 0);
@@ -770,47 +772,98 @@ fn a_skip_flag_of_another_kind_is_a_script_error() {
     script_error(r, SKIP_FIELD);
 }
 
-/// Note test 4: the per-component check, asked last, on a live recorded colliding entry with the bit clear and on a
-/// template's attached colliding entry: a `CylinderComponent` passes and gives its box (L on a template); a
-/// `BulletListenerComponent` passes, then meets B.7's `NotRead`; skeletal, static-mesh, particle and a toy cylinder
-/// subclass are the check's `NotRead`. With the bit set, or not colliding, none of them is asked.
+/// IMPL-COMPONENT-CHECK (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, tests 1, 2, 4 and 7): on a live, recorded,
+/// attached, colliding entry with the bit clear, every primitive class passes the per-component check and meets its
+/// box rule. The skeletal component gets `SKELETAL_SOURCE`, the static mesh component the static layer's `LayerAbsent`,
+/// and the particle component and the toy script-only subclasses of `PrimitiveComponent` and `CylinderComponent` "the
+/// bounds update of <class>". On a template the same entry meets refusal L, not the check. Not colliding, or with the bit
+/// set, none is asked. No answer carries the retired "the component check of" text.
 #[test]
-fn the_component_check_passes_the_read_classes_and_refuses_the_rest() {
+fn every_primitive_entry_passes_the_component_check() {
     let mut x = fx();
     let pickup = x.live("WillowGame.WillowPickup");
-    let listener = x.live("WillowGame.BulletListenerComponent");
-    x.set(listener, "CollideActors", Value::Bool(true));
-    x.attach(pickup, listener);
-    x.components(pickup, vec![Some(listener)]);
-    x.refuses(
-        pickup,
-        Missing::NotRead,
-        "Actor.GetBoundingCylinder: the bounds update of WillowGame.BulletListenerComponent",
-        BOUNDS_RECORD,
-    );
     let t = x.template("Engine.Actor");
-    for class in [
-        "Engine.SkeletalMeshComponent",
-        "Engine.StaticMeshComponent",
-        "Engine.ParticleSystemComponent",
-        "Engine.ToyCylinderKind",
-    ] {
+    let update = |class: &str| format!("Actor.GetBoundingCylinder: the bounds update of {class}");
+    let cases: Vec<(&str, Missing, String)> = vec![
+        ("Engine.SkeletalMeshComponent", Missing::NotRead, SKELETAL_SOURCE.to_string()),
+        ("Engine.StaticMeshComponent", Missing::LayerAbsent(STATIC_LAYER), STATIC_BOUNDS.to_string()),
+        ("Engine.ParticleSystemComponent", Missing::NotRead, update("Engine.ParticleSystemComponent")),
+        ("Engine.ToyPrimitiveKind", Missing::NotRead, update("Engine.ToyPrimitiveKind")),
+        ("Engine.ToyCylinderKind", Missing::NotRead, update("Engine.ToyCylinderKind")),
+    ];
+    for (class, missing, what) in cases {
+        assert!(!what.contains("the component check of"), "{class}");
         let c = x.live(class);
         x.attach(pickup, c);
         x.set(c, "bAttached", Value::Bool(true));
-        let want = format!("{COMPONENT_CHECK_OF} {class} (not read)");
-        // Not colliding: skipped before the check.
         x.components(pickup, vec![Some(c)]);
         x.components(t, vec![Some(c)]);
+        // Not colliding: skipped before the check.
         x.answers(pickup, (0.0, 0.0), "live, not colliding");
         x.answers(t, (0.0, 0.0), "template, not colliding");
         x.set(c, "CollideActors", Value::Bool(true));
-        x.refuses(pickup, Missing::NotRead, &want, SKIP_RECORD);
-        x.refuses(t, Missing::NotRead, &want, SKIP_RECORD);
+        x.refuses(pickup, missing, &what, BOUNDS_RECORD);
+        x.refuses(t, l(), REFUSAL_L, RECORD);
         // The bit set: skipped before the check.
         x.set(c, "BulletListener", Value::Bool(true));
         x.answers(pickup, (0.0, 0.0), "live, a bullet listener");
         x.answers(t, (0.0, 0.0), "template, a bullet listener");
+    }
+}
+
+/// Section 6.1 test 3, unchanged: a `BulletListenerComponent` (the bit clear) passes the check and meets B.7's
+/// `NotRead`; a `CylinderComponent` gives its box (the earlier tests).
+#[test]
+fn a_bullet_listener_component_meets_its_bounds_rule() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.BulletListenerComponent");
+    let owner = x.live("WillowGame.WillowPickup");
+    x.set(pickup, "CollideActors", Value::Bool(true));
+    x.attach(owner, pickup);
+    x.components(owner, vec![Some(pickup)]);
+    x.refuses(
+        owner,
+        Missing::NotRead,
+        "Actor.GetBoundingCylinder: the bounds update of WillowGame.BulletListenerComponent",
+        BOUNDS_RECORD,
+    );
+}
+
+/// Section 6.1 test 6: an entry that is not a primitive component is skipped at the class test, live and template.
+#[test]
+fn a_non_primitive_entry_is_skipped_at_the_class_test() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let t = x.template("Engine.Actor");
+    let lamp = x.live("Engine.DynamicLightEnvironmentComponent");
+    x.components(pickup, vec![Some(lamp)]);
+    x.components(t, vec![Some(lamp)]);
+    x.answers(pickup, (0.0, 0.0), "live");
+    x.answers(t, (0.0, 0.0), "template");
+}
+
+/// The check itself, its guard (IMPL-COMPONENT-CHECK): it passes for every primitive class above, writing nothing,
+/// and an object whose chain never reaches `Engine.PrimitiveComponent` (no path asks one) is `CHAIN_NOT_READ`.
+#[test]
+fn the_component_check_passes_a_primitive_chain_and_guards_the_rest() {
+    let mut x = fx();
+    for class in [
+        "Engine.PrimitiveComponent",
+        "Engine.CylinderComponent",
+        "Engine.SkeletalMeshComponent",
+        "Engine.ToyPrimitiveKind",
+        "WillowGame.BulletListenerComponent",
+    ] {
+        let c = x.live(class);
+        x.same(class, |x| component_check(&x.vm.space, c)).unwrap();
+    }
+    let lamp = x.live("Engine.DynamicLightEnvironmentComponent");
+    match x.same("the guard", |x| component_check(&x.vm.space, lamp)) {
+        Err(VmError::NotYet(n)) => {
+            let want = format!("{CHAIN_NOT_READ} Engine.DynamicLightEnvironmentComponent");
+            assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, want.as_str(), SKIP_RECORD));
+        }
+        other => panic!("expected the guard's NotRead, got {other:?}"),
     }
 }
 
