@@ -573,8 +573,9 @@ pub(crate) fn decl_at(
             )
             .map(Rc::new)
             .map_err(|e| chain_text(&e));
-        // Not counted as a code load (review r1 of #685, the decision's limit): this cache fills on any script
-        // function's first run, so counting it flags the interpreter's own laziness, not a native's preflight.
+        // Not counted as a code load (review r1 of #685, the decision's limit): this cache fills on the first access to
+        // an uncached property declaration, so counting it flags the interpreter's own laziness, not a native's
+        // preflight.
         vm.code.children.insert(key, typed);
     }
     match &vm.code.children[&key] {
