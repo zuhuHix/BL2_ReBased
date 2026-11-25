@@ -85,6 +85,8 @@ Links 1, 3, 4, 5, 13 and 14 meet the hooks first on Maya's attachment 0, her mad
 mode 0). Links 3, 4, 5, 13 and 14 are blocked behind link 1, so each needs what link 1 needs:
 - **Hook 1:** an Engine `SkeletalMeshComponent` does not implement the WillowGame interface (by its class tables;
   checkable read-only), so nothing happens.
+*Superseded by section 6 (2026-11-25):* the pawn test is `IsPlayerPawn`, the controller test
+  `UsingFirstPersonCamera`; the reading below is historical.
 - **Hook 2** (the hub's ruling on #622: the unidentified pawn test is `NotRead` whenever it would decide). Her
   controller is the local player's, so the known parts of the gate pass by fit, and the outcome turns on her `Mesh`
   template's `bOwnerNoSee`, which was not read for this note:
@@ -114,6 +116,8 @@ no layer.
   refresh)", layer "a rendering layer". An empty render-layer harness input (as #605's `SceneLayer`) could answer it
   only under a hub ruling, because what it writes was not read. Maya's gear-likeness components meet their socket
   attach first, so the slice does not need that ruling now.
+*Superseded by section 6 (2026-11-25):* the `IsLocalPlayerController` fit and the unidentified pawn
+  test below are replaced by section 6.1.
 - **Hook 2: a real answer where the pawn test does not decide, `NotRead` where it does.** `SetOwnerNoSee`'s rule is
   already ported. The controller test can use the port's Off `IsLocalPlayerController` (decision 2026-11-19-15), by
   fit. The pawn virtual is not identified. Under the hub's ruling it is `NotYet { NotRead }` exactly when its unknown
@@ -181,7 +185,8 @@ behaviour change.
      `NotYet { NotRead }`;
    - no: nothing. Yes: `NotYet { LayerAbsent }`, "InitializeBodyComposition: the body's rendering hooks (the
      gear-likeness refresh)", layer "a rendering layer".
-2. **Hook 2** (after it):
+2. **Hook 2** (after it). *Superseded by section 6 (2026-11-25):* section 6.1 replaces this step: no
+   `IsLocalPlayerController` check, and no `PAWN_TEST` refusal.
    - the known parts of the gate, in the game's order. Not mode 0, not a `PrimitiveComponent`, or a pawn
      `Controller` that is None or not a local `PlayerController` (its Off `IsLocalPlayerController` answer,
      read-only): the gate fails whatever the pawn test says, so nothing;
@@ -216,6 +221,7 @@ and load transitions unchanged):
 2. hook 1, one whose class implements it: the gear-likeness `LayerAbsent`, before any write;
 3. the interface class not resolved at set-up, and an unresolved table entry: each `NotRead`;
 4. hook 1's refusal and a malformed `HeadMesh` declaration together: hook 1's refusal is the one reported;
+*Tests 5 to 7 are superseded by section 6.2 (2026-11-25).*
 5. hook 2 with a local player controller and `bOwnerNoSee` already true: nothing (the pawn test does not decide);
 6. hook 2 with a local player controller and `bOwnerNoSee` clear: the pawn test's `NotRead`, before any write, ahead
    of `REATTACH_OWNER`;
@@ -286,8 +292,9 @@ Neither test writes anything. All four checks are conjunctive and read only, so 
 
 **Every rule below is UNVERIFIED.** It replaces hook 2's `PAWN_TEST` refusal, and its `IsLocalPlayerController`
 check (section 4, hook 2; `ow-world` `render_hooks::owner_no_see`). Reads are loaded-only, by name on resident objects.
-A field of the wrong kind is a `VmError::Script` naming it. A non-resident `Controller` is a `NotYet` of kind
-`NotRead`, "the rendering hooks: an object the store has not loaded (a load is a write)".
+A field that is missing, or declared with the wrong kind (`bIsPlayer`, `bBehindView`, `bViewingThirdPersonMenu`
+not bools), is a `VmError::Script` naming it. A non-resident `Controller`, where a test must read it, is a `NotYet` of
+kind `NotRead`, "the rendering hooks: an object the store has not loaded (a load is a write)".
 
 **The pawn test**, by the pawn's first native class (the fitted `CLASS_NATIVE` walk):
 - `WillowGame.WillowPlayerPawn`: true;
@@ -302,10 +309,35 @@ A field of the wrong kind is a `VmError::Script` naming it. A non-resident `Cont
   owner-no-see gate's camera test (UsingFirstPersonCamera of PlayerController)";
 - any other: the same refusal with the class named.
 
-**The order** stays the port's: the known parts first, then the template settled, then the setter's planner. A failed
-test is nothing. Where both pass, the setter's own rule follows (section 4, hook 2): nothing if `bOwnerNoSee` is
-already true, else its deferred-reattach `REATTACH_OWNER` refusal with `Owner` set. **Hook 2 never refuses for the
-pawn test** on the classes listed. The `is_local_player` check leaves hook 2.
+**The exact sequence.** Every test that can be decided is decided, in this order:
+1. mode 0, else nothing;
+2. the made class is a `PrimitiveComponent`, else nothing;
+3. the pawn test, where its class rule decides it: false is nothing;
+4. the `PlayerController` cast: `Controller` None, or of a class that is not a `PlayerController` (judged by the class
+   its handle carries, so a lazy handle can be judged), is nothing;
+5. the controller test, where its class rule decides it: false is nothing;
+6. the template settled, else the existing `NOT_SETTLED` `NotRead`;
+7. `plan_flag(bOwnerNoSee, true)`: when it plans nothing (`bOwnerNoSee` already true), hook 2 is nothing.
+
+**The undecided parts come last.** Three things can leave a test undecided: the pawn test on an unlisted class, a
+`Controller` that must be read but is not resident, and the camera test of `Engine.PlayerController` /
+`GearboxPlayerController`. They are skipped over in steps 3 to 5. Their `NotRead` is raised only when every decided
+part passed, the template is settled, and the planner would write. That follows the #622 ruling carried in section 4:
+`NotRead` only where the unread part decides. When several remain undecided, the first in gate order (pawn test, then
+`Controller` residency, then the camera test) is reported. So `NOT_SETTLED` comes **before** any of them. If none
+remains, the setter's own rule follows: its deferred-reattach `REATTACH_OWNER` with `Owner` set. **Hook 2 never refuses
+for the pawn test on the classes listed.**
+
+**What leaves hook 2.** The `is_local_player` check goes, and with it the two refusals it brought into hook 2: its
+`LayerAbsent` when the world has no local-player list, and its `NotPorted` for a controller outside that list whose
+`Player` is set.
+
+**Existing tests that change** (`ow-world` `world/body_composition_tests.rs`):
+- `hook_2_a_clear_flag_is_the_pawn_test_s_not_read` (section 4's test 6): with a passing pawn and controller it is now
+  the setter's `REATTACH_OWNER`, not the pawn test's `NotRead`;
+- `hook_2_a_failing_known_gate_is_nothing` (section 4's test 7): its non-local-controller case now passes the gate. A
+  `WillowPlayerController` with both view bits clear goes on to the planner. The other cases (no controller, a
+  non-player controller, mode 3, a non-primitive) stay nothing.
 
 **What link 1 would meet** (a prediction, not a run). Maya is a `WillowPlayerPawn`, so the pawn test passes. Her
 controller is a `WillowPlayerController`, whose class defaults have `bBehindView` and `bViewingThirdPersonMenu` clear.
@@ -326,12 +358,22 @@ causes no class-code load (where #685 has landed):
    None fails;
 3. a `WillowPlayerController`: `bBehindView` set fails (nothing); `bViewingThirdPersonMenu` set fails; both clear
    passes. A non-local controller (the old `is_local_player` false) with both clear still passes;
-4. a plain `Engine.PlayerController` controller: the camera-test `NotRead`;
+4. a plain `Engine.PlayerController` controller, with `bOwnerNoSee` clear and the pawn test passing: the camera-test
+   `NotRead`;
 5. an `Engine.Controller` that is not a `PlayerController`: nothing;
 6. both tests pass, `bOwnerNoSee` already true: nothing. Clear, with `Owner` set: `REATTACH_OWNER`;
-7. a pawn of an unlisted native class: the pawn-test `NotRead`;
-8. a lazy `Controller`: the "not loaded" `NotRead`, nothing loaded;
-9. `bIsPlayer` or `bBehindView` not declared as a bool: `VmError::Script` naming it.
+7. a pawn of an unlisted native class, with `bOwnerNoSee` clear and the controller test passing: the pawn-test
+   `NotRead`;
+8. a lazy `Controller` that a test must read (a `WillowPawn` pawn, or a `WillowPlayerController`), with `bOwnerNoSee`
+   clear and the other test passing: the "not loaded" `NotRead`, nothing loaded;
+9. `bIsPlayer`, `bBehindView` or `bViewingThirdPersonMenu` missing, or not declared as a bool: `VmError::Script`
+   naming it;
+10. **nothing-cases with an undecided part:**
+    - a camera-test class (`Engine.PlayerController`) with `bOwnerNoSee` already true: nothing;
+    - a camera-test class with a failing pawn test (a `WillowPawn` whose controller has `bIsPlayer` clear): nothing;
+    - a pawn of an unlisted native class whose `Controller` is not a `PlayerController`: nothing;
+11. order: an unsettled template with a camera-test class and `bOwnerNoSee` clear gives `NOT_SETTLED`, not the camera
+    test's `NotRead`.
 
 ## Open questions
 

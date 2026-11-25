@@ -19,4 +19,9 @@ bounds check changed.
   `is_local_player` check. `Engine.PlayerController`'s camera test and unlisted classes are `NotRead`. Tests listed.
 - **On link 1:** both tests pass for Maya with her controller's defaults. Hook 2 then does nothing, or reaches the
   setter's `REATTACH_OWNER`, depending on her `Mesh` template's `bOwnerNoSee`.
+- **Review r1 (#699):**
+  - the exact gate sequence, with undecided parts raised only where the setter would write, after `NOT_SETTLED`;
+  - superseded markers in sections 2 to 4;
+  - the changed existing tests, and what leaves hook 2 with `is_local_player`;
+  - three nothing-cases and the missing-declaration rule.
 - **Clean room:** a different lane implements this note.
