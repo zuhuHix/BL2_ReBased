@@ -57,6 +57,9 @@ struct Mesh<'a> {
     packed: [u8; 8],
     vertex_position: [f32; 3],
     uv: u16,
+    /// Every bone's flags word, and its rotation's `w`.
+    bone_flags: u32,
+    rotation_w: f32,
 }
 
 fn mesh<'a>() -> Mesh<'a> {
@@ -91,6 +94,8 @@ fn mesh<'a>() -> Mesh<'a> {
         packed: [255, 128, 128, 128, 128, 128, 255, 255],
         vertex_position: [1.0, -2.0, 3.0],
         uv: 0x3C00,
+        bone_flags: 0,
+        rotation_w: 1.0,
     }
 }
 
@@ -181,8 +186,8 @@ fn package(m: &Mesh<'_>) -> Package {
         bone_names.push(n);
         payload.extend(n.to_le_bytes());
         payload.extend(0i32.to_le_bytes());
-        payload.extend(words(&[0]));
-        for v in [0.0f32, 0.0, 0.0, 1.0, m.position, 0.0, 2.0] {
+        payload.extend(words(&[m.bone_flags]));
+        for v in [0.0f32, 0.0, 0.0, m.rotation_w, m.position, 0.0, 2.0] {
             payload.extend(v.to_le_bytes());
         }
         payload.extend(children.to_le_bytes());
@@ -501,4 +506,28 @@ fn only_the_root_lod_info_is_typed() {
     let inside = props::ArrayScope::new("Outer", None, &nested, &root);
     assert_eq!(typer.element(&at_root, "LODInfo"), Some(props::ElementType::Struct("SkeletalMeshLODInfo".into())));
     assert_eq!(typer.element(&inside, "LODInfo"), None, "a nested LODInfo is the caller's");
+}
+
+/// Lane SKELMESH-REFSKELETON: the full read gives the reference skeleton bone by bone (name text, parent, rotation,
+/// position, stored child count, colour), and refuses a bone with flags set or a rotation that is not a unit
+/// quaternion.
+#[test]
+fn the_reference_skeleton_is_read_bone_by_bone() {
+    let got = models(&mesh()).unwrap();
+    let names: Vec<&str> = got.skeleton.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["ToyRoot", "ToyHips", "ToySpine", "ToyArm"]);
+    let parents: Vec<Option<usize>> = got.skeleton.iter().map(|b| b.parent).collect();
+    assert_eq!(parents, [None, Some(0), Some(1), Some(0)]);
+    let hips = &got.skeleton[1];
+    assert_eq!((hips.rotation, hips.position), ([0.0, 0.0, 0.0, 1.0], [1.5, 0.0, 2.0]));
+    assert_eq!((hips.children, hips.colour), (1, u32::MAX));
+    let mut flagged = mesh();
+    flagged.bone_flags = 4;
+    assert_eq!(models(&flagged), Err(LodCountError::BoneFlags { bone: 0, flags: 4 }));
+    let mut long = mesh();
+    long.rotation_w = 1.01;
+    assert_eq!(models(&long), Err(LodCountError::NotUnit { bone: 0 }));
+    let mut near = mesh();
+    near.rotation_w = 1.0005;
+    assert!(models(&near).is_ok(), "within a thousandth: {:?}", models(&near));
 }

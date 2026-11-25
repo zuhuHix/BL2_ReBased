@@ -12,12 +12,16 @@
 //!   `WillowAnimNodeFeatherBlend`:** the mesh's [`reference_skeleton`]: the bone count, each bone's parent, and the
 //!   bone names its branch names are looked up as.
 //!
-//! **Where the data comes from.** The project's decoders do not read `SkeletalMesh`'s native serialization: its
-//! layout has no public spec and none is recovered (AGENTS.md rule 4, ow-assets `skeletal`). So:
+//! **Where the data comes from.** `SkeletalMesh`'s native layout has no public spec (AGENTS.md rule 4). Since lanes
+//! SKELMESH-LOD-LAYER and SKELMESH-REFSKELETON, ow-assets `skeletal_lods` reads it from the packages with a fitted
+//! layout checked by structural oracles (UNVERIFIED). So:
 //! - **the reference skeleton** comes from a [`SkeletonSource`] the harness installs ([`SkeletalMeshes::new`]). The
-//!   world owns the trait; `ow-cli` implements it with ow-assets' ActorX `.psk` reader over UModel's exports of the
-//!   player's own install (the crate edges do not let `ow-world` depend on `ow-assets`). With no source installed, or
-//!   no export for the mesh, it is `NotYet { LayerAbsent }` with [`LAYER`], the text #529 already names;
+//!   world owns the trait; `ow-cli` implements it (the crate edges do not let `ow-world` depend on `ow-assets`). The
+//!   layer asks [`SkeletonSource::skeleton`] first (in `ow-cli`, ow-assets' ActorX `.psk` reader over UModel's
+//!   exports of the player's own install, by package and name, behind the flat-name guard), then, with no answer
+//!   there, [`SkeletonSource::skeleton_in`] by the mesh's export origin (in `ow-cli`, the mesh's own package
+//!   export). With no source installed, or no answer from either, it is `NotYet { LayerAbsent }` with [`LAYER`], the
+//!   text #529 already names;
 //! - **the sockets** are the mesh's tagged `Sockets` property, read from the definition store's objects.
 //!
 //! **Write-free.** Nothing here writes the heap, draws from the generator or loads through the store: a parse of an
@@ -116,6 +120,15 @@ pub struct MeshSocket {
 /// `Err(text)`: the data failed to parse.
 pub trait SkeletonSource {
     fn skeleton(&self, package: &str, path: &str, leaf: &str) -> Result<Option<ReferenceSkeleton>, String>;
+
+    /// The reference skeleton of export `index` of `package`, the definition store's own in-memory package, when the
+    /// source reads it from the package itself (lane SKELMESH-REFSKELETON). Asked by the mesh's export origin, only
+    /// when [`SkeletonSource::skeleton`] has no answer (or the flat-name guard keeps it from being asked). The
+    /// default, `Ok(None)`, is "not read". Reads only.
+    fn skeleton_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<ReferenceSkeleton>, String> {
+        let _ = (package, index);
+        Ok(None)
+    }
 
     /// The number of the mesh's LOD models, when the source knows it (lane IMPL-SKELMESH-MESH-CHANGE,
     /// NATIVE_SKELMESH_MESH_CHANGE.md section 4, row 15). The default, and today every source's answer, is `Ok(None)`:
@@ -293,26 +306,44 @@ pub fn reference_skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>
     {
         return Ok(Rc::clone(hit));
     }
-    let (package, path, leaf) = identity(vm, mesh)?;
-    let read = cell
-        .try_borrow()
-        .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
-        .source
-        .skeleton(&package, &path, &leaf);
-    let skeleton = match read {
-        Ok(Some(s)) => s,
-        Ok(None) => {
+    // The name-based answer first (a `.psk` export): only through `identity` and its flat-name guard.
+    let named = match identity(vm, mesh) {
+        Ok(id) => Ok(id),
+        Err(VmError::NotYet(n)) => Err(n),
+        Err(e) => return Err(e),
+    };
+    let mut found = None;
+    if let Ok((package, path, leaf)) = &named {
+        let read = cell
+            .try_borrow()
+            .map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?
+            .source
+            .skeleton(package, path, leaf);
+        found = read.map_err(|e| script(format!("the reference skeleton of {path} failed to parse: {e}")))?;
+    }
+    // Then the mesh's own package export, by its validated origin (lane SKELMESH-REFSKELETON): keyed by export index,
+    // so the flat-name guard does not apply.
+    if found.is_none() {
+        if let Some((at, index, path)) = export_of(vm, mesh)? {
+            let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
+            let read = layer.source.skeleton_in(vm.defs.packages().get(at), index);
+            found = read.map_err(|e| script(format!("the reference skeleton of {path} failed to parse: {e}")))?;
+        }
+    }
+    let path = match &named {
+        Ok((_, path, _)) => path.clone(),
+        Err(_) => export_of(vm, mesh)?.map(|(_, _, p)| p).unwrap_or_default(),
+    };
+    let skeleton = match (found, named) {
+        (Some(s), _) => s,
+        (None, Err(n)) => return Err(VmError::NotYet(n)),
+        (None, Ok(_)) => {
             return Err(NotYet::layer_absent(
                 format!("{UNIT}: no reference skeleton for {path}"),
                 LAYER,
                 RECORD,
             )
             .into());
-        }
-        Err(e) => {
-            return Err(script(format!(
-                "the reference skeleton of {path} failed to parse: {e}"
-            )));
         }
     };
     check_skeleton(&skeleton, &path)?;

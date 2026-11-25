@@ -81,12 +81,38 @@ pub fn read_skeleton(path: &Path) -> Result<ReferenceSkeleton, String> {
     })
 }
 
+/// A package export's reference skeleton (`ow_assets::skeletal_lods::RefBone`s) in the layer's form: name, parent
+/// and bind pose, the rotation and position taken as they are (module documentation of
+/// [`PskExports::skeleton_in`]).
+pub fn package_skeleton(bones: &[ow_assets::skeletal_lods::RefBone]) -> ReferenceSkeleton {
+    ReferenceSkeleton {
+        bones: bones
+            .iter()
+            .map(|b| SkeletonBone {
+                name: b.name.clone(),
+                parent: b.parent,
+                bind: Some(BoneBind { rotation: b.rotation, translation: b.position }),
+            })
+            .collect(),
+    }
+}
+
 impl SkeletonSource for PskExports {
     fn skeleton(&self, package: &str, _path: &str, leaf: &str) -> Result<Option<ReferenceSkeleton>, String> {
         match self.file(package, leaf)? {
             Some(f) => read_skeleton(&f).map(Some),
             None => Ok(None),
         }
+    }
+
+    /// The reference skeleton from the mesh export itself (lane SKELMESH-REFSKELETON, `ow_assets::skeletal_lods`, a
+    /// fitted layout checked by structural oracles, UNVERIFIED), given only by a read of the whole export. The layer
+    /// asks it when no `.psk` export answers. Each bone's rotation and position become its bind pose: the installed
+    /// census found them equal, bone for bone, to the `.psk` reader's for UModel's export of the same mesh.
+    fn skeleton_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<ReferenceSkeleton>, String> {
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        let read = ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer).map_err(|e| e.to_string())?;
+        Ok(Some(package_skeleton(&read.skeleton)))
     }
 
     /// The LOD model count from the mesh export's own native prefix (lane SKELMESH-LOD-LAYER,
@@ -170,7 +196,7 @@ mod tests {
 
     /// The installed LOD census (needs the game, so ignored): `OPENWILLOW_BL2` the install, `OW_LOD_PACKAGES` a
     /// `;`-separated list of file packages. Every `SkeletalMesh` export is read to its end with the fitted layout and
-    /// its checks; counts only are printed (lane SKELMESH-LOD-LAYER's structural oracle, decision 2026-11-25-NNN).
+    /// its checks; counts only are printed (lane SKELMESH-LOD-LAYER's structural oracle, decision 2026-11-25-09).
     #[test]
     #[ignore = "needs the installed game"]
     fn installed_lod_count_census() {
@@ -204,6 +230,72 @@ mod tests {
                 "CENSUS {name}: read {by_count:?} (LOD count: meshes), {models} LOD models ({coloured} with colours), refused {refused}"
             );
         }
+    }
+
+    /// The installed reference-skeleton census (needs the game and UModel exports, so ignored): `OPENWILLOW_BL2` the
+    /// install, `OW_LOD_PACKAGES` the packages, `OPENWILLOW_PSK_EXPORTS` one UModel export root. Every
+    /// `SkeletalMesh` export's package skeleton is compared, bone for bone, with the `.psk` reader's skeleton of the
+    /// same mesh: names, parents, rotations (to 1e-4, a quaternion and its negation being one rotation) and
+    /// positions (to 1e-3). Counts only are printed (lane SKELMESH-REFSKELETON, decision 2026-11-25-NNN).
+    #[test]
+    #[ignore = "needs the installed game and UModel exports"]
+    fn installed_refskeleton_census() {
+        let (Some(game), Ok(list), Ok(root)) =
+            (std::env::var_os("OPENWILLOW_BL2"), std::env::var("OW_LOD_PACKAGES"), std::env::var("OPENWILLOW_PSK_EXPORTS"))
+        else {
+            panic!("set OPENWILLOW_BL2, OW_LOD_PACKAGES and OPENWILLOW_PSK_EXPORTS");
+        };
+        let cooked = PathBuf::from(game).join("WillowGame").join("CookedPCConsole");
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        let exports = PskExports::new(vec![PathBuf::from(root)]);
+        let (mut meshes, mut bones, mut without, mut agree, mut differ, mut refused, mut child_misfits) = (0, 0, 0, 0, 0, 0, 0);
+        for name in list.split(';').filter(|n| !n.is_empty()) {
+            let pkg = ow_package::package::Package::load(&cooked.join(name)).unwrap();
+            for i in 1..=pkg.exports.len() as i32 {
+                let class = pkg.object(i).ok().filter(|o| o.class != 0).and_then(|o| pkg.object(o.class).ok()).map(|c| c.name.clone());
+                if class.as_deref() != Some("SkeletalMesh") {
+                    continue;
+                }
+                let read = match ow_assets::skeletal_lods::read_lod_models(&pkg, i, EXPORT_PROPERTY_OFFSET, &typer) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        refused += 1;
+                        println!("REFSKEL refused: {e}");
+                        continue;
+                    }
+                };
+                meshes += 1;
+                bones += read.skeleton.len();
+                let actual = |b: usize| read.skeleton.iter().filter(|x| x.parent == Some(b)).count();
+                if (0..read.skeleton.len()).any(|b| read.skeleton[b].children != actual(b)) {
+                    child_misfits += 1;
+                }
+                let ours = package_skeleton(&read.skeleton);
+                let leaf = pkg.object(i).unwrap().name.clone();
+                let Some(file) = exports.file(&pkg.name, &leaf).unwrap() else {
+                    without += 1;
+                    continue;
+                };
+                let theirs = read_skeleton(&file).unwrap();
+                let same = ours.bones.len() == theirs.bones.len()
+                    && ours.bones.iter().zip(&theirs.bones).all(|(a, b)| {
+                        let (qa, qb) = (a.bind.unwrap().rotation, b.bind.unwrap().rotation);
+                        let near = |s: f32| (0..4).all(|k| (qa[k] - s * qb[k]).abs() <= 1e-4);
+                        let (ta, tb) = (a.bind.unwrap().translation, b.bind.unwrap().translation);
+                        a.name == b.name
+                            && a.parent == b.parent
+                            && (near(1.0) || near(-1.0))
+                            && (0..3).all(|k| (ta[k] - tb[k]).abs() <= 1e-3)
+                    });
+                if same { agree += 1 } else { differ += 1 }
+            }
+        }
+        println!(
+            "REFSKEL census: {meshes} meshes ({bones} bones) read, {refused} refused; against the .psk exports: \
+             {agree} agree, {differ} differ, {without} without an export; {child_misfits} meshes whose stored child \
+             counts differ from their bones' children"
+        );
+        assert_eq!(differ, 0);
     }
 
     fn temp(name: &str) -> PathBuf {

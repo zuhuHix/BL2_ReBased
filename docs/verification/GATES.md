@@ -2,6 +2,24 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SKELMESH-REFSKELETON (2026-11-25, pc-hummer, on fix/rust-skelmesh-refskeleton, stacked on #673 fbfcd3d3):**
+AI-assisted (Claude Code, Opus 5.5). The reference skeleton is read from the mesh's package export when no UModel
+`.psk` answers (fitted bone layout, structural oracles; UNVERIFIED).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,427 passed / 0 failed / 54 ignored. `crate_edges_test.py`: 19 OK.
+- Installed census (`ow-cli` `installed_refskeleton_census`, twelve packages, counts only): 106 meshes (1,398 bones)
+  read, 0 refused. All 106 equal the `.psk` reader's skeleton of UModel's export bone for bone (names, parents,
+  rotations, positions). 2 meshes hold a stored child count that differs from their bones' children (not checked).
+- `installed_mesh_probe` with no `.psk` root: `Char_Siren.Mesh.Skel_SirenBody` gives 27 bones, and 13 of 13 sockets
+  name one of them.
+- Installed Off `--slice-gate` strict (release build, under the machine lock, no `OPENWILLOW_PSK_EXPORTS`, no default
+  root present): 4 ok / 9 NotYet / 1 error, row for row the same as its base fbfcd3d3 run the same way. Link 1 stops
+  in `maya:8` at `AnimNodeSpecialMoveBlend` (`GearboxFramework.SpecialMoveInterface` has no code key) before any
+  skeleton read; links 3, 4, 5, 13 and 14 stop there too. Link 9's error, the unbound `SpecialMoveComponent.Queue`,
+  is the base's.
+
+No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/refskel/` and `local/p2/refskel-base/`. Decision
+2026-11-25-NNN.
+
 **IMPL-SET-REPLICATED-SMDATA (2026-11-25, zuhu desktop (Linux), on fix/rust-set-replicated-smdata from main
 03896e5):** AI-assisted (Claude Code, Opus 5.5). `SpecialMoveComponent.Play` in Off writes the owner's replicated
 record (`SetReplicatedSMData`) on an exact-authority `Owner`, at the start and after the stop's `ServerFinished`, from

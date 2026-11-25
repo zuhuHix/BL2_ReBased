@@ -1,15 +1,19 @@
 //! Owner: lane SKELMESH-LOD-LAYER. A `SkeletalMesh` export's native data, read from the 832/46 package: the prefix up
 //! to its LOD model count ([`read_lod_count`]), the count `SkeletalMeshComponent.SetSkeletalMesh`'s LOD row asks for
 //! (NATIVE_SKELMESH_MESH_CHANGE.md row 15, `ow_world::world::skeletal::lod_count`), and the LOD models to the export's
-//! end ([`read_lod_models`]). AI-assisted (Claude Code). Decision 2026-11-25-NNN.
+//! end ([`read_lod_models`]). AI-assisted (Claude Code). Decision 2026-11-25-09; the reference skeleton (lane SKELMESH-REFSKELETON), decision 2026-11-25-NNN.
 //!
 //! **Fitted, UNVERIFIED** (AGENTS.md rule 4: no public spec). Recovered from the installed packages and checked with
-//! structural oracles, as decision 2026-11-25-NNN records. After the tagged properties, in order:
+//! structural oracles, as decision 2026-11-25-09 records. After the tagged properties, in order:
 //! 1. the bounds: 28 bytes (an origin, a box extent, a sphere radius), seven finite floats;
 //! 2. the materials: a count, then one 4-byte object reference each;
 //! 3. the origin and the rotation origin: 12 bytes each;
 //! 4. the reference skeleton: a count, then one 52-byte bone each: a name (an 8-byte name-table entry), 4 bytes of
-//!    flags, a rotation (16), a position (12), the child count, the parent index, and a 4-byte colour;
+//!    flags (zero in every census bone; anything else is refused, its bits not decoded), a rotation (16: a unit
+//!    quaternion, its length within a thousandth of 1), a position (12), the child count, the parent index, and a
+//!    4-byte colour. [`read_lod_models`] returns the bones as [`RefBone`]s (lane SKELMESH-REFSKELETON); their names,
+//!    parents, rotations and positions equal, bone for bone, the `.psk` reader's for UModel's export of the same
+//!    mesh in all 106 census meshes (1,398 bones);
 //! 5. the skeletal depth: the longest root-to-leaf bone chain, counting both ends;
 //! 6. **the LOD model count**.
 //!
@@ -103,6 +107,10 @@ const PACKED_UNIT: f32 = 0.02;
 const PACKED_RIGHT_ANGLE: f32 = 0.03;
 /// The UV sets whose halves must be finite (sets 2 and 3 are read unchecked; [`check_vertex`]).
 const CHECKED_UV_SETS: usize = 2;
+/// A bone rotation's squared length lies in `UNIT_LOW..=UNIT_HIGH`: within a thousandth of 1 in length (the census'
+/// largest departure is under 2e-7). Squares, so no root is taken (rule N3).
+const UNIT_LOW: f32 = 0.999 * 0.999;
+const UNIT_HIGH: f32 = 1.001 * 1.001;
 /// The length of the trailer's last array (the only length the census holds).
 const TRAILER_FLOATS: usize = 4;
 
@@ -136,6 +144,10 @@ pub enum LodCountError {
     Parent { bone: usize, parent: i32 },
     /// A negative child count.
     Children { bone: usize, children: i32 },
+    /// A bone's flags word is not zero (the only value seen; its bits are not decoded).
+    BoneFlags { bone: usize, flags: u32 },
+    /// A bone's rotation is not a unit quaternion.
+    NotUnit { bone: usize },
     /// The stored depth differs from the parent chain's.
     Depth { stored: i32, computed: usize },
     /// The LOD count is out of range.
@@ -166,6 +178,8 @@ impl fmt::Display for LodCountError {
             LodCountError::NonFinite { bone } => write!(f, "bone {bone} holds a non-finite number"),
             LodCountError::Parent { bone, parent } => write!(f, "bone {bone} names parent {parent}"),
             LodCountError::Children { bone, children } => write!(f, "bone {bone} holds a child count of {children}"),
+            LodCountError::BoneFlags { bone, flags } => write!(f, "bone {bone} holds flags {flags:#x}, not decoded"),
+            LodCountError::NotUnit { bone } => write!(f, "bone {bone}'s rotation is not a unit quaternion"),
             LodCountError::Depth { stored, computed } => {
                 write!(f, "the stored skeletal depth {stored} differs from the bones' {computed}")
             }
@@ -213,6 +227,27 @@ struct Prefix {
     lods: SkeletalLods,
     bone_names: Vec<(i32, i32)>,
     vertex_colors: bool,
+    skeleton: Vec<RefBone>,
+}
+
+/// One bone of the reference skeleton (module documentation, item 4), as the package stores it. Fitted and
+/// UNVERIFIED in meaning: the rotation and position equal, bone for bone, what the project's `.psk` reader gives for
+/// UModel's export of the same mesh (decision 2026-11-25-NNN), and that is the evidence for their convention: the
+/// bone's transform relative to its parent, `p_parent = q p q* + t` (Hamilton, `(x, y, z, w)`), in the game's frame.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefBone {
+    /// The name's text (`name_<number - 1>` for a numbered name).
+    pub name: String,
+    /// `None` for the root (bone 0, stored as its own parent).
+    pub parent: Option<usize>,
+    /// A unit quaternion `(x, y, z, w)`.
+    pub rotation: [f32; 4],
+    pub position: [f32; 3],
+    /// The stored child count. Not checked: it equals the bone's actual children in all but two census meshes.
+    pub children: usize,
+    /// A 4-byte colour (every value is a colour).
+    pub colour: u32,
 }
 
 /// The caller's array typer, with `LODInfo`'s elements typed as tagged `SkeletalMeshLODInfo` structs, so the walk
@@ -277,13 +312,26 @@ fn read_prefix(
     let names = i32::try_from(package.names.len()).unwrap_or(i32::MAX);
     let mut level = Vec::with_capacity(bones);
     let mut bone_names = Vec::with_capacity(bones);
+    let mut skeleton = Vec::with_capacity(bones);
     for bone in 0..bones {
-        bone_names.push(r.name(names)?);
-        r.u32()?;
-        for _ in 0..7 {
-            if !f32::from_bits(r.u32()?).is_finite() {
+        let (name_index, number) = r.name(names)?;
+        bone_names.push((name_index, number));
+        let name = ow_package::tables::name_text(&package.names, name_index, number)?;
+        let flags = r.u32()?;
+        if flags != 0 {
+            return Err(LodCountError::BoneFlags { bone, flags });
+        }
+        let mut numbers = [0f32; 7];
+        for n in &mut numbers {
+            *n = f32::from_bits(r.u32()?);
+            if !n.is_finite() {
                 return Err(LodCountError::NonFinite { bone });
             }
+        }
+        let rotation = [numbers[0], numbers[1], numbers[2], numbers[3]];
+        let square = rotation.iter().map(|q| q * q).sum::<f32>();
+        if !(UNIT_LOW..=UNIT_HIGH).contains(&square) {
+            return Err(LodCountError::NotUnit { bone });
         }
         let children = r.i32()?;
         if children < 0 {
@@ -295,7 +343,15 @@ fn read_prefix(
             return Err(LodCountError::Parent { bone, parent });
         }
         level.push(if bone == 0 { 1 } else { level[parent as usize] + 1 });
-        r.u32()?;
+        let colour = r.u32()?;
+        skeleton.push(RefBone {
+            name,
+            parent: (bone > 0).then_some(parent as usize),
+            rotation,
+            position: [numbers[4], numbers[5], numbers[6]],
+            children: children as usize,
+            colour,
+        });
     }
     let computed = level.iter().copied().max().unwrap_or(0);
     let stored = r.i32()?;
@@ -308,7 +364,7 @@ fn read_prefix(
         return Err(LodCountError::LodInfo { native: lod_count, tagged });
     }
     let lods = SkeletalLods { materials, bones, depth: computed, lod_count, lods_at: r.pos(), object_end, bounds_origin, bounds_extent };
-    Ok(Prefix { lods, bone_names, vertex_colors })
+    Ok(Prefix { lods, bone_names, vertex_colors, skeleton })
 }
 
 /// One LOD model's counts (module documentation, "The LOD models").
@@ -335,6 +391,9 @@ pub struct LodModel {
 pub struct SkeletalLodModels {
     pub prefix: SkeletalLods,
     pub models: Vec<LodModel>,
+    /// The reference skeleton, bone by bone (lane SKELMESH-REFSKELETON). Given only by a read of the whole export,
+    /// so every check of the export has held.
+    pub skeleton: Vec<RefBone>,
 }
 
 /// A LOD-model field outside what the fitted layout accepts.
@@ -350,7 +409,7 @@ pub fn read_lod_models(
     property_offset: usize,
     typer: &dyn ArrayTyper,
 ) -> Result<SkeletalLodModels, LodCountError> {
-    let Prefix { lods: prefix, bone_names, vertex_colors } = read_prefix(package, index, property_offset, typer)?;
+    let Prefix { lods: prefix, bone_names, vertex_colors, skeleton } = read_prefix(package, index, property_offset, typer)?;
     let mut r = package.reader();
     r.set_pos(prefix.lods_at);
     r.set_limit(prefix.object_end);
@@ -401,7 +460,7 @@ pub fn read_lod_models(
     if r.pos() != prefix.object_end {
         return Err(LodCountError::Leftover { bytes: prefix.object_end.saturating_sub(r.pos()) });
     }
-    Ok(SkeletalLodModels { prefix, models })
+    Ok(SkeletalLodModels { prefix, models, skeleton })
 }
 
 /// A byte at the cursor.
