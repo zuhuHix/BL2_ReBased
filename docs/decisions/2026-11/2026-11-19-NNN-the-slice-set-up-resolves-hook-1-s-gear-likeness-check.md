@@ -3,8 +3,11 @@
 AI-assisted (Claude Code, Claude Opus 5.5). Lane HARNESS-GEARLIKENESS-SETUP (the hub's call on #657's two local
 probes). The decision number is pending from the hub (three digits); NNN is a placeholder.
 
-- **Base:** stacked on #657 (fix/rust-bodycomp-render-hooks at a53c54a). The branch also carries #657's four LOW
-  review findings as their own commit; #657 itself is not changed.
+- **Base:** first stacked on #657 (fix/rust-bodycomp-render-hooks at a53c54a; parked 2026-11-20). #657 and
+  IMPL-TREE-INIT-OWNER-EVENT have since landed, so on 2026-11-25 the lane's own commits were brought onto main
+  d3c7a13 as fix/rust-gearlikeness-setup-2. The branch also carries #657's four LOW review findings as their own
+  commit. The merge kept both set-up lines next to the mesh-sockets preload from main (sockets first, then the
+  gear-likeness lines), so the combat harness test now counts 12 lines.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game. The body composition's rules
   (`ow_world::world::render_hooks`) are not changed, and still load nothing.
 
@@ -22,7 +25,8 @@ mesh preload) does two things:
      is not the game's interface list;
    - a class the packages do not hold resolves nothing.
 
-**Measured:** links 1, 3, 4, 5, 13 and 14 now stop at hook 2's pawn test ("the owner-no-see gate's pawn test (not
+**Measured (2026-11-20, pc-hummer, on the #657 stack, installed Off `--slice-gate`; not re-measured on the new
+base, because this Linux desktop has no install yet):** links 1, 3, 4, 5, 13 and 14 now stop at hook 2's pawn test ("the owner-no-see gate's pawn test (not
 identified)", `NotRead`). Maya's `Mesh` template has `bOwnerNoSee` clear, so the unidentified pawn test decides. Its
 analyst note is another lane's; the rule is unchanged here.
 
