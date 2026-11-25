@@ -13,5 +13,5 @@ ROADMAP-REFRESH r1 (#671), docs only, with Claude Opus 5.5. No code, no dependen
   - the reader ticks cite the runner's current `verify_packages` row (GATES.md, PHASE-0R-READER-CHECK). The earlier run is
     described as main 86c28d00 plus lane FIX-FIRE-TO-HIT's branch;
   - "script VM" is "a script VM in progress";
-  - the slice-gate numbers are left to the runner's GATES row, SLICE-GATE-READING. The hearsay row is removed.
+  - the slice-gate numbers are left to the runner's GATES row, SLICE-GATE-READING.
 - **Not verified in the running game.**

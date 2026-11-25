@@ -9,8 +9,9 @@ errors; the gate printed "links ok 5/14" and "step share X = 5.783/14 = 41.3%". 
 stops at `maya:8` "the deferred reattach: the owner's component update: not read from native code or script yet"
 (NATIVE_ATTACH_MESH_TO_PICKUP.md) with and without a UModel export (`OPENWILLOW_PSK_EXPORTS`), because #693
 reads the reference skeleton from the package; before #693 the first stop depended on the export. Links 3, 4, 5,
-13 and 14 are blocked behind link 1. Link 8 stops in `init` at `BuildWeaponMaterial`'s parent-material `NotRead`.
-Logs under ignored `local/runner/c16_*` on pc-hummer. A reading of the host, not parity; `UNVERIFIED` in game.
+13 and 14 are blocked behind link 1. Link 8 stops in `init` at `BuildWeaponMaterial`'s parent-material `NotRead`. Links 6 (1 of 3) and 7
+(1 of 4) stop in `touch` at `Actor.GetBoundingCylinder`: a skeletal mesh component's bounds source.
+Logs under ignored `local/runner/c16_*` on pc-hummer. A headless reading, not parity; `UNVERIFIED` in game.
 
 **PHASE-0R-READER-CHECK (2026-11-25, pc-hummer runner, main a3b548d):** AI-assisted (Claude Code, Opus 5.5).
 C++ configure (`-T version=14.50`) and Release build, `ctest --test-dir build -C Release --output-on-failure`: 100%

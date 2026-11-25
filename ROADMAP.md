@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core; engine route picked) · **Last update:** 2026-11-25
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R gate met 2026-11-25; the Rust port of the VM and rules is in progress (Phases 1-4) · **Last update:** 2026-11-25
 
 **2026-11-14: the host engine changes.** The maintainer reversed the Unreal Engine 5 host choice
 ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). New runtime code is Rust; Python stays for tools and analysis. The UE5 host
@@ -43,8 +43,9 @@ Broad map coverage (79 more maps) and the remaining Vault Hunters are
 deferred until that gate is met; they move to Phase 5/6.
 
 The slice priority is unchanged by the switch to Rust (2026-11-14); the order
-in front of it is: port the C++ core to Rust to parity (Phase 0R; the engine
-benchmark is done and the maintainer picked an own engine on wgpu + winit),
+in front of it is: port the reader to Rust and match `tools/verify_packages.py` (Phase 0R, met 2026-11-25; the engine
+benchmark is done and the maintainer picked an own engine on wgpu + winit; the VM and rules continue in
+Phases 2-4),
 then build the slice again in the Rust host, Sanctuary first and Maya next, reusing the
 host-independent rules and evidence already recorded.
 
@@ -79,7 +80,7 @@ UNVERIFIED in the running game)
   definition store, a script VM in progress (most of the slice's script runs in Reference only,
   [SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md)), and the game rules ported so far. Rules are ported one native at a time in
   `ParityMode::Off`, each from an own-words note, and answer a typed `NotYet` where a rule is not read yet. The
-  workspace test counts are in [gates](docs/verification/GATES.md) (the top rows). Float-oracle tests whose bit
+  workspace test counts are in [gates](docs/verification/GATES.md) (each lane's row names the branch it ran on). Float-oracle tests whose bit
   parity is gated on Windows (rule N1 in `crates/ow-core/src/num.rs`) are not expected to pass on Linux.
 - **The engine:** our own engine on wgpu + winit, picked by the maintainer on 2026-11-15
   ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). wgpu 30.0.1 and
@@ -94,8 +95,8 @@ UNVERIFIED in the running game)
 - **The slice gate**, headless (`ow-package --slice-gate`, installed data, Off, strict): the reading is the
   runner's, in [gates](docs/verification/GATES.md), row SLICE-GATE-READING (per link in
   [SLICE_RUN_PLAN.md](docs/rust-port/SLICE_RUN_PLAN.md), section 2). Links that do not pass stop at a rule the port
-  has not read or built yet. Link 1's first stop depends on whether a UModel export is present
-  (`OPENWILLOW_PSK_EXPORTS`). `ow-host --play` does not count slice links
+  has not read or built yet. Link 1 stops at `maya:8` whether or not a UModel export is present, because the reference skeleton
+  is read from the package (row SLICE-GATE-READING). `ow-host --play` does not count slice links
   yet, and the gate counts only there ([plan](docs/rust-port/SLICE_RUN_PLAN.md), section 1), so the Phase 4 gate is
   not met.
 
