@@ -14,11 +14,17 @@
 //!    `VmError::Script` naming the field. All are checked before anything else, so the write is all or nothing;
 //! 2. **the list's owner** is `TemplateNode` when set, else the receiver. A `TemplateNode` the store has not loaded is
 //!    [`TEMPLATE_NOT_LOADED`] (`NotRead`), before any field of it is read. The owner declares `Profiles` too;
-//! 3. **the profiles, the interim rule** (the note's, conservative): the port has no reader for the binary-serialized
-//!    elements, and the store leaves a skipped `Profiles` as the class default, an empty array, so an empty list
-//!    cannot be told from a skipped one. **An empty `Profiles` on the list's owner is [`PROFILES`]** (`LayerAbsent`,
-//!    [`PROFILES_LAYER`]), never "no match". A non-empty list goes on. Each element is a struct with a `ProfileName`
-//!    (a name), else `VmError::Script`;
+//! 3. **the profiles** (lane IMPL-AIMOFFSET-PROFILES, the hub's ruling on the interim rule): on the list's owner,
+//!    - a non-empty `Profiles` is the slot's values; each element is a struct with a `ProfileName` (a name), else
+//!      `VmError::Script`;
+//!    - an empty one the store marked skipped (`DefStore::is_skipped`) is the profiles layer's names
+//!      (crate::world::aim_profiles, the binary elements read from the owner's export); its refusal is
+//!      [`PROFILES`]-led `LayerAbsent` on [`PROFILES_LAYER`];
+//!    - an empty one on a loaded definition that is not marked skipped was decoded (or not tagged): an empty list, so
+//!      "no match";
+//!    - an empty one on any other owner (a run-time object) keeps the interim rule: [`PROFILES`] (`LayerAbsent`).
+//!
+//!    A profile name with no entry in the name table cannot be the asked name (nothing is interned);
 //! 4. **the index:** by name, the first element whose `ProfileName` is the name (by id), and no match is nothing; by
 //!    index, the argument, and negative or not below the list's length is nothing. The same index as
 //!    `CurrentProfileIndex` is nothing;
@@ -108,11 +114,19 @@ fn object(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
     }
 }
 
-/// The profile names of `owner`'s `Profiles`; an empty list is [`PROFILES`] (the interim rule, step 3).
-fn profile_names(vm: &Vm, owner: ObjRef) -> Result<Vec<NameId>, VmError> {
-    let (_, list) = field(vm, owner, "Profiles", "an array of a struct", is_struct_array)?;
+/// The profile names of `owner`'s `Profiles` (module documentation, step 3), each as its name-table id (`None` for a
+/// name the table does not hold, which matches no asked name).
+fn profile_names(vm: &Vm, owner: ObjRef) -> Result<Vec<Option<NameId>>, VmError> {
+    let (prop, list) = field(vm, owner, "Profiles", "an array of a struct", is_struct_array)?;
     let items = list.elements().ok_or_else(|| script(format!("Profiles holds {}, not an array", list.kind_name())))?;
     if items.is_empty() {
+        if vm.defs.is_skipped(&vm.space, owner, prop) {
+            let names = crate::world::aim_profiles::profile_names(vm, owner)?;
+            return Ok(names.iter().map(|text| vm.space.names.find(text)).collect());
+        }
+        if vm.defs.is_loaded(&vm.space, owner) {
+            return Ok(Vec::new());
+        }
         return Err(NotYet::layer_absent(PROFILES, PROFILES_LAYER, RECORD).into());
     }
     let key = vm.space.names.find("ProfileName");
@@ -124,7 +138,7 @@ fn profile_names(vm: &Vm, owner: ObjRef) -> Result<Vec<NameId>, VmError> {
                 .and_then(|k| vm.space.classes.struct_layout(s.ty)?.field(k))
                 .ok_or_else(|| script("a profile has no ProfileName".to_string()))?;
             match s.fields.get(at.0 as usize) {
-                Some(Value::Name(n)) => Ok(*n),
+                Some(Value::Name(n)) => Ok(Some(*n)),
                 Some(other) => Err(script(format!("ProfileName holds {}, not a name", other.kind_name()))),
                 None => Err(script("a profile has no ProfileName".to_string())),
             }
@@ -166,7 +180,7 @@ fn plan(vm: &Vm, node: ObjRef, ask: Ask) -> Result<Option<i32>, VmError> {
     };
     let names = profile_names(vm, owner)?;
     let index = match ask {
-        Ask::Name(n) => match names.iter().position(|&x| x == n) {
+        Ask::Name(n) => match names.iter().position(|&x| x == Some(n)) {
             Some(i) => i32::try_from(i).map_err(|_| script("a profile list past i32".to_string()))?,
             None => return Ok(None),
         },
