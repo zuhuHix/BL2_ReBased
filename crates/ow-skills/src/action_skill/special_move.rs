@@ -31,6 +31,10 @@
 //!     answers.
 //! - **`SpecialMoveComponent.Play(NewSMD, PlayRateScale = 1, Duration = 0, CallbackName, CallbackObject, Data)`**
 //!   (sections 1 and 4):
+//!   0. the first reads, loaded-only (lane IMPL-SET-REPLICATED-SMDATA, as NATIVE_SPECIAL_MOVE_QUEUE.md section 5):
+//!      the component resident; with a `NewSMD` and an `SMI` set, those two and the component's `Owner` resident
+//!      ([`NOT_LOADED`]); `Owner` None ([`NO_OWNER`]) or not the `SMI` actor ([`OTHER_OWNER`]) is `NotYet { NotRead }`.
+//!      The method checks of step 3 look in loaded code only, and code not loaded is `NotYet { NotRead }`;
 //!   1. 0 with no definition or no owner interface (`SMI`); then the definition to play (`GetSMDToPlay`), 0 with none;
 //!   2. the gates, in this order: `IsLocalAuthority`, then the script event `AuthorityCanPlay` (not asked when the
 //!      first fails; UNVERIFIED). Failed: 0, nothing changed;
@@ -38,10 +42,14 @@
 //!      of #437), each `NotYet`:
 //!      - an owner below `ROLE_Authority` in a world whose `WorldInfo.NetMode` is `NM_Client`: the forward to the
 //!        server (`ServerSpecialMove_Play`, step 6) is network play, not ported;
-//!      - an owner at `ROLE_Authority` that passes `IsLocalAuthority`: the record the owner keeps of the current move
-//!        for replication (step 4.4) is not named in the note, so it is `NotYet { NotRead }`. It is refused before
-//!        `AuthorityCanPlay` is asked, so a move whose second gate would fail (where the game answers 0) is refused
-//!        too. In the single-player slice this is every `Play` that passes `IsLocalAuthority`;
+//!      - lane IMPL-SET-REPLICATED-SMDATA (NATIVE_SET_REPLICATED_SMDATA.md, clean room) lifts the old refusal of an
+//!        owner at `ROLE_Authority`. When the component's `Owner` is exactly `ROLE_Authority`, the replicated record
+//!        ([`RECORD_REPLICATED`]) is checked here, before `AuthorityCanPlay`: the `SMI` actor's first native class is
+//!        one of [`REPLICATED_OWNERS`] (else `NotRead`), `ReplicatedSMData` is declared as [`REPLICATED_STRUCT`] with
+//!        its five fields of the read kinds and `bNetDirty` as a bool (else `VmError::Script`), and the definitions
+//!        whose server events the commit runs declare them in loaded code (`ServerStarted`, and `ServerFinished` for
+//!        each stop the start may run; none declared is a `VmError::Script`). These come after the refusals below,
+//!        in the note's order;
 //!      - a definition with a `NextSpecialMove`: what the queued follow-ups carry is not read;
 //!      - a stop this start may run (the current move's, or the new move's own when its duration is 0 or less) whose
 //!        definition declares no `ClientFinished`, whose callback the target does not declare, or whose callback has
@@ -53,7 +61,9 @@
 //!      nothing this port binds writes during it;
 //!   5. committed, the start: the node cache written; the queue (`SMDQueue`) emptied; a current move stopped as
 //!      interrupted; the request (its definition the one to play) made the current move (`CurrentSMData`) and
-//!      `StartTime` the world time; the definition's `ClientStarted(SMI, SMData)` answers the duration, and a
+//!      `StartTime` the world time; on an exact-authority `Owner`, the record write (`SetReplicatedSMData` with
+//!      `CurrentSMData`) and then the definition's `ServerStarted(SMI)`; the definition's `ClientStarted(SMI, SMData)`
+//!      answers the duration, and a
 //!      duration of 0 or less stops the move again, not interrupted, if it is still the current move. The answer is
 //!      the duration.
 //!
@@ -61,12 +71,19 @@
 //!   **terminal**: nothing is put back, and its text starts "stopped after partial writes" (the hub's ruling in review
 //!   r2 of #437, the same rule as #439), its kind kept.
 //!
-//!   Stopping a move (section 4), as `Play` uses it (queue cleared, owner below authority): the queue emptied, the
-//!   current move cleared, the old definition's `ClientFinished(SMI, bInterrupted)`, then the callback when the old
+//!   Stopping a move (section 4), as `Play` uses it (queue cleared): the queue emptied, the current move cleared by
+//!   setting only its `SMD` to None (NATIVE_SET_REPLICATED_SMDATA.md section 3; its other fields keep the stopped
+//!   move's values), on an exact-authority `Owner` the old definition's `ServerFinished(SMI, bInterrupted)` and then
+//!   the record write with `CurrentSMData` as it reads after that event, the old definition's
+//!   `ClientFinished(SMI, bInterrupted)`, then the callback when the old
 //!   definition passes `IsLocalAuthority` and the request named one: the function `CallbackName` on `CallbackObject`
 //!   (or on the owner), with `bInterrupted` when it declares that one parameter, and only if the old definition still
-//!   passes `IsLocalAuthority` when the callback is dispatched. On the authority the stop would also
-//!   run `ServerFinished` and update the replicated record; `Play` refuses before that case is reached.
+//!   passes `IsLocalAuthority` when the callback is dispatched.
+//!
+//!   **The record write** (`SetReplicatedSMData`, NATIVE_SET_REPLICATED_SMDATA.md section 2; UNVERIFIED): on the
+//!   `SMI` actor, `ReplicatedSMData`'s `SMD`, `Data`, `PlayRateScale` and `Duration` from the move, its
+//!   `DirtyCounter` one higher as a byte (255 wraps to 0), and `bNetDirty` set. The callback is not copied. No script
+//!   calls the native, so nothing is bound for it.
 //! - **`SpecialMoveComponent.PlayLocal(...)`** (section 1): 0 with no definition or owner interface; otherwise the
 //!   definition to play (0 with none), its `ServerStarted(SMI)` and then its `ClientStarted(SMI, SMData)`, whose answer
 //!   is the answer. No gate, no current move, no `StartTime`, no queue.
@@ -112,6 +129,26 @@ use super::{method_of, need, script_error};
 
 /// The record these natives follow.
 pub const RECORD: &str = "NATIVE_SPECIAL_MOVE_PLAY.md";
+/// The record of the replicated-record write (lane IMPL-SET-REPLICATED-SMDATA).
+pub const RECORD_REPLICATED: &str = "docs/verification/NATIVE_SET_REPLICATED_SMDATA.md";
+/// The first native classes whose record write was read (the note, section 2).
+pub const REPLICATED_OWNERS: [&str; 4] = [
+    "GearboxFramework.GearboxPawn",
+    "WillowGame.WillowPawn",
+    "WillowGame.WillowPlayerPawn",
+    "WillowGame.WillowAIPawn",
+];
+/// `ReplicatedSMData`'s struct. The note names it and says `GearboxPawn` holds the record; that the struct is declared
+/// in `GearboxPawn` is a fit (UNVERIFIED).
+pub const REPLICATED_STRUCT: &str = "GearboxFramework.GearboxPawn.ReplicatedSpecialMoveData";
+/// A Play read on an object the store has not loaded.
+pub const NOT_LOADED: &str = "SpecialMoveComponent.Play: an object the store has not loaded (a load is a write)";
+/// A component with an owner interface and no `Owner`.
+pub const NO_OWNER: &str =
+    "SpecialMoveComponent.Play: a component with an owner interface and no Owner (the game reads its Role unchecked)";
+/// A component whose `Owner` is not its owner interface's actor.
+pub const OTHER_OWNER: &str = "SpecialMoveComponent.Play: a component whose Owner is not its owner interface's actor \
+                               (the record hook reads Owner's Role, the gate reads SMI)";
 
 /// The record `Queue` follows (lane IMPL-SPECIALMOVE-QUEUE).
 pub const QUEUE_RECORD: &str = "NATIVE_SPECIAL_MOVE_QUEUE.md";
@@ -455,6 +492,8 @@ fn request(c: &NativeCall<'_>, component: ObjRef, smd: ObjRef, what: &str) -> Re
 fn to_play(c: &mut NativeCall<'_>, component: ObjRef, what: &str) -> Result<Option<(ObjRef, ObjRef)>, VmError> {
     let Some(requested) = object(c.arg(0)?, what)? else { return Ok(None) };
     let Some(owner) = owner_of(c.vm, component, what)? else { return Ok(None) };
+    // Looked up in loaded code only, so a cold definition class is refused, not loaded (lane IMPL-SET-REPLICATED-SMDATA).
+    require_method(c.vm, requested, "GetSMDToPlay")?;
     let smd = object(&call(c.vm, requested, "GetSMDToPlay", vec![interface(owner)])?, what)?;
     Ok(smd.map(|s| (s, owner)))
 }
@@ -487,6 +526,151 @@ fn is_network_client(vm: &mut Vm, what: &str) -> Result<bool, VmError> {
     Ok(usize::from(raw) == index)
 }
 
+/// `NotYet { NotRead }` ([`NOT_LOADED`]) unless `o` is resident: not a store handle still unloaded (or failed), and
+/// not a stand-in with fewer slots than its class.
+fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        return Err(NotYet::not_read(NOT_LOADED, RECORD_REPLICATED).into());
+    }
+    Ok(())
+}
+
+/// Field `name` of the resident `o`, by name lookup only (no load); a class that declares none is `VmError::Script`.
+fn loaded_field(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Value, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm.space.prop(class, name).ok_or_else(|| script_error(what, format!("the class declares no {name}")))?;
+    Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
+}
+
+/// `name` as `o`'s class sees it, in loaded code only (lane IMPL-SET-REPLICATED-SMDATA): code on the chain not loaded
+/// yet is `NotYet { NotRead }`. A class with no package code (defined by hand) falls back to its declared functions,
+/// as [`method_of`] does.
+fn loaded_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    match vm.find_loaded_method(class, name, None) {
+        Some(Some(f)) => return Ok(Some(f)),
+        Some(None) => {}
+        None => {
+            let path = ow_attr::eval::class_path(&vm.space, o);
+            return Err(NotYet::not_read(format!("{name} on {path}: the class's code is not loaded (a load is a write)"), RECORD).into());
+        }
+    }
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.layout(c);
+        let path = format!("{}.{name}", layout.path().as_str());
+        cursor = layout.super_class();
+        if vm.defs.code().key_of(c).is_none()
+            && let Ok(f) = vm.find_function(&path)
+        {
+            return Ok(Some(f));
+        }
+    }
+    Ok(None)
+}
+
+/// A server event the commit will call, resolved in loaded code before the commit: code not loaded is `NotYet {
+/// NotRead }` (a load is a write); a class that declares none is a `VmError::Script` (the note's section 4).
+fn require_event(vm: &mut Vm, o: ObjRef, name: &str) -> Result<(), VmError> {
+    match loaded_method(vm, o, name)? {
+        Some(_) => Ok(()),
+        None => Err(script_error(
+            "SpecialMoveComponent.Play",
+            format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o)),
+        )),
+    }
+}
+
+/// Whether `o`'s `Role` is exactly `ROLE_Authority` (the record hook's test; the local-authority gate keeps its
+/// at-least comparison).
+fn exact_authority(vm: &mut Vm, o: ObjRef, what: &str) -> Result<bool, VmError> {
+    let (raw, index) = enum_order(vm, o, "Role", "ROLE_Authority", what)?;
+    Ok(usize::from(raw) == index)
+}
+
+/// The record write's target, checked by [`record_preflight`].
+#[derive(Debug, Clone, Copy)]
+struct Record {
+    receiver: ObjRef,
+    replicated: ow_object::ids::PropId,
+    dirty: ow_object::ids::PropId,
+}
+
+/// The record's preflight on `receiver`, the `SMI` actor (module documentation): reads declarations only.
+fn record_preflight(vm: &Vm, receiver: ObjRef) -> Result<Record, VmError> {
+    const WHAT: &str = "SpecialMoveComponent: the replicated record";
+    let bad = |m: String| script_error(WHAT, m);
+    let class = vm.space.heap.get(receiver)?.class;
+    // The first native class from the receiver's class up (the fitted native bit, as `ow-combat`'s read-only walk).
+    let code = vm.defs.code();
+    let mut cursor = Some(class);
+    let mut first_native = None;
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.layout(c);
+        let native = match code.key_of(c) {
+            Some(k) => code.class(k).body.as_ref().map_or(true, |b| b.is_native()),
+            None => vm.space.classes.is_native(c),
+        };
+        if native {
+            first_native = Some(layout.path().to_string());
+            break;
+        }
+        cursor = layout.super_class();
+    }
+    let read = first_native.as_deref().is_some_and(|p| REPLICATED_OWNERS.iter().any(|r| r.eq_ignore_ascii_case(p)));
+    if !read {
+        let path = first_native.unwrap_or_else(|| ow_attr::eval::class_path(&vm.space, receiver));
+        return Err(NotYet::not_read(format!("SpecialMoveComponent: the replicated record of {path}"), RECORD_REPLICATED).into());
+    }
+    let replicated = vm.space.prop(class, "ReplicatedSMData").ok_or_else(|| bad("the owner declares no ReplicatedSMData".into()))?;
+    let ty = match vm.space.classes.decl(replicated).map(|d| (&d.kind, d.array_dim)) {
+        Some((PropKind::Struct(ty), 1)) => *ty,
+        _ => return Err(bad("ReplicatedSMData is not declared as a struct".into())),
+    };
+    if vm.space.classes.struct_by_path(REPLICATED_STRUCT) != Some(ty) {
+        return Err(bad(format!("ReplicatedSMData is a struct of another type, not a {REPLICATED_STRUCT}")));
+    }
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(|| bad("ReplicatedSMData's struct has no layout".into()))?;
+    let definition = vm.space.classes.by_path("GearboxFramework.SpecialMoveDefinition");
+    for (name, want) in [("SMD", "definition"), ("Data", "object"), ("PlayRateScale", "float"), ("Duration", "float"), ("DirtyCounter", "byte")] {
+        let decl = vm.space.names.find(name).and_then(|id| layout.field(id)).map(|(_, d)| (d.kind.clone(), d.array_dim));
+        let fits = match (want, &decl) {
+            ("definition", Some((PropKind::Object { class }, 1))) => definition == Some(*class),
+            ("object", Some((PropKind::Object { .. }, 1))) => true,
+            ("float", Some((PropKind::Float, 1))) => true,
+            ("byte", Some((PropKind::Byte { .. }, 1))) => true,
+            _ => false,
+        };
+        if !fits {
+            return Err(bad(format!("ReplicatedSMData.{name} is not declared as {want}")));
+        }
+    }
+    let dirty = vm.space.prop(class, "bNetDirty").ok_or_else(|| bad("the owner declares no bNetDirty".into()))?;
+    if !matches!(vm.space.classes.decl(dirty).map(|d| &d.kind), Some(PropKind::Bool)) {
+        return Err(bad("bNetDirty is not declared as a bool".into()));
+    }
+    Ok(Record { receiver, replicated, dirty })
+}
+
+/// The record write (`SetReplicatedSMData`, module documentation) from the move `data`.
+fn write_record(vm: &mut Vm, record: &Record, data: &Value, what: &str) -> Result<(), VmError> {
+    let mut rep = vm.space.read(record.receiver, PropAddr::scalar(record.replicated))?.clone();
+    for name in ["SMD", "Data", "PlayRateScale", "Duration"] {
+        let v = field(vm, data, name, what)?;
+        rep = with_field(vm, rep, name, v, what)?;
+    }
+    let counter = match field(vm, &rep, "DirtyCounter", what)? {
+        Value::Byte(b) => b.wrapping_add(1),
+        other => return Err(script_error(what, format!("ReplicatedSMData.DirtyCounter holds {}", other.kind_name()))),
+    };
+    rep = with_field(vm, rep, "DirtyCounter", Value::Byte(counter), what)?;
+    vm.space.write(record.receiver, PropAddr::scalar(record.replicated), rep)?;
+    vm.space.write(record.receiver, PropAddr::scalar(record.dirty), Value::Bool(true))?;
+    Ok(())
+}
+
 /// A stop's callback, resolved before anything changes: none, or the function on its target and whether it takes
 /// `bInterrupted`.
 enum Callback {
@@ -506,7 +690,8 @@ fn callback_of(vm: &mut Vm, data: &Value, smd: ObjRef, owner: ObjRef, zero: &Val
     };
     let target = object(&field(vm, data, "CallbackObject", what)?, what)?.unwrap_or(owner);
     let text = vm.space.names.text(name).to_string();
-    let Some(f) = method_of(vm, target, &text)? else {
+    resident(vm, target)?;
+    let Some(f) = loaded_method(vm, target, &text)? else {
         return Err(NotYet::not_read(format!("a special-move callback {text} the target does not declare"), RECORD).into());
     };
     let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
@@ -527,9 +712,10 @@ fn callback_of(vm: &mut Vm, data: &Value, smd: ObjRef, owner: ObjRef, zero: &Val
     Ok(Callback::Call { target, f, interrupted_param })
 }
 
-/// `NotYet` unless `o`'s class declares `name` (decided before a start changes anything).
+/// `NotYet` unless `o`'s class declares `name` in loaded code (decided before a start changes anything; loads
+/// nothing, lane IMPL-SET-REPLICATED-SMDATA).
 fn require_method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<(), VmError> {
-    match method_of(vm, o, name)? {
+    match loaded_method(vm, o, name)? {
         Some(_) => Ok(()),
         None => Err(NotYet::not_read(
             format!("{name} on {} (the class declares no such function)", ow_attr::eval::class_path(&vm.space, o)),
@@ -547,11 +733,21 @@ fn stop(
     smd: ObjRef,
     callback: &Callback,
     interrupted: bool,
-    zero: &Value,
+    record: Option<&Record>,
     what: &str,
 ) -> Result<(), VmError> {
     write(vm, component, "SMDQueue", Value::array(Vec::new()), what)?;
-    write(vm, component, "CurrentSMData", zero.clone(), what)?;
+    // Only the SMD is cleared; the other fields keep the stopped move's values (NATIVE_SET_REPLICATED_SMDATA.md
+    // section 3).
+    let current = need(vm, component, "CurrentSMData")?;
+    let cleared = with_field(vm, current, "SMD", Value::Object(None), what)?;
+    write(vm, component, "CurrentSMData", cleared, what)?;
+    if let Some(record) = record {
+        call(vm, smd, "ServerFinished", vec![interface(owner), Value::Bool(interrupted)])?;
+        // The record copies CurrentSMData as it reads after the event.
+        let after = need(vm, component, "CurrentSMData")?;
+        write_record(vm, record, &after, what)?;
+    }
     call(vm, smd, "ClientFinished", vec![interface(owner), Value::Bool(interrupted)])?;
     // The authority is asked again at dispatch: `ClientFinished` may have changed it since the callback was resolved.
     if let Callback::Call { target, f, interrupted_param } = *callback
@@ -570,19 +766,24 @@ struct Start {
     smd: ObjRef,
     data: Value,
     now: f32,
-    zero: Value,
     old: Option<(ObjRef, Callback)>,
     own: Callback,
+    /// The record to write on an exact-authority owner (lane IMPL-SET-REPLICATED-SMDATA).
+    record: Option<Record>,
 }
 
 /// The start of module documentation step 4.
 fn start(vm: &mut Vm, s: &Start, what: &str) -> Result<Value, VmError> {
     write(vm, s.component, "SMDQueue", Value::array(Vec::new()), what)?;
     if let Some((old, callback)) = &s.old {
-        stop(vm, s.component, s.owner, *old, callback, true, &s.zero, what)?;
+        stop(vm, s.component, s.owner, *old, callback, true, s.record.as_ref(), what)?;
     }
     write(vm, s.component, "CurrentSMData", s.data.clone(), what)?;
     write(vm, s.component, "StartTime", Value::Float(s.now), what)?;
+    if let Some(record) = &s.record {
+        write_record(vm, record, &s.data, what)?;
+        call(vm, s.smd, "ServerStarted", vec![interface(s.owner)])?;
+    }
     let duration = match call(vm, s.smd, "ClientStarted", vec![interface(s.owner), s.data.clone()])? {
         Value::Float(d) => d,
         other => return Err(script_error(what, format!("ClientStarted answered {}", other.kind_name()))),
@@ -591,7 +792,7 @@ fn start(vm: &mut Vm, s: &Start, what: &str) -> Result<Value, VmError> {
     // `ClientFinished` not run) a second time.
     let current = need(vm, s.component, "CurrentSMData")?;
     if duration <= 0.0 && object(&field(vm, &current, "SMD", what)?, what)? == Some(s.smd) {
-        stop(vm, s.component, s.owner, s.smd, &s.own, false, &s.zero, what)?;
+        stop(vm, s.component, s.owner, s.smd, &s.own, false, s.record.as_ref(), what)?;
     }
     Ok(Value::Float(duration))
 }
@@ -599,6 +800,24 @@ fn start(vm: &mut Vm, s: &Start, what: &str) -> Result<Value, VmError> {
 fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "SpecialMoveComponent.Play";
     let component = this(c, WHAT)?;
+    // Step 0: the first reads, loaded-only (module documentation).
+    resident(c.vm, component)?;
+    let requested = object(c.arg(0)?, WHAT)?;
+    let smi_actor = object(&loaded_field(c.vm, component, "SMI", WHAT)?, WHAT)?;
+    let (Some(requested), Some(smi_actor)) = (requested, smi_actor) else {
+        return Ok(Value::Float(0.0));
+    };
+    let owner_field = object(&loaded_field(c.vm, component, "Owner", WHAT)?, WHAT)?;
+    if let Some(o) = owner_field {
+        resident(c.vm, o)?;
+    }
+    resident(c.vm, smi_actor)?;
+    resident(c.vm, requested)?;
+    match owner_field {
+        None => return Err(NotYet::not_read(NO_OWNER, RECORD_REPLICATED).into()),
+        Some(o) if o != smi_actor => return Err(NotYet::not_read(OTHER_OWNER, RECORD_REPLICATED).into()),
+        Some(_) => {}
+    }
     let Some((smd, owner)) = to_play(c, component, WHAT)? else {
         return Ok(Value::Float(0.0));
     };
@@ -616,14 +835,6 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if !is_local_authority_of(c.vm, smd, &smi)? {
         return Ok(Value::Float(0.0));
     }
-    if authority {
-        return Err(NotYet::not_read(
-            "Play on the authority: the record the owner keeps of the current move for replication (section 1 step \
-             4.4 does not name it); refused before AuthorityCanPlay is asked",
-            RECORD,
-        )
-        .into());
-    }
     if object(&need(c.vm, smd, "NextSpecialMove")?, WHAT)?.is_some() {
         return Err(NotYet::not_read("Play of a definition with a NextSpecialMove (what the queued follow-ups carry)", RECORD).into());
     }
@@ -635,6 +846,7 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let current = need(vm, component, "CurrentSMData")?;
     let old = match object(&field(vm, &current, "SMD", WHAT)?, WHAT)? {
         Some(o) => {
+            resident(vm, o)?;
             require_method(vm, o, "ClientFinished")?;
             Some((o, callback_of(vm, &current, o, owner, &zero, WHAT)?))
         }
@@ -643,13 +855,26 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     require_method(vm, smd, "ClientStarted")?;
     require_method(vm, smd, "ClientFinished")?;
     let own = callback_of(vm, &data, smd, owner, &zero, WHAT)?;
+    // Step 4 of NATIVE_SET_REPLICATED_SMDATA.md's preflight, after Play's own refusals: only when the Owner (here the
+    // SMI actor, checked above) is exactly ROLE_Authority, the record and the server events the commit will call.
+    let record = if exact_authority(vm, owner, WHAT)? {
+        let record = record_preflight(vm, owner)?;
+        require_event(vm, smd, "ServerStarted")?;
+        require_event(vm, smd, "ServerFinished")?;
+        if let Some((o, _)) = &old {
+            require_event(vm, *o, "ServerFinished")?;
+        }
+        Some(record)
+    } else {
+        None
+    };
     // The gate event. The node GetSMNode finds meanwhile is cached only once Play is committed.
     let (passes, node) = authority_can_play(vm, component, smd, smi)?;
     if !passes {
         return Ok(Value::Float(0.0));
     }
     // Committed: from here a refusal is terminal (module documentation).
-    let s = Start { component, owner, smd, data, now, zero, old, own };
+    let s = Start { component, owner, smd, data, now, old, own, record };
     let committed = |vm: &mut Vm| -> Result<Value, VmError> {
         if let Some(node) = node {
             write(vm, component, "SMBlendNode", Value::Object(Some(node)), WHAT)?;
