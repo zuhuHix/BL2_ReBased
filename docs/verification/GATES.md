@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-GETWEAPONHOLDDEF (2026-11-25, pc-hummer, docs only, on docs/native-getweaponholddef from main ca547247):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_GET_WEAPON_HOLD_DEF.md: link 1's new stop is a pure read of the body
+class's weapon holds. For Maya (`Unarmed`, no tag) it answers the shared class's default hold, then
+`WeaponHold_Siren_Unarmed`. The next unread native is `SetActiveProfileByName`. No code changed, so no measured
+number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **LINK1-HEAD-MESH (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh from #721 c845ff85):** AI-assisted (Claude
 Code, Opus 5.5). Link 1's set-up walks Maya's body composition templates and their meshes, loading only exports of her
 pawn's streaming package file, and a store handle reached from that file loads the file's own copy of its path
