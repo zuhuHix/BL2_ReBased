@@ -381,6 +381,132 @@ fn the_stand_in_loads_only_the_archetype_s_same_package_references() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The body-composition walk (lane LINK1-HEAD-MESH, the hub's ruling): over the templates, each loaded only if it is an
+/// export of the home package file, then its `SkeletalMesh` by the same rule. Invented packages: `GD_ToyHome` holds the
+/// holder, `TemplateA` and `TemplateB` (each naming its own mesh, `MeshA` and `MeshB`, both home exports); `GD_ToyOther`
+/// holds `TemplateC`. All start as unloaded handles. A, B and their meshes load; C is skipped with a line naming it.
+/// Then the cap: a walk already at it visits nothing more.
+#[test]
+fn the_body_walk_loads_home_templates_and_meshes_and_skips_another_package() {
+    use std::rc::Rc;
+
+    use ow_attr::AttributeSystem;
+    use ow_core::ObjectPath;
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::ObjectSpace;
+    use ow_object::value::Value;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!("ow-cli-bodywalk-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let holder = t.class("ToyHolder", object);
+        for n in ["A", "B", "C"] {
+            t.prop("Object", holder, n, 0, object);
+        }
+        let comp = t.class("ToyComp", object);
+        t.prop("Object", comp, "SkeletalMesh", 0, object);
+        t.class("ToyMesh", object);
+        t.build()
+    };
+    let none_only = |t: &ScriptToy| {
+        let mut p = ow_package::testkit::ints(&[0]);
+        p.extend_from_slice(&t.none);
+        p
+    };
+    let other = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let comp = t.p.add_import("Core", "Class", willow, "ToyComp");
+        let payload = none_only(&t);
+        t.p.add_export(comp, "TemplateC", payload);
+        t.build()
+    };
+    let home = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let holder = t.p.add_import("Core", "Class", willow, "ToyHolder");
+        let comp = t.p.add_import("Core", "Class", willow, "ToyComp");
+        let mesh = t.p.add_import("Core", "Class", willow, "ToyMesh");
+        let other_package = t.p.add_import("Core", "Package", 0, "GD_ToyOther");
+        let c = t.p.add_import("WillowGame", "ToyComp", other_package, "TemplateC");
+        let payload = none_only(&t);
+        let mesh_a = t.p.add_export(mesh, "MeshA", payload.clone());
+        let mesh_b = t.p.add_export(mesh, "MeshB", payload);
+        let template = |t: &mut ScriptToy, name: &str, m: i32| {
+            let mut p = ow_package::testkit::ints(&[0]);
+            p.extend(t.p.tag("SkeletalMesh", "ObjectProperty", &ow_package::testkit::ints(&[m])));
+            p.extend_from_slice(&t.none);
+            t.p.add_export(comp, name, p)
+        };
+        let a = template(&mut t, "TemplateA", mesh_a);
+        let b = template(&mut t, "TemplateB", mesh_b);
+        let mut h = ow_package::testkit::ints(&[0]);
+        for (n, r) in [("A", a), ("B", b), ("C", c)] {
+            h.extend(t.p.tag(n, "ObjectProperty", &ow_package::testkit::ints(&[r])));
+        }
+        h.extend_from_slice(&t.none);
+        t.p.add_export(holder, "Holder", h);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Core.upk", core.as_slice()),
+        ("WillowGame.upk", willow.as_slice()),
+        ("GD_ToyHome.upk", home.as_slice()),
+        ("GD_ToyOther.upk", other.as_slice()),
+    ];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let holder = vm.defs.find(&mut vm.space, &ObjectPath::parse("GD_ToyHome.Holder").unwrap()).unwrap().unwrap();
+    let read = |vm: &Vm, o: ow_object::ids::ObjRef, name: &str| {
+        let c = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(c, name).unwrap();
+        match vm.space.read(o, ow_object::ids::PropAddr::scalar(p)).unwrap() {
+            Value::Object(Some(x)) => *x,
+            other => panic!("{name}: {other:?}"),
+        }
+    };
+    let (a, b, c) = (read(&vm, holder, "A"), read(&vm, holder, "B"), read(&vm, holder, "C"));
+    for t in [a, b, c] {
+        assert!(vm.defs.is_unloaded(&vm.space, t), "every template starts unloaded");
+    }
+    let home_id = super::file_package(&vm, holder).unwrap();
+    let mut walk = super::BodyWalk { home: home_id, package: "GD_ToyHome".into(), visited: Vec::new(), loaded: 0 };
+    super::walk_templates(&mut vm, &mut walk, &[a, b, c]).unwrap();
+    for t in [a, b] {
+        assert!(!vm.defs.is_unloaded(&vm.space, t), "a home template is loaded");
+        let m = read(&vm, t, "SkeletalMesh");
+        assert!(!vm.defs.is_unloaded(&vm.space, m), "and its home mesh");
+    }
+    assert!(vm.defs.is_unloaded(&vm.space, c), "the other package's template is not loaded");
+    assert_eq!(walk.loaded, 4, "two templates and two meshes");
+    assert!(
+        vm.log.iter().any(|l| l.contains("GD_ToyOther.TemplateC") && l.contains("is not an export of GD_ToyHome") && l.contains("its branch stops")),
+        "the skipped template is logged: {:?}",
+        vm.log
+    );
+    assert!(vm.log.iter().any(|l| l.contains("GD_ToyHome.TemplateA") && l.contains("UNVERIFIED")), "each load is labelled");
+
+    // The cap: a walk that has visited the cap's worth of objects visits nothing more, and says so.
+    let mut full = super::BodyWalk { home: home_id, package: "GD_ToyHome".into(), visited: vec![holder; super::BODY_WALK_CAP], loaded: 0 };
+    super::walk_templates(&mut vm, &mut full, &[c]).unwrap();
+    assert_eq!(full.visited.len(), super::BODY_WALK_CAP);
+    assert!(vm.log.last().unwrap().contains("stopped at the cap of 64 objects"), "{:?}", vm.log.last());
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--map` parsing (review r1 of #556, item 5; lane MAP-ROUTE-FOLLOWUP): the name and the steps after it, none
 /// without the option, the usage message without a name, `NotYet` outside Off.
 #[test]
