@@ -32,16 +32,23 @@ in the running game.
      - each object is visited once, up to a cap of 64 objects (logged if hit). Each load is logged before and after,
        as an UNVERIFIED stand-in for the streaming load; a failed load is the step's error, kept;
      - no native refusal changes. The explicit cube preload is gone; `preload_mesh` keeps the name it logs.
-  3. **The store rule** (the hub's ruling on step 2's stop, a third commit): in the game only Maya's streaming package
-     is loaded, and her head template's `SkeletalMesh` is an export index of that same file, so the object at that path
+  3. **The store rule** (the hub's ruling on step 2's stop, a third commit). The ruling's reason: in the game only
+     Maya's streaming package is loaded (**UNVERIFIED**: no session; checkable live by listing the loaded packages at
+     link 1), and her head template's `SkeletalMesh` is an export index of that same file, so the object at that path
      in her game is the Siren copy. `ow-defs` gains `DefStore::load_export_of_file(obj, file)`:
      - when `file` holds an export at `obj`'s path and `obj` is still an unloaded handle, the handle is re-pointed to
-       `file`'s export and loaded. It stays the one object for the path;
+       `file`'s export and loaded. It stays the one object for the path. The re-point moves the handle, its
+       holder-export entry and the path's cached holder, so **a re-pointed handle is `file`'s copy for everyone
+       afterwards**: overlays and archetype lookups of the path made after it read that copy, ones made before it read
+       the policy's;
      - when `obj` is already loaded from another file's copy, it is a typed `NotYet { NotRead }` naming both files
        ("... is resident from A, and B holds its own copy (an identity conflict)"), with nothing changed;
-     - a file with no export at the path does nothing, and a handle whose load failed returns that error again;
-     - every other lookup (`find`, `resolve_ref`, `ensure_loaded`, `load`) keeps the identity policy's holder. The
-       policy itself is unchanged;
+     - while an installed overlay patches the path, the re-point is the same typed refusal, with nothing changed. The
+       overlay's patches are placed by the policy's holder, so a re-point would leave them unapplied (review of #727);
+     - a handle whose load already failed returns that stored error, whichever file is asked; a file with no export at
+       the path does nothing; if `file`'s copy fails to load, the handle goes back to the policy's holder and the error
+       is returned;
+     - no other lookup (`find`, `resolve_ref`, `ensure_loaded`, `load`) ever re-points. The policy itself is unchanged;
      - **UNVERIFIED** that the game resolves a path so; the reason is the one above.
 
      The walk calls it for an object the store holds from another file, logging the attempt and its outcome; a file
@@ -51,9 +58,14 @@ in the running game.
     `Startup.upk`): a handle reached from `Startup.upk` loads Startup's copy and stays the one object for the path; a
     second call is a no-op; a call from `GD_Test.upk` with Startup's copy resident is the conflict `NotRead`; a file
     without the path does nothing; and an ordinary load keeps the policy's holder, after which a call from Startup is
-    the conflict;
+    the conflict. Review of #727: a pending overlay on the path refuses the re-point with nothing changed, and the
+    policy's load then takes the patch; an overlay pushed after a re-point applies to the file's copy at once; a failed
+    handle returns its stored error from a file holding the path and from one not; a file copy that fails to load puts
+    the handle back on the policy's holder, which then loads;
   - `combat/tests.rs`: two templates and their meshes in the home package load, a template in another package is
-    skipped with a line naming it, and a walk at the cap visits nothing more;
+    skipped with a line naming it, and a walk at the cap visits nothing more. Review of #727: over a path two files
+    hold, the walk loads the home file's own copy (logged), and with the other copy resident the conflict is the walk's
+    error;
   - the `maya` step's harness test: the walk's skip line for a toy archetype with no `BodyClass`.
 - **The skeleton source:** on this machine the `.psk` root is missing, so skeletons come from the mesh's own package
   export (`ow_assets::skeletal_lods`, #693's reader). With the first version, the Assassin copy's skeleton read, and

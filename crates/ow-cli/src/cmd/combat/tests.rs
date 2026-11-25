@@ -507,6 +507,119 @@ fn the_body_walk_loads_home_templates_and_meshes_and_skips_another_package() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review of #727, LOW: the walk over a duplicated path. `GD_AOther.upk` and `GD_ToyHome.upk` each hold
+/// `GD_Shared.Cube`; `GD_AOther` comes first in the scan, so its copy is the policy's. Home's `TemplateA` names home's
+/// own cube. The walk loads home's copy into the cube's handle and logs it; with the other copy already resident, the
+/// store's conflict is the walk's error.
+#[test]
+fn the_body_walk_loads_the_home_file_s_own_copy_of_a_duplicated_path() {
+    use std::rc::Rc;
+
+    use ow_attr::AttributeSystem;
+    use ow_core::ObjectPath;
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::{ObjectSpace, Origin};
+    use ow_object::value::Value;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let holder = t.class("ToyHolder", object);
+        t.prop("Object", holder, "A", 0, object);
+        let comp = t.class("ToyComp", object);
+        t.prop("Object", comp, "SkeletalMesh", 0, object);
+        t.class("ToyMesh", object);
+        t.build()
+    };
+    // A file holding `GD_Shared.Cube` under a package export, then `extra` exports: (exports, the cube's index).
+    let with_cube = |extra: bool| {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let package = t.p.add_import("Core", "Class", core, "Package");
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let mesh = t.p.add_import("Core", "Class", willow, "ToyMesh");
+        let shared = t.p.add_export(package, "GD_Shared", ow_package::testkit::ints(&[0]));
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        let mut cube = ow_package::testkit::Export::new(mesh, "Cube", payload);
+        cube.outer = shared;
+        let cube = t.p.add_export_with(cube);
+        if extra {
+            let comp = t.p.add_import("Core", "Class", willow, "ToyComp");
+            let holder = t.p.add_import("Core", "Class", willow, "ToyHolder");
+            let mut p = ow_package::testkit::ints(&[0]);
+            p.extend(t.p.tag("SkeletalMesh", "ObjectProperty", &ow_package::testkit::ints(&[cube])));
+            p.extend_from_slice(&t.none);
+            let a = t.p.add_export(comp, "TemplateA", p);
+            let mut h = ow_package::testkit::ints(&[0]);
+            h.extend(t.p.tag("A", "ObjectProperty", &ow_package::testkit::ints(&[a])));
+            h.extend_from_slice(&t.none);
+            t.p.add_export(holder, "Holder", h);
+        }
+        t.build()
+    };
+    let (other, home) = (with_cube(false), with_cube(true));
+    let vm_of = |tag: &str| {
+        let dir = std::env::temp_dir().join(format!("ow-cli-bodywalk-dup-{tag}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files: Vec<(&str, &[u8])> = vec![
+            ("Core.upk", core.as_slice()),
+            ("WillowGame.upk", willow.as_slice()),
+            ("GD_AOther.upk", other.as_slice()),
+            ("GD_ToyHome.upk", home.as_slice()),
+        ];
+        let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+        (Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off), dir)
+    };
+    let read = |vm: &Vm, o: ow_object::ids::ObjRef, name: &str| {
+        let c = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(c, name).unwrap();
+        match vm.space.read(o, ow_object::ids::PropAddr::scalar(p)).unwrap() {
+            Value::Object(Some(x)) => *x,
+            other => panic!("{name}: {other:?}"),
+        }
+    };
+    let start = |vm: &mut Vm| {
+        let holder = vm.defs.find(&mut vm.space, &ObjectPath::parse("GD_ToyHome.Holder").unwrap()).unwrap().unwrap();
+        let a = read(vm, holder, "A");
+        let home = super::file_package(vm, holder).unwrap();
+        (a, home)
+    };
+
+    let (mut vm, dir) = vm_of("own");
+    let (a, home_id) = start(&mut vm);
+    let mut walk = super::BodyWalk { home: home_id, package: "GD_ToyHome".into(), visited: Vec::new(), loaded: 0 };
+    super::walk_templates(&mut vm, &mut walk, &[a]).unwrap();
+    let cube = read(&vm, a, "SkeletalMesh");
+    assert!(matches!(vm.space.heap.get(cube).unwrap().origin, Origin::Export { package, .. } if package == home_id), "home's own copy");
+    assert_eq!(walk.loaded, 2, "the template and the cube");
+    assert!(vm.log.iter().any(|l| l.contains("GD_Shared.Cube: loaded GD_ToyHome's own copy")), "{:?}", vm.log);
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let (mut vm, dir) = vm_of("conflict");
+    let (a, home_id) = start(&mut vm);
+    vm.defs.ensure_loaded(&mut vm.space, a).unwrap();
+    let cube = read(&vm, a, "SkeletalMesh");
+    vm.defs.ensure_loaded(&mut vm.space, cube).unwrap();
+    let mut walk = super::BodyWalk { home: home_id, package: "GD_ToyHome".into(), visited: Vec::new(), loaded: 0 };
+    let err = super::walk_templates(&mut vm, &mut walk, &[a]).unwrap_err();
+    assert!(err.to_string().contains("identity conflict"), "{err}");
+    assert!(vm.log.iter().any(|l| l.contains("GD_Shared.Cube: failed")), "{:?}", vm.log);
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--map` parsing (review r1 of #556, item 5; lane MAP-ROUTE-FOLLOWUP): the name and the steps after it, none
 /// without the option, the usage message without a name, `NotYet` outside Off.
 #[test]

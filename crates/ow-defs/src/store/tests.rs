@@ -174,15 +174,21 @@ struct World {
 
 impl World {
     fn new(tag: &str, policy: IdentityPolicy, mode: ParityMode) -> World {
+        World::with_extra(tag, policy, mode, Vec::new())
+    }
+
+    /// [`World::new`] with `extra` files added to the package set.
+    fn with_extra(tag: &str, policy: IdentityPolicy, mode: ParityMode, extra: Vec<(&'static str, Vec<u8>)>) -> World {
         let dir = std::env::temp_dir().join(format!("ow-defs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let files = [
+        let mut files = vec![
             ("Core.upk", core()),
             ("Engine.upk", engine()),
             ("GD_Test.upk", gd_test()),
             ("Startup.upk", startup()),
             ("Broken.upk", vec![1, 2, 3]),
         ];
+        files.extend(extra);
         let files: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
         let defs = DefStore::from_synthetic(&dir, &files, policy, mode).unwrap();
         World {
@@ -358,6 +364,102 @@ fn ordinary_loads_keep_the_policy_holder() {
     assert_eq!(t.read(a, "ClipSize"), Value::Int(7));
     assert_eq!(t.defs.load_export_of_file(&mut t.w, a, ids[1]).unwrap(), FileCopy::Loaded, "the resident copy is GD_Test's");
     assert!(matches!(t.defs.load_export_of_file(&mut t.w, a, ids[0]), Err(DefError::NotYet(_))));
+}
+
+/// Review of #727, MED: an overlay patching the path keeps the re-point refused (its patches are placed by the
+/// policy's holder), nothing changed, and the policy's load still takes the pending patch. An overlay pushed after a
+/// re-point applies to the re-pointed copy.
+#[test]
+fn a_re_point_waits_for_no_overlay_and_an_overlay_after_it_applies_to_the_file_s_copy() {
+    let mut t = World::off("filecopy-overlay");
+    let ids = file_ids(&mut t, &["Startup"]);
+    let b = t.get("GD_Test.Part_B");
+    let a = t.object(b, "Next");
+    t.overlay(OverlayKind::Test, "GD_Test.Part_A Damage = 5.0\n");
+    match t.defs.load_export_of_file(&mut t.w, a, ids[0]) {
+        Err(DefError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(n.what.contains("has an overlay installed"), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(t.defs.is_unloaded(&t.w, a), "nothing changed");
+    t.defs.ensure_loaded(&mut t.w, a).unwrap();
+    assert_eq!((t.read(a, "ClipSize"), t.read(a, "Damage")), (Value::Int(7), Value::Float(5.0)), "the policy's copy, patched");
+
+    let mut t = World::off("filecopy-overlay-after");
+    let ids = file_ids(&mut t, &["Startup"]);
+    let b = t.get("GD_Test.Part_B");
+    let a = t.object(b, "Next");
+    assert_eq!(t.defs.load_export_of_file(&mut t.w, a, ids[0]).unwrap(), FileCopy::Loaded);
+    let o = t.overlay(OverlayKind::Test, "GD_Test.Part_A Damage = 5.0\n");
+    assert_eq!((t.read(a, "ClipSize"), t.read(a, "Damage")), (Value::Int(99), Value::Float(5.0)), "Startup's copy, patched");
+    let status = t.defs.overlay_status(o).unwrap().clone();
+    assert_eq!((status.applied, status.pending), (1, 0), "applied at once, not left pending");
+}
+
+/// Two files for the failure cases: `GD_Brk.upk` holds `Bad` (its own archetype: the store refuses its load),
+/// `Good` (ClipSize 5) and `Holder1`/`Holder2` naming them; `GD_BrkCopy.upk` holds its own `GD_Brk.Bad` (good) and
+/// `GD_Brk.Good` (its own archetype). `GD_Brk.upk` comes first in the scan, so its copies are the policy's.
+fn brk_files() -> Vec<(&'static str, Vec<u8>)> {
+    let cyclic = |p: &mut PackageBuilder, thing: i32, name: &str, me: i32, outer: i32| {
+        let none = p.none();
+        let mut b = ints(&[0]);
+        b.extend_from_slice(&none);
+        let mut e = ow_package::testkit::Export::new(thing, name, b);
+        e.archetype = me;
+        e.outer = outer;
+        p.add_export_with(e)
+    };
+    let good = |p: &mut PackageBuilder, thing: i32, name: &str, clip: i32, outer: i32| {
+        let none = p.none();
+        let mut b = ints(&[0]);
+        b.extend(p.int_tag("ClipSize", clip));
+        b.extend_from_slice(&none);
+        let mut e = ow_package::testkit::Export::new(thing, name, b);
+        e.outer = outer;
+        p.add_export_with(e)
+    };
+    let mut p = PackageBuilder::new_empty();
+    let (thing, _, _, _, _) = class_imports(&mut p);
+    assert_eq!(cyclic(&mut p, thing, "Bad", 1, 0), 1);
+    assert_eq!(good(&mut p, thing, "Good", 5, 0), 2);
+    for (name, r) in [("Holder1", 1), ("Holder2", 2)] {
+        let none = p.none();
+        let mut b = ints(&[0]);
+        b.extend(p.object_tag("Next", r));
+        b.extend_from_slice(&none);
+        p.add_export(thing, name, b);
+    }
+    let brk = p.build();
+    let mut p = PackageBuilder::new_empty();
+    let (thing, _, _, _, package) = class_imports(&mut p);
+    assert_eq!(p.add_export(package, "GD_Brk", ints(&[0])), 1);
+    assert_eq!(good(&mut p, thing, "Bad", 6, 1), 2);
+    assert_eq!(cyclic(&mut p, thing, "Good", 3, 1), 3);
+    vec![("GD_Brk.upk", brk), ("GD_BrkCopy.upk", p.build())]
+}
+
+/// Review of #727, LOW: a handle whose load failed returns that stored error whichever file is asked (one holding the
+/// path, one not); and when the file's own copy fails to load, the handle goes back to the policy's holder, which then
+/// loads.
+#[test]
+fn a_failed_handle_keeps_its_error_and_a_failed_file_copy_restores_the_policy_holder() {
+    let mut t = World::with_extra("filecopy-failed", IdentityPolicy::FirstInScanOrder, ParityMode::Off, brk_files());
+    let ids = file_ids(&mut t, &["GD_BrkCopy", "Engine"]);
+    let holder = t.get("GD_Brk.Holder1");
+    let bad = t.object(holder, "Next");
+    let stored = t.defs.ensure_loaded(&mut t.w, bad).unwrap_err();
+    assert!(t.defs.is_failed(&t.w, bad));
+    for f in ids.iter().copied() {
+        assert_eq!(t.defs.load_export_of_file(&mut t.w, bad, f).unwrap_err(), stored);
+    }
+    let holder = t.get("GD_Brk.Holder2");
+    let good = t.object(holder, "Next");
+    assert!(t.defs.load_export_of_file(&mut t.w, good, ids[0]).is_err(), "the file's own copy fails");
+    assert!(t.defs.is_unloaded(&t.w, good) && !t.defs.is_failed(&t.w, good), "back to an unloaded handle");
+    t.defs.ensure_loaded(&mut t.w, good).unwrap();
+    assert_eq!(t.read(good, "ClipSize"), Value::Int(5), "the policy's copy loads");
 }
 
 #[test]
