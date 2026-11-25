@@ -21,7 +21,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_package::testkit::reflect::{toy_array_of, toy_struct};
+use ow_package::testkit::reflect::{ClassBodySpec, class_body, toy_array_of, toy_struct};
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT, CPF_PARM, CPF_RET, FunctionSpec, ScriptToy, function_payload};
 use ow_package::testkit::{Export, ints};
 use ow_vm::api::{NativeCall, NativePack, StubPolicy, Vm};
@@ -56,6 +56,26 @@ const NET_MODES: [&str; 5] = ["NM_Standalone", "NM_DedicatedServer", "NM_ListenS
 const SIMULATED: u8 = 1;
 const AUTONOMOUS: u8 = 2;
 const AUTHORITY: u8 = 3;
+
+/// How the record's declarations are built (lane IMPL-SET-REPLICATED-SMDATA, the note's test 7).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Variant {
+    Good,
+    /// `ReplicatedSMData` of another struct (same fields, declared in `SpecialMoveInterface`).
+    OtherStruct,
+    /// No `Duration` field.
+    MissingField,
+    /// `DirtyCounter` an int.
+    IntCounter,
+    /// `bNetDirty` an int.
+    IntNetDirty,
+    /// `SMD` an int.
+    SmdNotObject,
+    /// `PlayRateScale` an int.
+    RateNotFloat,
+    /// The definition class declares no `ServerStarted`.
+    NoServerStarted,
+}
 
 /// One declared parameter: kind (without `Property`), name, extra flags, the property's tail words.
 struct D<'a>(&'a str, &'a str, u64, Vec<i32>);
@@ -114,7 +134,7 @@ fn native(t: &mut ScriptToy, owner: i32, name: &str, declared: &[D<'_>], result:
 /// `IsAliveAndWell`, `IsFriendly` and two toy callbacks), `PawnAllegiance`, `WorldInfo`, `SkeletalMeshComponent`, the
 /// anim nodes, and `ToyLiftSkill`, whose script `GetPlayerAnimation(Target)` has the shape of the cast's choice:
 /// `if (Caster.IsFriendly(Target)) return Miss; if (Target.IsAliveAndWell()) return Hit; return Miss;`.
-fn engine() -> Vec<u8> {
+fn engine(variant: Variant) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let (friendly, alive) = (t.p.fname("IsFriendly", 0), t.p.fname("IsAliveAndWell", 0));
     let object = t.class("Object", 0);
@@ -122,6 +142,7 @@ fn engine() -> Vec<u8> {
     let roles = enumeration(&mut t, actor, "ENetRole", &ROLES);
     t.prop("Byte", actor, "Role", 0, roles);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
+    t.prop(if variant == Variant::IntNetDirty { "Int" } else { "Bool" }, actor, "bNetDirty", 0, 0);
     // Actor.Trace, which both binding sites bind in Off (lane IMPL-ACTOR-TRACE); no parameters are needed to tell
     // the shared function from the old refusal.
     native(&mut t, actor, "Trace", &[], Some(("Object", vec![actor])));
@@ -193,10 +214,11 @@ fn engine() -> Vec<u8> {
 
 /// `GearboxFramework`: `SpecialMoveInterface` with `SpecialMoveData`, `SpecialMoveComponent` with its natives,
 /// `SpecialMoveDefinition` with its natives and events, the toy moves, and `AnimNodeSpecialMoveBlend`.
-fn gearbox() -> Vec<u8> {
+fn gearbox(variant: Variant) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
+    let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
     let blend_base = t.p.add_import("Core", "Class", engine, "AnimNodeBlendBase");
     let actor = t.p.add_import("Core", "Class", engine, "Actor");
     let interface = t.class("SpecialMoveInterface", object);
@@ -258,14 +280,16 @@ fn gearbox() -> Vec<u8> {
     native(&mut t, definition, "GetSMDToPlay", &[smi()], Some(("Object", vec![definition])));
     native(&mut t, definition, "IsLocalAuthority", &[smi()], Some(("Bool", vec![0])));
     native(&mut t, definition, "AuthorityCanPlay", &[smi()], Some(("Bool", vec![0])));
-    native(&mut t, definition, "ServerStarted", &[smi()], None);
+    if variant != Variant::NoServerStarted {
+        native(&mut t, definition, "ServerStarted", &[smi()], None);
+    }
+    native(&mut t, definition, "ServerFinished", &[smi(), D("Bool", "bInterrupted", 0, vec![0])], None);
     native(&mut t, definition, "ClientStarted", &[smi(), D("Struct", "SMData", 0, vec![data])], Some(("Float", vec![0])));
     native(&mut t, definition, "ClientFinished", &[smi(), D("Bool", "bInterrupted", 0, vec![0])], None);
     let toy_move = t.class("ToyMove", definition);
     t.class("ToyOtherMove", definition);
     // Queue's residency tests (review r1 of #682): `ToyHolder`, loaded, whose `Move` and `Actor` name two exports the
     // store leaves as lazy handles, a `ToyMove` and an `Engine.Pawn`.
-    let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
     let bare = |t: &mut ScriptToy| {
         let mut payload = 0i32.to_le_bytes().to_vec();
         payload.extend_from_slice(&t.none);
@@ -288,6 +312,59 @@ fn gearbox() -> Vec<u8> {
     let payload = bare(&mut t);
     t.p.add_export(cold, "ToyColdMoveObject", payload);
     t.class("AnimNodeSpecialMoveBlend", blend_base);
+    // GearboxPawn and its replicated record (the note, section 1). `OtherStruct` declares the record with a struct of
+    // the same fields held by `SpecialMoveInterface` instead.
+    let gearbox_pawn = t.class("GearboxPawn", pawn);
+    let holder = if variant == Variant::OtherStruct { interface } else { gearbox_pawn };
+    let rep = toy_struct(&mut t, holder, "ReplicatedSpecialMoveData", None);
+    if variant == Variant::SmdNotObject {
+        t.prop("Int", rep, "SMD", 0, 0);
+    } else {
+        t.prop("Object", rep, "SMD", 0, definition);
+    }
+    t.prop("Object", rep, "Data", 0, object);
+    t.prop(if variant == Variant::RateNotFloat { "Int" } else { "Float" }, rep, "PlayRateScale", 0, 0);
+    if variant != Variant::MissingField {
+        t.prop("Float", rep, "Duration", 0, 0);
+    }
+    t.prop(if variant == Variant::IntCounter { "Int" } else { "Byte" }, rep, "DirtyCounter", 0, 0);
+    t.prop("Struct", gearbox_pawn, "ReplicatedSMData", 0, rep);
+    // A native class below GearboxPawn whose record was not read (the note's test 6).
+    t.class("ToyNativePawn", gearbox_pawn);
+    // A definition export and a pawn export the store leaves as handles, held by a holder export.
+    let holder = t.class("ToyMoveHolder", object);
+    t.prop("Object", holder, "Move", 0, definition);
+    t.prop("Object", holder, "Pawn", 0, gearbox_pawn);
+    let mut empty = ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let stored = t.p.add_export(toy_move, "ToyStoredMove", empty.clone());
+    let stored_pawn = t.p.add_export(gearbox_pawn, "ToyStoredPawn", empty);
+    let mut h = ints(&[0]);
+    h.extend(t.p.object_tag("Move", stored));
+    h.extend(t.p.object_tag("Pawn", stored_pawn));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "ToyMoveHolderObject", h);
+    t.build()
+}
+
+/// `WillowGame`: `WillowPawn`, `WillowPlayerPawn` and `WillowAIPawn` (each a native class: their toy bodies do not
+/// decode, which the native walk counts as native), and `ToyMayaPawn`, a script-only subclass of `WillowPlayerPawn`
+/// with a decodable, non-native class body (the note's test 1).
+fn willow() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&IMPORTS);
+    let gbx = t.p.add_import("Core", "Package", 0, "GearboxFramework");
+    let gearbox_pawn = t.p.add_import("Core", "Class", gbx, "GearboxPawn");
+    let willow_pawn = t.class("WillowPawn", gearbox_pawn);
+    let player = t.class("WillowPlayerPawn", willow_pawn);
+    t.class("WillowAIPawn", willow_pawn);
+    let at = t.p.next_export();
+    let body = class_body(&mut t.p, &ClassBodySpec { flags: 2, ..ClassBodySpec::new(player, 0, at + 1) });
+    let mut export = Export::new(0, "ToyMayaPawn", body);
+    export.super_ = player;
+    assert_eq!(t.p.add_export_with(export), at);
+    let mut default = ints(&[0]);
+    default.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(at, "Default__ToyMayaPawn", default));
     t.build()
 }
 
@@ -305,12 +382,20 @@ struct Script {
     demote: Option<ObjRef>,
     /// `ClientStarted` ends this component's current move itself.
     end_on_start: Option<ObjRef>,
+    /// Each event first records this pawn's replicated record as "rec(counter,smd,rate)" (lane
+    /// IMPL-SET-REPLICATED-SMDATA): the order of the record write against the server events.
+    spy: Option<ObjRef>,
+    /// Each event also records this component's current move as "cur(smd,rate)".
+    spy_component: Option<ObjRef>,
+    /// `ServerStarted` fails (an unbound native it reaches, say).
+    fail_server_start: bool,
 }
 
 /// The recorded events and callbacks: function path and what each answers.
-const EVENTS: [&str; 6] = [
+const EVENTS: [&str; 7] = [
     "GearboxFramework.SpecialMoveDefinition.AuthorityCanPlay",
     "GearboxFramework.SpecialMoveDefinition.ServerStarted",
+    "GearboxFramework.SpecialMoveDefinition.ServerFinished",
     "GearboxFramework.SpecialMoveDefinition.ClientStarted",
     "GearboxFramework.SpecialMoveDefinition.ClientFinished",
     "Engine.Pawn.ToyDone",
@@ -337,16 +422,21 @@ fn fx(mode: ParityMode) -> Fx {
 
 /// A world over the two packages in `mode` with `packs`, the toy events bound, and a placed `WorldInfo` at time 12.
 fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
+    fx_variant(mode, packs, Variant::Good)
+}
+
+/// [`fx_with`] over the record's declaration `variant`, with the `WillowGame` package.
+fn fx_variant(mode: ParityMode, packs: &[&dyn NativePack], variant: Variant) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-sm-play-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, g) = (engine(), gearbox());
+    let (e, g, w) = (engine(variant), gearbox(variant), willow());
     let defs = DefStore::from_synthetic(
         &dir,
-        &[("Engine.upk", e.as_slice()), ("GearboxFramework.upk", g.as_slice())],
+        &[("Engine.upk", e.as_slice()), ("GearboxFramework.upk", g.as_slice()), ("WillowGame.upk", w.as_slice())],
         IdentityPolicy::FirstInScanOrder,
         mode,
     )
@@ -366,7 +456,8 @@ fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
     let mut world = World::new(vm, BalanceState::new(snapshot), packs).unwrap();
     let script = Rc::new(RefCell::new(Script { can_play: true, duration: 2.5, ..Default::default() }));
     for path in EVENTS {
-        let f = world.vm.find_function(path).unwrap();
+        // The NoServerStarted variant declares no ServerStarted.
+        let Ok(f) = world.vm.find_function(path) else { continue };
         let key = world.vm.function(f).unwrap().native_key.clone().unwrap();
         let name = path.rsplit('.').next().unwrap();
         let s = script.clone();
@@ -384,10 +475,18 @@ fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
                             _ => "_".into(),
                         })
                         .collect();
-                    let (probe, demote, end) = {
+                    let (probe, demote, end, spy, spy_component) = {
                         let s = s.borrow();
-                        (s.probe, s.demote, s.end_on_start)
+                        (s.probe, s.demote, s.end_on_start, s.spy, s.spy_component)
                     };
+                    if let Some(pawn) = spy {
+                        let seen = record_text(c.vm, pawn);
+                        s.borrow_mut().calls.push(seen);
+                    }
+                    if let Some(component) = spy_component {
+                        let seen = current_text(c.vm, component);
+                        s.borrow_mut().calls.push(seen);
+                    }
                     if name == "AuthorityCanPlay"
                         && let Some(component) = probe
                     {
@@ -415,6 +514,9 @@ fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
                     match name {
                         "AuthorityCanPlay" => Ok(Value::Bool(s.can_play)),
                         "ClientStarted" if s.fail_start => Err(VmError::NotYet(ow_core::NotYet::not_read("a toy unbound native", "test"))),
+                        "ServerStarted" if s.fail_server_start => {
+                            Err(VmError::NotYet(ow_core::NotYet::not_read("a toy unbound native in OnServerStart", "test")))
+                        }
                         "ClientStarted" => Ok(Value::Float(s.duration)),
                         _ => Ok(Value::None),
                     }
@@ -465,6 +567,22 @@ impl Fx {
         self.set(component, "SMI", Value::Interface(Some(pawn)));
         self.set(component, "Owner", Value::Object(Some(pawn)));
         (pawn, component)
+    }
+
+    /// [`Fx::owner`] with a pawn of `class`.
+    fn owner_of(&mut self, class: &str, role: u8) -> (ObjRef, ObjRef) {
+        let pawn = self.obj(class);
+        self.set(pawn, "Role", Value::Byte(role));
+        let component = self.obj("GearboxFramework.SpecialMoveComponent");
+        self.set(component, "SMI", Value::Interface(Some(pawn)));
+        self.set(component, "Owner", Value::Object(Some(pawn)));
+        (pawn, component)
+    }
+
+    /// The pawn's record field `f`.
+    fn record(&mut self, pawn: ObjRef, f: &str) -> Value {
+        let rep = self.get(pawn, "ReplicatedSMData");
+        field(&self.world.vm, &rep, f, "test").unwrap()
     }
 
     fn definition(&mut self, class: &str, client_authority: bool) -> ObjRef {
@@ -729,9 +847,10 @@ fn play_refusals_change_nothing() {
         assert_eq!(x.calls(), Vec::<String>::new(), "no event ran");
         not_yet(r)
     };
+    // Lane IMPL-SET-REPLICATED-SMDATA: the authority's record of a pawn class whose record was not read.
     let (missing, text) = run(&mut x, AUTHORITY, None, vec![Value::Object(Some(d))]);
     assert_eq!(missing, Missing::NotRead, "{text}");
-    assert!(text.contains("replication"), "{text}");
+    assert!(text.contains("the replicated record of Engine.Pawn"), "{text}");
     let wi = x.world_info;
     x.set(wi, "NetMode", Value::Byte(3));
     let (missing, _) = run(&mut x, AUTONOMOUS, None, vec![Value::Object(Some(d))]);
@@ -1160,8 +1279,10 @@ fn queue_behind_a_current_move_appends_full_entries_in_order() {
     assert!(x.calls().is_empty(), "no event: {:?}", x.calls());
 }
 
-/// Test 6, the integration: nothing current, on the authority. Play's path runs, and its own refusal stands: the
-/// replication-record `NotRead`, no "stopped after partial writes" prefix, the queue unchanged.
+/// Test 6, the integration: nothing current, on the authority. Play's path runs, and its own refusal stands, with no
+/// "stopped after partial writes" prefix and the queue unchanged. Since lane IMPL-SET-REPLICATED-SMDATA, Play on the
+/// authority checks the replicated record, and the fixture's plain `Engine.Pawn` owner is a class whose record was not
+/// read: that `NotRead`.
 #[test]
 fn queue_with_nothing_current_on_the_authority_meets_play_s_refusal() {
     let mut x = fx(ParityMode::Off);
@@ -1174,8 +1295,9 @@ fn queue_with_nothing_current_on_the_authority_meets_play_s_refusal() {
     let args = x.six(d, pawn, pawn);
     let (missing, what) = queue_refused(&mut x, component, args);
     assert_eq!(missing, Missing::NotRead);
-    assert!(what.contains("the record the owner keeps of the current move for replication"), "{what}");
-    assert!(what.contains(RECORD), "Play's own record: {what}");
+    assert!(what.contains("the replicated record of Engine.Pawn"), "{what}");
+    assert!(!what.contains("stopped after partial writes"), "{what}");
+    assert!(what.contains(RECORD_REPLICATED), "Play's own record: {what}");
 }
 
 /// Test 6b, the delegation seam: the arguments Queue hands to Play's path are the five as given (an omitted one
@@ -1345,4 +1467,290 @@ fn queue_residency_comes_before_the_owner_and_forward_refusals() {
         assert!(what.starts_with(&format!("{QUEUE_NOT_LOADED}: ")), "{case}: {what}");
         assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy_move), "{case}: still unloaded");
     }
+}
+
+/// The spy's text for `pawn`'s record (lane IMPL-SET-REPLICATED-SMDATA): "rec(counter,smd,rate)".
+fn record_text(vm: &Vm, pawn: ObjRef) -> String {
+    let class = vm.space.heap.get(pawn).unwrap().class;
+    let p = vm.space.prop(class, "ReplicatedSMData").unwrap();
+    let rep = vm.space.read(pawn, PropAddr::scalar(p)).unwrap().clone();
+    let counter = match field(vm, &rep, "DirtyCounter", "test").unwrap() {
+        Value::Byte(b) => b,
+        other => panic!("{other:?}"),
+    };
+    let smd = match field(vm, &rep, "SMD", "test").unwrap() {
+        Value::Object(Some(_)) => "set",
+        _ => "none",
+    };
+    let rate = match field(vm, &rep, "PlayRateScale", "test").unwrap() {
+        Value::Float(r) => r,
+        other => panic!("{other:?}"),
+    };
+    format!("rec({counter},{smd},{rate})")
+}
+
+/// The note's test 1: a start on an exact-authority owner (a script-only subclass of `WillowPlayerPawn`) with nothing
+/// current: the record holds the request's `SMD`, `Data`, rate and duration, `DirtyCounter` 0 to 1, `bNetDirty` set;
+/// the order is the record, `ServerStarted`, then `ClientStarted`.
+#[test]
+fn a_start_on_the_authority_writes_the_record_before_server_started() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    let data = x.obj("Engine.PawnAllegiance");
+    x.script.borrow_mut().spy = Some(pawn);
+    let no_callback = x.name("None");
+    let args = vec![
+        Value::Object(Some(d)),
+        Value::Float(1.5),
+        Value::Float(4.0),
+        no_callback,
+        Value::Object(None),
+        Value::Object(Some(data)),
+    ];
+    assert_eq!(x.play(component, args).unwrap(), Value::Float(2.5));
+    assert_eq!(
+        x.calls(),
+        vec![
+            "rec(0,none,0)",
+            "AuthorityCanPlay on ToyMove(_)",
+            "rec(1,set,1.5)",
+            "ServerStarted on ToyMove(_)",
+            "rec(1,set,1.5)",
+            "ClientStarted on ToyMove(_,data)",
+        ]
+    );
+    assert_eq!(x.record(pawn, "SMD"), Value::Object(Some(d)));
+    assert_eq!(x.record(pawn, "Data"), Value::Object(Some(data)));
+    assert_eq!(x.record(pawn, "PlayRateScale"), Value::Float(1.5));
+    assert_eq!(x.record(pawn, "Duration"), Value::Float(4.0));
+    assert_eq!(x.record(pawn, "DirtyCounter"), Value::Byte(1));
+    assert_eq!(x.get(pawn, "bNetDirty"), Value::Bool(true));
+}
+
+/// The note's tests 2 and 4: a start over a running move steps `DirtyCounter` twice. The interrupting stop runs
+/// `ServerFinished` first, then its write holds `SMD` None and the old move's other fields (seen at `ClientFinished`);
+/// the start's write holds the new move. The component keeps the stopped move's fields with `SMD` None between them.
+#[test]
+fn a_start_over_a_running_move_steps_the_counter_twice() {
+    let mut x = fx(ParityMode::Off);
+    let (first, second) = (x.definition("GearboxFramework.ToyMove", false), x.definition("GearboxFramework.ToyOtherMove", false));
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    assert_eq!(x.play(component, vec![Value::Object(Some(first)), Value::Float(2.0)]).unwrap(), Value::Float(2.5));
+    x.script.borrow_mut().spy = Some(pawn);
+    x.clear_calls();
+    assert_eq!(x.play(component, vec![Value::Object(Some(second))]).unwrap(), Value::Float(2.5));
+    assert_eq!(
+        x.calls(),
+        vec![
+            "rec(1,set,2)",
+            "AuthorityCanPlay on ToyOtherMove(_)",
+            "rec(1,set,2)",
+            "ServerFinished on ToyMove(_,true)",
+            "rec(2,none,2)",
+            "ClientFinished on ToyMove(_,true)",
+            "rec(3,set,1)",
+            "ServerStarted on ToyOtherMove(_)",
+            "rec(3,set,1)",
+            "ClientStarted on ToyOtherMove(_,data)",
+        ]
+    );
+    assert_eq!(x.record(pawn, "SMD"), Value::Object(Some(second)));
+    assert_eq!(x.record(pawn, "DirtyCounter"), Value::Byte(3));
+}
+
+/// The note's test 4 on a stop of its own: a zero duration stops the new move, not interrupted: `ServerFinished(SMI,
+/// false)` before the write, which holds `SMD` None and the stopped move's rate and duration.
+#[test]
+fn a_stop_on_the_authority_writes_the_record_after_server_finished() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    x.script.borrow_mut().duration = 0.0;
+    x.script.borrow_mut().spy = Some(pawn);
+    x.script.borrow_mut().spy_component = Some(component);
+    assert_eq!(x.play(component, vec![Value::Object(Some(d)), Value::Float(0.5), Value::Float(3.0)]).unwrap(), Value::Float(0.0));
+    let calls = x.calls();
+    let at = calls.iter().position(|c| c == "ServerFinished on ToyMove(_,false)").expect("ServerFinished");
+    // During ServerFinished: the component's move has SMD None and keeps its rate; the record holds its old values.
+    assert_eq!(calls[at - 2], "rec(1,set,0.5)", "the start's write, not yet the stop's");
+    assert_eq!(calls[at - 1], "cur(none,0.5)", "only the SMD is cleared before the event");
+    // After it (seen at ClientFinished): the stop's write.
+    assert_eq!(calls[at + 1], "rec(2,none,0.5)", "the stop's write comes after ServerFinished");
+    assert_eq!(x.record(pawn, "SMD"), Value::Object(None));
+    assert_eq!((x.record(pawn, "PlayRateScale"), x.record(pawn, "Duration")), (Value::Float(0.5), Value::Float(3.0)));
+    assert_eq!(x.current(component, "SMD"), Value::Object(None));
+    assert_eq!(x.current(component, "Duration"), Value::Float(3.0), "only the SMD is cleared");
+}
+
+/// The note's test 3: `DirtyCounter` 255 wraps to 0 on one write.
+#[test]
+fn the_dirty_counter_wraps() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.WillowAIPawn", AUTHORITY);
+    let rep = x.get(pawn, "ReplicatedSMData");
+    let rep = with_field(&x.world.vm, rep, "DirtyCounter", Value::Byte(255), "test").unwrap();
+    x.set(pawn, "ReplicatedSMData", rep);
+    x.play(component, vec![Value::Object(Some(d))]).unwrap();
+    assert_eq!(x.record(pawn, "DirtyCounter"), Value::Byte(0));
+}
+
+/// The note's test 5, and the exact-authority test: an owner below `ROLE_Authority`, or at `ROLE_MAX` (which passes
+/// the at-least gate), gets no record write and no server event.
+#[test]
+fn below_or_above_exact_authority_no_record_is_written() {
+    for role in [AUTONOMOUS, AUTHORITY + 1] {
+        let mut x = fx(ParityMode::Off);
+        let d = x.definition("GearboxFramework.ToyMove", true);
+        let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", role);
+        let before = x.get(pawn, "ReplicatedSMData");
+        assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(2.5), "role {role}");
+        assert_eq!(x.get(pawn, "ReplicatedSMData"), before, "role {role}");
+        assert_eq!(x.get(pawn, "bNetDirty"), Value::Bool(false), "role {role}");
+        assert!(x.calls().iter().all(|c| !c.starts_with("Server")), "role {role}: {:?}", x.calls());
+    }
+}
+
+/// #518's three counters and the name table's length.
+fn counters(x: &Fx) -> (u64, u64, u64, usize) {
+    let vm = &x.world.vm;
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+/// A preflight refusal: the `NotYet` or error, with the counters, the name table, the component, the pawn's record
+/// and the event list unchanged.
+fn refused(x: &mut Fx, pawn: ObjRef, component: ObjRef, args: Vec<Value>) -> Result<Value, VmError> {
+    let before = (counters(x), x.state(component), x.get(pawn, "ReplicatedSMData"));
+    x.clear_calls();
+    let r = x.play(component, args);
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!((counters(x), x.state(component), x.get(pawn, "ReplicatedSMData")), before, "nothing changed: {r:?}");
+    assert!(x.calls().is_empty(), "no event: {:?}", x.calls());
+    r
+}
+
+/// The note's test 6: an owner whose first native class is not one of the four read is the class `NotRead`.
+#[test]
+fn an_unread_native_owner_class_is_not_read() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("GearboxFramework.ToyNativePawn", AUTHORITY);
+    let (missing, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.contains("the replicated record of GearboxFramework.ToyNativePawn"), "{text}");
+}
+
+/// The note's test 7: the record's declarations, each a script error naming the field, before any write.
+#[test]
+fn the_record_declarations_are_checked_before_any_write() {
+    for (variant, needle) in [
+        (Variant::OtherStruct, "struct of another type"),
+        (Variant::MissingField, "Duration"),
+        (Variant::IntCounter, "DirtyCounter"),
+        (Variant::IntNetDirty, "bNetDirty"),
+        (Variant::SmdNotObject, "SMD"),
+        (Variant::RateNotFloat, "PlayRateScale"),
+        (Variant::NoServerStarted, "declares no ServerStarted"),
+    ] {
+        let mut x = fx_variant(ParityMode::Off, &[&crate::action_skill::Pack], variant);
+        let d = x.definition("GearboxFramework.ToyMove", false);
+        let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+        match refused(&mut x, pawn, component, vec![Value::Object(Some(d))]) {
+            Err(VmError::Script { message, .. }) => assert!(message.contains(needle), "{variant:?}: {message}"),
+            other => panic!("{variant:?}: expected a script error, got {other:?}"),
+        }
+    }
+}
+
+/// The first reads (the hub's heads-up for #684): no `Owner`, or an `Owner` that is not the `SMI` actor, is a typed
+/// `NotRead`; a definition the store has not loaded is `NOT_LOADED` and stays unloaded; a definition whose class code
+/// is not loaded is `NotRead` and its code stays unloaded. Each writes and loads nothing.
+#[test]
+fn the_first_reads_are_loaded_only() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    x.set(component, "Owner", Value::Object(None));
+    let (_, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert!(text.contains(NO_OWNER), "{text}");
+    let (other, _) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    x.set(component, "Owner", Value::Object(Some(other)));
+    let (_, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert!(text.contains(OTHER_OWNER), "{text}");
+    x.set(component, "Owner", Value::Object(Some(pawn)));
+    // A lazy definition handle.
+    let path = ow_core::ObjectPath::parse("GearboxFramework.ToyMoveHolderObject").unwrap();
+    let vm = x.vm();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let lazy = match x.get(holder, "Move") {
+        Value::Object(Some(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy));
+    let (missing, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(lazy))]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.contains(NOT_LOADED), "{text}");
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy), "still unloaded");
+    // A lazy Owner (before the mismatch test), then a lazy SMI actor with a resident Owner (before the mismatch test).
+    let lazy_pawn = match x.get(holder, "Pawn") {
+        Value::Object(Some(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    x.set(component, "Owner", Value::Object(Some(lazy_pawn)));
+    let (_, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert!(text.contains(NOT_LOADED), "a lazy Owner: {text}");
+    x.set(component, "Owner", Value::Object(Some(pawn)));
+    x.set(component, "SMI", Value::Interface(Some(lazy_pawn)));
+    let (_, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(d))]));
+    assert!(text.contains(NOT_LOADED), "a lazy SMI actor: {text}");
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy_pawn), "still unloaded");
+    x.set(component, "SMI", Value::Interface(Some(pawn)));
+    x.set(component, "Owner", Value::Object(Some(pawn)));
+    // A definition whose class code is not loaded.
+    let cold = {
+        let vm = x.vm();
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, "GearboxFramework.ToyColdMove").unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        vm.space.alloc(c, "Cold_0", None, ow_object::heap::Origin::Runtime).unwrap()
+    };
+    let class = x.world.vm.space.heap.get(cold).unwrap().class;
+    assert!(!x.world.vm.class_code_loaded(class));
+    let (missing, text) = not_yet(refused(&mut x, pawn, component, vec![Value::Object(Some(cold))]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.contains("not loaded"), "{text}");
+    assert!(!x.world.vm.class_code_loaded(class), "its code is still not loaded");
+}
+
+/// The spy's text for `component`'s current move: "cur(smd,rate)".
+fn current_text(vm: &Vm, component: ObjRef) -> String {
+    let class = vm.space.heap.get(component).unwrap().class;
+    let p = vm.space.prop(class, "CurrentSMData").unwrap();
+    let cur = vm.space.read(component, PropAddr::scalar(p)).unwrap().clone();
+    let smd = match field(vm, &cur, "SMD", "test").unwrap() {
+        Value::Object(Some(_)) => "set",
+        _ => "none",
+    };
+    let rate = match field(vm, &cur, "PlayRateScale", "test").unwrap() {
+        Value::Float(r) => r,
+        other => panic!("{other:?}"),
+    };
+    format!("cur({smd},{rate})")
+}
+
+/// The note's test 5b: a `ServerStarted` that reaches an unbound native after the commit is terminal, "stopped after
+/// partial writes", and the record and `CurrentSMData` keep what the commit wrote.
+#[test]
+fn a_server_started_failure_after_the_commit_is_terminal() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", false);
+    let (pawn, component) = x.owner_of("WillowGame.ToyMayaPawn", AUTHORITY);
+    x.script.borrow_mut().fail_server_start = true;
+    let (missing, text) = not_yet(x.play(component, vec![Value::Object(Some(d)), Value::Float(1.5)]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.starts_with("stopped after partial writes: a toy unbound native in OnServerStart"), "{text}");
+    assert_eq!((x.record(pawn, "SMD"), x.record(pawn, "DirtyCounter")), (Value::Object(Some(d)), Value::Byte(1)));
+    assert_eq!(x.current(component, "SMD"), Value::Object(Some(d)));
+    assert!(x.calls().iter().all(|c| !c.starts_with("ClientStarted")), "{:?}", x.calls());
 }

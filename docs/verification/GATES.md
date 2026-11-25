@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SET-REPLICATED-SMDATA (2026-11-25, zuhu desktop (Linux), on fix/rust-set-replicated-smdata from main
+03896e5):** AI-assisted (Claude Code, Opus 5.5). `SpecialMoveComponent.Play` in Off writes the owner's replicated
+record (`SetReplicatedSMData`) on an exact-authority `Owner`, at the start and after the stop's `ServerFinished`, from
+NATIVE_SET_REPLICATED_SMDATA.md (#684 at fa346d2); its first reads and method checks are loaded-only. `cargo test
+--workspace -j 4`: 3,411 passed / 4 failed (the expected N1 float-oracle failures on Linux) / 52 ignored;
+`crate_edges_test.py` OK. Slice gate: not run (no install on this PC); link 9 stops before this today (the runner:
+`Actor.SetPhysics` after `Queue`). No real-game run; UNVERIFIED in game.
+
 **GAMEINFO-COLLIDER-CODE-LOAD (2026-11-25, zuhuPC Linux, on #685 bd8f3934 over main 03896e5):** AI-assisted (Claude
 Code, Opus 5.5). The game info's refusal after its class lookup loaded class code is marked (the routine's marking
 counts code loads). `cargo test --workspace`: 3,405 passed / 4 failed (the expected Linux N1 tests) / 53 ignored
