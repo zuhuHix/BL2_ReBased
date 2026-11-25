@@ -134,8 +134,8 @@ pub trait SkeletonSource {
     }
 
     /// Each LOD model's trailing count, one entry per LOD, of export `index` of `package`, when the source reads the
-    /// LOD models from the package itself (lane SKELMESH-LOD-LAYER). The trailing count is the one LOD-model field
-    /// whose meaning is not identified (fitted, UNVERIFIED). The default, `Ok(None)`, is "not read". Reads only.
+    /// LOD models from the package itself (lane SKELMESH-LOD-LAYER). The trailing count is an unidentified LOD-model
+    /// field (fitted, UNVERIFIED). The default, `Ok(None)`, is "not read". Reads only.
     fn lod_trailing_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<Vec<usize>>, String> {
         let _ = (package, index);
         Ok(None)
@@ -707,49 +707,62 @@ fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     [x, y, z]
 }
 
+/// The package export `o` came from, by its validated origin (review r1 of #673, item 4): the store's package index,
+/// the export index and the object path. `None` for an object with no export origin, or one whose entry or path the
+/// package cannot give. Unlike [`identity`], no flat-name guard: an in-package read is keyed by export index, so two
+/// meshes of one name in different groups stay apart.
+fn export_of(vm: &Vm, o: ObjRef) -> Result<Option<(u32, i32, String)>, VmError> {
+    let (Origin::Export { package, index } | Origin::Resource { package, index }) = vm.space.heap.get(o)?.origin else {
+        return Ok(None);
+    };
+    let pkg = vm.defs.packages().get(package);
+    if pkg.object(index).is_err() {
+        return Ok(None);
+    }
+    Ok(ow_defs::identity::full_path(pkg, index).ok().map(|path| (package, index, path)))
+}
+
 /// `mesh`'s LOD model count, when the layer can give one (lane IMPL-SKELMESH-MESH-CHANGE): `Ok(None)` with no source
-/// installed, for an object the layer cannot place in a package export, or when the source does not know. Reads only;
-/// a source's parse failure is `VmError::Script`. `mesh` must be a resident `SkeletalMesh` ([`check_mesh`]).
+/// installed, for an object the layer cannot place in a package export, or when the source does not know. The
+/// in-package answer is asked first, by the mesh's export origin; only the name-based fallback goes through
+/// [`identity`] and its flat-name guard. Reads only; a source's parse failure is `VmError::Script`. `mesh` must be a
+/// resident `SkeletalMesh` ([`check_mesh`]).
 pub fn lod_count(vm: &Vm, mesh: ObjRef) -> Result<Option<usize>, VmError> {
     check_mesh(vm, mesh)?;
     let Some(cell) = vm.service::<SkeletalMeshes>() else {
         return Ok(None);
     };
+    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
+    if let Some((at, index, path)) = export_of(vm, mesh)? {
+        let pkg = vm.defs.packages().get(at);
+        let read = layer.source.lod_count_in(pkg, index);
+        if let Some(n) = read.map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))? {
+            return Ok(Some(n));
+        }
+    }
     let (package, path, leaf) = match identity(vm, mesh) {
         Ok(id) => id,
         Err(VmError::NotYet(_)) => return Ok(None),
         Err(e) => return Err(e),
     };
-    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
-    // The store's own package first (lane SKELMESH-LOD-LAYER): `identity` placed the mesh in an export.
-    if let Origin::Export { package: at, index } | Origin::Resource { package: at, index } = vm.space.heap.get(mesh)?.origin {
-        let pkg = vm.defs.packages().get(at);
-        if let Some(n) = layer.source.lod_count_in(pkg, index).map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))? {
-            return Ok(Some(n));
-        }
-    }
     let read = layer.source.lod_count(&package, &path, &leaf);
     read.map_err(|e| script(format!("the LOD count of {path} failed to parse: {e}")))
 }
 
 /// `mesh`'s LOD models' trailing counts, one per LOD (lane SKELMESH-LOD-LAYER; the source's
 /// [`SkeletonSource::lod_trailing_in`], fitted and UNVERIFIED): `Ok(None)` with no source installed, for an object
-/// the layer cannot place in a package export, or when the source does not read the LOD models. Reads only; a
-/// source's parse failure is `VmError::Script`. `mesh` must be a resident `SkeletalMesh` ([`check_mesh`]).
+/// the layer cannot place in a package export ([`export_of`]), or when the source does not read the LOD models.
+/// Reads only; a source's parse failure is `VmError::Script`. `mesh` must be a resident `SkeletalMesh`
+/// ([`check_mesh`]).
 pub fn lod_trailing_counts(vm: &Vm, mesh: ObjRef) -> Result<Option<Vec<usize>>, VmError> {
     check_mesh(vm, mesh)?;
     let Some(cell) = vm.service::<SkeletalMeshes>() else {
         return Ok(None);
     };
-    let path = match identity(vm, mesh) {
-        Ok((_, path, _)) => path,
-        Err(VmError::NotYet(_)) => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
-    let (Origin::Export { package: at, index } | Origin::Resource { package: at, index }) = vm.space.heap.get(mesh)?.origin else {
+    let Some((at, index, path)) = export_of(vm, mesh)? else {
         return Ok(None);
     };
+    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
     let pkg = vm.defs.packages().get(at);
     layer.source.lod_trailing_in(pkg, index).map_err(|e| script(format!("the LOD models of {path} failed to parse: {e}")))
 }
