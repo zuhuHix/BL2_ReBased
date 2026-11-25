@@ -1,7 +1,7 @@
 ## 2026-11-25: A class code load marks a refusal "stopped after partial writes"
 
-AI-assisted (Claude Code, Opus 5.5). Lane RUNTIME-MARK-CODE-LOADS, stacked on #692 (decision 2026-11-25-26). The file
-number is a placeholder until the landing run numbers it. A rule decision, the hub's ruling 0b, **which the
+AI-assisted (Claude Code, Opus 5.5). Lane RUNTIME-MARK-CODE-LOADS, stacked on #692 (decision 2026-11-25-26).
+A rule decision, the hub's ruling 0b, **which the
 maintainer may overturn**. Synthetic fixtures only.
 
 - **The rule:** a load is a write, so a class code load (`Vm::class_code_loads`, decision 2026-11-25-20) now counts
