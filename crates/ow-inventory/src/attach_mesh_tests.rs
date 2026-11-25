@@ -156,6 +156,17 @@ fn engine() -> Vec<u8> {
     t.function(mesh, "SetForceRefPose", &[Param::new("Bool", "bNewForceRefPose")], None, &[], &FunctionSpec::new(NATIVE, "SetForceRefPose"), |_| None);
     let bone = [Param::new("Name", "BoneName"), Param::new("Byte", "PhysBodyOption")];
     t.function(mesh, "HideBoneByName", &bone, None, &[], &FunctionSpec::new(NATIVE, "HideBoneByName"), |_| None);
+    // A store handle owner (review of #714, LOW 2): a holder whose `Owner` is an `Actor` export the store leaves
+    // unloaded until asked.
+    let holder = t.class("ToyOwnerHolder", object);
+    t.prop("Object", holder, "Owner", 0, object);
+    let mut d = 0i32.to_le_bytes().to_vec();
+    d.extend_from_slice(&t.none);
+    let lazy = t.p.add_export(actor, "Owner_Lazy", d);
+    let mut h = 0i32.to_le_bytes().to_vec();
+    h.extend(t.p.object_tag("Owner", lazy));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "OwnerHolder", h);
     t.build()
 }
 
@@ -728,8 +739,9 @@ fn the_scene_refusal_comes_before_the_destination_checks() {
 
 /// NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.2, tests 1, 4 and 5 (lane IMPL-DEFERRED-REATTACH-OWNER). With an
 /// ordinary owner, `SetOwnerNoSee(true)` writes `bOwnerNoSee` and `bNeedsReattach` on the component only: the owner and
-/// its other components are unchanged. An owner the store holds as a stand-in with no slots is the "not loaded"
-/// `NotRead`, nothing written. An owner that declares `bStatic` as an int, or not at all, is a data error naming it.
+/// its other components are unchanged. An owner the store holds as a stand-in with no slots, or as a store handle not
+/// loaded, is the "not loaded" `NotRead`: nothing written, drawn, loaded or interned. An owner that declares `bStatic`
+/// as an int, or not at all, is a data error naming it.
 #[test]
 fn the_owner_rule_touches_only_the_component_and_checks_the_owner_first() {
     let mut x = fx(ParityMode::Off, true);
@@ -738,6 +750,8 @@ fn the_owner_rule_touches_only_the_component_and_checks_the_owner_first() {
     let mesh = x.obj("Engine.SkeletalMeshComponent");
     x.set(mesh, "Owner", Value::Object(Some(owner)));
     x.set(other, "Owner", Value::Object(Some(owner)));
+    // The other component is in the owner's Components, so "unchanged" covers the list too (review of #714, LOW 3).
+    x.set(owner, "Components", Value::array(vec![Value::Object(Some(other))]));
     let owner_slots = x.vm.space.heap.get(owner).unwrap().slots.clone();
     let other_before = x.written(other);
     x.call(NO_SEE, mesh, vec![Value::Bool(true)]).unwrap();
@@ -752,6 +766,22 @@ fn the_owner_rule_touches_only_the_component_and_checks_the_owner_first() {
     let before = x.written(mesh);
     unmarked(&not_yet(x.call(NO_SEE, mesh, vec![Value::Bool(true)])), Missing::NotRead, REATTACH_OWNER_NOT_LOADED);
     assert_eq!(x.written(mesh), before, "nothing written");
+
+    // A store handle owner (review of #714, LOW 2): the rule's is_unloaded branch, with #518's counters unchanged.
+    let path = ow_core::ObjectPath::parse("Engine.OwnerHolder").unwrap();
+    let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
+    let Value::Object(Some(lazy)) = x.get(holder, "Owner") else { panic!("the holder's Owner") };
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "a store handle, not loaded");
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(mesh, "Owner", Value::Object(Some(lazy)));
+    let counters = |x: &Fx| {
+        let space = &x.vm.space;
+        (space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions() + x.vm.class_code_loads(), space.names.len())
+    };
+    let before = (x.written(mesh), counters(&x));
+    unmarked(&not_yet(x.call(NO_SEE, mesh, vec![Value::Bool(true)])), Missing::NotRead, REATTACH_OWNER_NOT_LOADED);
+    assert_eq!((x.written(mesh), counters(&x)), before, "nothing written, drawn, loaded or interned");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the owner is still not loaded");
 
     for (owner_class, field) in [("Engine.OddOwnerActor", "bStatic"), ("Engine.BadActor", "bStatic")] {
         let owner = x.obj(owner_class);
