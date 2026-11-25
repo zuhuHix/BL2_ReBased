@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SETMATERIAL-AND-GLOW (2026-11-25, pc-hummer, on fix/rust-link8-startup-material b257456f):** AI-assisted
+(Claude Code, Opus 5.5). `MeshComponent.SetMaterial` and `MaterialInterface.GetScalarParameterValue` in Off, from
+NATIVE_INITMESHES_MATERIAL_GLOW.md section 4. `cargo test --workspace -j 8` 3,581 passed / 0 failed / 61 ignored;
+`crate_edges_test.py` 19 OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 5 ok / 8
+NotYet / 1 error, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`. Link 8 is 1 of 5 at `init`, past `SetMaterial`
+and the glow read, an error at the unbound `ParticleSystemComponent.SetColorParameter(name,color)`. No real-game run.
+
 **LINK-8-STARTUP-MATERIAL-PRELOAD (2026-11-25, pc-hummer, on main b744f9f, after review r1 of #712):** AI-assisted
 (Claude Code, Opus 5.5). Link 8's set-up preloads the Material part's material only when it is a Startup export
 (`Mati_BanditCommonAR`, Startup export 23880, read 2026-11-25), then the material classes' code and a family

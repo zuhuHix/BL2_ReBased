@@ -431,13 +431,15 @@ impl NativePack for Pack {
 }
 
 /// The pack's equip natives bound by their keys alone (no package lookup), in the pack's order: the slots, the
-/// internal slots and `StaticGetWeaponDamageType` (review r1 of #582, item 2: one step a test can run as the pack
+/// internal slots, `StaticGetWeaponDamageType`, `BuildWeaponMaterial`, then `SetMaterial` and
+/// `GetScalarParameterValue` (review r1 of #582, item 2: one step a test can run as the pack
 /// does).
 pub(crate) fn register_equip_keys(vm: &mut Vm) -> Result<(), VmError> {
     crate::equip::slots::register(vm)?;
     crate::equip::internal_slots::register(vm)?;
     crate::equip::damage_type::register(vm)?;
-    crate::equip::weapon_material::register(vm)
+    crate::equip::weapon_material::register(vm)?;
+    crate::equip::material_natives::register(vm)
 }
 
 #[cfg(test)]
