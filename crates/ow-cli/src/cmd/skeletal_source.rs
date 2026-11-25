@@ -88,7 +88,21 @@ impl SkeletonSource for PskExports {
             None => Ok(None),
         }
     }
+
+    /// The LOD model count from the mesh export's own native prefix (lane SKELMESH-LOD-LAYER,
+    /// `ow_assets::skeletal_lods`: the project's reader of the player's own packages, a fitted layout checked by
+    /// structural oracles, UNVERIFIED). Not a UModel export: the count needs no `.psk`.
+    fn lod_count_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<usize>, String> {
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        ow_assets::skeletal_lods::read_lod_count(package, index, EXPORT_PROPERTY_OFFSET, &typer)
+            .map(|l| Some(l.lod_count))
+            .map_err(|e| e.to_string())
+    }
 }
+
+/// Where an export's tagged properties start in its payload (after the 4-byte net index), as the asset commands pass
+/// it to the readers.
+pub const EXPORT_PROPERTY_OFFSET: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -143,6 +157,38 @@ mod tests {
         println!("PROBE after the harness load: sockets={} on a skeleton bone={}", after.len(), on_bones);
         assert!(!after.is_empty());
         assert_eq!(on_bones, after.len(), "every socket names a bone of the skeleton");
+    }
+
+    /// The installed LOD-count census (needs the game, so ignored): `OPENWILLOW_BL2` the install, `OW_LOD_PACKAGES` a
+    /// `;`-separated list of file packages. Every `SkeletalMesh` export is read with the fitted prefix and its checks;
+    /// counts only are printed (lane SKELMESH-LOD-LAYER's structural oracle, decision 2026-11-19-NNN).
+    #[test]
+    #[ignore = "needs the installed game"]
+    fn installed_lod_count_census() {
+        let (Some(game), Ok(list)) = (std::env::var_os("OPENWILLOW_BL2"), std::env::var("OW_LOD_PACKAGES")) else {
+            panic!("set OPENWILLOW_BL2 and OW_LOD_PACKAGES");
+        };
+        let cooked = PathBuf::from(game).join("WillowGame").join("CookedPCConsole");
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        for name in list.split(';').filter(|n| !n.is_empty()) {
+            let pkg = ow_package::package::Package::load(&cooked.join(name)).unwrap();
+            let mut by_count = std::collections::BTreeMap::new();
+            let mut refused = 0;
+            for i in 1..=pkg.exports.len() as i32 {
+                let class = pkg.object(i).ok().filter(|o| o.class != 0).and_then(|o| pkg.object(o.class).ok()).map(|c| c.name.clone());
+                if class.as_deref() != Some("SkeletalMesh") {
+                    continue;
+                }
+                match ow_assets::skeletal_lods::read_lod_count(&pkg, i, EXPORT_PROPERTY_OFFSET, &typer) {
+                    Ok(l) => *by_count.entry(l.lod_count).or_insert(0) += 1,
+                    Err(e) => {
+                        refused += 1;
+                        println!("CENSUS {name} refused: {e}");
+                    }
+                }
+            }
+            println!("CENSUS {name}: read {by_count:?} (LOD count: meshes), refused {refused}");
+        }
     }
 
     fn temp(name: &str) -> PathBuf {
