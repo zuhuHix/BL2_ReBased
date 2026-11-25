@@ -142,3 +142,20 @@ fn a_world_with_no_world_info_is_an_error() {
 fn the_harness_line_has_single_spaces() {
     assert!(!GAME_INFO_INPUT.contains("  "), "{GAME_INFO_INPUT}");
 }
+
+/// Review r1 of #710: the pickup world itself (`pickup_world`, built from the installed packages, so ignored) has its
+/// game info: `WorldInfo.Game` is a `WillowGameInfo` and the harness line is logged once. Deleting the call in
+/// `pickup_world` fails this test, which the direct tests above cannot catch. `OPENWILLOW_BL2` names the install.
+#[test]
+#[ignore = "needs the installed game"]
+fn the_installed_pickup_world_has_its_game_info() {
+    let game = std::env::var_os("OPENWILLOW_BL2").expect("set OPENWILLOW_BL2");
+    let cooked = PathBuf::from(game).join("WillowGame").join("CookedPCConsole");
+    let (world, _) = pickup_world(&cooked).unwrap();
+    let wi = world.actors().try_borrow().unwrap().world_info().expect("the pickup world's WorldInfo");
+    let Value::Object(Some(game)) = get(&world.vm, wi, "Game") else {
+        panic!("the pickup world's WorldInfo.Game is set")
+    };
+    assert_eq!(ow_attr::eval::class_path(&world.vm.space, game), GAME_INFO_CLASS);
+    assert_eq!(world.vm.log.iter().filter(|l| l.as_str() == GAME_INFO_INPUT).count(), 1);
+}

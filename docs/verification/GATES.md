@@ -6,9 +6,10 @@ Update this file in the commit that changes a number. Paste real output in repor
 AI-assisted (Claude Code, Opus 5.5). The pickup world gets a class-default `WillowGameInfo` stand-in for
 `WorldInfo.Game`, so `ValidTouch`'s `PickupQuery` runs instead of reading through None.
 - `cargo test --workspace -j 8 --no-fail-fast`: 3,494 passed / 0 failed / 55 ignored. `crate_edges_test.py`: 19 OK.
-- Installed Off `--slice-gate` strict (release build, under the machine lock): 5 ok / 8 NotYet / 1 error. Every row
-  is as on main: links 6 and 7 stop at `GetBoundingCylinder`'s skeletal bounds, before `PickupQuery`. Their harness
-  lines now list the game info.
+- Installed Off `--slice-gate` strict (release build, under the machine lock, on main 5168bb63 with this change): 5 ok
+  / 8 NotYet / 1 error, main 5168bb63's own reading (this change moves no row). Links 6 and 7 stop at
+  `GetBoundingCylinder`'s skeletal bounds, before `PickupQuery`, and their harness lines now list the game info. Current
+  main reads 5 ok / 9 NotYet / 0 errors (row SLICE-GATE-READING), and links 6 and 7 stop at the same place there.
 - A throwaway local stack with #707's first version (the box answered): link 6 stops at the unbound
   `WillowInventory.GetInventorySpaceRequirement()`, the next lane.
 

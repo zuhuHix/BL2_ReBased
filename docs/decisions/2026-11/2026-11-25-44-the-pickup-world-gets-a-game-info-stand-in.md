@@ -20,9 +20,10 @@ finding (recorded in decision 2026-11-25-41).
   game's. `GameInfo.PickupQuery` and what it calls are the installed script, run by the VM; nothing is bound or
   stubbed.
 - **The slice gate** (installed Off strict, under the machine lock, on main 5168bb63 with this change): 5 ok / 8
-  NotYet / 1 error. Every row is as it is on main: links 6 and 7 still stop in `touch` at `GetBoundingCylinder`'s
-  skeletal bounds, which come before `ValidTouch`'s `PickupQuery`. The change shows in the gate only once a link gets
-  past that box.
+  NotYet / 1 error. That is main 5168bb63's own reading; this change moves no row. Links 6 and 7 still stop in `touch`
+  at `GetBoundingCylinder`'s skeletal bounds, which come before `ValidTouch`'s `PickupQuery`. Current main reads 5 ok /
+  9 NotYet / 0 errors (GATES row SLICE-GATE-READING), and links 6 and 7 stop at the same place there. The change shows
+  in the gate only once a link gets past that box.
 - **Where link 6 goes next** (a throwaway local stack, never pushed: this change on #707's first version, whose box
   for the pickup's skeletal component was answered): link 6 runs `make` and `touch` and stops at the unbound native
   `WillowInventory.GetInventorySpaceRequirement()`. That is the inventory manager's `HandlePickupQuery`, behind
