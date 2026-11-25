@@ -15,7 +15,7 @@ pawn's streaming package file, and a reference followed from that file loads its
     5, 13 and 14 report the same. Every other row is unchanged.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/filecopy/`, `local/p2/bodywalk/` and
-`local/p2/bodywalk-base/`. Decision 2026-11-25-NNN.
+`local/p2/bodywalk-base/`. Decision 2026-11-25-62.
 
 **IMPL-WEAPON-ONCREATE (2026-11-25, pc-hummer, on fix/rust-psc-setcolorparameter d3c22f85):** AI-assisted (Claude
 Code, Opus 5.5). `WillowWeapon.OnCreate` in Off, from NATIVE_WEAPON_ON_CREATE.md section 4, sharing the broadcast's
