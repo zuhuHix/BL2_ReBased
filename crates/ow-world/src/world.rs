@@ -544,6 +544,9 @@ impl NativePack for Pack {
             // BodyClassDefinition.GetWeaponHoldDef (NATIVE_GET_WEAPON_HOLD_DEF.md, UNVERIFIED; lane
             // IMPL-GETWEAPONHOLDDEF): a pure read of the body class's weapon holds; keep-existing by key, Off only.
             weapon_hold::register(vm)?;
+            // AnimNodeAimOffset.SetActiveProfileByName / ByIndex (NATIVE_AIMOFFSET_SET_PROFILE.md, UNVERIFIED; lane
+            // IMPL-AIMOFFSET-SET-PROFILE): the profile switch; keep-existing by key, Off only.
+            aim_offset::register(vm)?;
         }
         Ok(())
     }
@@ -652,6 +655,7 @@ pub mod online;
 
 /// `UpdateURL`, `SaveConfig` and `UpdateInputContext` after the login check (lane IMPL-LINK1-AFTER-LOGIN).
 pub mod after_login;
+pub mod aim_offset;
 
 /// `SkeletalMeshComponent.SetSkeletalMesh` (lane IMPL-SET-SKELETAL-MESH, NATIVE_SET_SKELETAL_MESH.md).
 pub mod skeletal_mesh;
