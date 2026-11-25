@@ -21,8 +21,10 @@
 //! 4. **Source a** (not visible, or `bComponentUseFixedSkelBounds`): no `SkeletalMesh` is [`HIDDEN_NO_MESH`]'s
 //!    `NotRead`; otherwise the mesh's stored bounds ([`stored_box`]).
 //! 5. **Source b** (a `ParentAnimComponent` with a `SkeletalMesh` and its own `bComponentUseFixedSkelBounds`): the
-//!    parent mesh's stored bounds through the accessor. While it answers none, the stored-bounds `LayerAbsent`. Once
-//!    it answers, [`PARENT_ROOT`]'s `NotRead`: the note did not check whether the root offset is added on this source.
+//!    parent mesh's stored bounds through the accessor (the parent's flag is read before its mesh is required
+//!    resident). While it answers none, the stored-bounds `LayerAbsent`. Once it answers, the world transform's
+//!    `NotRead` unless the transform is the simplest one (below), and then [`PARENT_ROOT`]'s `NotRead`: the note did
+//!    not check whether the root offset is added on this source.
 //! 6. **Sources c and d**, each asked only when its object is there:
 //!    - **c**, the component's own `PhysicsAsset` with `bHasValidBodies` set and "can use the bones": the bodies'
 //!      `LayerAbsent` ([`BODIES_LAYER`]), its text naming the bone transforms' layer too;
@@ -34,8 +36,8 @@
 //!    `SpaceBases` as long as the mesh's bone count or a parent with a `PhysicsAsset`. With `SpaceBases` empty the
 //!    count half is false. With it not empty, the bone count comes from the accessor; while that answers none, the
 //!    stored-bounds `LayerAbsent`.
-//! 7. **Source e** (no `SkeletalMesh`): the base rule, origin 0 and a half extent of 262144 on each axis, with no
-//!    `BoundsScale` and no transform. Answered.
+//! 7. **Source e** (no `SkeletalMesh`): the game's base rule (origin 0, a half extent of 262144) is **not answered**:
+//!    `NotYet { NotRead }` ([`TEMPLATE`]), by the hub's revised ruling on the template gap (below).
 //! 8. **Source f**: the mesh's stored bounds ([`stored_box`]).
 //!
 //! **The stored box** ([`stored_box`], sources a and f): the accessor ([`crate::world::skeletal::mesh_bounds`]); while
@@ -47,10 +49,10 @@
 //! per-poly collision bones (`PerPolyCollisionBones`) is [`PER_BONE`]'s `NotRead`: the per-bone step is not read.
 //!
 //! **The template gap** (note section 9.5): the port's `new` ignores a component's template, so the slice's pickup
-//! component holds class defaults and no mesh, and takes source e. The note asks the hub to rule between keeping
-//! step 7 as written (option A) and refusing a component made from a template that holds a mesh (option B, which
-//! needs the port to record a `new` component's template). The port records no template, so this lane codes option
-//! A; the slice answer that follows from it is the game's rule on a non-game input, UNVERIFIED.
+//! component holds class defaults and no mesh. The note recommends refusing a component made from a template that
+//! holds a mesh (option B), which needs the port to record a `new` component's template; it does not. The hub's
+//! revised ruling (review r1 of #707): a component with no mesh is not answered at all, since in the port that is
+//! always the class-default input the game never has. Source e is [`TEMPLATE`]'s `NotRead`.
 
 use ow_core::NotYet;
 use ow_object::ids::ObjRef;
@@ -85,8 +87,10 @@ pub const BODIES_LAYER: &str = "a physics asset's bodies";
 pub const PARENT_BOUNDS: &str = "Actor.GetBoundingCylinder: a parent anim component's stored bounds";
 /// The per-bone collision boxes of a mesh that lists per-poly collision bones, with a non-empty `SpaceBases`.
 pub const PER_BONE: &str = "Actor.GetBoundingCylinder: a skeletal mesh's per-bone collision boxes";
-/// The base rule's half extent on each axis.
-pub const UNBOUNDED: f32 = 262_144.0;
+/// Source e, a component with no mesh: the game's base rule would apply, but in the port such a component holds class
+/// defaults only (its template is ignored by `new`), an input the game never has. Refused (the hub's revised ruling
+/// on note section 9.5, review r1 of #707).
+pub const TEMPLATE: &str = "Actor.GetBoundingCylinder: the component's template (option B) is not read";
 /// The largest difference between two axes of a combined scale that still counts as uniform.
 const UNIFORM: f32 = 0.0001;
 
@@ -124,14 +128,19 @@ pub fn skeletal_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32
         };
         return stored_box(vm, owner, c, mesh);
     }
-    // 5. Source b.
+    // 5. Source b: the parent's flag first, so the parent's mesh must be resident only when this source applies
+    // (review r1 of #707).
     let parent = resident_object(vm, c, "ParentAnimComponent")?;
     if let Some(p) = parent
-        && let Some(parent_mesh) = resident_object(vm, p, "SkeletalMesh")?
         && flag(space, p, "bComponentUseFixedSkelBounds")?
+        && let Some(parent_mesh) = resident_object(vm, p, "SkeletalMesh")?
     {
         if crate::world::skeletal::mesh_bounds(vm, parent_mesh)?.is_none() {
             return Err(NotYet::layer_absent(SKELETAL_BOUNDS, STORED_LAYER, BOUNDS_RECORD).into());
+        }
+        // The root offset question arises only where the box would be answered: in the simplest world transform.
+        if !simple_transform(vm, owner, c)? {
+            return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
         }
         return Err(NotYet::not_read(PARENT_ROOT, BOUNDS_RECORD).into());
     }
@@ -152,11 +161,30 @@ pub fn skeletal_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32
         }
         return Err(NotYet::layer_absent(BODIES, BODIES_LAYER, BOUNDS_RECORD).into());
     }
-    // 7. Source e, and 8. source f.
+    // 7. Source e: refused (the hub's revised ruling on 9.5, review r1 of #707), and 8. source f.
     match mesh {
-        None => Ok(([0.0; 3], [UNBOUNDED; 3])),
+        None => Err(NotYet::not_read(TEMPLATE, BOUNDS_RECORD).into()),
         Some(mesh) => stored_box(vm, owner, c, mesh),
     }
+}
+
+/// The simplest world transform the stored box answers (module documentation, "The stored box"): zero `Translation`,
+/// none of the three Absolute flags, `owner` as the component's `Owner`, zero component and owner `Rotation`, and a
+/// combined scale of exactly 1.
+fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<bool, VmError> {
+    let space = &vm.space;
+    let component_owner = object(space, c, "Owner")?;
+    let translation = vector(space, c, &field(space, c, "Translation")?, "Translation")?;
+    let mut absolute = false;
+    for name in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+        absolute |= flag(space, c, name)?;
+    }
+    Ok(translation == [0.0; 3]
+        && !absolute
+        && component_owner == Some(owner)
+        && rotation_zero(vm, c)?
+        && rotation_zero(vm, owner)?
+        && combined_scale(vm, c, component_owner)? == [1.0; 3])
 }
 
 /// Step 6's "can use the bones" (module documentation).
@@ -194,19 +222,7 @@ fn stored_box(vm: &Vm, owner: ObjRef, c: ObjRef, mesh: ObjRef) -> Result<([f32; 
     let Some(bounds) = crate::world::skeletal::mesh_bounds(vm, mesh)? else {
         return Err(NotYet::layer_absent(SKELETAL_BOUNDS, STORED_LAYER, BOUNDS_RECORD).into());
     };
-    let component_owner = object(space, c, "Owner")?;
-    let translation = vector(space, c, &field(space, c, "Translation")?, "Translation")?;
-    let mut absolute = false;
-    for name in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
-        absolute |= flag(space, c, name)?;
-    }
-    let simple = translation == [0.0; 3]
-        && !absolute
-        && component_owner == Some(owner)
-        && rotation_zero(vm, c)?
-        && rotation_zero(vm, owner)?
-        && combined_scale(vm, c, component_owner)? == [1.0; 3];
-    if !simple {
+    if !simple_transform(vm, owner, c)? {
         return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
     }
     if space_bases(vm, c)? > 0 && list_len(vm, mesh, "PerPolyCollisionBones")? > 0 {
