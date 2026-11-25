@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK1-TAIL-SETTERS (2026-11-25, pc-hummer, on main 49810ce4):** AI-assisted (Claude Code, Opus 5.5). maya:8's
+tail in Off from NATIVE_LINK1_TAIL_SETTERS.md: `FindAllAnimNodes`, `SetBlendTarget`, `SetActiveChild` (`NotRead`) and
+the five collision setters; `SetRBChannel`'s no-op is Reference-only. `cargo test --workspace -j 8` 3,690 passed / 0
+failed / 57 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (under the machine lock), before and
+after: 5 ok / 8 NotYet / 1 error, 41.3%; link 1 still at the aim-offset profiles' `LayerAbsent`. No real-game run.
+
 **IMPL-AIMOFFSET-PROFILES (2026-11-25, pc-hummer, on fix/rust-aimoffset-profiles from lane D's
 fix/rust-aimoffset-set-profile d906ee9f):** AI-assisted (Claude Code, Opus 5.5). The store marks a property the decoder
 skipped (`DefStore::is_skipped`); `ow_assets::aim_profiles` reads `AnimNodeAimOffset.Profiles`' binary elements

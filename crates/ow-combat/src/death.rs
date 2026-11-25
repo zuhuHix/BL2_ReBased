@@ -69,6 +69,27 @@ pub const PRESENTATION_NO_OPS: [&str; 8] = [
     "WillowGame.WillowPawn.PlayPainSound",
 ];
 
+/// Binds [`PRESENTATION_NO_OPS`] (keep-existing), less the ones Off gives their own rule.
+pub(crate) fn bind_presentation_no_ops(vm: &mut Vm) -> Result<(), VmError> {
+    for path in PRESENTATION_NO_OPS {
+        // In Off, DropCombatPerch has its own rule (crate::hit::pools, NATIVE_DROP_COMBAT_PERCH.md; lane
+        // IMPL-DROPCOMBATPERCH), which `Died` and `Staggered.BeginState` reach; Reference keeps this no-op.
+        if path == crate::hit::pools::DROP_COMBAT_PERCH && vm.parity == ow_core::ParityMode::Off {
+            continue;
+        }
+        // In Off, SetRBChannel has its own rule (ow-world collision_setters, NATIVE_LINK1_TAIL_SETTERS.md 2.D; lane
+        // IMPL-LINK1-TAIL-SETTERS); Reference keeps this no-op.
+        if path == SET_RB_CHANNEL_PATH && vm.parity == ow_core::ParityMode::Off {
+            continue;
+        }
+        bind_fn(vm, path, |_| Ok(Value::None))?;
+    }
+    Ok(())
+}
+
+/// `SetRBChannel`'s path in [`PRESENTATION_NO_OPS`]: Off binds ow-world's rule instead (lane IMPL-LINK1-TAIL-SETTERS).
+pub const SET_RB_CHANNEL_PATH: &str = "Engine.PrimitiveComponent.SetRBChannel";
+
 /// The same, with an event naming what had nothing to update.
 pub const LOGGED_NO_OPS: [&str; 3] = [
     "Engine.PawnAllegiance.RemoveParent",
@@ -414,14 +435,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
         },
     )?;
 
-    for path in PRESENTATION_NO_OPS {
-        // In Off, DropCombatPerch has its own rule (crate::hit::pools, NATIVE_DROP_COMBAT_PERCH.md; lane
-        // IMPL-DROPCOMBATPERCH), which `Died` and `Staggered.BeginState` reach; Reference keeps this no-op.
-        if path == crate::hit::pools::DROP_COMBAT_PERCH && vm.parity == ow_core::ParityMode::Off {
-            continue;
-        }
-        bind_fn(vm, path, |_| Ok(Value::None))?;
-    }
+    bind_presentation_no_ops(vm)?;
     for path in LOGGED_NO_OPS {
         bind_fn(vm, path, move |c| {
             note(c.vm, format!("{path} (nothing to update in the VM)"))?;

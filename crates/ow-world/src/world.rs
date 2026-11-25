@@ -547,6 +547,10 @@ impl NativePack for Pack {
             // AnimNodeAimOffset.SetActiveProfileByName / ByIndex (NATIVE_AIMOFFSET_SET_PROFILE.md, UNVERIFIED; lane
             // IMPL-AIMOFFSET-SET-PROFILE): the profile switch; keep-existing by key, Off only.
             aim_offset::register(vm)?;
+            // maya:8's tail (NATIVE_LINK1_TAIL_SETTERS.md, UNVERIFIED; lane IMPL-LINK1-TAIL-SETTERS): the blend and
+            // collision setters; keep-existing by key, Off only.
+            blend_setters::register(vm)?;
+            collision_setters::register(vm)?;
         }
         Ok(())
     }
@@ -657,6 +661,8 @@ pub mod online;
 pub mod after_login;
 pub mod aim_offset;
 pub mod aim_profiles;
+pub mod blend_setters;
+pub mod collision_setters;
 
 /// `SkeletalMeshComponent.SetSkeletalMesh` (lane IMPL-SET-SKELETAL-MESH, NATIVE_SET_SKELETAL_MESH.md).
 pub mod skeletal_mesh;

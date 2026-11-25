@@ -165,3 +165,33 @@ fn the_tracker_native_logs_the_killed_stat_and_needs_no_objective() {
     );
     assert!(text.contains("\"stubs\":{}"), "{text}");
 }
+
+/// Lane IMPL-LINK1-TAIL-SETTERS (NATIVE_LINK1_TAIL_SETTERS.md 2.D): with deaths enabled, the death registration's
+/// presentation no-ops skip `SetRBChannel` in Off (ow-world's rule binds the key instead); Reference keeps the no-op.
+#[test]
+fn set_rb_channel_is_the_no_op_in_reference_only() {
+    use ow_object::layout::PropertyDecl;
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _dir) = fresh(mode);
+        let vm = &mut run.world().vm;
+        let class = vm.space.classes.define("Engine.PrimitiveComponent", None, vec![]).unwrap();
+        let channel = PropertyDecl::new(vm.space.names.intern("Channel"), ow_object::layout::PropKind::Byte { enum_: None })
+            .with_flags(PropertyDecl::PARAM);
+        let path = ow_core::ObjectPath::parse(SET_RB_CHANNEL_PATH).unwrap();
+        let decl = ow_vm::api::FunctionDecl::native(path, "PrimitiveComponent.SetRBChannel(byte)")
+            .with_owner(class)
+            .with_params(vec![channel]);
+        let f = vm.declare_function(decl).unwrap();
+        bind_presentation_no_ops(vm).unwrap();
+        let c = vm.space.alloc(class, "Comp", None, ow_object::heap::Origin::Runtime).unwrap();
+        let out = vm.call(f, Some(c), vec![Value::Byte(1)]);
+        match mode {
+            // ow-world's rule (the world pack bound its key): this bare toy class declares no RBChannel.
+            ParityMode::Off => match out {
+                Err(VmError::Script { message, .. }) => assert!(message.contains("RBChannel"), "{message}"),
+                other => panic!("Off: expected ow-world's rule, got {other:?}"),
+            },
+            _ => assert_eq!(out.unwrap().ret, Value::None, "Reference keeps the no-op"),
+        }
+    }
+}
