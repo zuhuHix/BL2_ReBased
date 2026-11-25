@@ -204,6 +204,15 @@ pub const CDO_RECORD: &str = "docs/decisions/2026-11/2026-11-16-70-rust-definiti
 /// How many archetypes deep a load follows (module documentation, "Archetypes"); deeper is a `NotYet`.
 const MAX_ARCHETYPE_DEPTH: usize = 16;
 
+/// What [`DefStore::load_export_of_file`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileCopy {
+    /// The file holds no export at the object's path, or the object is not a definition of this store: nothing done.
+    NotInFile,
+    /// The object is the file's own export at its path, loaded (now or before).
+    Loaded,
+}
+
 /// Why a definition store operation failed. The layer variants are transparent: they print as the inner error, and
 /// their `source()` is the inner error's cause. The `From` conversions flatten: a `NotYet` or a heap error from the
 /// decode, reflection and store layers is [`DefError::NotYet`] or [`DefError::Heap`] (a container's `NotYet` inside a
@@ -1879,6 +1888,55 @@ impl DefStore {
     /// changes nothing (one of the [`DefStore::is_unloaded`] handles; review r2 of #480, L2).
     pub fn is_failed(&self, w: &ObjectSpace, obj: ObjRef) -> bool {
         w.heap.contains(obj) && matches!(self.handles.borrow().entries.get(&obj), Some(Entry::Failed { .. }))
+    }
+
+    /// `obj`, the store's object for a path, loaded from **file `file`'s own export at that path** when `file` holds
+    /// one, in place of the export the identity policy picked (lane LINK1-HEAD-MESH, the hub's ruling; **UNVERIFIED**
+    /// that the game resolves it so). It is for a reference followed out of an object loaded from `file`: a cooked
+    /// package holds its own copy of what it references, and the game, which loads that file, has that copy. Only a
+    /// handle not loaded yet is re-pointed. One already loaded from another file's copy is a typed
+    /// `NotYet { NotRead }` naming both files, an identity conflict. A handle whose load failed returns that error
+    /// again. Every other lookup (`find`, `resolve_ref`, `ensure_loaded`, `load`) keeps the policy's holder.
+    pub fn load_export_of_file(&mut self, w: &mut ObjectSpace, obj: ObjRef, file: PackageId) -> Result<FileCopy, DefError> {
+        let pkg = self.packages.shared(file);
+        let entry = self.handles.borrow().entries.get(&obj).cloned();
+        let (path, loaded_from) = match (&entry, w.heap.get(obj)?.origin) {
+            (Some(Entry::Unloaded { path, .. } | Entry::Failed { path, .. }), _) => (path.clone(), None),
+            (Some(Entry::Loaded { .. }), Origin::Export { package, index }) => {
+                (full_path(&self.packages.shared(package), index).map_err(package_error)?, Some((package, index)))
+            }
+            _ => return Ok(FileCopy::NotInFile),
+        };
+        let key = path_key(&path);
+        let mine = (1..=pkg.exports.len())
+            .filter_map(|i| i32::try_from(i).ok())
+            .find(|&i| full_path(&pkg, i).is_ok_and(|p| path_key(&p) == key));
+        let Some(index) = mine else {
+            return Ok(FileCopy::NotInFile);
+        };
+        let same_file = |a: PackageId| a == file || self.packages.get(a).source == pkg.source;
+        match (entry, loaded_from) {
+            (_, Some((package, i))) if same_file(package) && i == index => Ok(FileCopy::Loaded),
+            (_, Some((package, _))) => Err(DefError::NotYet(NotYet::not_read(
+                format!(
+                    "the definition store: {path} is resident from {}, and {} holds its own copy (an identity conflict)",
+                    self.packages.get(package).name,
+                    pkg.name
+                ),
+                RECORD,
+            ))),
+            (Some(Entry::Unloaded { path, target }), None) => {
+                if !(same_file(target.0) && target.1 == index) {
+                    let mut handles = self.handles.borrow_mut();
+                    handles.by_target.remove(&target);
+                    handles.by_target.insert((file, index), obj);
+                    handles.entries.insert(obj, Entry::Unloaded { path, target: (file, index) });
+                }
+                self.ensure_loaded(w, obj)?;
+                Ok(FileCopy::Loaded)
+            }
+            _ => self.ensure_loaded(w, obj).map(|()| FileCopy::Loaded),
+        }
     }
 
     /// Export `index` of `package`, loaded. Its tags are read from the prefix the store derives for it (module
