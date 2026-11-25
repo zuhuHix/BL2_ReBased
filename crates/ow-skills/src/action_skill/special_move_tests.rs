@@ -289,6 +289,9 @@ fn gearbox(variant: Variant) -> Vec<u8> {
     native(&mut t, definition, "ClientStarted", &[smi(), D("Struct", "SMData", 0, vec![data])], Some(("Float", vec![0])));
     native(&mut t, definition, "ClientFinished", &[smi(), D("Bool", "bInterrupted", 0, vec![0])], None);
     let toy_move = t.class("ToyMove", definition);
+    // COLD-CLASS-AUDIT: a blend class no fixture call warms (`find_class` loads code; it gets a layout only).
+    // `ToyColdMove` is declared below (#682's).
+    t.class("ToyColdBlend", blend_base);
     t.class("ToyOtherMove", definition);
     // Queue's residency tests (review r1 of #682): `ToyHolder`, loaded, whose `Move` and `Actor` name two exports the
     // store leaves as lazy handles, a `ToyMove` and an `Engine.Pawn`.
@@ -1824,4 +1827,99 @@ fn the_callback_is_not_copied_into_the_record() {
     assert_eq!(x.record(pawn, "SMD"), Value::Object(Some(d)), "the record was written");
     assert_eq!((x.record(pawn, "CallbackName"), x.record(pawn, "CallbackObject")), before, "not copied");
     assert_ne!(x.current(component, "CallbackName"), before.0, "the move itself has the callback");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-SKILLS): each Off native of this module, called with an object whose class has
+// a layout but no loaded code (the fixtures above warm their classes through `find_class`, which hides a code load).
+// A load is a write, so the native must leave `Vm::class_code_loads`, #518's three counters and the name table as they
+// were. A test that fails because the native loads cold code is `#[ignore]`d with its reason, for the hub to route.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The code loads, #518's three counters and the name table's length.
+fn cold_marks(x: &Fx) -> (u64, u64, u64, u64, usize) {
+    let vm = &x.world.vm;
+    (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+impl Fx {
+    /// An object of `class` with its layout defined and its code not loaded.
+    fn cold(&mut self, class: &str) -> ObjRef {
+        let vm = self.vm();
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, class).unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        assert!(!vm.class_code_loaded(c), "{class} starts cold");
+        vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap()
+    }
+
+    /// Runs `f` and asserts the code loads, counters and name table unchanged; answers `f`'s result.
+    fn no_code_load<T: std::fmt::Debug>(&mut self, label: &str, f: impl FnOnce(&mut Fx) -> T) -> T {
+        let before = cold_marks(self);
+        let r = f(self);
+        assert_eq!(cold_marks(self), before, "{label}: no code load, write, draw, store load or name: {r:?}");
+        r
+    }
+}
+
+/// `Play` of a definition whose class code is not loaded.
+#[test]
+#[ignore = "COLD-CLASS-AUDIT: Play loads the cold definition's class code (GetSMDToPlay through method_of -> find_method); #689 makes the lookup loaded-only"]
+fn cold_play_definition_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let (_, component) = x.owner(AUTONOMOUS);
+    let d = x.cold("GearboxFramework.ToyColdMove");
+    let _ = x.no_code_load("Play", |x| x.play(component, vec![Value::Object(Some(d))]));
+}
+
+/// `PlayLocal` of a definition whose class code is not loaded.
+#[test]
+#[ignore = "COLD-CLASS-AUDIT: PlayLocal loads the cold definition's class code (GetSMDToPlay through method_of -> find_method)"]
+fn cold_play_local_definition_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let (_, component) = x.owner(AUTONOMOUS);
+    let d = x.cold("GearboxFramework.ToyColdMove");
+    let _ = x.no_code_load("PlayLocal", |x| x.call(PATHS[6], component, vec![Value::Object(Some(d))]));
+}
+
+/// The definition natives `GetSMDToPlay` and `IsLocalAuthority` on a cold definition.
+#[test]
+fn cold_definition_natives_load_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, _) = x.owner(AUTONOMOUS);
+    let d = x.cold("GearboxFramework.ToyColdMove");
+    let smi = Value::Interface(Some(pawn));
+    let got = x.no_code_load("GetSMDToPlay", |x| x.call(PATHS[1], d, vec![smi.clone()]));
+    assert_eq!(got.unwrap(), Value::Object(Some(d)));
+    let got = x.no_code_load("IsLocalAuthority", |x| x.call(PATHS[2], d, vec![smi]));
+    assert_eq!(got.unwrap(), Value::Bool(false), "an autonomous owner, bClientHasAuthority clear");
+}
+
+/// `IsPlayingClass` with a current move whose definition's class code is not loaded.
+#[test]
+fn cold_is_playing_class_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let (_, component) = x.owner(AUTONOMOUS);
+    let d = x.cold("GearboxFramework.ToyColdMove");
+    x.seed(component, d, None);
+    let class = x.world.vm.space.classes.by_path("GearboxFramework.ToyMove");
+    let got = x.no_code_load("IsPlayingClass", |x| x.call(PATHS[3], component, vec![Value::Class(class)]));
+    assert_eq!(got.unwrap(), Value::Bool(false));
+}
+
+/// `GetSMNode` on a tree whose `SpecialMoveBlend` node is of a cold class.
+#[test]
+#[ignore = "COLD-CLASS-AUDIT: GetSMNode calls vm.find_class(AnimNodeSpecialMoveBlend), which loads that class's code when cold"]
+fn cold_get_sm_node_loads_no_code() {
+    let mut x = fx(ParityMode::Off);
+    let (pawn, component) = x.owner(AUTONOMOUS);
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(pawn, "Mesh", Value::Object(Some(mesh)));
+    let node = x.cold("GearboxFramework.ToyColdBlend");
+    let n = x.name("SpecialMoveBlend");
+    x.set(node, "NodeName", n);
+    x.set(mesh, "Animations", Value::Object(Some(node)));
+    let before = x.world.vm.class_code_loads();
+    let _ = x.call(PATHS[4], component, vec![]);
+    assert_eq!(x.world.vm.class_code_loads(), before, "no class code loaded");
 }

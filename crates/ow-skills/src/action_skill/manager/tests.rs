@@ -116,6 +116,10 @@ fn willow_game() -> Vec<u8> {
         &FunctionSpec::new(NATIVE, "GetSkillManager"),
         |_| None,
     );
+    // COLD-CLASS-AUDIT: subclasses no fixture call warms.
+    t.class("ToyColdGameInfo", game);
+    t.class("ToyColdManager", manager);
+    t.class("ToyColdSkill", skill);
     t.build()
 }
 
@@ -317,4 +321,47 @@ fn under_reference_both_natives_stay_unbound() {
     let m = make(x.vm(), "WillowGame.SkillEffectManager");
     let got = x.call(NATIVE_PATHS[1], m, vec![Value::Object(None)]);
     assert!(matches!(got, Err(VmError::UnboundNative { .. })), "{got:?}");
+}
+
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-SKILLS): an object of `class` with its layout defined and its code not loaded.
+fn cold(vm: &mut Vm, class: &str) -> ObjRef {
+    let (code, store) = vm.defs.code_mut();
+    let key = code.find_class(store, class).unwrap();
+    let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+    assert!(!vm.class_code_loaded(c), "{class} starts cold");
+    vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap()
+}
+
+/// The code loads, #518's three counters and the name table's length.
+fn cold_marks(vm: &Vm) -> (u64, u64, u64, u64, usize) {
+    (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+/// COLD-CLASS-AUDIT: `GetSkillManager` on a cold game info in a world that cannot spawn: the `LayerAbsent` refusal
+/// loads no class code (the game info's, or the manager's it would spawn) and writes nothing.
+#[test]
+fn a_cold_game_info_s_spawn_refusal_loads_no_code() {
+    let mut x = fx(ParityMode::Off, 3, false);
+    let game = cold(x.vm(), "WillowGame.ToyColdGameInfo");
+    set_required(x.vm(), game, "Role", Value::Byte(3), "test").unwrap();
+    let before = cold_marks(&x.world.vm);
+    let r = x.call(NATIVE_PATHS[0], game, Vec::new());
+    assert!(matches!(&r, Err(VmError::NotYet(n)) if matches!(n.missing, Missing::LayerAbsent(_))), "{r:?}");
+    assert_eq!(cold_marks(&x.world.vm), before, "no code load, write, draw, store load or name");
+}
+
+/// COLD-CLASS-AUDIT: `DeactivateAllSkillsForInstigator` on a cold manager holding a cold skill of the instigator: its
+/// `NotRead` refusal loads no class code and writes nothing.
+#[test]
+fn a_cold_manager_s_deactivate_refusal_loads_no_code() {
+    let mut x = fx(ParityMode::Off, 3, true);
+    let pc = make(x.vm(), "WillowGame.ToyController");
+    let m = cold(x.vm(), "WillowGame.ToyColdManager");
+    let mine = cold(x.vm(), "WillowGame.ToyColdSkill");
+    set_required(x.vm(), mine, "SkillInstigator", Value::Object(Some(pc)), "test").unwrap();
+    set_required(x.vm(), m, "ActiveSkills", Value::array(vec![Value::Object(Some(mine))]), "test").unwrap();
+    let before = cold_marks(&x.world.vm);
+    let n = not_yet(x.call(NATIVE_PATHS[1], m, vec![Value::Object(Some(pc))]));
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(cold_marks(&x.world.vm), before, "no code load, write, draw, store load or name");
 }

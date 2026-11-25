@@ -45,6 +45,9 @@ fn package(odd_tree: bool, no_path: bool, tree_of_manager: bool) -> Vec<u8> {
     t.prop("Object", controller, "PlayerClass", 0, class_def);
     let spec = FunctionSpec::new(NATIVE, "InitPlayerSkillTree");
     t.function(controller, "InitPlayerSkillTree", &[], None, &[], &spec, |_| None);
+    // COLD-CLASS-AUDIT: subclasses no fixture call warms.
+    t.class("ToyColdController", controller);
+    t.class("ToyColdClassDefinition", class_def);
     let globals = t.class("WillowGlobals", object);
     t.prop("Object", globals, "ThePlayerPawnDataManager", 0, manager);
     let holder = t.class("Holder", object);
@@ -394,4 +397,33 @@ fn no_globals_comes_out_before_the_player_class_is_read() {
     let VmError::NotYet(n) = x.call().unwrap_err() else { panic!("a NotYet") };
     assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
     assert_eq!(n.what, "the toy world's globals", "the world's NotYet, unchanged");
+}
+
+/// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-SKILLS): `InitPlayerSkillTree` on a controller, and with a player class, whose
+/// classes have a layout but no loaded code (the fixture warms its classes through `find_class`): the existing-tree
+/// refusal loads no class code, and leaves #518's counters and the name table unchanged.
+#[test]
+fn a_cold_controller_and_player_class_load_no_code() {
+    let mut x = fx();
+    x.ready("A.B");
+    let cold = |x: &mut Fx, class: &str| {
+        let vm = &mut x.vm;
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, class).unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        assert!(!vm.class_code_loaded(c), "{class} starts cold");
+        vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap()
+    };
+    let controller = cold(&mut x, "WillowGame.ToyColdController");
+    let class = cold(&mut x, "WillowGame.ToyColdClassDefinition");
+    x.set(class, "SkillTreePath", Value::Str("A.B".into()));
+    x.set(controller, "PlayerClass", Value::Object(Some(class)));
+    let old = x.make(TREE_CLASS);
+    x.set(controller, "PlayerSkillTree", Value::Object(Some(old)));
+    let marks = |vm: &Vm| (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let before = marks(&x.vm);
+    let f = x.vm.find_function(PATH).unwrap();
+    let r = x.vm.call(f, Some(controller), Vec::new());
+    assert!(matches!(&r, Err(VmError::NotYet(n)) if n.what == EXISTING_TREE), "{r:?}");
+    assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
 }
