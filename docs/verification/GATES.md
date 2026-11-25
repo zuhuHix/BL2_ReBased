@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**UNDECLARED-COMPONENT-CLASS (2026-11-25, zuhuPC Linux, on fix/rust-undeclared-component-class, rebased onto main
+4b3e4df):** AI-assisted (Claude Code, Opus 5.5). A `Components` entry whose class runs through an engine-native
+stand-in is `NotRead` in `Actor.GetBoundingCylinder` and the spawn extent, not skipped. `cargo test --workspace
+--no-fail-fast` (on bf9eea7 plus this change): 3371 passed / 4 failed / 52 ignored, the 4 expected N1 failures.
+Installed Off strict `--slice-gate` on the Aspyr install: main 4b3e4df and this change on bf9eea7 give the same 14
+results and first stops. Cause A still stops most links there, so only links 2 and 6-9 are covered. UNVERIFIED in game.
+
 **BIND-UPDATEANIMATIONS-FORCESKELUPDATE (2026-11-25, pc-hummer, on main d3c7a13b):** AI-assisted (Claude Code, Opus
 5.5). `World::new` binds `ForceSkelUpdate` and `UpdateAnimations` in Off in every slice world, neither under Reference
 (two new tests). `cargo test --workspace -j 8` 3,365 passed / 0 failed / 52 ignored; `crate_edges_test.py` 19 OK.

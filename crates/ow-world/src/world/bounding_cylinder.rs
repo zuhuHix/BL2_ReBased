@@ -98,6 +98,42 @@ pub const COMPONENT_CHECK_OF: &str = "Actor.GetBoundingCylinder: the component c
 pub const SKIP_FIELD: &str = "BulletListener";
 /// The record of the per-component check and the skip check.
 pub const SKIP_RECORD: &str = "docs/verification/NATIVE_COMPONENT_SKIP_FLAG.md";
+/// The refusal of a `Components` entry whose class chain runs through an engine-native stand-in class before it
+/// reaches `PrimitiveComponent` (followed by that class's path; lane UNDECLARED-COMPONENT-CLASS).
+pub const NATIVE_STAND_IN_CLASS: &str = "a Components entry whose class runs through the engine-native stand-in class \
+                                         (decision 2026-11-15-08), so whether it is a primitive is not known:";
+
+/// Whether `class` is `primitive` or derives from it, for a `Components` walk (lane UNDECLARED-COMPONENT-CLASS,
+/// decision 2026-11-25-NNN-undeclared-component-class.md; a port policy, UNVERIFIED in game). The chain is walked from
+/// `class` up: reaching `primitive` is yes. Reaching an engine-native stand-in class first (a class with no package
+/// export, which the definition store defines directly under `Core.Object`, decision 2026-11-15-08) is
+/// `NotYet { NotRead }` with `prefix`, the class and `record`: its real super chain is not known, so the game might
+/// count the entry, and the VM's casts answer the same (`interp::is_child`). The end of a chain of package classes
+/// is no. A class that is only declared cannot reach here: the heap makes no object of one, and a class is defined
+/// only after its super class. Read only.
+pub fn primitive_class(
+    space: &ObjectSpace,
+    class: ow_object::ids::ClassId,
+    primitive: ow_object::ids::ClassId,
+    prefix: &str,
+    record: &'static str,
+) -> Result<bool, VmError> {
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        if c == primitive {
+            return Ok(true);
+        }
+        let Some(layout) = space.classes.get_layout(c) else {
+            return Ok(false);
+        };
+        if space.classes.is_native(c) {
+            let what = format!("{prefix}: {NATIVE_STAND_IN_CLASS} {}", layout.path().as_str());
+            return Err(NotYet::not_read(what, record).into());
+        }
+        cursor = layout.super_class();
+    }
+    Ok(false)
+}
 /// The native's name in its errors.
 const NATIVE: &str = "Actor.GetBoundingCylinder";
 
@@ -224,7 +260,9 @@ fn actor_default(vm: &Vm, this: ObjRef) -> Result<(f32, f32), VmError> {
     let mut boxes = Vec::new();
     for c in objects(space, this, "Components")?.into_iter().flatten() {
         let class = space.heap.get(c)?.class;
-        if !primitive.is_some_and(|p| space.classes.is_child_of(class, p)) {
+        let Some(primitive) = primitive else { continue };
+        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS).
+        if !primitive_class(space, class, primitive, "Actor.GetBoundingCylinder", RECORD)? {
             continue;
         }
         resident(vm, c)?;

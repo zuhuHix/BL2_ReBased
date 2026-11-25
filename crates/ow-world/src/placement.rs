@@ -344,8 +344,12 @@ pub fn extent(vm: &Vm, template: ObjRef) -> Result<[f32; 3], VmError> {
 /// so none reaches step 6 (UNVERIFIED, note section 4).
 fn actor_rule(vm: &Vm, template: ObjRef, class: &str) -> Result<[f32; 3], VmError> {
     let space = &vm.space;
+    let primitive = space.classes.by_path("Engine.PrimitiveComponent");
     for c in objects(space, template, "Components")?.into_iter().flatten() {
-        if !is_primitive(space, c)? {
+        // A chain through an engine-native stand-in is refused, not skipped (lane UNDECLARED-COMPONENT-CLASS).
+        let Some(primitive) = primitive else { continue };
+        let prefix = format!("{BOUNDING_CYLINDER_OF} {class}");
+        if !crate::world::bounding_cylinder::primitive_class(space, space.heap.get(c)?.class, primitive, &prefix, EXTENT_RECORD)? {
             continue;
         }
         if vm.defs.is_unloaded(space, c) {

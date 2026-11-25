@@ -877,3 +877,30 @@ fn a_bad_height_destination_leaves_the_radius_unwritten() {
     let p = x.vm.space.prop(class, "ToyRadius").unwrap();
     assert_eq!(x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap(), &Value::Float(-3.0), "the radius is unchanged");
 }
+
+/// Lane UNDECLARED-COMPONENT-CLASS: on a live receiver, a `Components` entry whose class is an engine-native stand-in
+/// is `NotRead` naming that class, before its flags are read and with nothing changed ([`Fx::same`]); a package
+/// non-primitive is skipped as before.
+#[test]
+fn a_native_stand_in_component_class_is_not_read() {
+    let mut x = fx();
+    x.scene();
+    let pickup = x.live("WillowGame.WillowPickup");
+    // As the definition store makes one for a class with no package export: defined under Core.Object, native.
+    // The fixture's root class (its `Object`), as the store would use `Core.Object`.
+    let mut object = x.vm.find_class("Engine.PrimitiveComponent").unwrap();
+    while let Some(up) = x.vm.space.classes.get_layout(object).and_then(|l| l.super_class()) {
+        object = up;
+    }
+    let native = x.vm.space.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+    x.vm.space.classes.mark_native(native).unwrap();
+    let entry = x.vm.space.alloc_stand_in(native, "Native", Origin::Resource { package: 0, index: -1 }).unwrap();
+    let light = x.live("Engine.DynamicLightEnvironmentComponent");
+    x.components(pickup, vec![Some(light), Some(entry)]);
+    let err = x.same("native stand-in", |x| answer(&x.vm, pickup).unwrap_err());
+    let VmError::NotYet(n) = err else { panic!("{err:?}") };
+    assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD));
+    assert!(n.what.contains("engine-native stand-in class") && n.what.contains("Test.NativeOnlyComponent"), "{}", n.what);
+    x.components(pickup, vec![Some(light)]);
+    assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0), "a defined non-primitive is skipped");
+}
