@@ -148,10 +148,8 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
 /// Maya's skeletal mesh, which the slice harness preloads (lane SLICE-HARNESS-MAYA-MESH, hub ruling): in the game it is
 /// loaded with her pawn.
 pub(crate) const MAYA_MESH_PATH: &str = "Char_Siren.Mesh.Skel_SirenBody";
-/// Maya's head mesh, her `CustomHead` template's `SkeletalMesh` (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 8): a
-/// placeholder cube cooked into her pawn's streaming package, `GD_Siren_Streaming_SF`, beside her body mesh (lane
-/// LINK1-HEAD-MESH).
-pub(crate) const MAYA_HEAD_MESH_PATH: &str = "CD_Heads_Assassin_MainGame.CubeForCode";
+/// The body-composition walk's cap on objects visited ([`preload_body_composition`]), as link 8's material walk's.
+pub(crate) const BODY_WALK_CAP: usize = 64;
 /// The skeleton source's export roots (`;`-separated), else [`PSK_ROOTS_DEFAULT`].
 pub(crate) const PSK_ROOTS_VAR: &str = "OPENWILLOW_PSK_EXPORTS";
 /// The default export root, under ignored `local/` of the repository ow-cli was built from (review r1 of #592, item
@@ -451,10 +449,7 @@ fn objects_in(v: &Value, out: &mut Vec<ObjRef>) {
 /// Returns the object paths loaded, in slot order.
 pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Result<Vec<String>, VmError> {
     use ow_object::heap::Origin;
-    let package_of = |vm: &Vm, o: ObjRef| match vm.space.heap.get(o).map(|x| x.origin) {
-        Ok(Origin::Export { package, .. } | Origin::Resource { package, .. }) => Some(package),
-        _ => None,
-    };
+    let package_of = file_package;
     let Some(home) = package_of(vm, archetype) else {
         return Ok(Vec::new());
     };
@@ -486,12 +481,184 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     Ok(done)
 }
 
+/// The package file whose export `o` is (or will be, for a store handle), from its heap origin.
+pub(crate) fn file_package(vm: &Vm, o: ObjRef) -> Option<ow_package::PackageId> {
+    use ow_object::heap::Origin;
+    match vm.space.heap.get(o).map(|x| x.origin) {
+        Ok(Origin::Export { package, .. } | Origin::Resource { package, .. }) => Some(package),
+        _ => None,
+    }
+}
+
+/// `o`'s object path, for the log.
+fn object_path(vm: &Vm, o: ObjRef) -> String {
+    use ow_object::heap::Origin;
+    match vm.space.heap.get(o).map(|x| x.origin) {
+        Ok(Origin::Export { package, index } | Origin::Resource { package, index }) => {
+            ow_defs::identity::full_path(vm.defs.packages().get(package), index).unwrap_or_else(|_| format!("{o:?}"))
+        }
+        _ => format!("{o:?}"),
+    }
+}
+
+/// Object property `name` of `o`, when its class declares it and it holds an object.
+fn object_slot(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let Some(p) = vm.space.prop(class, name) else {
+        return Ok(None);
+    };
+    Ok(match vm.space.read(o, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Object(r) => *r,
+        _ => None,
+    })
+}
+
+/// Struct field `name` of `v`, when `v` is a struct that has it.
+fn struct_field(vm: &Vm, v: &Value, name: &str) -> Option<Value> {
+    let s = v.as_struct()?;
+    let id = vm.space.names.find(name)?;
+    let (index, _) = vm.space.classes.struct_layout(s.ty)?.field(id)?;
+    s.fields.get(usize::try_from(index).ok()?).cloned()
+}
+
+/// The body class's attachment templates in list order (`BodyComposition.Attachments[i].Data.ComponentData.Component`,
+/// None entries left out), or `None` when the body class is not shaped so.
+fn attachment_templates(vm: &Vm, body: ObjRef) -> Result<Option<Vec<ObjRef>>, VmError> {
+    let class = vm.space.heap.get(body)?.class;
+    let Some(p) = vm.space.prop(class, "BodyComposition") else {
+        return Ok(None);
+    };
+    let composition = vm.space.read(body, ow_object::ids::PropAddr::scalar(p))?.clone();
+    let Some(list) = struct_field(vm, &composition, "Attachments") else {
+        return Ok(None);
+    };
+    let Some(items) = list.elements() else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let component = struct_field(vm, item, "Data")
+            .and_then(|d| struct_field(vm, &d, "ComponentData"))
+            .and_then(|c| struct_field(vm, &c, "Component"));
+        match component {
+            Some(Value::Object(Some(t))) => {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+            Some(Value::Object(None)) => {}
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(out))
+}
+
+/// The body-composition set-up walk (lane LINK1-HEAD-MESH, the hub's ruling on #722's next stop; the pattern of link
+/// 8's material walk, decision 2026-11-25-47). From the archetype's `BodyClass`: the component templates its body
+/// composition makes (the attachment list), and each template's `SkeletalMesh`. An object is loaded through the store
+/// **only if it is an export of the archetype's own package file**, the pawn's streaming package; one already resident
+/// is visited with no load. Anything else stops its branch with a logged line and is left for the native to refuse.
+/// Each object is visited once, up to [`BODY_WALK_CAP`] (logged if hit). Each load is logged before and after; a failed
+/// load is the step's error, kept. An UNVERIFIED stand-in, as the archetype's preload: the streaming load makes the
+/// package resident, and which exports it loads is not read. No native refusal changes.
+pub(crate) fn preload_body_composition(vm: &mut Vm, archetype: ObjRef) -> Result<(), VmError> {
+    let Some(home) = file_package(vm, archetype) else {
+        vm.log.push("harness input: body-composition walk skipped (the archetype is not a package export)".to_string());
+        return Ok(());
+    };
+    let Some(body) = object_slot(vm, archetype, "BodyClass")? else {
+        vm.log.push("harness input: body-composition walk skipped (the archetype has no BodyClass)".to_string());
+        return Ok(());
+    };
+    let package = vm.defs.packages().get(home).name.clone();
+    vm.log.push(format!(
+        "harness input: body-composition walk from {}: its templates and their meshes, loading only exports of \
+         {package} (UNVERIFIED stand-in for the streaming load)",
+        object_path(vm, body)
+    ));
+    let mut walk = BodyWalk { home, package, visited: Vec::new(), loaded: 0 };
+    if walk.visit(vm, body)? {
+        match attachment_templates(vm, body)? {
+            None => vm.log.push("harness input: body-composition walk: the body class has no attachment list".to_string()),
+            Some(templates) => walk_templates(vm, &mut walk, &templates)?,
+        }
+    }
+    vm.log.push(format!("harness input: body-composition walk: {} loaded, {} visited", walk.loaded, walk.visited.len()));
+    Ok(())
+}
+
+/// The walk's state: the home package file, the objects visited and the loads made.
+pub(crate) struct BodyWalk {
+    pub(crate) home: ow_package::PackageId,
+    pub(crate) package: String,
+    pub(crate) visited: Vec<ObjRef>,
+    pub(crate) loaded: usize,
+}
+
+impl BodyWalk {
+    /// Visits `o` once: `Ok(true)` when it is resident afterwards (loaded here or before), so its branch goes on.
+    fn visit(&mut self, vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
+        if self.visited.contains(&o) {
+            return Ok(!vm.defs.is_unloaded(&vm.space, o));
+        }
+        if self.visited.len() >= BODY_WALK_CAP {
+            return Ok(false);
+        }
+        self.visited.push(o);
+        let path = object_path(vm, o);
+        if file_package(vm, o) != Some(self.home) {
+            let at = file_package(vm, o).map_or_else(|| "no package".to_string(), |p| vm.defs.packages().get(p).name.clone());
+            vm.log.push(format!(
+                "harness input: body-composition walk: {path} is not an export of {} ({at}); its branch stops",
+                self.package
+            ));
+            return Ok(false);
+        }
+        if !vm.defs.is_unloaded(&vm.space, o) {
+            return Ok(true);
+        }
+        vm.log.push(format!("harness input: preload {path} (an export of {}; UNVERIFIED stand-in)", self.package));
+        let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+        vm.log.extend(vm.defs.take_log());
+        match loaded {
+            Ok(()) => {
+                vm.log.push(format!("harness input: preload {path}: loaded"));
+                self.loaded += 1;
+                Ok(true)
+            }
+            Err(e) => {
+                vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+                Err(VmError::from(e))
+            }
+        }
+    }
+}
+
+/// The walk over `templates` and each one's `SkeletalMesh` (module function so the tests can drive it).
+pub(crate) fn walk_templates(vm: &mut Vm, walk: &mut BodyWalk, templates: &[ObjRef]) -> Result<(), VmError> {
+    for &t in templates {
+        if walk.visited.len() >= BODY_WALK_CAP {
+            vm.log.push(format!("harness input: body-composition walk: stopped at the cap of {BODY_WALK_CAP} objects"));
+            break;
+        }
+        if walk.visit(vm, t)?
+            && let Some(mesh) = object_slot(vm, t, "SkeletalMesh")?
+        {
+            walk.visit(vm, mesh)?;
+        }
+    }
+    Ok(())
+}
+
 /// The six Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
 /// 2026-11-19-41 and 2026-11-19-46, lane IMPL-MESH-REST for the tree, and lane SLICE-HARNESS-MAYA-MESH for steps 3
 /// and 4, lane IMPL-BODYCOMP-SOCKET-BONE-TABLES for step 5). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
 ///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
-///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
+///    (and logged), and a load that finds nothing is logged; the class select then runs either way. After the
+///    archetype's same-package references, the body-composition walk (lane LINK1-HEAD-MESH): its body class's component
+///    templates and their meshes, exports of the pawn's package file only ([`preload_body_composition`]), the same
+///    UNVERIFIED stand-in.
 /// 1a. **Owner-test set-up** (lane ROUTE-A, NATIVE_SPECIALMOVE_OWNER.md route (a)): `SpecialMoveInterface` loaded and
 ///    the interface entries on the archetype's class chain resolved ([`owner_setup`]), UNVERIFIED stand-ins for the
 ///    game having them loaded and resolved.
@@ -503,10 +670,6 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
 /// 5. **Socket preload:** the mesh's unloaded socket objects loaded through the store
 ///    (`crate::cmd::mesh_sockets::preload_mesh_sockets`), an UNVERIFIED stand-in for the same streaming load (hub
 ///    ruling).
-/// 5a. **Head mesh preload** (lane LINK1-HEAD-MESH): Maya's head mesh [`MAYA_HEAD_MESH_PATH`], which the body
-///    composition's `Parent` link reads, loaded the same way ([`preload_mesh`]). It is an export of the same package file
-///    as her pawn archetype, so the same UNVERIFIED stand-in applies: the game's streaming load makes the package
-///    resident, and which exports it loads is not read.
 /// 6. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
@@ -551,6 +714,8 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
                                 if let Some(archetype) = found {
                                     pawn_class = Some(vm.space.heap.get(archetype)?.class);
                                     load_same_package_references(vm, archetype)?;
+                                    // The body composition's templates and their meshes (lane LINK1-HEAD-MESH).
+                                    preload_body_composition(vm, archetype)?;
                                 }
                             }
                             Err(e) => {
@@ -577,7 +742,6 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
     }
     preload_mesh(vm, MAYA_MESH_PATH, "Maya's mesh")?;
     crate::cmd::mesh_sockets::preload_mesh_sockets(vm, MAYA_MESH_PATH)?;
-    preload_mesh(vm, MAYA_HEAD_MESH_PATH, "Maya's head mesh, cooked into her pawn's streaming package")?;
     gear_likeness_setup(vm)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
