@@ -12,7 +12,7 @@ AI-assisted (Claude Code, Opus 5.5). The body composition's `Parent` link from t
   unloaded skeletal mesh CubeForCode"; links 3, 4, 5, 13 and 14 report the same. Every other row is unchanged.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/parentlink/` and `local/p2/hook3/`.
-Decision 2026-11-25-NNN.
+Decision 2026-11-25-56.
 
 **ANALYST-HOOK1-INTERFACE (2026-11-25, pc-hummer, docs only, on docs/native-hook1-interface from main e4d383f2):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_BODYCOMP_RENDER_HOOKS.md section 8: hook 1 is the simple-anim cache
