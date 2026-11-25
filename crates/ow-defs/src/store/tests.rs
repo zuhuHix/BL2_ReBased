@@ -1849,30 +1849,3 @@ fn real_pawn_archetypes() {
     }
     std::fs::write(out.join("pawns-summary.txt"), summary).unwrap();
 }
-
-/// Lane IMPL-AIMOFFSET-SET-PROFILE: `DefStore::skipped_property` reports a property whose tag the decoder skipped (an
-/// invented `GD_Skip.Bad` whose `List` tag says two ints but holds one), so its slot keeps the default; a property
-/// it read, and an object that is no export, are not reported. Nothing is loaded by asking.
-#[test]
-fn a_skipped_tag_is_reported_by_the_store() {
-    let mut p = PackageBuilder::new_empty();
-    let (thing, ..) = class_imports(&mut p);
-    let none = p.none();
-    let mut bad = ints(&[0]);
-    bad.extend(p.int_tag("ClipSize", 4));
-    bad.extend(p.array_tag("List", 2, &ints(&[5])));
-    bad.extend_from_slice(&none);
-    p.add_export(thing, "Bad", bad);
-    let mut t = World::with_extra("skipped", IdentityPolicy::FirstInScanOrder, ParityMode::Off, vec![("GD_Skip.upk", p.build())]);
-    let o = t.get("GD_Skip.Bad");
-    assert!(t.defs.take_log().iter().any(|l| l.contains("defaults: skipped Thing.List")));
-    let class = t.w.heap.get(o).unwrap().class;
-    let (list, clip) = (t.w.prop(class, "List").unwrap(), t.w.prop(class, "ClipSize").unwrap());
-    let loads = t.defs.load_transitions();
-    assert!(t.defs.skipped_property(&t.w, o, list), "the skipped tag");
-    assert!(!t.defs.skipped_property(&t.w, o, clip), "a tag it read");
-    assert_eq!(t.read(o, "ClipSize"), Value::Int(4));
-    let fresh = t.w.alloc(class, "Runtime_0", None, Origin::Runtime).unwrap();
-    assert!(!t.defs.skipped_property(&t.w, fresh, list), "not an export");
-    assert_eq!(t.defs.load_transitions(), loads);
-}

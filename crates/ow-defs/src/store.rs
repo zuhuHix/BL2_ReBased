@@ -1745,17 +1745,6 @@ impl DefStore {
         std::mem::take(&mut self.state.log)
     }
 
-    /// Whether loading `o` skipped the tag of its property `prop` (a value the decoder could not decode or store, the
-    /// `defaults: skipped ...` line), so the slot holds the declaration's default rather than the package's value
-    /// (lane IMPL-AIMOFFSET-SET-PROFILE; the record is `DecodeState::skipped`). A read: false for an object that is not
-    /// an export of a package.
-    pub fn skipped_property(&self, w: &ObjectSpace, o: ObjRef, prop: PropId) -> bool {
-        match w.heap.get(o).map(|x| x.origin) {
-            Ok(Origin::Export { package, index }) => self.state.skipped.contains(&(package, index, prop)),
-            _ => false,
-        }
-    }
-
     /// Runs `f` with a load context over this store and `w`.
     fn run<T>(&mut self, w: &mut ObjectSpace, f: impl FnOnce(&mut Loader<'_, '_>) -> T) -> T {
         let DefStore {

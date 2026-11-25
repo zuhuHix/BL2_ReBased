@@ -4,11 +4,10 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **IMPL-AIMOFFSET-SET-PROFILE (2026-11-25, pc-hummer, on fix/rust-getweaponholddef 2910cde2):** AI-assisted (Claude
 Code, Opus 5.5). `AnimNodeAimOffset.SetActiveProfileByName` / `ByIndex` in Off, from NATIVE_AIMOFFSET_SET_PROFILE.md
-section 3, and a skipped-property record in the store (`DefStore::skipped_property`; decoding unchanged).
-`cargo test --workspace -j 8` 3,679 passed / 0 failed / 57 ignored; `crate_edges_test.py` OK. Installed Off strict
+section 3 (#730 r1); an empty `Profiles` on the list's owner is `LayerAbsent` (the interim rule).
+`cargo test --workspace -j 8` 3,678 passed / 0 failed / 57 ignored; `crate_edges_test.py` OK. Installed Off strict
 `--slice-gate` (release build, under the machine lock): 5 ok / 8 NotYet / 1 error, `links ok 5/14`, `step share X =
-5.783/14 = 41.3%`. Links 1, 3, 4, 5, 13 and 14 stop at `maya:8` on the profiles' `LayerAbsent` (no reader for the
-binary-serialized `Profiles`). No real-game run.
+5.783/14 = 41.3%`. Links 1, 3, 4, 5, 13 and 14 stop at `maya:8` on the profiles' `LayerAbsent`. No real-game run.
 
 **IMPL-GETWEAPONHOLDDEF (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh fff815f4):** AI-assisted (Claude Code,
 Opus 5.5). `BodyClassDefinition.GetWeaponHoldDef` in Off, from NATIVE_GET_WEAPON_HOLD_DEF.md section 3, and link 1's
