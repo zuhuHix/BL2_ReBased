@@ -57,3 +57,12 @@ Reference the stand-in).
    for `Engine`). Another package's same-keyed function is neither bound nor shadowing.
 4. **`Physics` is read after the AI layer's answers**, so a malformed `Physics` does not turn a nav-mesh request or a
    `bHardAttach` stop into a script error.
+
+**Review r2** (Sol high, on #696): **each handler is resolved again at dispatch.** The preflight used to keep the pawn
+events' `FuncId`s. The commit runs `PhysicsChangedFor` first, and that callback (or a pawn event) can change the pawn's
+state, so a kept handler could be stale. The preflight still validates every event, write-free. The plan now carries
+each event's name, parameter shape and arguments instead of a `FuncId`. Right before each dispatch, the commit
+resolves the handler again with `find_loaded_event` (load-free) and validates it again. A refusal there comes after
+the `Physics` write, so it is marked "stopped after partial writes". Test: the volume's event moves the pawn into state
+`Landing`, so the `StoppedFalling` dispatched next is `Falling`'s override, not the class body's handler the preflight
+saw. It fails when the handlers are resolved before the volume callback.

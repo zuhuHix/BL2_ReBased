@@ -36,7 +36,9 @@
 //! The note's commit step 1 (`bForceFloorCheck` set on a transition into `PHYS_Walking`) is never reached in the port:
 //! every transition into `PHYS_Walking` is refused at step 3 (the base search), so it is not written here.
 //!
-//! **Commit, in the game's order:** `Physics` = the mode; with a `PhysicsVolume`, its `PhysicsChangedFor(actor)`; the
+//! **Commit, in the game's order** (each handler resolved again, load-free, right before its dispatch, so a callback
+//! that changes a receiver's state is followed; review r2 of #696): `Physics` = the mode; with a `PhysicsVolume`, its
+//! `PhysicsChangedFor(actor)`; the
 //! four `WillowPawn` events, in that order, each when its condition holds (`BeganFalling` and `BeganWalking` get the
 //! old mode). A refusal after the write is marked "stopped after partial writes: " when #518's counters moved
 //! ([`crate::pools::after_partial_writes`]); `Vm::class_code_loads` (#685) is not on this lane's base.
@@ -206,7 +208,8 @@ enum Shape {
 
 /// Step 4: the event `name` sent to `o`, in loaded code only, with the parameters `shape`. The lookup is the one Off
 /// event dispatch makes (`ow_vm::states::find_loaded_event`): the active state, its parent states, then the class
-/// chain (review r1 of #696, item 1). The `FuncId` found is the one the commit calls. Each parameter must be a scalar
+/// chain (review r1 of #696, item 1). The preflight validates it, and the commit resolves it again right before each
+/// dispatch, since an earlier callback may change the receiver's state (review r2 of #696). Each parameter must be a scalar
 /// by value (no static array, no `out`), and an object parameter's class must accept `actor` (item 2).
 fn event(vm: &Vm, o: ObjRef, name: &str, shape: Shape, actor: ObjRef) -> Result<FuncId, VmError> {
     let class = class_path(vm, o);
@@ -236,9 +239,11 @@ fn event(vm: &Vm, o: ObjRef, name: &str, shape: Shape, actor: ObjRef) -> Result<
 struct Plan {
     actor: ObjRef,
     mode: u8,
-    volume: Option<(ObjRef, FuncId)>,
-    /// The `WillowPawn` events to fire, in order, with their arguments.
-    events: Vec<(FuncId, Vec<Value>)>,
+    /// The volume whose `PhysicsChangedFor` the commit calls (validated in preflight).
+    volume: Option<ObjRef>,
+    /// The `WillowPawn` events to fire, in order: name, parameter shape and arguments (validated in preflight; the
+    /// handler is resolved again at dispatch, review r2 of #696).
+    events: Vec<(&'static str, Shape, Vec<Value>)>,
 }
 
 /// The preflight (module documentation): `Ok(None)` when nothing changes. Reads only.
@@ -282,7 +287,8 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     let volume = match object(vm, actor, "PhysicsVolume")? {
         Some(v) => {
             resident(vm, v)?;
-            Some((v, event(vm, v, "PhysicsChangedFor", Shape::Object, actor)?))
+            event(vm, v, "PhysicsChangedFor", Shape::Object, actor)?;
+            Some(v)
         }
         None => None,
     };
@@ -290,7 +296,7 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     if layers.willow {
         let walking = |m: u8| m == PHYS_WALKING || m == PHYS_NAV_MESH_WALKING;
         let old_arg = || vec![Value::Byte(old)];
-        let cases: [(&str, &str, bool, Shape, Vec<Value>); 4] = [
+        let cases: [(&str, &'static str, bool, Shape, Vec<Value>); 4] = [
             ("bNotifyStopFalling", "StoppedFalling", old == PHYS_FALLING && mode != PHYS_FALLING, Shape::None, vec![]),
             ("bNotifyBeginFalling", "BeganFalling", old != PHYS_FALLING && mode == PHYS_FALLING, Shape::Byte, old_arg()),
             ("bNotifyBeginWalking", "BeganWalking", !walking(old) && walking(mode), Shape::Byte, old_arg()),
@@ -298,7 +304,8 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
         ];
         for (notify, name, transition, shape, args) in cases {
             if transition && flag(vm, actor, notify)? {
-                events.push((event(vm, actor, name, shape, actor)?, args));
+                event(vm, actor, name, shape, actor)?;
+                events.push((name, shape, args));
             }
         }
     }
@@ -333,11 +340,15 @@ fn commit(c: &mut NativeCall<'_>, plan: &Plan) -> Result<Value, VmError> {
     let class = c.vm.space.heap.get(plan.actor)?.class;
     let p = c.vm.space.prop(class, "Physics").ok_or_else(|| script("the class declares no Physics".to_string()))?;
     c.vm.space.write(plan.actor, PropAddr::scalar(p), Value::Byte(plan.mode))?;
-    if let Some((volume, f)) = plan.volume {
+    // Each handler is resolved again, load-free, right before its dispatch: an earlier callback may have changed the
+    // receiver's state (review r2 of #696). A refusal here comes after the Physics write, so it is marked.
+    if let Some(volume) = plan.volume {
+        let f = event(c.vm, volume, "PhysicsChangedFor", Shape::Object, plan.actor)?;
         c.call_script(f, Some(volume), vec![Value::Object(Some(plan.actor))])?;
     }
-    for (f, args) in &plan.events {
-        c.call_script(*f, Some(plan.actor), args.clone())?;
+    for (name, shape, args) in &plan.events {
+        let f = event(c.vm, plan.actor, name, *shape, plan.actor)?;
+        c.call_script(f, Some(plan.actor), args.clone())?;
     }
     Ok(Value::None)
 }
