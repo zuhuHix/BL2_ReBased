@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**COLD-CLASS-AUDIT-SKILLS (2026-11-25, zuhu desktop (Linux), on fix/rust-cold-class-audit-skills stacked on
+fix/rust-class-code-load-counter 1a22658, #685):** AI-assisted (Claude Code, Opus 5.5). Tests only. Each of ow-skills'
+package-backed Off natives is called with an object whose class has a layout but no loaded code, asserting
+`Vm::class_code_loads`, #518's three counters and the name table unchanged. 9 tests: 6 pass (`GetSMDToPlay`,
+`IsLocalAuthority`, `IsPlayingClass`, `InitPlayerSkillTree`, `GetSkillManager`'s spawn refusal,
+`DeactivateAllSkillsForInstigator`'s refusal, and the class achievement as the action-skill pack binds it); 3 are
+`#[ignore]`d because the native loads cold code (`Play` and `PlayLocal` through `GetSMDToPlay`'s `method_of`, and
+`GetSMNode`'s `find_class` of `AnimNodeSpecialMoveBlend`). `cargo test --workspace -j 4`: 3,409 passed / 4 failed (the
+expected N1 float-oracle failures on Linux) / 56 ignored; `cargo test -p ow-skills` 160 / 0 / 4; `crate_edges_test.py`
+OK. No real-game run.
+
 **IMPL-BODYCOMP-HOOK2-PAWN-TEST (2026-11-25, pc-hummer, on integration/2026-11-25-c15 25425bb9):** AI-assisted
 (Claude Code, Opus 5.5). Hook 2's pawn test (`IsPlayerPawn`) and controller test (`UsingFirstPersonCamera`) in Off,
 from NATIVE_BODYCOMP_RENDER_HOOKS.md section 6 at 44532835; `PAWN_TEST` "not identified" and the
