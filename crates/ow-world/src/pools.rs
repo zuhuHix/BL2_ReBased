@@ -697,21 +697,33 @@ pub fn after_partial_writes(e: VmError) -> VmError {
 /// The write tracker's three counters (#518's design, review r2 of #518): heap writes committed, random draws made,
 /// and definition-store load transitions. Each only grows, so a step that read them at its start knows whether it
 /// wrote anything since, without keeping its own flags (review r1 of #528, item 4).
+///
+/// Lane COUNTERS-MISS-CLASS-CODE-LOADS adds a fourth, the VM's code loads (`Vm::class_code_loads`), which none of the
+/// three sees. It takes part in equality, so a test that compares two readings ("write-free") catches a code load.
+/// [`Counters::moved`], which marks a runtime refusal "stopped after partial writes", still reads only #518's three:
+/// whether a code load should mark one is a separate ruling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counters {
     writes: u64,
     draws: u64,
     loads: u64,
+    code_loads: u64,
 }
 
 impl Counters {
     pub fn read(vm: &Vm) -> Self {
-        Counters { writes: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+        Counters {
+            writes: vm.space.heap.committed_writes(),
+            draws: vm.rng.draws(),
+            loads: vm.defs.load_transitions(),
+            code_loads: vm.class_code_loads(),
+        }
     }
 
-    /// Whether any counter moved since `self` was read.
+    /// Whether any of #518's three counters moved since `self` was read (not the code loads; see the type).
     pub fn moved(self, vm: &Vm) -> bool {
-        Counters::read(vm) != self
+        let now = Counters::read(vm);
+        (now.writes, now.draws, now.loads) != (self.writes, self.draws, self.loads)
     }
 }
 

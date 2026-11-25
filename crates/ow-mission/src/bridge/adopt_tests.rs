@@ -217,10 +217,10 @@ fn the_adopted_globals_give_their_own_definition() {
     let Value::Object(Some(handle)) = get(&vm.space, pawn, "MissionDirectives").unwrap() else { panic!("no reference") };
     assert!(vm.defs.is_unloaded(&vm.space, handle), "a handle the store has not loaded");
     set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(Some(handle))).unwrap();
-    let loads = vm.defs.load_transitions();
+    let loads = (vm.defs.load_transitions() + vm.class_code_loads());
     let n = not_yet(script.player_interaction_distance(vm).unwrap_err());
     assert_eq!(&*n.what, GLOBALS_UNLOADED);
-    assert_eq!(vm.defs.load_transitions(), loads, "nothing loaded");
+    assert_eq!((vm.defs.load_transitions() + vm.class_code_loads()), loads, "nothing loaded");
     assert!(vm.defs.is_unloaded(&vm.space, handle));
     // And cleared again: the unset refusal, not the earlier definition.
     set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(None)).unwrap();
@@ -278,7 +278,7 @@ fn the_map_route_makes_no_director_and_takes_the_placed_waypoint() {
     // A placed actor of the map package stands for the waypoint (any export: the map route does not make it).
     const PLACED: &str = "GD_Marcus.Character.Directives_Toy";
     let objects = m.world.vm.space.heap.len();
-    let loads = m.world.vm.defs.load_transitions();
+    let loads = (m.world.vm.defs.load_transitions() + m.world.vm.class_code_loads());
     // Review r1 of #571, item 1: nothing is loaded first. An uncached package, an unknown one and (below) a missing
     // export are each the typed refusal, not a store error or `false`.
     assert!(!m.world.vm.defs.packages().is_loaded(&director), "TestDirector starts uncached");
@@ -289,7 +289,7 @@ fn the_map_route_makes_no_director_and_takes_the_placed_waypoint() {
     let n = not_yet(script.place_waypoint(&mut m.world.vm, &unknown, PLACED).unwrap_err());
     assert_eq!(&*n.what, waypoint_on_map(PLACED));
     assert_eq!(m.world.vm.space.heap.len(), objects, "nothing made");
-    assert_eq!(m.world.vm.defs.load_transitions(), loads, "nothing loaded");
+    assert_eq!((m.world.vm.defs.load_transitions() + m.world.vm.class_code_loads()), loads, "nothing loaded");
     let vm = &mut m.world.vm;
     let (_, store) = vm.defs.code_mut();
     let id = store.load(&director).unwrap();

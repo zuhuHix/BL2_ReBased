@@ -217,7 +217,7 @@ impl Fx {
     /// length (lane FOLLOWUP-627-COUNTERS, the assertion #627's decision promised once #595 was on main).
     fn counters(&self) -> (u64, u64, u64, usize) {
         let vm = &self.vm;
-        (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+        (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len())
     }
 
     /// Everything a refusal or an answer must leave as it was (review r1 of #642, item 3): the heap fingerprint
@@ -341,7 +341,7 @@ impl Fx {
 
 /// #518's three counters (heap writes, draws, load transitions) and the name table's length.
 fn counts(vm: &Vm) -> (u64, u64, u64, usize) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len())
 }
 
 fn l() -> Missing {

@@ -82,7 +82,7 @@ fn fx() -> Fx {
 /// #518's counters: heap committed writes, generator draws and definition-store load transitions (review r1 of #599,
 /// item 1). Every call, refusals included, must leave all three as they were.
 fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()))
 }
 
 impl Fx {

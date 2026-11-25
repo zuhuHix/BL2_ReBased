@@ -308,7 +308,7 @@ type Counts = (u64, u64, u64, usize, usize);
 
 fn counters(vm: &Vm) -> Counts {
     let space = &vm.space;
-    (space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), space.classes.len(), space.names.len())
+    (space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), space.classes.len(), space.names.len())
 }
 
 fn not_yet(r: Result<Option<ObjRef>, VmError>, missing: Missing, words: &[&str]) {

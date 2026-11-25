@@ -2061,6 +2061,29 @@ fn find_loaded_method_reads_only_and_follows_find_method() {
     assert_eq!(r.vm.find_loaded_method(mach, "NoSuchFunction", None), Some(None));
 }
 
+/// `class_code_loads` (lane COUNTERS-MISS-CLASS-CODE-LOADS): loading a cold class's code moves it, while #518's three
+/// counters (heap writes, draws, store load transitions) stay put; asking again, or a read-only lookup, does not move it.
+#[test]
+fn a_class_code_load_moves_the_code_load_counter_only() {
+    let mut r = start(ParityMode::Off);
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    let three = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+    let (before, loads) = (three(&r.vm), r.vm.class_code_loads());
+    assert_eq!(r.vm.find_loaded_method(mach, "Where", None), None);
+    assert_eq!(r.vm.class_code_loads(), loads, "a read-only lookup loads nothing");
+    r.vm.find_method(mach, "Where", None).unwrap();
+    assert!(r.vm.class_code_loads() > loads, "the class code load is counted");
+    assert_eq!(three(&r.vm), before, "#518's three counters do not see it");
+    let after = r.vm.class_code_loads();
+    r.vm.find_method(mach, "Where", None).unwrap();
+    assert_eq!(r.vm.class_code_loads(), after, "loaded once");
+}
+
 /// `declare_method` (reviews r1 and r2 of #570): a hand-declared class gets a method `find_method` and
 /// `find_loaded_method` see, in the class or in a state. Refused: a class with package code, and any name a lookup
 /// from the class already answers (the class's own, in another of its states, a hand parent's, a package

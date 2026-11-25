@@ -126,7 +126,7 @@ impl Fx {
 
     /// #518's heap-write and load-transition counts.
     fn counts(&self) -> (u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.defs.load_transitions())
+        (self.vm.space.heap.committed_writes(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()))
     }
 
     fn harness(&self) -> Vec<String> {

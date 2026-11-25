@@ -223,7 +223,7 @@ fn get(vm: &Vm, o: ObjRef, name: &str) -> Value {
 
 /// What a call must leave unchanged: #518's three counters and the name table's length.
 fn marks(vm: &Vm) -> (u64, u64, u64, usize) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len())
 }
 
 impl Fx {

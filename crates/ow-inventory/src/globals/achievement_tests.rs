@@ -292,7 +292,7 @@ impl Fx {
     }
 
     fn counters(&self) -> (u64, u64, u64) {
-        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions())
+        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), (self.vm.defs.load_transitions() + self.vm.class_code_loads()))
     }
 }
 

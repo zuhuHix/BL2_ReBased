@@ -784,20 +784,20 @@ fn link_9_s_set_up_binds_get_ai_component() {
 #[test]
 fn a_set_up_object_is_loaded_once_and_reported() {
     let mut t = toy();
-    let loads = t.world.vm.defs.load_transitions();
+    let loads = (t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads());
     let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
     outcome.unwrap();
     assert!(line.ends_with(": loaded at set-up (a write; UNVERIFIED stand-in for the package's load with its definition)"), "{line}");
-    assert!(t.world.vm.defs.load_transitions() > loads, "a load happened");
-    let loads = t.world.vm.defs.load_transitions();
+    assert!((t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads()) > loads, "a load happened");
+    let loads = (t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads());
     let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.ToyResolver");
     outcome.unwrap();
     assert_eq!(line, format!("{SETUP_OBJECT_INPUT} GearboxFramework.ToyResolver: ready, nothing loaded"));
-    assert_eq!(t.world.vm.defs.load_transitions(), loads);
+    assert_eq!((t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads()), loads);
     let (line, outcome) = preload_object(&mut t.world.vm, "GearboxFramework.NoSuchResolver");
     outcome.unwrap();
     assert!(line.ends_with(": not in the packages, nothing loaded"), "{line}");
-    assert_eq!(t.world.vm.defs.load_transitions(), loads, "nothing loaded for a missing path");
+    assert_eq!((t.world.vm.defs.load_transitions() + t.world.vm.class_code_loads()), loads, "nothing loaded for a missing path");
 }
 
 /// Lane LINK9-PAWN-NATIVES: link 9's set-up registers the combat pack's pawn natives (`register_pawn_natives`), so
@@ -846,7 +846,7 @@ fn decoded_gear_vm() -> (Vm, PathBuf) {
 }
 
 fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes() as u64, vm.defs.load_transitions() as u64, vm.rng.draws() as u64)
+    (vm.space.heap.committed_writes() as u64, (vm.defs.load_transitions() + vm.class_code_loads()) as u64, vm.rng.draws() as u64)
 }
 
 /// A decoded class whose entry is another interface: the answer (no) is read from the packages' interface lists, its

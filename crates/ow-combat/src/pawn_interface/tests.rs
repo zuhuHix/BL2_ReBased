@@ -695,7 +695,7 @@ fn a_refusal_names_a_deep_component_by_its_leaf_name() {
 
 /// #518's counters: heap committed writes, generator draws and definition-store load transitions.
 fn counters(vm: &Vm) -> (u64, u64, u64) {
-    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+    (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()))
 }
 
 impl Env {

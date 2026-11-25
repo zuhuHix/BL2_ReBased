@@ -361,7 +361,7 @@ fn the_rarity_schema_wants_the_declared_struct() {
 fn the_declared_reference_check_looks_nothing_up() {
     let mut x = fx(ParityMode::Off);
     let g = x.globals;
-    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len());
     let start = marks(&x.vm);
     declared_reference(&x.vm, g, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), "test").unwrap();
     assert_eq!(marks(&x.vm), start, "the passing check");
@@ -395,7 +395,7 @@ fn a_declared_only_target_stays_cold() {
     let target = x.vm.space.classes.by_path("WillowGame.ToyColdTarget").expect("declared by the store");
     let cold = |vm: &Vm| (vm.space.classes.get_layout(target).is_some_and(|l| l.is_defined()), vm.class_code_loaded(target));
     assert_eq!(cold(&x.vm), (false, false), "the target's layout starts undefined and its code cold");
-    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), (vm.defs.load_transitions() + vm.class_code_loads()), vm.space.names.len());
     let start = marks(&x.vm);
     declared_reference(&x.vm, holder, "Target", Some("WillowGame.ToyColdTarget"), "test")
         .expect("the declared class is the wanted one");

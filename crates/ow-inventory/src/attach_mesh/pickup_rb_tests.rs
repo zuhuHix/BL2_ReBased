@@ -360,7 +360,7 @@ impl Fx {
     fn state(&self) -> (Vec<Value>, Vec<Value>, usize, [u64; 3]) {
         let all = |o: ObjRef| -> Vec<Value> { self.vm.space.heap.get(o).unwrap().slots.to_vec() };
         let timers = ow_world::timers::timers_of(&self.vm).unwrap().borrow().of(self.pickup).len();
-        let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions()];
+        let counters = [self.vm.space.heap.committed_writes(), self.vm.rng.draws(), (self.vm.defs.load_transitions() + self.vm.class_code_loads())];
         (all(self.pickup), all(self.mesh), timers, counters)
     }
 
@@ -536,9 +536,9 @@ fn an_unloaded_definition_is_not_read_and_not_loaded() {
     let mut x = fx();
     let u = x.unloaded;
     x.set_definition(Some(u));
-    let loads = x.vm.defs.load_transitions();
+    let loads = (x.vm.defs.load_transitions() + x.vm.class_code_loads());
     refused(&mut x, Missing::NotRead, UNLOADED_DEFINITION, RECORD_RB);
-    assert!(x.vm.defs.is_unloaded(&x.vm.space, u) && x.vm.defs.load_transitions() == loads, "not loaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, u) && (x.vm.defs.load_transitions() + x.vm.class_code_loads()) == loads, "not loaded");
 }
 
 /// Refusals 3 and 4 (the deferred reattach, `CollideActors` clear), and the owner cases that get the flag only.
