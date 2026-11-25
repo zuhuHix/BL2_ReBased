@@ -19,8 +19,11 @@ changed.
   - an owner below authority also forwards to the server's queue event;
   - a stop drains only the queue's first entry, gated, with its `Data`;
   - `IsQueued` matches definitions by identity.
-- **Link 9 (inferred):** the caller is most likely the target AI's `Action_FollowPath.SetSpecialMoves`. Case "nothing
-  current" then meets `Play`'s existing replication-record `NotRead`.
-- **Proposed Off answer:** bind `Queue` beside `Play` in `ow-skills`, with a write-free preflight (the owner and
-  network cases refused as `NotRead`) and the two commits above. Reference unchanged; tests listed.
+- **Link 9 (inferred):** the caller is most likely the target AI's `Action_FollowPath.SetSpecialMoves`. If the
+  target's `CurrentSMData.SMD` is None when it is called, case "nothing current" applies, so link 9's predicted next
+  stop after `Queue` is `Play`'s existing replication-record `NotRead`. That refusal comes before any start, write or
+  queue clear.
+- **Proposed Off answer:** bind `Queue` beside `Play` in `ow-skills`, with a write-free preflight that reads only
+  loaded objects. An unloaded input, a missing `Owner`, an `Owner` that differs from the `SMI` actor, and an owner below
+  authority are each refused as a `NotYet`. Then the two commits above. Reference unchanged; tests listed.
 - **Clean room:** a different lane implements this note.
