@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**COLD-LOAD-FIXES (2026-11-25, pc-hummer, on fix/rust-cold-class-audit-world-inv d253ffe2):** AI-assisted (Claude
+Code, Opus 5.5). #701's five cold-class findings fixed and their pinned tests un-ignored, plus pickup targeting's
+`suspended` (cold `WillowPlayerPawn`, and no "Dead" intern). `cargo test --workspace -j 8` 3,497 passed / 0 failed / 55
+ignored; `crate_edges_test.py` 19 OK. The slice gate was not run (not asked). No real-game run.
+
 **WALK-INVALID-BOUNDS (2026-11-25, zuhuPC Linux, on fix/rust-walk-invalid-bounds stacked on f12b4e99):** AI-assisted
 (Claude Code, Opus 5.5). The spawn and touch walk no longer takes NaN or inverted service bounds for a miss: a primitive
 the filters keep is refused with `Actor.Trace`'s text and record. Off only. Workspace numbers are in the hand-back; the
