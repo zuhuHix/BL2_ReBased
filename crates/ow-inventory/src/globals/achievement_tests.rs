@@ -524,11 +524,9 @@ fn reference_binds_nothing_and_a_bound_key_is_kept() {
 }
 
 /// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the read-only "no match" answer with the globals
-/// definition's class cold. Ignored: two code loads happen before the answer false; by reading, they are step 1's
-/// `globals_definition`, whose `find_class` of `GearboxGlobalsDefinition` and `GlobalsDefinition` loads their cold
-/// code.
+/// definition's class cold: the answer false with no class code loaded (lane COLD-LOAD-FIXES: step 1 takes both
+/// classes from the class table by path, `globals_definition_resident`).
 #[test]
-#[ignore = "finding: UnlockAchievementIfConditionsMet's globals_definition find_class loads cold class code on its read-only path (lane COLD-CLASS-AUDIT-WORLD-INVENTORY)"]
 fn no_match_with_a_cold_globals_definition_loads_no_code() {
     let mut x = fx_with(Setup { cold_definition: true, ..OFF });
     x.set_rows(&[(16, 7, "", 20)]);

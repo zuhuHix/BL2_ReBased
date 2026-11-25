@@ -226,8 +226,9 @@ fn run(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let call = conditions(c)?;
     // Step 1: no globals object is the lookup's own LayerAbsent refusal, before any write (review r1 of #546).
     let globals = super::world_globals(c.vm)?;
-    // The existing helper as it is: None and an unloaded handle are its typed refusals (the hub's ruling).
-    let definition = super::globals_definition(c.vm, globals, WHAT)?;
+    // The existing helper's refusals (None and an unloaded handle, the hub's ruling), through its read-only form so a
+    // cold definition class is not loaded on this path (lane COLD-LOAD-FIXES).
+    let definition = super::globals_definition_resident(c.vm, globals, WHAT)?;
     // Step 2: the declared types, then the selection, reads only.
     let ids = achievements_to_unlock(&achievement_data(c.vm, definition)?, &call);
     // Step 3.
