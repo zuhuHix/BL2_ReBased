@@ -233,6 +233,8 @@ struct Fx {
     calls: Rc<RefCell<Vec<String>>>,
     /// The volume event answers a typed NotYet (the note's test 14).
     fail_volume: Rc<RefCell<bool>>,
+    /// The volume event moves the actor to this state first (review r2 of #696).
+    goto_on_volume: Rc<RefCell<Option<&'static str>>>,
     dir: PathBuf,
 }
 
@@ -268,11 +270,12 @@ fn fx_variant(mode: ParityMode, variant: Variant) -> Fx {
     let mut world = World::new(vm, BalanceState::new(snapshot), &[]).unwrap();
     let calls = Rc::new(RefCell::new(Vec::new()));
     let fail_volume = Rc::new(RefCell::new(false));
+    let goto_on_volume: Rc<RefCell<Option<&'static str>>> = Rc::new(RefCell::new(None));
     for path in SPIES {
         let Ok(f) = world.vm.find_function(path) else { continue };
         let key = world.vm.function(f).unwrap().native_key.clone().unwrap();
         let name = path.rsplit('.').next().unwrap();
-        let (seen, fail) = (calls.clone(), fail_volume.clone());
+        let (seen, fail, goto) = (calls.clone(), fail_volume.clone(), goto_on_volume.clone());
         world
             .vm
             .register_native(
@@ -297,6 +300,14 @@ fn fx_variant(mode: ParityMode, variant: Variant) -> Fx {
                     let p = c.vm.space.prop(class, "Physics").unwrap();
                     let physics = c.vm.space.read(actor, PropAddr::scalar(p))?.clone();
                     seen.borrow_mut().push(format!("{name}({}) physics={physics:?}", args.join(",")));
+                    let target = *goto.borrow();
+                    if name == "PhysicsChangedFor"
+                        && let Some(state) = target
+                    {
+                        let state = Value::Name(c.vm.space.names.intern(state));
+                        let f = c.vm.find_function("Engine.Object.GotoState")?;
+                        c.call_script(f, Some(actor), vec![state])?;
+                    }
                     if name == "PhysicsChangedFor" && *fail.borrow() {
                         return Err(NotYet::not_read("a toy native the volume event reaches", "test").into());
                     }
@@ -305,7 +316,7 @@ fn fx_variant(mode: ParityMode, variant: Variant) -> Fx {
             )
             .unwrap();
     }
-    Fx { world, calls, fail_volume, dir }
+    Fx { world, calls, fail_volume, goto_on_volume, dir }
 }
 
 fn fx() -> Fx {
@@ -622,7 +633,10 @@ fn an_override_in_a_parent_state_is_the_event_called() {
     x.set(pawn, "bNotifyStopFalling", Value::Bool(true));
     let plan = preflight(&x.world.vm, pawn, CUSTOM).unwrap().unwrap();
     let paths: Vec<String> =
-        plan.events.iter().map(|(f, _)| x.world.vm.function(*f).unwrap().path.as_str().to_string()).collect();
+        plan.events.iter().map(|(name, shape, _)| {
+            let f = event(&x.world.vm, pawn, name, *shape, pawn).unwrap();
+            x.world.vm.function(f).unwrap().path.as_str().to_string()
+        }).collect();
     assert_eq!(paths, ["WillowGame.ToyStatePawn.Falling.StoppedFalling"]);
     // The commit runs it (a script body): Physics 14 and no spy call, since the class body's spy is not the one called.
     x.physics(pawn, CUSTOM).unwrap();
@@ -665,4 +679,25 @@ fn the_ai_layer_answers_before_physics_is_read() {
     assert_eq!(not_yet(x.same(pawn, 12)), (Missing::NotRead, NAV_MESH.to_string()));
     x.set(pawn, "bHardAttach", Value::Bool(true));
     assert_eq!(x.same(pawn, CUSTOM).unwrap(), Value::None);
+}
+
+/// Review r2 of #696: the volume's `PhysicsChangedFor` moves the pawn into state `Landing` (whose parent `Falling`
+/// overrides `StoppedFalling`), so the pawn event dispatched next is the new state's override, resolved again at
+/// dispatch, not the class body's handler the preflight saw.
+#[test]
+fn a_callback_s_state_change_is_followed_at_dispatch() {
+    let mut x = fx();
+    ow_vm::natives_core::register(x.vm()).unwrap();
+    let pawn = x.obj("WillowGame.ToyStatePawn");
+    let volume = x.obj("Engine.PhysicsVolume");
+    x.set(pawn, "PhysicsVolume", Value::Object(Some(volume)));
+    x.set(pawn, "Physics", Value::Byte(2));
+    x.set(pawn, "bNotifyStopFalling", Value::Bool(true));
+    let plan = preflight(&x.world.vm, pawn, CUSTOM).unwrap().unwrap();
+    assert_eq!(plan.events.iter().map(|e| e.0).collect::<Vec<_>>(), ["StoppedFalling"], "validated in preflight");
+    *x.goto_on_volume.borrow_mut() = Some("Landing");
+    x.physics(pawn, CUSTOM).unwrap();
+    assert_eq!(x.calls(), vec!["PhysicsChangedFor(actor) physics=Byte(14)"], "the class body's spy is not called");
+    let landing = x.world.vm.space.names.find("Landing");
+    assert_eq!(x.world.vm.space.heap.get(pawn).unwrap().state, landing, "the pawn is in the new state");
 }
