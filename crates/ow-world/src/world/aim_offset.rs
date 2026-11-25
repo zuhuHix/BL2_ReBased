@@ -20,8 +20,11 @@
 //!    - an empty one the store marked skipped (`DefStore::is_skipped`) is the profiles layer's names
 //!      (crate::world::aim_profiles, the binary elements read from the owner's export); its refusal is
 //!      [`PROFILES`]-led `LayerAbsent` on [`PROFILES_LAYER`];
-//!    - an empty one on a loaded definition that is not marked skipped was decoded (or not tagged): an empty list, so
-//!      "no match";
+//!    - an empty one on a loaded definition that is not marked skipped **and whose own export tags `Profiles`** was
+//!      decoded: an empty list, so "no match";
+//!    - an empty one on a loaded definition whose export does not tag it carries the value it was built over (an
+//!      archetype's, whose skip mark the build does not carry, or the class default's), which the store does not
+//!      report: the reader's "no Profiles tag" `LayerAbsent` (review r1 of #737, the hub's ruling);
 //!    - an empty one on any other owner (a run-time object) keeps the interim rule: [`PROFILES`] (`LayerAbsent`).
 //!
 //!    A profile name with no entry in the name table cannot be the asked name (nothing is interned);
@@ -125,7 +128,10 @@ fn profile_names(vm: &Vm, owner: ObjRef) -> Result<Vec<Option<NameId>>, VmError>
             return Ok(names.iter().map(|text| vm.space.names.find(text)).collect());
         }
         if vm.defs.is_loaded(&vm.space, owner) {
-            return Ok(Vec::new());
+            if crate::world::aim_profiles::has_own_profiles_tag(vm, owner)? {
+                return Ok(Vec::new());
+            }
+            return Err(crate::world::aim_profiles::no_profiles_tag());
         }
         return Err(NotYet::layer_absent(PROFILES, PROFILES_LAYER, RECORD).into());
     }
