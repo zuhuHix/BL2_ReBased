@@ -906,7 +906,6 @@ pub mod exp_level {
     }
 
     #[cfg(test)]
-    #[path = "../exp_level_tests.rs"]
     mod tests;
 }
 
