@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-BUILDWEAPONMATERIAL (2026-11-25, pc-hummer, docs only, on docs/native-build-weapon-material from main
+9cb8428f):** AI-assisted (Claude Code, Opus 5.5). NATIVE_WEAPON_VISUALS.md section 1.1: the Off answer for
+`BuildWeaponMaterial`, link 8's stop. No code changed, so no measured number moved; the slice gate was not run for
+this lane. UNVERIFIED in game.
+
 **COUNTERS-MISS-CLASS-CODE-LOADS (2026-11-25, zuhuPC Linux, on main 03896e5):** AI-assisted (Claude Code, Opus 5.5).
 Write-free test checks also count class code loads (`Vm::class_code_loads`); runtime partial-write marking unchanged.
 `cargo test --workspace` (after review r1 of #685): 3,403 passed / 4 failed (the expected Linux N1 tests) / 54
