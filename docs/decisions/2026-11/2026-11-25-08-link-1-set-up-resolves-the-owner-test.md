@@ -16,12 +16,27 @@ asked for. Synthetic fixtures only.
 - **Where each answer comes from (the line says it):**
   - "read from the packages' interface lists": both agree; the entries resolved at set-up are a load, an UNVERIFIED
     stand-in for when the game resolves them;
-  - "unresolved": the strict reading has no answer (an entry resolves to no class, an incomplete chain), fails, or
-    disagrees. The set-up then answers `NotYet` (`NotRead`, record the owner note), because the plain resolve keeps a
+  - "unresolved": the strict reading has no answer (an entry or a class chain did not resolve), fails (an entry's
+    lookup failed, for example an entry naming something that is not a class), or disagrees. The set-up then answers `NotYet` (`NotRead`, record the owner note), because the plain resolve keeps a
     failed lookup as "resolved to nothing" and the owner test would read that as a settled no (O7);
   - interface not loaded, no code key, or undecoded bodies: nothing is resolved, and the owner test answers that case
     itself (O1, O3/O3', O4). No structural fallback is taken anywhere, as the owner test takes none.
   - No pawn archetype loaded: the tables' line says it skipped.
+- **Review r1 of #670:**
+  - **Every entry:** `resolve_interface_tables` resolves every interface entry on the pawn class's chain, not only the
+    one naming `SpecialMoveInterface`, and the line says "(every entry on the chain)". So other read-only interface
+    questions about Maya's pawn class now answer from resolved entries too. `Vm::plain_interface_read_only` has no
+    guard like the owner test's for an entry resolved to nothing on its no.
+  - **An earlier stop:** a set-up refusal stops the `maya` step before the tree, mesh and socket preloads and
+    `ServerPlayerSelectClass`, which is earlier than the owner test's O5 stopped it.
+  - **Loads:** the store's handle counter does not move when a class or a package is loaded for an entry's lookup.
+    So the line's load note is now measured on the code index's class count and the store's loaded-package count. A
+    resolve that registers a class the index did not hold, or loads another package, is reported as a write. The
+    entries count is on the refusal line too.
+  - **Tests added:** an entry naming a second, unloaded package (the note appears, and not on a second run); an entry
+    naming a Function export (the strict lookup fails: "an entry's lookup failed", `NotRead`, the owner note's
+    record); a hand-defined pawn class ("no code key, nothing resolved"). A failing `preload_class` is not tested here;
+    it is the existing loader's own line.
 - **Unchanged:** the owner rule (`ow_world::world::anim_node_init::owner_implements`) still loads and resolves
   nothing; Reference does none of this.
 - **Verified (host only):** on an invented package with decoded bodies, the owner test refuses O5 before the set-up
