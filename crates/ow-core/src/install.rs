@@ -139,6 +139,24 @@ pub fn localization_roots(cooked: &Path) -> Result<Vec<PathBuf>, PathCaseError> 
     ["Engine", "Gearbox", "WillowGame"].iter().map(|n| resolve_or_join(game, &format!("{n}/Localization"))).collect()
 }
 
+/// The one of `paths` that ends with `rel` (review r2 of #675): exact trailing components first; when none matches
+/// exactly, the one that matches ignoring ASCII case ([`ends_with`]). `Ok(None)` when none matches; two or more at
+/// the deciding step is [`PathCaseError::Ambiguous`].
+pub fn select_tail<'a>(paths: &'a [PathBuf], rel: &str) -> Result<Option<&'a PathBuf>, PathCaseError> {
+    let exact_rel: PathBuf = rel.split('/').filter(|p| !p.is_empty()).collect();
+    let exact: Vec<&PathBuf> = paths.iter().filter(|p| p.ends_with(&exact_rel)).collect();
+    let pick = if exact.is_empty() { paths.iter().filter(|p| ends_with(p, rel)).collect() } else { exact };
+    match pick.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(*one)),
+        many => Err(PathCaseError::Ambiguous {
+            dir: PathBuf::new(),
+            name: rel.to_string(),
+            matches: many.iter().map(|p| p.display().to_string()).collect(),
+        }),
+    }
+}
+
 /// Whether `path` ends with `rel` (components separated by `/`), each component equal exactly or ignoring ASCII
 /// case (module documentation).
 pub fn ends_with(path: &Path, rel: &str) -> bool {
@@ -186,14 +204,24 @@ mod tests {
         sensitive
     }
 
+    /// `got` names the fixture's `tail` (review r2 of #675): component for component on a case-sensitive volume, where
+    /// the resolver returns the file's own spelling; ignoring case on a case-insensitive one (Windows CI), where the
+    /// requested spelling already exists. Either way the path must open.
+    fn names(got: &Path, tail: &str, sensitive: bool) {
+        let exact: PathBuf = tail.split('/').collect();
+        assert!(if sensitive { got.ends_with(&exact) } else { ends_with(got, tail) }, "{got:?} vs {tail}");
+        assert!(got.exists(), "{got:?} opens");
+    }
+
     #[test]
     fn a_lower_case_tree_resolves_from_the_windows_names() {
         let t = Tree::new("lower", &["steamassets/willowgame/cookedpcconsole/startup.upk"]);
+        let sensitive = case_sensitive(&t.0);
         let got = resolve(&t.0, "steamassets/WillowGame/CookedPCConsole/Startup.upk").unwrap().unwrap();
-        assert!(got.ends_with("steamassets/willowgame/cookedpcconsole/startup.upk"), "{got:?}");
+        names(&got, "steamassets/willowgame/cookedpcconsole/startup.upk", sensitive);
         assert_eq!(resolve(&t.0, "steamassets/WillowGame/NoSuch.upk").unwrap(), None);
         let cooked = cooked_folder(&t.0).unwrap().unwrap();
-        assert!(cooked.ends_with("steamassets/willowgame/cookedpcconsole"), "{cooked:?}");
+        names(&cooked, "steamassets/willowgame/cookedpcconsole", sensitive);
         assert_eq!(content_root(&t.0).unwrap(), t.0.join("steamassets"));
         assert_eq!(cooked_or_join(&t.0).unwrap(), cooked);
     }
@@ -226,12 +254,16 @@ mod tests {
     #[test]
     fn the_localization_roots_resolve_in_aspyr_s_layout() {
         let t = Tree::new("loc", &["steamassets/engine/localization/int/core.int", "steamassets/willowgame/cookedpcconsole/core.upk"]);
+        let sensitive = case_sensitive(&t.0);
         let cooked = cooked_folder(&t.0).unwrap().unwrap();
         let roots = localization_roots(&cooked).unwrap();
-        assert!(roots[0].ends_with("steamassets/engine/localization"), "{roots:?}");
+        names(&roots[0], "steamassets/engine/localization", sensitive);
         // A root that is not there is joined as written; its reader finds no file there.
         assert!(roots[1].ends_with("steamassets/Gearbox/Localization"), "{roots:?}");
-        assert_eq!(resolve_child(&roots[0], "INT").unwrap(), Some(roots[0].join("int")));
+        assert!(!roots[1].exists());
+        let int = resolve_child(&roots[0], "INT").unwrap().unwrap();
+        names(&int, "steamassets/engine/localization/int", sensitive);
+        assert!(int.join("core.int").exists());
     }
 
     #[test]
@@ -241,6 +273,17 @@ mod tests {
         assert_eq!(content_root(&t.0).unwrap(), t.0);
         assert_eq!(cooked_or_join(&t.0).unwrap(), t.0.join("WillowGame").join("CookedPCConsole"));
         assert_eq!(resolve_or_join(&t.0, "WillowGame/X.upk").unwrap(), t.0.join("WillowGame").join("X.upk"));
+    }
+
+    #[test]
+    fn select_tail_prefers_an_exact_match_and_refuses_two_folded_ones() {
+        let p = |s: &str| PathBuf::from(s);
+        let both = [p("/g/c/Map.upk"), p("/g/c/map.upk")];
+        assert_eq!(select_tail(&both, "c/Map.upk").unwrap(), Some(&both[0]));
+        assert!(matches!(select_tail(&both, "c/MAP.upk"), Err(PathCaseError::Ambiguous { .. })));
+        let one = [p("/g/c/map.upk")];
+        assert_eq!(select_tail(&one, "c/Map.upk").unwrap(), Some(&one[0]));
+        assert_eq!(select_tail(&one, "c/Other.upk").unwrap(), None);
     }
 
     #[test]

@@ -42,6 +42,13 @@ Lane LINUX-PATHS, with Claude Opus 5.5; the hub approved cause B of the Linux in
 - **Errors, not guesses** (review r1 of #675): a folder that cannot be checked or listed for any reason but its
   absence is `PathCaseError::Io`. The vendor map view refuses two census files that both match its level ignoring
   case, instead of taking the first.
+- **Review r2 of #675:**
+  - the vendor map view picks its level file from the whole census file list (`install::select_tail`: exact first,
+    then ignoring case, two at the deciding step refused), and that file gives both the exports and the load;
+  - `resolve_map` returns the file it selected, and the host's scene load opens that file for the persistent level
+    (`Scene::load_at`; the levels it streams are still loaded by name). Its metadata check propagates every error but
+    absence;
+  - the helper's tests check paths according to the test volume's case sensitivity, so they also hold on Windows CI.
   Adding `pub mod install;` to `ow-core/src/lib.rs` is that file's first edit since the scaffold.
 - **Measured** (zuhuPC, Linux, release build under the machine lock, main faa3bbc plus this lane): `ow-host --game
   <Aspyr install>` exit 0 (install found); `--game /tmp` exit 1. Installed Off strict `--slice-gate` on the Aspyr

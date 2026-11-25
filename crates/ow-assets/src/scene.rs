@@ -529,6 +529,19 @@ impl Scene {
         assets: &SceneAssets,
         map: &PackageName,
     ) -> Result<Scene, SceneError> {
+        Scene::load_at(defs, space, assets, map, None)
+    }
+
+    /// [`Scene::load`] with the persistent level read from `file` when given (review r2 of #675: the file a caller
+    /// already selected, so two files whose names differ only in case are not looked up again by name). The levels
+    /// it streams are loaded by name as before.
+    pub fn load_at(
+        defs: &mut DefStore,
+        space: &mut ObjectSpace,
+        assets: &SceneAssets,
+        map: &PackageName,
+        file: Option<&std::path::Path>,
+    ) -> Result<Scene, SceneError> {
         let mut loader = Loader {
             defs,
             space,
@@ -539,7 +552,7 @@ impl Scene {
             resolved: DetMap::new(),
             level_paths: DetMap::new(),
         };
-        loader.levels(map)?;
+        loader.levels(map, file)?;
         for level in 0..loader.scene.levels.len() {
             loader.level(level)?;
         }
@@ -782,7 +795,7 @@ impl Loader<'_> {
     // ------------------------------------------------------------------------------------------------- levels
 
     /// The persistent level and every level a `LevelStreaming*` object names, breadth first, each once (folded).
-    fn levels(&mut self, map: &PackageName) -> Result<(), SceneError> {
+    fn levels(&mut self, map: &PackageName, file: Option<&std::path::Path>) -> Result<(), SceneError> {
         let mut pending = VecDeque::from([map.as_str().to_string()]);
         let mut seen = DetSet::new();
         while let Some(name) = pending.pop_front() {
@@ -793,7 +806,11 @@ impl Loader<'_> {
                 level: self.scene.map.clone(),
                 name: name.clone(),
             })?;
-            let package = self.defs.code_mut().1.load(&parsed)?;
+            let store = self.defs.code_mut().1;
+            let package = match file {
+                Some(path) if self.scene.levels.is_empty() => store.load_path(path)?,
+                _ => store.load(&parsed)?,
+            };
             self.scene.levels.push(SceneLevel {
                 name: name.clone(),
                 package,

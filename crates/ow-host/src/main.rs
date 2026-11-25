@@ -155,7 +155,7 @@ fn scene_window(
     let Ok(install) = ow_host::find_install(game) else {
         return ExitCode::from(1);
     };
-    let map = &match ow_host::movement::sanctuary::resolve_map(&install.cooked, map) {
+    let (map, map_file) = &match ow_host::movement::sanctuary::resolve_map(&install.cooked, map) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("ow-host: {e}");
@@ -176,7 +176,8 @@ fn scene_window(
         }
     };
     let mut space = ow_object::heap::ObjectSpace::new();
-    let scene = match Scene::load(&mut defs, &mut space, &SceneAssets::new(install.cooked.clone()), &name) {
+    let assets = SceneAssets::new(install.cooked.clone());
+    let scene = match Scene::load_at(&mut defs, &mut space, &assets, &name, map_file.as_deref()) {
         Ok(scene) => scene,
         Err(e) => {
             eprintln!("ow-host: loading {map}: {e}");
@@ -441,14 +442,14 @@ fn play(
         },
         None => None,
     };
-    let map = match sanctuary::resolve_map(&install.cooked, map) {
+    let (map, map_file) = match sanctuary::resolve_map(&install.cooked, map) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("ow-host: {e}");
             return ExitCode::from(1);
         }
     };
-    let loaded = match sanctuary::load(&install.cooked, &map) {
+    let loaded = match sanctuary::load_at(&install.cooked, &map, map_file.as_deref()) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("ow-host: loading {map}: {e}");
