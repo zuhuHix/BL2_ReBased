@@ -27,7 +27,8 @@ use super::*;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// The handles the holder names, in this order.
-const HANDLES: [&str; 12] = ["Coll", "E1", "E2", "E3", "E4", "FxA", "FxB", "FxD", "Bad", "Aee", "Attr", "Res"];
+const HANDLES: [&str; 14] =
+    ["Coll", "E1", "E2", "E3", "E4", "FxA", "FxB", "FxD", "Bad", "Aee", "Attr", "Res", "Comp", "Cold"];
 
 /// `Mode` of a test evaluator: answer `Answer`; write `Hits` then refuse; refuse without a write; answer an int.
 const ANSWER: i32 = 0;
@@ -83,9 +84,18 @@ fn package() -> Vec<u8> {
     toy_array_of(&mut t, attribute, "ContextResolverChain", "Object", object);
     toy_array_of(&mut t, attribute, "ValueResolverChain", "Object", object);
     let unknown = t.class("UnknownValueResolver", object);
+    // Review r1 of #686: a compound evaluator (its Evaluate, bound by the test, evaluates its children through
+    // `find_method`, as `ow-combat`'s binding does) and an evaluator class nothing warms.
+    let compound = t.class("CompoundExpressionEvaluator", evaluator);
+    t.prop("Object", compound, "Expression1", 0, evaluator);
+    t.prop("Object", compound, "Expression2", 0, evaluator);
+    native(&mut t, compound, "Evaluate", &context(object), Some(("Bool", 0)));
+    let cold = t.class("ToyColdEvaluator", evaluator);
     let collection = t.class("EffectCollectionDefinition", object);
     let entry = toy_struct(&mut t, collection, "ConditionalParticleEffectData", None);
-    t.prop("Object", entry, "Expression", 0, evaluator);
+    // Typed as a plain object, not an evaluator, so a test can put a class with no `Evaluate` there (review r1 of
+    // #686, item 2: every evaluator subclass inherits one, so only such data reaches the walk's "no Evaluate" error).
+    t.prop("Object", entry, "Expression", 0, object);
     t.prop("Object", entry, "ParticleEffect", 0, system);
     let inner = t.p.next_export();
     t.prop("Array", collection, "ParticleEffects", 0, inner + 1);
@@ -100,8 +110,12 @@ fn package() -> Vec<u8> {
     }
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&t.none);
-    let classes = [collection, evaluator, evaluator, evaluator, evaluator, system, system, system, bad, aee, attribute, unknown];
-    let names = ["ToyColl", "ToyE1", "ToyE2", "ToyE3", "ToyE4", "ToyFxA", "ToyFxB", "ToyFxD", "ToyBad", "ToyAee", "ToyAttr", "ToyRes"];
+    let classes =
+        [collection, evaluator, evaluator, evaluator, evaluator, system, system, system, bad, aee, attribute, unknown, compound, cold];
+    let names = [
+        "ToyColl", "ToyE1", "ToyE2", "ToyE3", "ToyE4", "ToyFxA", "ToyFxB", "ToyFxD", "ToyBad", "ToyAee", "ToyAttr", "ToyRes",
+        "ToyComp", "ToyCold",
+    ];
     let exports: Vec<i32> = classes.iter().zip(names).map(|(&c, n)| t.p.add_export(c, n, empty.clone())).collect();
     let mut h = 0i32.to_le_bytes().to_vec();
     for (n, e) in HANDLES.iter().zip(&exports) {
@@ -188,6 +202,22 @@ fn fx_mode(mode: ParityMode) -> Fx {
         }
     });
     vm.register_native("ExpressionEvaluator.Evaluate(object)", evaluate).unwrap();
+    let compound_seen = calls.clone();
+    let compound: NativeFn = Rc::new(move |c: &mut NativeCall<'_>| {
+        let me = c.this.unwrap();
+        let context = c.arg(0)?.clone();
+        compound_seen.borrow_mut().push((me, None));
+        let mut all = true;
+        for side in ["Expression1", "Expression2"] {
+            if let Value::Object(Some(child)) = read(c.vm, me, side) {
+                let (class, state) = (c.vm.space.heap.get(child)?.class, c.vm.space.heap.get(child)?.state);
+                let f = c.vm.find_method(class, "Evaluate", state)?.expect("a child's Evaluate");
+                all &= c.vm.call(f, Some(child), vec![context.clone()])?.ret == Value::Bool(true);
+            }
+        }
+        Ok(Value::Bool(all))
+    });
+    vm.register_native("CompoundExpressionEvaluator.Evaluate(object)", compound).unwrap();
     let refuse: NativeFn = Rc::new(|_c: &mut NativeCall<'_>| Err(NotYet::not_read(REFUSAL, TEST_RECORD).into()));
     vm.register_native("ScriptEvaluator.Refuse()", refuse).unwrap();
     register(&mut vm).unwrap();
@@ -566,4 +596,73 @@ fn an_unimplemented_resolver_of_a_resident_operand_refuses_before_any_evaluation
     assert_eq!(n.missing, Missing::NotRead);
     assert!(f.called().is_empty(), "no evaluator ran");
     assert_eq!(f.counters(), before);
+}
+
+/// Review r1 of #686, item 1: a warm compound evaluator whose child's class code is cold. Rule 5 walks into the child
+/// and refuses before any evaluator runs, so the compound's own dispatch (`find_method`) never loads the child's code.
+#[test]
+fn a_warm_compound_with_a_cold_child_refuses_before_any_evaluation() {
+    let mut f = fx();
+    f.vm.find_class("GearboxFramework.CompoundExpressionEvaluator").unwrap();
+    let a = f.handle("FxA");
+    let comp = f.load("Comp");
+    let cold = f.load("Cold");
+    f.set(comp, "Expression1", Value::Object(Some(cold)));
+    let cold_class = f.vm.space.heap.get(cold).unwrap().class;
+    assert!(!f.vm.class_code_loaded(cold_class), "the child's class code is cold");
+    let c = f.collection(&[(Some(comp), Some(a))]);
+    let before = f.counters();
+    let n = not_yet(f.run(c, None).unwrap_err());
+    assert_eq!((n.what.as_ref(), n.missing, n.record), (EVALUATOR_CODE_NOT_LOADED, Missing::NotRead, RECORD));
+    assert_eq!(f.counters(), before, "no write, draw, load or code load");
+    assert!(f.calls.borrow().is_empty(), "no evaluator ran");
+    assert!(!f.vm.class_code_loaded(cold_class), "still cold");
+}
+
+/// Review r1 of #686, item 1, the warm case: with the child's code loaded the compound answers through its children,
+/// and nothing loads code.
+#[test]
+fn a_warm_compound_with_a_warm_child_answers_and_loads_no_code() {
+    let mut f = fx();
+    f.vm.find_class("GearboxFramework.CompoundExpressionEvaluator").unwrap();
+    let a = f.handle("FxA");
+    let comp = f.load("Comp");
+    let e1 = f.evaluator("E1", ANSWER, true);
+    f.set(comp, "Expression1", Value::Object(Some(e1)));
+    let c = f.collection(&[(Some(comp), Some(a))]);
+    let before = f.counters();
+    assert_eq!(f.run(c, None).unwrap(), Some(a));
+    assert_eq!(f.counters(), before);
+    assert_eq!(f.calls.borrow().len(), 2, "the compound, then its child");
+}
+
+/// Review r1 of #686: a warm first entry followed by a cold second entry: refused in the preflight, before the walk,
+/// so zero evaluator calls.
+#[test]
+fn a_cold_later_entry_refuses_before_the_first_is_evaluated() {
+    let mut f = fx();
+    let a = f.handle("FxA");
+    let e1 = f.evaluator("E1", ANSWER, false);
+    let cold = f.load("Cold");
+    let c = f.collection(&[(Some(e1), Some(a)), (Some(cold), Some(a))]);
+    let n = not_yet(f.run(c, None).unwrap_err());
+    assert_eq!(n.what.as_ref(), EVALUATOR_CODE_NOT_LOADED);
+    assert!(f.calls.borrow().is_empty(), "zero evaluator calls");
+}
+
+/// Review r1 of #686, item 2: an entry that passes answers even when a later, warm entry's class has no `Evaluate`:
+/// that script error belongs to the walk, which never reaches it.
+#[test]
+fn a_later_warm_entry_without_evaluate_does_not_stop_an_earlier_pass() {
+    let mut f = fx();
+    f.vm.find_class("GearboxFramework.ParticleSystem").unwrap();
+    let (a, d) = (f.handle("FxA"), f.load("FxD"));
+    let e1 = f.evaluator("E1", ANSWER, true);
+    let c = f.collection(&[(Some(e1), Some(a)), (Some(d), Some(a))]);
+    assert_eq!(f.run(c, None).unwrap(), Some(a));
+    // Reached, the same entry is the walk's script error.
+    let e2 = f.evaluator("E2", ANSWER, false);
+    let c = f.collection(&[(Some(e2), Some(a)), (Some(d), Some(a))]);
+    let m = script_message(f.run(c, None).unwrap_err());
+    assert!(m.contains("has no Evaluate"), "{m}");
 }

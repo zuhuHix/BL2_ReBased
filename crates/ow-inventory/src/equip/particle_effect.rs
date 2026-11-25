@@ -21,11 +21,18 @@
 //!
 //! 4. for each reachable `AttributeExpressionEvaluator`, its operands are checked resident and their resolver dispatch
 //!    known ([`check_operands`]; review r1 of #573, item 2, a port convention too).
-//! 5. for each reachable evaluator, its `Evaluate` must resolve with the class code already loaded
+//! 5. for each reachable evaluator, and through the composite evaluators it can reach (an `ExpressionTree`'s
+//!    `RootChild`, a `CompoundExpressionEvaluator`'s `Expression1` and `Expression2`, whose `Evaluate` bindings, in
+//!    `ow-combat`, evaluate those children; review r1 of #686), every node must be resident (else
+//!    [`EVALUATOR_NOT_LOADED`]) and its `Evaluate` must resolve with the class code already loaded
 //!    (`Vm::find_loaded_method`), else `NotYet { NotRead }`, [`EVALUATOR_CODE_NOT_LOADED`] (lane
 //!    PARTICLE-EFFECT-CODE-LOAD: looking it up would load the class's code, which registers functions and can intern
-//!    names, a write under #518's rule). The walk then dispatches through the same resident-only lookup. This is a
-//!    loading discipline, not a rule change: with the code loaded, the answer is the same.
+//!    names, a write under #518's rule). Only the cold outcome is refused here: a class with no `Evaluate` stays the
+//!    walk's script error when the walk reaches it, so an earlier entry that passes still answers (review r1 of #686).
+//!    The walk dispatches the direct evaluators through the same resident-only lookup; the composites' own bindings
+//!    look their children up with `find_method`, which, with every node checked warm here, loads nothing. This is a
+//!    loading discipline, not a rule change: with the code loaded, the answer is the same. Composite evaluator classes
+//!    other than these two are not walked (their children, if any, are not known to this preflight).
 //!
 //! A handle whose load failed (the collection, or an evaluator in that range) is a `VmError::Script`: the note does
 //! not cover it, and reading it as an empty object would hide the failure.
@@ -169,7 +176,53 @@ fn check_operands(vm: &mut Vm, entries: &[Entry]) -> Result<(), VmError> {
     Ok(())
 }
 
-/// Preflight rule 5 and the walk's dispatch: `evaluator`'s `Evaluate`, found without a load (`Vm::find_loaded_method`).
+/// The composite evaluators whose children preflight rule 5 walks, with their child fields.
+const COMPOSITES: [(&str, &[&str]); 2] = [
+    ("Engine.ExpressionTree", &["RootChild"]),
+    ("GearboxFramework.CompoundExpressionEvaluator", &["Expression1", "Expression2"]),
+];
+
+/// How many evaluator nodes rule 5 walks at most from one entry (more is a data error).
+const NODE_LIMIT: usize = 1024;
+
+/// Preflight rule 5 over `root` and the composite children it reaches (module documentation), reading resident
+/// objects only. Refuses only what would need a load; a node with no `Evaluate` is left to the walk.
+fn check_dispatch(vm: &Vm, root: ObjRef) -> Result<(), VmError> {
+    let composites: Vec<(ow_object::ids::ClassId, &[&str])> =
+        COMPOSITES.iter().filter_map(|(path, fields)| vm.space.classes.by_path(path).map(|c| (c, *fields))).collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        if seen.len() > NODE_LIMIT {
+            return Err(bad(GET_PARTICLE_EFFECT, format!("an evaluator graph of more than {NODE_LIMIT} nodes")));
+        }
+        if vm.defs.is_failed(&vm.space, node) {
+            return Err(bad(GET_PARTICLE_EFFECT, "an entry's evaluator failed to load"));
+        }
+        if vm.defs.is_unloaded(&vm.space, node) {
+            return Err(NotYet::not_read(EVALUATOR_NOT_LOADED, RECORD).into());
+        }
+        let o = vm.space.heap.get(node)?;
+        if vm.find_loaded_method(o.class, "Evaluate", o.state).is_none() {
+            return Err(NotYet::not_read(EVALUATOR_CODE_NOT_LOADED, RECORD).into());
+        }
+        for &(class, fields) in &composites {
+            if vm.space.classes.is_child_of(o.class, class) {
+                for f in fields {
+                    if let Some(Value::Object(Some(child))) = crate::equip::read_prop(vm, node, f) {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The walk's dispatch: `evaluator`'s `Evaluate`, found without a load (`Vm::find_loaded_method`).
 /// Cold class code is [`EVALUATOR_CODE_NOT_LOADED`]; a class with no `Evaluate` is a `VmError::Script`.
 fn evaluate_fn(vm: &Vm, evaluator: ObjRef) -> Result<ow_object::ids::FuncId, VmError> {
     let o = vm.space.heap.get(evaluator)?;
@@ -196,7 +249,7 @@ pub fn get_particle_effect(vm: &mut Vm, collection: ObjRef, context: Option<ObjR
     check_operands(vm, &entries)?;
     for &(e, _) in &entries {
         if let Some(e) = e {
-            evaluate_fn(vm, e)?;
+            check_dispatch(vm, e)?;
         }
     }
     for (expression, effect) in entries {
