@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-GETFIRINGMODEDEFINITION (2026-11-25, pc-hummer, on main 72c6355e):** AI-assisted (Claude Code, Opus 5.5).
+`WillowWeapon.GetFiringModeDefinition` in Off, from NATIVE_WEAPON_GET_FIRING_MODE.md, and `ow-combat`'s shot helper on
+the same rule (its elemental case now answers). `cargo test --workspace -j 8` 3,664 passed / 0 failed / 57 ignored;
+`crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 6 ok / 2 NotYet
+/ 6 errors, `links ok 6/14`, `step share X = 6.583/14 = 47.0%`. **Link 8 passes, 5 of 5 steps** (the host ran it; not
+parity). No real-game run.
+
 **IMPL-AIMOFFSET-SET-PROFILE (2026-11-25, pc-hummer, on fix/rust-getweaponholddef 2910cde2):** AI-assisted (Claude
 Code, Opus 5.5). `AnimNodeAimOffset.SetActiveProfileByName` / `ByIndex` in Off, from NATIVE_AIMOFFSET_SET_PROFILE.md
 section 3 (#730 r1); an empty `Profiles` on the list's owner is `LayerAbsent` (the interim rule).

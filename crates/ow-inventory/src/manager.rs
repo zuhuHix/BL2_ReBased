@@ -439,7 +439,8 @@ pub(crate) fn register_equip_keys(vm: &mut Vm) -> Result<(), VmError> {
     crate::equip::internal_slots::register(vm)?;
     crate::equip::damage_type::register(vm)?;
     crate::equip::weapon_material::register(vm)?;
-    crate::equip::material_natives::register(vm)
+    crate::equip::material_natives::register(vm)?;
+    crate::equip::firing_mode::register(vm)
 }
 
 #[cfg(test)]
