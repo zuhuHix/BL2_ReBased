@@ -58,7 +58,10 @@ On the receiving body class, with `HoldName` N, `EnvironmentTag` T, `bSearchPare
 2. **The parent** (P true and `WeaponActionParentClass` set). The same lookup runs on the parent class, with N, T and
    P, and with F passed on **only when this class has no `DefaultWeaponHoldDef`**. Then:
    - with a candidate from step 1: the parent's answer stands only when it is an exact match (name and tag).
-     Otherwise, or when the parent answers None, the candidate is the answer;
+     Otherwise, or when the parent answers None, the candidate is the answer. **The mechanism is a field read:**
+     the caller re-reads the returned hold's own `HoldName` and `EnvironmentTag` and compares them with N and T. The
+     recursion does not report how it matched. So a parent answer that is the parent's **default**, with N and T as
+     its own name and tag, also counts as exact, and stands over the candidate;
    - with no candidate: the parent's answer, when it is not None.
 
    Which object the parent lookup runs on comes from the field the routine tests (by fit). The register that carries
@@ -93,6 +96,10 @@ Reference keeps the stub policy. Reads only, **load-free** (no load, no class-co
 3. **The parent**, only when P is true and the field is set: the same rule recursively, with the not-loaded check on
    the parent. A chain that comes back to a class it has already visited is `VmError::Script`. That is a port-only
    guard; the game's routine has none.
+   - **The returned hold's re-read** (only when this class has a candidate and the parent answers non-None): the
+     parent's answer is read for `HoldName` and `EnvironmentTag`, as step 2 reads an entry. A store handle not loaded
+     yet is the same `NotRead` ("a weapon hold definition"), checked before its fields are read. This can be an
+     object no earlier step read, since the parent's `DefaultWeaponHoldDef` is returned without being read.
 4. **The answer**, as section 2 orders it. An object reference, or None.
 5. **Nothing is written.**
 
@@ -121,7 +128,8 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
    - `GetWeaponHoldDef('Unarmed', None, false, true)` answers the `Unarmed` entry;
    - on the parent, the same call answers the parent's default;
 2. no match, F true: the default. F false: None;
-3. name matches with other tags only: the first name match is the candidate, ahead of the default;
+3. name matches with other tags only: the first name match is the candidate, ahead of the default. The shape of
+   every armed-hold call on the slice: (`A`, None) asked against [(`A`, X)] answers (`A`, X), ahead of the default;
 4. name matches (`A`, tag X), then (`A`, None), then (`A`, tag Y), asked (`A`, tag Z): the answer is the (`A`, None)
    entry (the candidate rule);
 5. the exact match after a candidate: entries (`A`, None), (`A`, Z), asked (`A`, Z): the second;
@@ -131,6 +139,13 @@ Synthetic, with `package()` / `tag()`. Each refusal leaves #518's three counters
    - P false: the parent is not read;
    - this class has a default and the parent does too, with no matches anywhere: this class's default (F is not
      passed to the parent);
+   - **F passed on:** this class has no default, no own match, F true: the parent's default;
+   - the same with an own candidate, and a parent default whose name or tag differ from (N, T): the own candidate;
+   - **the re-read quirk:** this class has a candidate and no default, F true, and the parent answers its own
+     `DefaultWeaponHoldDef`, whose `HoldName` and `EnvironmentTag` equal (N, T): **the parent's default**, over the
+     candidate;
+   - the parent's returned default is a lazy handle while this class has a candidate: the not-loaded `NotRead`,
+     nothing loaded;
 7. None entries in `WeaponHoldDefs` are skipped;
 8. a lazy entry, a lazy parent, or a lazy receiver: the not-loaded `NotRead`, nothing loaded;
 9. a malformed declaration (`WeaponHoldDefs` not an array of object references, `HoldName` not a name):

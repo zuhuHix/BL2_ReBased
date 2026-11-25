@@ -29,4 +29,8 @@ check changed.
   - malformed declarations are `VmError::Script`;
   - tests listed.
 - **Next** (a prediction, not a run): `SetActiveProfileByName`, then the upper-body blend natives.
+- **Review r1 (#728):**
+  - the parent's exact-match test is named: the caller re-reads the returned hold's `HoldName` and `EnvironmentTag`;
+  - so a matching parent default stands over the candidate, and that returned object gets the not-loaded `NotRead`;
+  - tests added for the F-passed side, the re-read quirk and the slice's armed-hold shape.
 - **Clean room:** a different lane implements this note.
