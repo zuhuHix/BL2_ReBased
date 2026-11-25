@@ -1664,7 +1664,8 @@ pub const SETUP_INTERFACE_INPUT: &str = "harness input: set-up interface check";
 /// Resolves, at set-up, the interface entries `implements(class, iface)` reads on `class`'s chain, so a later
 /// read-only check answers without a load (lane HARNESS-GEARLIKENESS-SETUP: the body composition's hook 1,
 /// NATIVE_BODYCOMP_RENDER_HOOKS.md). Both classes must be in the packages; each is loaded first if it is not, and
-/// the line then says the lookup loaded (a write, by the store's load counter, as [`preload_class`] reports one).
+/// the line then says the lookup loaded (a write). That is measured as [`preload_class`] measures it: each class's
+/// layout and code state before and after the lookup.
 ///
 /// The line says where the answer came from:
 /// - **read:** the chain's bodies decoded, so the answer is the packages' own interface lists, each entry resolved to
@@ -1674,8 +1675,8 @@ pub const SETUP_INTERFACE_INPUT: &str = "harness input: set-up interface check";
 ///   `implements` does), which is not the game's interface list;
 /// - **unresolved:** `implements` keeps an entry whose lookup failed as "resolved to nothing", which would read as a
 ///   settled answer. So a decoded answer is checked against the strict `implements_declared` (review r1 of #665,
-///   MED 1): when that has no answer (an entry resolves to no class) or disagrees, the line says so and the set-up
-///   answers `NotYet` (`NotRead`), not the packages' answer.
+///   MED 1): when the strict reading has no answer (an entry or a class chain did not resolve), fails, or disagrees,
+///   the line says so and the set-up answers `NotYet` (`NotRead`), not the packages' answer.
 ///
 /// A class or interface the packages do not hold is reported and nothing is resolved.
 pub fn resolve_interface(
@@ -1684,9 +1685,17 @@ pub fn resolve_interface(
     iface: &str,
 ) -> (String, Result<(), ow_vm::error::VmError>) {
     let found = |vm: &mut ow_vm::api::Vm, path: &str| vm.find_class_if_present(path);
-    let loads = vm.defs.load_transitions();
+    // Review r2 of #665, N1: a class lookup does not move the store's handle counter, so the layout and the code of
+    // each class are compared before and after it, as `preload_class` does.
+    let ready = |vm: &ow_vm::api::Vm, path: &str| {
+        vm.space.classes.by_path(path).map(|c| {
+            (vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()), vm.class_code_loaded(c))
+        })
+    };
+    let before = [ready(vm, class), ready(vm, iface)];
     let lookup = (found(vm, class), found(vm, iface));
-    let loaded = if vm.defs.load_transitions() != loads { " (the class lookup loaded code: a write)" } else { "" };
+    let after = [ready(vm, class), ready(vm, iface)];
+    let loaded = if before != after { " (the class lookup loaded code: a write)" } else { "" };
     let (c, i) = match lookup {
         (Ok(Some(c)), Ok(Some(i))) => (c, i),
         (Err(e), _) | (_, Err(e)) => {
@@ -1725,7 +1734,7 @@ pub fn resolve_interface(
         if !matches!(strict, Ok(Some(b)) if b == answer) {
             let why = match &strict {
                 Err(e) => format!("an entry's lookup failed ({e})"),
-                Ok(None) => "an entry did not resolve to a class".to_string(),
+                Ok(None) => "the strict reading has no answer (an entry or a class chain did not resolve)".to_string(),
                 Ok(Some(_)) => "the strict reading disagrees".to_string(),
             };
             let line = format!(

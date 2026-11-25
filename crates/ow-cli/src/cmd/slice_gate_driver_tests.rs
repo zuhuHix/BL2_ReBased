@@ -836,6 +836,8 @@ fn decoded_gear_vm() -> (Vm, PathBuf) {
     let missing = d.p.add_import("Core", "Package", 0, "ToyMissingPkg");
     let gone = d.p.add_import("Core", "Class", missing, "ToyGoneTarget");
     d.real_class("ToyGone", obj, obj, 2, &[gone], None);
+    let not_a_class = d.p.add_export(obj, "ToyNotAClassThing", ow_package::testkit::ints(&[0, 0, 0, 0]));
+    d.real_class("ToyBadEntry", obj, obj, 2, &[not_a_class], None);
     let bytes = d.build();
     let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .expect("store");
@@ -895,10 +897,39 @@ fn the_set_up_interface_check_refuses_an_entry_that_resolves_to_no_class() {
     vm.find_class(GEAR_LIKENESS).unwrap();
     let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyGone", GEAR_LIKENESS);
     assert!(line.starts_with(SETUP_INTERFACE_INPUT), "{line}");
-    assert!(line.contains(": unresolved, an entry did not resolve to a class;"), "{line}");
+    assert!(line.contains(": unresolved, the strict reading has no answer (an entry or a class chain did not resolve);"), "{line}");
     assert!(!line.contains(": no, read from"), "{line}");
     let Err(VmError::NotYet(n)) = outcome else { panic!("{outcome:?}") };
     assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review r2 of #665, N2: an interface entry whose lookup fails (an export that is not a class) is the strict
+/// reading's error, named in the line, and the set-up answers `NotYet` (`NotRead`).
+#[test]
+fn the_set_up_interface_check_refuses_an_entry_whose_lookup_fails() {
+    use ow_world::world::render_hooks::GEAR_LIKENESS;
+    let (mut vm, dir) = decoded_gear_vm();
+    vm.find_class(GEAR_LIKENESS).unwrap();
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyBadEntry", GEAR_LIKENESS);
+    assert!(line.contains(": unresolved, an entry's lookup failed ("), "{line}");
+    let Err(VmError::NotYet(n)) = outcome else { panic!("{outcome:?}") };
+    assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review r2 of #665, N1: the first check, with neither class loaded yet, says the lookup loaded (a write); a second
+/// check finds both ready and says nothing of a load.
+#[test]
+fn the_set_up_interface_check_reports_a_lookup_that_loads() {
+    use ow_world::world::render_hooks::GEAR_LIKENESS;
+    let (mut vm, dir) = decoded_gear_vm();
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyMesh", GEAR_LIKENESS);
+    assert!(outcome.is_ok());
+    assert!(line.contains(" (the class lookup loaded code: a write): "), "{line}");
+    let (line, outcome) = resolve_interface(&mut vm, "WillowGame.ToyMesh", GEAR_LIKENESS);
+    assert!(outcome.is_ok());
+    assert!(!line.contains("the class lookup loaded"), "{line}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
