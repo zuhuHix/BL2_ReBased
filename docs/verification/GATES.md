@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-SPECIALMOVE-QUEUE (2026-11-25, pc-hummer, docs only, on docs/native-specialmove-queue from main
+4b3e4df6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIAL_MOVE_QUEUE.md: `SpecialMoveComponent.Queue`,
+link 9's stop. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in
+game.
+
 **IMPL-SPECIALMOVE-OWNER (2026-11-25, zuhuPC Linux, on main faa3bbc):** AI-assisted (Claude Code, Opus 5.5).
 `AnimNodeSpecialMoveBlend`'s owner test (rule 7) answers one outcome per case O1 to O7 and O3'
 (NATIVE_SPECIALMOVE_OWNER.md section 4.1, #647). `cargo test --workspace`: 3,368 passed / 4 failed (the expected
