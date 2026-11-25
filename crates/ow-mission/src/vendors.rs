@@ -725,6 +725,11 @@ impl MapView {
         for p in &input.paths {
             let Some(h) = p.holders.first() else { continue };
             if ow_core::install::ends_with(&h.file, &own) {
+                // Two files whose names differ only in case would both match: refused, not the first taken (review
+                // r1 of #675).
+                if file.as_ref().is_some_and(|f: &std::path::PathBuf| *f != h.file) {
+                    return Err(VendorError::Data(format!("{own}: two files match ignoring case")));
+                }
                 exports.push((p.path.clone(), h.class.clone()));
                 own_exports.insert(p.path.clone(), h.export);
                 file.get_or_insert_with(|| h.file.clone());

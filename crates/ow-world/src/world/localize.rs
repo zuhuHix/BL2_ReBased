@@ -105,7 +105,13 @@ fn context(path: &Path, e: VmError) -> VmError {
 
 /// Enumerating the directory avoids platform-dependent case-sensitive filename lookup and refuses two matches.
 fn read_file(root: &Path, package: &PackageName) -> Result<Option<(PathBuf, String)>, VmError> {
-    let dir = root.join("INT");
+    // The INT folder in its own case (Aspyr's Linux build has `int`; review r1 of #675): two that differ only in case
+    // are an error.
+    let dir = match ow_core::install::resolve_child(root, "INT") {
+        Ok(Some(dir)) => dir,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(bad(e.to_string())),
+    };
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

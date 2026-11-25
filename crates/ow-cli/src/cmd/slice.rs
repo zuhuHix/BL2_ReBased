@@ -277,13 +277,8 @@ pub(crate) fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Re
     if mode != ParityMode::Reference {
         // This bounded CLI selects INT explicitly; it does not infer the game's global language/options.
         // No localization config/root list is represented elsewhere in this command.
-        let game = cooked_root
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| "localization: cooked root has no install parent".to_string())?;
-        let roots = ["Engine", "Gearbox", "WillowGame"]
-            .map(|name| game.join(name).join("Localization"))
-            .to_vec();
+        // Each root in its own case and install layout (`ow_core::install`, review r1 of #675).
+        let roots = ow_core::install::localization_roots(&cooked_root).map_err(|e| format!("localization: {e}"))?;
         let backend = ow_world::world::localize::Localization::ready(roots, "INT", false)
             .map_err(BehaviorError::from)?;
         vm.add_service(backend).map_err(|e| error_text(&e))?;

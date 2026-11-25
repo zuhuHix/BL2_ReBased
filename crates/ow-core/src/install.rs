@@ -1,6 +1,6 @@
 //! Owner: lane LINUX-PATHS. Finding files of the player's installed game whatever the case of their names.
 //!
-//! AI-assisted (Claude Code). Decision: `docs/decisions/2026-11/2026-11-25-NNN-install-layout-and-path-case.md`.
+//! AI-assisted (Claude Code). Decision: `docs/decisions/2026-11/2026-11-25-10-install-layout-and-path-case.md`.
 //!
 //! The Windows build of Borderlands 2 names its folders and packages in mixed case (`WillowGame/CookedPCConsole/
 //! Startup.upk`), and the code names them that way. Aspyr's native Linux build has the same packages, every path in
@@ -10,7 +10,8 @@
 //! **The rule** ([`resolve`]): a relative path is followed one component at a time. A component whose exact name
 //! exists is taken (so a Windows install, and any exact match, behaves as before); otherwise the folder is listed and
 //! the one entry whose name equals it ignoring ASCII case is taken. None is "not found"; two or more is an error
-//! ([`PathCaseError::Ambiguous`]), never a guess. [`ends_with`] is the same comparison for a path the census already
+//! ([`PathCaseError::Ambiguous`]), never a guess. A folder that cannot be read for any reason but its absence is
+//! [`PathCaseError::Io`], not "not found" (review r1 of #675). [`ends_with`] is the same comparison for a path the census already
 //! holds: each trailing component equal exactly or ignoring ASCII case.
 //!
 //! **The install layouts** ([`cooked_folder`]): `<root>/WillowGame/CookedPCConsole` (Windows), then
@@ -28,6 +29,8 @@ pub const COOKED_LAYOUTS: [&str; 2] = ["WillowGame/CookedPCConsole", "steamasset
 pub enum PathCaseError {
     /// Several entries of `dir` equal `name` ignoring case (and none equals it exactly).
     Ambiguous { dir: PathBuf, name: String, matches: Vec<String> },
+    /// `path` could not be checked or listed for a reason other than its absence.
+    Io { path: PathBuf, message: String },
 }
 
 impl fmt::Display for PathCaseError {
@@ -40,6 +43,7 @@ impl fmt::Display for PathCaseError {
                 matches.len(),
                 matches.join(", ")
             ),
+            PathCaseError::Io { path, message } => write!(f, "{}: {message}", path.display()),
         }
     }
 }
@@ -47,20 +51,28 @@ impl fmt::Display for PathCaseError {
 impl std::error::Error for PathCaseError {}
 
 /// The entry of `dir` named `name` (module documentation): the exact name if it exists, else the one entry equal to
-/// it ignoring ASCII case; `Ok(None)` when there is none (or `dir` cannot be listed).
+/// it ignoring ASCII case; `Ok(None)` when there is none or `dir` does not exist. Any other failure to check or list
+/// is [`PathCaseError::Io`].
 pub fn resolve_child(dir: &Path, name: &str) -> Result<Option<PathBuf>, PathCaseError> {
+    let io = |path: &Path, e: std::io::Error| PathCaseError::Io { path: path.to_path_buf(), message: e.to_string() };
     let exact = dir.join(name);
-    if exact.exists() {
+    if exact.try_exists().map_err(|e| io(&exact, e))? {
         return Ok(Some(exact));
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(None);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io(dir, e)),
     };
-    let mut matches: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .filter(|n| n.eq_ignore_ascii_case(name))
-        .collect();
+    let mut matches: Vec<String> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| io(dir, e))?;
+        if let Some(n) = entry.file_name().to_str()
+            && n.eq_ignore_ascii_case(name)
+        {
+            matches.push(n.to_string());
+        }
+    }
     matches.sort();
     match matches.len() {
         0 => Ok(None),
@@ -114,6 +126,17 @@ pub fn content_root(root: &Path) -> Result<PathBuf, PathCaseError> {
 /// `root/WillowGame/CookedPCConsole` as written when there is none.
 pub fn cooked_or_join(root: &Path) -> Result<PathBuf, PathCaseError> {
     Ok(cooked_folder(root)?.unwrap_or_else(|| root.join("WillowGame").join("CookedPCConsole")))
+}
+
+/// The install's localization roots for the cooked folder `cooked`, in priority order: `Engine`, `Gearbox` and
+/// `WillowGame`'s `Localization` folders under the folder two above `cooked`, each by [`resolve_or_join`] (review r1
+/// of #675).
+pub fn localization_roots(cooked: &Path) -> Result<Vec<PathBuf>, PathCaseError> {
+    let game = cooked.parent().and_then(Path::parent).ok_or_else(|| PathCaseError::Io {
+        path: cooked.to_path_buf(),
+        message: "the cooked folder has no install parent".to_string(),
+    })?;
+    ["Engine", "Gearbox", "WillowGame"].iter().map(|n| resolve_or_join(game, &format!("{n}/Localization"))).collect()
 }
 
 /// Whether `path` ends with `rel` (components separated by `/`), each component equal exactly or ignoring ASCII
@@ -198,6 +221,17 @@ mod tests {
         }
         // An exact name among them is no ambiguity.
         assert!(resolve(&t.0, "startup.upk").unwrap().unwrap().ends_with("startup.upk"));
+    }
+
+    #[test]
+    fn the_localization_roots_resolve_in_aspyr_s_layout() {
+        let t = Tree::new("loc", &["steamassets/engine/localization/int/core.int", "steamassets/willowgame/cookedpcconsole/core.upk"]);
+        let cooked = cooked_folder(&t.0).unwrap().unwrap();
+        let roots = localization_roots(&cooked).unwrap();
+        assert!(roots[0].ends_with("steamassets/engine/localization"), "{roots:?}");
+        // A root that is not there is joined as written; its reader finds no file there.
+        assert!(roots[1].ends_with("steamassets/Gearbox/Localization"), "{roots:?}");
+        assert_eq!(resolve_child(&roots[0], "INT").unwrap(), Some(roots[0].join("int")));
     }
 
     #[test]
