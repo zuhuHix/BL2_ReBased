@@ -18,7 +18,7 @@ AI-assisted (Claude Code, Opus 5.5). The reference skeleton is read from the mes
   is the base's.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/refskel/` and `local/p2/refskel-base/`. Decision
-2026-11-25-NNN.
+2026-11-25-27.
 
 **IMPL-SET-REPLICATED-SMDATA (2026-11-25, zuhu desktop (Linux), on fix/rust-set-replicated-smdata from main
 03896e5):** AI-assisted (Claude Code, Opus 5.5). `SpecialMoveComponent.Play` in Off writes the owner's replicated
