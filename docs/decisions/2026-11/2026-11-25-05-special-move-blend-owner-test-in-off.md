@@ -33,7 +33,13 @@ the note. Synthetic fixtures only.
   copy that is the component's own `Owner`. For an attach (`attach_check` / `attach_plan`, the body composition's
   preflight) it is the actor attached to, not the component template's own `Owner`. Before, an attach with an empty
   template `Owner` skipped the test in the preflight and refused only at the instance, after the body composition's
-  writes.
+  writes. Review r2 of #667: the actor is the right owner only for an actor attach, which writes `Owner`. A socket
+  attach leaves the made component's `Owner` as the template's, and the copy then asks that one, so for a socket
+  attach the preflight asks the template's own `Owner` (the plan's owner event follows the same owner). The only
+  `attach_plan` caller is the body composition. The copy paths (`instance`, `instance_with_map`) read the made
+  component's own `Owner`, so they agree with it. A body-composition test (socket attach, a settling pawn, a refusing
+  template `Owner`, via a test-only per-owner refusal) refuses before any write; passing the pawn again makes it stop
+  after partial writes.
 - **Verified (host only):** one test per case on invented packages: O1, O2, O3 (settled no, derived yes, stand-in),
   O3', O4, O5, O6, O6 behind an unresolved entry (where #575's `implements_resolved` gives no answer), and O7 (settled
   no, stand-in). Every refusal goes through `refused_clean` (heap writes, handles, RNG draws, loads and the name table

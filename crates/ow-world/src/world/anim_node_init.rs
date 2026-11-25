@@ -217,6 +217,10 @@ pub fn owner_target_missing(class: &str) -> String {
 /// running game.
 pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
     #[cfg(test)]
+    if REFUSE_OWNER.with(std::cell::Cell::get) == Some(owner) {
+        return Err(owner_not_read(REFUSED_FOR_TESTS.to_string()));
+    }
+    #[cfg(test)]
     if let Some(answer) = OWNER_ANSWER.with(std::cell::Cell::get) {
         return Ok(answer);
     }
@@ -269,6 +273,18 @@ pub fn owner_implements(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
 #[cfg(test)]
 thread_local! {
     static OWNER_ANSWER: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static REFUSE_OWNER: std::cell::Cell<Option<ObjRef>> = const { std::cell::Cell::new(None) };
+}
+
+/// The test-only refusal [`refuse_owner_for_tests`] gives.
+#[cfg(test)]
+pub(crate) const REFUSED_FOR_TESTS: &str = "AnimNodeSpecialMoveBlend: the test's refusing owner";
+
+/// For the tests only: [`owner_implements`] refuses (`NotRead`, [`REFUSED_FOR_TESTS`]) when asked about `owner`, ahead
+/// of [`answer_owner_for_tests`]; so a test can tell which owner was asked (review r2 of #667).
+#[cfg(test)]
+pub(crate) fn refuse_owner_for_tests(owner: Option<ObjRef>) {
+    REFUSE_OWNER.with(|c| c.set(owner));
 }
 
 /// For the tests only: answer [`owner_implements`] with `answer` on this thread (a yes or a settled no), for the

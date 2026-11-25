@@ -523,3 +523,66 @@ fn a_template_without_the_back_link_slot_refuses_before_any_write() {
     assert_eq!(e.vm.space.names.len(), names, "nothing interned");
     assert!(entries(&e, p).is_empty(), "no entry appended");
 }
+
+/// Review r2 of #667: a socket-attached `Mesh` keeps its template's `Owner` (the socket attach does not write it), and
+/// the tree copy's step H asks that owner. So the attach's preflight asks it too, not the pawn: with a pawn the owner
+/// test settles and a template `Owner` it refuses, the build refuses before any write (writes, handles, draws, loads
+/// and names unchanged). The tree: a root and one `AnimNodeSpecialMoveBlend` (two children) under it.
+#[test]
+fn a_socket_attached_mesh_asks_its_template_s_owner_before_any_write() {
+    use crate::world::anim_node_init::{REFUSED_FOR_TESTS, answer_owner_for_tests, refuse_owner_for_tests};
+    let mut e = env();
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    // Step H's node class, with the fields its preflight reads (invented layout: the packages' names).
+    let slot = e.vm.find_class("Engine.AnimNodeSlot").unwrap();
+    let object = e.object;
+    let params = e
+        .vm
+        .space
+        .classes
+        .define_struct(
+            "GearboxFramework.AnimNodeSpecialMoveBlend.SlotAnimParameters",
+            None,
+            vec![PropertyDecl::new(e.vm.space.names.intern("CustomAnimDef"), PropKind::Object { class: object })],
+        )
+        .unwrap();
+    let h_class = class(&mut e.vm, "GearboxFramework.AnimNodeSpecialMoveBlend", slot, &[
+        ("AnimParameters", PropKind::Array(Box::new(PropKind::Struct(params)))),
+        ("SMI", PropKind::Object { class: object }),
+    ]);
+    let t = Anim::new(&mut e);
+    put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
+    let h = make(&mut e.vm, h_class, "Node");
+    let v = name(&mut e.vm, "SpecialMove");
+    put(&mut e.vm, h, "NodeName", v);
+    put(&mut e.vm, h, "TickArrayIndex", Value::Int(1));
+    let (l0, l1) = (t.node(&mut e, "AnimNode", "Leaf0", 2), t.node(&mut e, "AnimNode", "Leaf1", 3));
+    t.children(&mut e, t.root, &[h]);
+    let st = e.vm.space.classes.struct_by_path("Engine.AnimNodeBlendBase.AnimBlendChild").unwrap();
+    let kids = [(l0, 1.0), (l1, 0.0)].map(|(n, w)| value(&e.vm, st, vec![("Anim", Value::Object(Some(n))), ("Weight", Value::Float(w))]));
+    put(&mut e.vm, h, "Children", Value::array(kids.to_vec()));
+    put(&mut e.vm, h, "ParentNodes", Value::array(vec![Value::Object(Some(t.root))]));
+    for l in [l0, l1] {
+        put(&mut e.vm, l, "ParentNodes", Value::array(vec![Value::Object(Some(h))]));
+    }
+    // The `Mesh` attachment, socket-attached to the parent component; its template's `Owner` refuses.
+    let skel = skel_with(&mut e, Some(t.root));
+    let ghost = make(&mut e.vm, object, "TemplateOwner");
+    put(&mut e.vm, skel, "Owner", Value::Object(Some(ghost)));
+    let list = vec![
+        attachment(&mut e, A { template: Some(pt), ..A::default() }),
+        attachment(&mut e, A { base: 0, template: Some(skel), socket: "Shield", parent: MESH_ID, index: 2, ..A::default() }),
+    ];
+    let p = pawn_with(&mut e, list);
+    aim_offset_named(&mut e, p, "AimOffset");
+    answer_owner_for_tests(Some(false));
+    refuse_owner_for_tests(Some(ghost));
+    let handles = e.vm.space.heap.handles().len();
+    let (missing, what) = with_copy(|| refusal(&mut e, p));
+    let handles_after = e.vm.space.heap.handles().len();
+    refuse_owner_for_tests(None);
+    answer_owner_for_tests(None);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, REFUSED_FOR_TESTS));
+    assert_eq!(handles_after, handles, "no object made");
+}
