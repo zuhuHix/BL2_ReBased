@@ -12,6 +12,7 @@ skipped (`DefStore::is_skipped`); `ow_assets::aim_profiles` reads `AnimNodeAimOf
   762bc93a: 5 ok / 8 NotYet / 1 error on both. Links 1, 3, 4, 5, 13 and 14 move in `maya:8` from "AnimNodeAimOffset:
   the profiles (a binary-serialized struct array)" to "AnimNodeAimOffset: the required-bones rebuild's sort and parent
   pass"; link 8's error is the base's. Every other row is unchanged.
+  These figures predate the r1 fix (an untagged empty list became `LayerAbsent`); the landing check re-reads the gate.
 
 No real-game run; `UNVERIFIED` in game. Rows under ignored `local/p2/profiles2/` and `local/p2/profiles2-base/`.
 Decision 2026-11-25-72.
