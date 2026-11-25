@@ -303,14 +303,20 @@ fn load_async(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(context) = context else {
         return Ok(Value::None);
     };
-    let Ok(iface) = c.vm.find_class(STREAMING_INTERFACE) else {
-        return Err(bad(
-            LOAD_ASYNC,
-            format!("the report's interface {STREAMING_INTERFACE} is not declared"),
-        ));
-    };
+    // The interface by its code-index key, not `find_class` (lane COLD-LOAD-FIXES): `Vm::implements` compares keys
+    // of the code index, so the same answer needs no class layout and no class code load.
     let class = c.vm.space.heap.get(context)?.class;
-    if !c.vm.implements(class, iface) {
+    let implements = {
+        let (code, store) = c.vm.defs.code_mut();
+        let Ok(iface) = code.find_class(store, STREAMING_INTERFACE) else {
+            return Err(bad(
+                LOAD_ASYNC,
+                format!("the report's interface {STREAMING_INTERFACE} is not declared"),
+            ));
+        };
+        code.key_of(class).is_some_and(|k| code.implements(store, k, iface))
+    };
+    if !implements {
         return Err(not_read(
             "LoadPlayerPawnDataAsync's report to a context the VM finds not implementing IStreamingDataEvent (a \"no\" \
              is not proven outside ow-vm, decision 2026-11-15-20)",
