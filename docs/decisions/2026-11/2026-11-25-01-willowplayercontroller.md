@@ -1,4 +1,4 @@
-## 2026-11-19: WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet: an own-words note for link 9
+## 2026-11-25: WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet: an own-words note for link 9
 
 AI-assisted (Claude Code)
 

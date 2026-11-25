@@ -1,7 +1,7 @@
 # `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet` on link 9 (draft, 2026-11-20)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-UNLOCKPLAYERCLASSACHIEVEMENT (decision
-`docs/decisions/2026-11/2026-11-19-NNN-unlock-class-achievement.md`, number pending). Analyst only: a different lane
+`docs/decisions/2026-11/2026-11-25-01-willowplayercontroller.md`). Analyst only: a different lane
 implements it (clean room).
 
 **Sources:**
