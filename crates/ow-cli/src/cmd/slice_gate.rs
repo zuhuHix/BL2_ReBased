@@ -1274,6 +1274,10 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
          no level, so every level part of the touch trace is clear)"
             .to_string(),
     );
+    // The set-up's game info (lane LINK-6-PICKUP-GAMEINFO, `equip_run::pickup_game_info`), when it installed one.
+    if world.vm.log.iter().any(|l| l == crate::cmd::inventory::equip_run::GAME_INFO_INPUT) {
+        r.harness.push(crate::cmd::inventory::equip_run::GAME_INFO_INPUT.to_string());
+    }
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).
