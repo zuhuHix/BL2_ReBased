@@ -669,6 +669,9 @@ fn an_unloaded_weapon_type_is_not_read_and_not_loaded() {
     )
     .unwrap();
     let mut x = Fx::with_defs(Schema::Good, ParityMode::Off, defs, true);
+    // `Core.Object`'s code loaded, as the game always has it (this fixture's separate Core package leaves it cold, and
+    // the native's lookups would load it: since lane RUNTIME-MARK-CODE-LOADS that code load marks the refusal).
+    x.vm.find_class("Core.Object").unwrap();
     let holder = x.vm.defs.find(&mut x.vm.space, &ObjectPath::parse("ToyPkg.ToyHolder").unwrap()).unwrap().unwrap();
     let handle = match read_prop(&x.vm, holder, "Type") {
         Some(Value::Object(Some(o))) => o,

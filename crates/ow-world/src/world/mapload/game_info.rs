@@ -165,8 +165,8 @@ pub fn game_option(options: &str) -> Option<&str> {
 /// The three counters a write moves (#518): the heap's committed writes, the store's load transitions and the game
 /// RNG's draws (a draw is a write, review r1 of #537).
 ///
-/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS) for [`WriteMark::still`], the tests'
-/// "nothing moved" check; [`WriteMark::moved`], which marks a runtime refusal, still reads only #518's three.
+/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS); since lane RUNTIME-MARK-CODE-LOADS
+/// [`WriteMark::moved`], which marks a runtime refusal, reads them too, and [`WriteMark::still`] is its negation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMark {
     heap: u64,
@@ -186,10 +186,9 @@ impl WriteMark {
         }
     }
 
-    /// Whether one of #518's three counters moved since this mark (not the code loads: see the type).
+    /// Whether anything was written or loaded since this mark, a code load included (see the type).
     pub fn moved(&self, vm: &Vm) -> bool {
-        let now = WriteMark::now(vm);
-        (now.heap, now.loads, now.draws) != (self.heap, self.loads, self.draws)
+        *self != WriteMark::now(vm)
     }
 
     /// Whether nothing moved since this mark, the code loads included: the tests' write-free check.

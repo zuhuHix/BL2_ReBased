@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**RUNTIME-MARK-CODE-LOADS (2026-11-25, zuhuPC Linux, on #692 bba377f over #685 bd8f3934):** AI-assisted (Claude
+Code, Opus 5.5). Runtime partial-write marks count class code loads (the hub's ruling 0b). `cargo test --workspace`:
+3,404 passed / 5 failed / 53 ignored: the 4 expected Linux N1 tests, and `ow-inventory`'s
+`an_evaluator_refusal_with_no_write_passes_through_unchanged`, which needs #686 under this branch (it passes with #686
+merged in locally). `crate_edges_test.py` OK. Not run: `ctest`, `verify_packages.py --reader` (no cmake here), the
+installed `--slice-gate` (no install yet). UNVERIFIED in game.
+
 **GAMEINFO-COLLIDER-CODE-LOAD (2026-11-25, zuhuPC Linux, on #685 bd8f3934 over main 03896e5):** AI-assisted (Claude
 Code, Opus 5.5). The game info's refusal after its class lookup loaded class code is marked (the routine's marking
 counts code loads). `cargo test --workspace`: 3,405 passed / 4 failed (the expected Linux N1 tests) / 53 ignored

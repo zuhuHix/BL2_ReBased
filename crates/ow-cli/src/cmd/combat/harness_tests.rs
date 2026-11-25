@@ -95,6 +95,10 @@ fn fx(mode: ParityMode, archetype_path: &str) -> Fx {
         }),
     )
     .unwrap();
+    // The toy class select probes `WillowGame.Thing` (`find_class`), which would load that class's code inside the
+    // step; warm it here, so the step's own writes are what the marking sees (lane RUNTIME-MARK-CODE-LOADS: a code
+    // load marks a refusal).
+    vm.find_class("WillowGame.Thing").unwrap();
     let class = vm.find_class("WillowGame.WillowPlayerController").unwrap();
     let controller = ow_vm::interp::instantiate_from_defaults(&mut vm, class).unwrap();
     let dclass = vm.find_class("WillowGame.PlayerClassDefinition").unwrap();

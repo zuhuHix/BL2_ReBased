@@ -122,8 +122,9 @@ fn not_read(what: String) -> VmError {
 /// The canonical write counters (#518's tracker): heap writes, generator draws and definition-store load
 /// transitions. Each only grows, so a refusal is after a write exactly when one moved since the snapshot.
 ///
-/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS) for [`WriteCounters::still`], the tests'
-/// "nothing moved" check; [`WriteCounters::moved`], which marks a runtime refusal, still reads only #518's three.
+/// It also keeps the VM's code loads (lane COUNTERS-MISS-CLASS-CODE-LOADS); since lane RUNTIME-MARK-CODE-LOADS
+/// [`WriteCounters::moved`], which marks a runtime refusal, reads them too, and [`WriteCounters::still`] is its
+/// negation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteCounters {
     heap: u64,
@@ -143,10 +144,9 @@ impl WriteCounters {
         }
     }
 
-    /// Whether one of #518's three counters moved since `self` (not the code loads: see the type).
+    /// Whether a counter moved since `self`, a code load included (see the type).
     pub fn moved(&self, vm: &Vm) -> bool {
-        let now = WriteCounters::of(vm);
-        (now.heap, now.draws, now.loads) != (self.heap, self.draws, self.loads)
+        WriteCounters::of(vm) != *self
     }
 
     /// Whether nothing moved since `self`, the code loads included: the tests' write-free check.

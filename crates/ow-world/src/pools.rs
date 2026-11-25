@@ -699,9 +699,8 @@ pub fn after_partial_writes(e: VmError) -> VmError {
 /// wrote anything since, without keeping its own flags (review r1 of #528, item 4).
 ///
 /// Lane COUNTERS-MISS-CLASS-CODE-LOADS adds a fourth, the VM's code loads (`Vm::class_code_loads`), which none of the
-/// three sees. It takes part in equality, so a test that compares two readings ("write-free") catches a code load.
-/// [`Counters::moved`], which marks a runtime refusal "stopped after partial writes", still reads only #518's three:
-/// whether a code load should mark one is a separate ruling.
+/// three sees. Since lane RUNTIME-MARK-CODE-LOADS (the hub's ruling: a load is a write) [`Counters::moved`] reads all
+/// four, so a runtime refusal after a code load is marked "stopped after partial writes" too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counters {
     writes: u64,
@@ -720,10 +719,9 @@ impl Counters {
         }
     }
 
-    /// Whether any of #518's three counters moved since `self` was read (not the code loads; see the type).
+    /// Whether any counter moved since `self` was read, the code loads included (see the type).
     pub fn moved(self, vm: &Vm) -> bool {
-        let now = Counters::read(vm);
-        (now.writes, now.draws, now.loads) != (self.writes, self.draws, self.loads)
+        Counters::read(vm) != self
     }
 }
 

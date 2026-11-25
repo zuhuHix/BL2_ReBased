@@ -219,10 +219,12 @@ fn a_refused_spawn_after_a_class_code_load_is_marked() {
         let mut f = fx_in(false, ParityMode::Off);
         let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
         actors::set_field(&mut f.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
-        let (mark, code) = (WriteMark::now(&f.w.vm), f.w.vm.class_code_loads());
+        let code = f.w.vm.class_code_loads();
+        let three_before = (f.w.vm.space.heap.committed_writes(), f.w.vm.rng.draws(), f.w.vm.defs.load_transitions());
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Collider"), ..PROBE });
         assert!(f.w.vm.class_code_loads() > code, "the lookup loaded the class's code");
-        assert!(!mark.moved(&f.w.vm), "#518's three did not move: only the code load marks it");
+        let three = |vm: &ow_vm::api::Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+        assert_eq!(three(&f.w.vm), three_before, "#518's three did not move: only the code load marks it");
         let VmError::NotYet(n) = e.unwrap_err() else { panic!("the collision refusal") };
         assert!(is_partial_writes(&n.what), "marked: {}", n.what);
         assert_eq!(n.missing, Missing::LayerAbsent("collision (the world's collision service, a SpawnCollision)"));

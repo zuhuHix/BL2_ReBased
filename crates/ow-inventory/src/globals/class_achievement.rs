@@ -114,10 +114,12 @@ struct Marks {
     writes: u64,
     draws: u64,
     loads: u64,
+    /// The VM's code loads: a load is a write (lane RUNTIME-MARK-CODE-LOADS).
+    code_loads: u64,
 }
 
 fn marks(vm: &Vm) -> Marks {
-    Marks { writes: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+    Marks { writes: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions(), code_loads: vm.class_code_loads() }
 }
 
 fn not_loaded(vm: &Vm, o: ObjRef) -> bool {
