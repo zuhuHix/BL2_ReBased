@@ -881,3 +881,46 @@ fn a_live_stand_in_component_is_ruled_out_only_by_its_bounds() {
         }
     }
 }
+
+/// Review r1 of #683: with no `Engine.PrimitiveComponent` in the class table, `Actor.Trace`'s walk still runs: a live
+/// actor's stand-in part whose bounds meet the swept box is `NotRead`, and disjoint bounds give the miss.
+#[test]
+fn with_no_primitive_class_the_trace_walk_still_refuses_a_stand_in_part() {
+    use ow_object::layout::{PropKind, PropertyDecl};
+    for (bounds, refused) in [(MEETS, true), (FAR, false)] {
+        let mut s = ObjectSpace::new();
+        let object = s.classes.define("Core.Object", None, vec![]).unwrap();
+        let obj = PropKind::Object { class: object };
+        let decls = vec![
+            PropertyDecl::new(s.names.intern("CollisionComponent"), obj.clone()),
+            PropertyDecl::new(s.names.intern("Components"), PropKind::Array(Box::new(obj))),
+        ];
+        let actor_class = s.classes.define("Engine.Actor", Some(object), decls).unwrap();
+        let native = s.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+        s.classes.mark_native(native).unwrap();
+        let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        assert!(vm.space.classes.by_path("Engine.PrimitiveComponent").is_none());
+        let actors = vm.add_service(Actors::new(actor_class)).unwrap();
+        let world_info = vm.space.alloc(actor_class, "WorldInfo", None, Origin::Runtime).unwrap();
+        let source = vm.space.alloc(actor_class, "Source", None, Origin::Runtime).unwrap();
+        let holder = vm.space.alloc(actor_class, "Holder", None, Origin::Runtime).unwrap();
+        let part = vm.space.alloc_stand_in(native, "NativePart", Origin::Resource { package: 0, index: -1 }).unwrap();
+        let p = vm.space.prop(actor_class, "CollisionComponent").unwrap();
+        vm.space.write(holder, PropAddr::scalar(p), Value::Object(Some(part))).unwrap();
+        actors.borrow_mut().place_world_info(world_info).unwrap();
+        actors.borrow_mut().place(source).unwrap();
+        actors.borrow_mut().place(holder).unwrap();
+        let toy = Rc::new(Toy::default());
+        toy.bounds.borrow_mut().insert(part, bounds);
+        install_collision(&mut vm, toy).unwrap();
+        let q = Query { start: [0.0, 0.0, -100.0], end: [0.0, 0.0, -100.0], extent: [1.0; 3], flags: trace_flags(true, 0) };
+        let got = answer(&vm, source, &q);
+        if refused {
+            let Err(VmError::NotYet(n)) = got else { panic!("{got:?}") };
+            assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD));
+            assert!(n.what.contains(crate::trace_filter::STAND_IN_PART), "{}", n.what);
+        } else {
+            got.unwrap();
+        }
+    }
+}
