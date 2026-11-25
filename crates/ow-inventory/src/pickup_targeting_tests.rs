@@ -222,6 +222,13 @@ fn reported_now(vm: &Vm, hud: Option<ObjRef>) -> Option<ObjRef> {
 /// pickup list, PickupRange 300, HoverWidthPickup 100 (a capture radius of 10), ItemHoverProjectionHeight 20, the
 /// pickup default's PickupShrinkDuration 5. The view looks along +X from the origin; bounds 40 high.
 fn fx() -> Fx {
+    fx_with(true)
+}
+
+/// The fixture; with `warm_player_pawn` false, `WillowPlayerPawn` is never looked up and the controller's pawn is a
+/// cold `ToyPlayerPawnSubclass` (its layout, and so its parents', through the code index; no class code loaded), for
+/// the cold-pawn case of #701 (lane COLD-LOAD-FIXES).
+fn fx_with(warm_player_pawn: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-inventory-targeting-{}-{}",
         std::process::id(),
@@ -271,7 +278,14 @@ fn fx() -> Fx {
     let hud = make(&mut vm, "WillowGame.WillowHUD");
     let hud_definition = make(&mut vm, "WillowGame.HUDDefinition");
     let controller = make(&mut vm, "WillowGame.WillowPlayerController");
-    let pawn = make(&mut vm, "WillowGame.WillowPlayerPawn");
+    let pawn = if warm_player_pawn {
+        make(&mut vm, "WillowGame.WillowPlayerPawn")
+    } else {
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, "WillowGame.ToyPlayerPawnSubclass").unwrap();
+        let c = code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap();
+        vm.space.alloc(c, "ColdPawn", None, ow_object::heap::Origin::Runtime).unwrap()
+    };
     events.borrow_mut().hud = Some(hud);
     let mut x = Fx {
         vm,
@@ -835,11 +849,9 @@ fn a_definition_store_not_yet_keeps_its_variant() {
 }
 
 /// COLD-CLASS-AUDIT (lane COLD-CLASS-AUDIT-WORLD-INVENTORY): the pawn test's refusal with a pawn whose class has a
-/// layout and no loaded code. It passes only with `WillowPlayerPawn` warm (the fixture's `make` looks it up):
-/// `suspended`'s `find_class(PLAYER_PAWN)` is finding 1's pattern and would load that class's code were it cold (review
-/// r1 of #701; that case is under the decision's "not reached"). With it warm, the refusal loads no class code and
-/// leaves #518's counters unchanged. (The name table is not compared: `suspended`
-/// interns "Dead" on each pass, a side finding of the audit, reported apart from the code loads.)
+/// layout and no loaded code, `WillowPlayerPawn` warm (the fixture's `make` looks it up). The refusal loads no class
+/// code and leaves #518's counters and the name table unchanged (lane COLD-LOAD-FIXES: `suspended` no longer interns
+/// "Dead").
 #[test]
 fn the_pawn_test_on_a_cold_pawn_class_loads_no_code() {
     let mut x = fx();
@@ -851,9 +863,29 @@ fn the_pawn_test_on_a_cold_pawn_class_loads_no_code() {
     assert!(!vm.class_code_loaded(c), "starts cold");
     let other = vm.space.alloc(c, "Cold", None, ow_object::heap::Origin::Runtime).unwrap();
     x.set(x.controller, "Pawn", Value::Object(Some(other)));
-    let marks = |vm: &Vm| (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
-    let before = marks(&x.vm);
+    let before = cold_marks(&x.vm);
     let n = not_yet(x.tick());
     assert!(n.what.contains("open question 1"), "{n}");
-    assert_eq!(marks(&x.vm), before, "no code load, write, draw or store load");
+    assert_eq!(cold_marks(&x.vm), before, "no code load, write, draw, store load or name");
+}
+
+/// Code loads, #518's three counters and the name table (lane COLD-LOAD-FIXES).
+fn cold_marks(vm: &Vm) -> (u64, u64, u64, u64, usize) {
+    (vm.class_code_loads(), vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
+}
+
+/// Lane COLD-LOAD-FIXES, the case #701 listed as not reached: `WillowPlayerPawn` itself cold (never looked up), the
+/// pawn a cold subclass. `suspended` compares the class through the class table by path, so the refusal loads no
+/// class code and interns nothing.
+#[test]
+fn the_pawn_test_with_the_player_pawn_class_cold_loads_no_code() {
+    let mut x = fx_with(false);
+    let player_pawn = x.vm.space.classes.by_path("WillowGame.WillowPlayerPawn").expect("the parent's layout");
+    assert!(!x.vm.class_code_loaded(player_pawn), "WillowPlayerPawn starts cold");
+    let _p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let before = cold_marks(&x.vm);
+    let n = not_yet(x.tick());
+    assert!(n.what.contains("open question 1"), "{n}");
+    assert_eq!(cold_marks(&x.vm), before, "no code load, write, draw, store load or name");
+    assert!(!x.vm.class_code_loaded(player_pawn), "still cold");
 }

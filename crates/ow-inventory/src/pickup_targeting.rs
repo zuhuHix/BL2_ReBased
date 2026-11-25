@@ -502,14 +502,17 @@ pub fn particle_offset(vm: &mut Vm, pickup: ObjRef) -> Result<(V3, bool), VmErro
 
 /// Whether scoring is suspended this tick (section 2; module documentation).
 fn suspended(vm: &mut Vm, owner: ObjRef, pawn: ObjRef) -> Result<bool, VmError> {
-    let dead = vm.space.names.intern("Dead");
-    if vm.space.heap.get(owner)?.state == Some(dead) {
+    // The state name compared by its text, as names compare (without case), so nothing is interned on a pass (lane
+    // COLD-LOAD-FIXES; the audit's side finding on #701).
+    if vm.space.heap.get(owner)?.state.is_some_and(|s| vm.space.names.text(s).eq_ignore_ascii_case("Dead")) {
         return Ok(true);
     }
     if object_field(vm, pawn, "DrivenVehicle")?.is_some() {
         return Err(refused("the suspend query of a driven vehicle (open question 1)"));
     }
-    if class_of(vm, pawn)? != vm.find_class(PLAYER_PAWN)? {
+    // The class table by path, read only (lane COLD-LOAD-FIXES): a resident WillowPlayerPawn pawn means the table holds
+    // that path, so no class code is loaded for the comparison.
+    if vm.space.classes.by_path(PLAYER_PAWN) != Some(class_of(vm, pawn)?) {
         return Err(refused(format!(
             "the suspend query of a {} (only a plain WillowPlayerPawn is answered; open question 1)",
             ow_attr::eval::class_path(&vm.space, pawn)
