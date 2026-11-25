@@ -19,9 +19,16 @@ bounds check changed.
     their class defaults.
 - **Proposed Off answer:**
   - the owner branch reads the owner's three flags, loaded-only;
-  - the immediate update is a `LayerAbsent` (the scene layer's component update);
+  - the immediate update keeps the existing `REATTACH_OWNER` refusal (review r1);
   - the ordinary owner is no refusal: only `bNeedsReattach` (and the setter's own field) is written;
   - Reference unchanged; tests listed, including `maya:8`'s call shape.
 - **On link 1 (a prediction):** hook 2 no longer refuses there. Its plan, `bOwnerNoSee` and `bNeedsReattach`, must be
   applied to the made component.
+- **Review r1 (#709):**
+  - the two object-state flags are read as "not pending kill" and "not a template object", as the particle note has
+    them. They are not modelled: the port refuses on the static path;
+  - the refusal stays `REATTACH_OWNER` (`NotRead`), consistent with the sites that already apply the owner rule;
+  - every owner-branch site is listed with its answer, and the changed tests are named;
+  - hook 2's fallback goes and its plan is applied in the write phase. The render-hooks note is marked;
+  - the class-defaults read is recorded, with the instance caveat.
 - **Clean room:** a different lane implements this note.

@@ -210,6 +210,8 @@ behaviour change.
 
 **Writes** (only after the whole preflight passed, in the hooks' order): the setters' apply side with their plans.
 Hook 2's writes are never reached under today's rules: where the setter would write, the pawn test refuses first.
+*Superseded 2026-11-25 by NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1: with an ordinary owner the deferred
+reattach does not refuse, and hook 2's plan is applied in the write phase.*
 Hook 3's writes come only once the array check is resolved.
 
 **After writes started:** the walk's writes precede these. A `NotYet` raised in a hook's writes despite the preflight is
@@ -345,6 +347,8 @@ If they stay clear, the controller test passes too. Then:
 - with her `Mesh` template's `bOwnerNoSee` already true, hook 2 does nothing and the body composition goes on to hook
   3, whose array check is the next stop;
 - with it clear, the next stop is the setter's `REATTACH_OWNER` (the deferred reattach).
+  *Superseded 2026-11-25 by NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.1: with an ordinary owner the deferred
+  reattach does not refuse, and hook 2's plan is applied in the write phase.*
 
 The template value was not read for this note (open question 5).
 
@@ -361,7 +365,8 @@ causes no class-code load (where #685 has landed):
 4. a plain `Engine.PlayerController` controller, with `bOwnerNoSee` clear and the pawn test passing: the camera-test
    `NotRead`;
 5. an `Engine.Controller` that is not a `PlayerController`: nothing;
-6. both tests pass, `bOwnerNoSee` already true: nothing. Clear, with `Owner` set: `REATTACH_OWNER`;
+6. both tests pass, `bOwnerNoSee` already true: nothing. Clear, with `Owner` set: `REATTACH_OWNER` *(superseded
+   2026-11-25: with an ordinary owner, the plan is applied; see NATIVE_ATTACH_MESH_TO_PICKUP.md section 2.1.2 test 7)*;
 7. a pawn of an unlisted native class, with `bOwnerNoSee` clear and the controller test passing: the pawn-test
    `NotRead`;
 8. a lazy `Controller` that a test must read (a `WillowPawn` pawn, or a `WillowPlayerController`), with `bOwnerNoSee`
