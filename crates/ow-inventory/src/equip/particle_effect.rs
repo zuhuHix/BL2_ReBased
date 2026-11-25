@@ -21,6 +21,11 @@
 //!
 //! 4. for each reachable `AttributeExpressionEvaluator`, its operands are checked resident and their resolver dispatch
 //!    known ([`check_operands`]; review r1 of #573, item 2, a port convention too).
+//! 5. for each reachable evaluator, its `Evaluate` must resolve with the class code already loaded
+//!    (`Vm::find_loaded_method`), else `NotYet { NotRead }`, [`EVALUATOR_CODE_NOT_LOADED`] (lane
+//!    PARTICLE-EFFECT-CODE-LOAD: looking it up would load the class's code, which registers functions and can intern
+//!    names, a write under #518's rule). The walk then dispatches through the same resident-only lookup. This is a
+//!    loading discipline, not a rule change: with the code loaded, the answer is the same.
 //!
 //! A handle whose load failed (the collection, or an evaluator in that range) is a `VmError::Script`: the note does
 //! not cover it, and reading it as an empty object would hide the failure.
@@ -56,6 +61,10 @@ pub const COLLECTION_NOT_LOADED: &str = "GetParticleEffect: the collection is no
 
 /// Preflight rule 3's refusal text.
 pub const EVALUATOR_NOT_LOADED: &str = "GetParticleEffect: an entry's evaluator is not loaded";
+
+/// Preflight rule 5's refusal text.
+pub const EVALUATOR_CODE_NOT_LOADED: &str =
+    "GetParticleEffect: an entry's evaluator class code is not loaded (a load is a write)";
 
 /// The collection's one field.
 const EFFECTS: &str = "ParticleEffects";
@@ -160,15 +169,20 @@ fn check_operands(vm: &mut Vm, entries: &[Entry]) -> Result<(), VmError> {
     Ok(())
 }
 
+/// Preflight rule 5 and the walk's dispatch: `evaluator`'s `Evaluate`, found without a load (`Vm::find_loaded_method`).
+/// Cold class code is [`EVALUATOR_CODE_NOT_LOADED`]; a class with no `Evaluate` is a `VmError::Script`.
+fn evaluate_fn(vm: &Vm, evaluator: ObjRef) -> Result<ow_object::ids::FuncId, VmError> {
+    let o = vm.space.heap.get(evaluator)?;
+    match vm.find_loaded_method(o.class, "Evaluate", o.state) {
+        None => Err(NotYet::not_read(EVALUATOR_CODE_NOT_LOADED, RECORD).into()),
+        Some(None) => Err(bad(GET_PARTICLE_EFFECT, "an entry's evaluator has no Evaluate")),
+        Some(Some(f)) => Ok(f),
+    }
+}
+
 /// One entry's `Evaluate(context)` through the VM (the evaluator class's own binding).
 fn evaluate(vm: &mut Vm, evaluator: ObjRef, context: Option<ObjRef>) -> Result<bool, VmError> {
-    let (class, state) = {
-        let o = vm.space.heap.get(evaluator)?;
-        (o.class, o.state)
-    };
-    let f = vm
-        .find_method(class, "Evaluate", state)?
-        .ok_or_else(|| bad(GET_PARTICLE_EFFECT, "an entry's evaluator has no Evaluate"))?;
+    let f = evaluate_fn(vm, evaluator)?;
     match vm.call(f, Some(evaluator), vec![Value::Object(context)])?.ret {
         Value::Bool(b) => Ok(b),
         other => Err(bad(GET_PARTICLE_EFFECT, format!("an evaluator's Evaluate returned {}", other.kind_name()))),
@@ -180,6 +194,11 @@ pub fn get_particle_effect(vm: &mut Vm, collection: ObjRef, context: Option<ObjR
     let start = counters(vm);
     let entries = plan(vm, collection)?;
     check_operands(vm, &entries)?;
+    for &(e, _) in &entries {
+        if let Some(e) = e {
+            evaluate_fn(vm, e)?;
+        }
+    }
     for (expression, effect) in entries {
         let Some(evaluator) = expression else {
             return Ok(effect);

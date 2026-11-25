@@ -194,7 +194,18 @@ fn fx_mode(mode: ParityMode) -> Fx {
     Fx { vm, dir, h, calls }
 }
 
+/// The evaluator classes' code loaded, as the game has it (lane PARTICLE-EFFECT-CODE-LOAD: the native refuses cold
+/// evaluator code rather than load it).
 fn fx() -> Fx {
+    let mut f = fx_mode(ParityMode::Off);
+    for class in ["GearboxFramework.ExpressionEvaluator", "GearboxFramework.AttributeExpressionEvaluator"] {
+        f.vm.find_class(class).unwrap();
+    }
+    f
+}
+
+/// [`fx`] with no class code warmed: the evaluators' classes have layouts (their objects load) but no code.
+fn fx_cold() -> Fx {
     fx_mode(ParityMode::Off)
 }
 
@@ -335,28 +346,40 @@ fn the_effect_handle_is_returned_unloaded_and_nothing_is_written_or_loaded() {
     let b = f.handle("FxB");
     let e1 = f.evaluator("E1", ANSWER, true);
     let c = f.collection(&[(Some(e1), Some(b))]);
-    // #518's three only: the code loads this run makes are lane COUNTERS-MISS-CLASS-CODE-LOADS's finding, pinned in the
-    // ignored test below.
-    let three = |f: &Fx| (f.vm.space.heap.committed_writes(), f.vm.rng.draws(), f.vm.defs.load_transitions());
-    let before = three(&f);
+    let before = f.counters();
     assert_eq!(f.run(c, None).unwrap(), Some(b));
     assert!(f.vm.defs.is_unloaded(&f.vm.space, b), "the effect is not loaded");
-    assert_eq!(three(&f), before);
+    assert_eq!(f.counters(), before, "the counters, code loads included");
 }
 
-/// Lane COUNTERS-MISS-CLASS-CODE-LOADS's finding: on this fixture the same run loads class code (the evaluator
-/// dispatch loads `GearboxFramework.ExpressionEvaluator`'s and `GearboxFramework.Object`'s code, three code loads),
-/// which #518's three counters do not see. Ignored until the hub routes it; run with `--ignored` to see it.
+/// Lane PARTICLE-EFFECT-CODE-LOAD (#685's finding): with the evaluator's class code cold, the lookup refuses
+/// `NotYet { NotRead }` before any evaluator runs, and loads no class code (and writes, draws and loads nothing).
 #[test]
-#[ignore = "finding: GetParticleEffect's evaluator dispatch loads cold class code (lane COUNTERS-MISS-CLASS-CODE-LOADS)"]
 fn the_effect_lookup_loads_no_class_code() {
+    let mut f = fx_cold();
+    let b = f.handle("FxB");
+    let e1 = f.evaluator("E1", ANSWER, true);
+    let c = f.collection(&[(Some(e1), Some(b))]);
+    let class = f.vm.space.heap.get(e1).unwrap().class;
+    assert!(!f.vm.class_code_loaded(class), "the evaluator's class code is cold");
+    let (before, calls) = (f.counters(), f.calls.borrow().len());
+    let n = not_yet(f.run(c, None).unwrap_err());
+    assert_eq!((n.what.as_ref(), n.missing, n.record), (EVALUATOR_CODE_NOT_LOADED, Missing::NotRead, RECORD));
+    assert_eq!(f.counters(), before, "no write, draw, load or code load");
+    assert!(!f.vm.class_code_loaded(class), "still cold");
+    assert_eq!(f.calls.borrow().len(), calls, "no evaluator ran");
+}
+
+/// The same run with the code loaded (the game's case) needs no code load: the answer as before.
+#[test]
+fn with_the_code_loaded_the_lookup_needs_no_code_load() {
     let mut f = fx();
     let b = f.handle("FxB");
     let e1 = f.evaluator("E1", ANSWER, true);
     let c = f.collection(&[(Some(e1), Some(b))]);
     let before = f.vm.class_code_loads();
     assert_eq!(f.run(c, None).unwrap(), Some(b));
-    assert_eq!(f.vm.class_code_loads(), before, "no class code loaded");
+    assert_eq!(f.vm.class_code_loads(), before);
 }
 
 /// Preflight 1: an unloaded collection refuses without loading it.
