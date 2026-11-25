@@ -543,4 +543,7 @@ fn past_errors_grading_drops_the_stop_and_the_error_steps() {
     // Strict grading: only a stop on the last step is dropped.
     let s = share_row("mission_turn_in", Outcome::NotYet, &["use", "turnin"], Some("turnin"));
     assert_eq!(step_counts(&s), (1, 6));
+    // A stop at a step that never ran drops nothing (review r1 of #674).
+    let k = share_row("pick_up_gun", Outcome::NotYet, &["make", "touch"], Some("key"));
+    assert_eq!(step_counts(&k), (2, 3));
 }
