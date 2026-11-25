@@ -682,6 +682,7 @@ pub mod set_base_value;
 
 /// `Actor.GetBoundingCylinder` and its `Pawn` and `NavigationPoint` keys (lane IMPL-GET-BOUNDING-CYLINDER).
 pub mod bounding_cylinder;
+pub mod skeletal_bounds;
 /// `Actor.Trace` in Off, shared by the Phaselock and go-down binding sites (lane IMPL-ACTOR-TRACE).
 pub mod actor_trace;
 pub mod set_physics;

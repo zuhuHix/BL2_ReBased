@@ -153,6 +153,24 @@ pub trait SkeletonSource {
         let _ = (package, index);
         Ok(None)
     }
+
+    /// The stored bounds and the reference-skeleton bone count of export `index` of `package`, the definition store's
+    /// own in-memory package, when the source reads them from the package itself (lane IMPL-SKELMESH-BOUNDS-SOURCE,
+    /// NATIVE_COMPONENT_BOUNDS.md section 9.6, "the mesh-bounds accessor"). The default, `Ok(None)`, is "not read".
+    /// Reads only.
+    fn mesh_bounds_in(&self, package: &ow_package::package::Package, index: i32) -> Result<Option<MeshBounds>, String> {
+        let _ = (package, index);
+        Ok(None)
+    }
+}
+
+/// A skeletal mesh's stored bounds (the bounds origin and box extent the mesh asset holds) and its reference-skeleton
+/// bone count, as [`SkeletonSource::mesh_bounds_in`] gives them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshBounds {
+    pub origin: [f32; 3],
+    pub extent: [f32; 3],
+    pub bones: usize,
 }
 
 /// The layer's service: the installed source and the cache by mesh identity.
@@ -796,6 +814,24 @@ pub fn lod_trailing_counts(vm: &Vm, mesh: ObjRef) -> Result<Option<Vec<usize>>, 
     let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
     let pkg = vm.defs.packages().get(at);
     layer.source.lod_trailing_in(pkg, index).map_err(|e| script(format!("the LOD models of {path} failed to parse: {e}")))
+}
+
+/// `mesh`'s stored bounds and bone count (lane IMPL-SKELMESH-BOUNDS-SOURCE; the source's
+/// [`SkeletonSource::mesh_bounds_in`], asked by the mesh's export origin): `Ok(None)` with no source installed, for an
+/// object the layer cannot place in a package export ([`export_of`]), or when the source does not read them. Reads
+/// only, loads nothing; a source's parse failure is `VmError::Script`. `mesh` must be a resident `SkeletalMesh`
+/// ([`check_mesh`]).
+pub fn mesh_bounds(vm: &Vm, mesh: ObjRef) -> Result<Option<MeshBounds>, VmError> {
+    check_mesh(vm, mesh)?;
+    let Some(cell) = vm.service::<SkeletalMeshes>() else {
+        return Ok(None);
+    };
+    let Some((at, index, path)) = export_of(vm, mesh)? else {
+        return Ok(None);
+    };
+    let layer = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?;
+    let pkg = vm.defs.packages().get(at);
+    layer.source.mesh_bounds_in(pkg, index).map_err(|e| script(format!("the stored bounds of {path} failed to parse: {e}")))
 }
 
 /// A `Sockets` entry as the socket object it names, refused as the module documentation says: a None entry is

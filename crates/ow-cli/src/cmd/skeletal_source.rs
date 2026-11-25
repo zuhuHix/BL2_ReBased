@@ -145,6 +145,19 @@ impl SkeletonSource for PskExports {
             .map(|l| Some(l.models.iter().map(|m| m.trailing).collect()))
             .map_err(|e| e.to_string())
     }
+
+    /// The mesh's stored bounds and bone count from the same full read (lane IMPL-SKELMESH-BOUNDS-SOURCE;
+    /// `ow_assets::skeletal_lods`, fitted, UNVERIFIED): the prefix's bounds origin and box extent, and its bone count.
+    fn mesh_bounds_in(
+        &self,
+        package: &ow_package::package::Package,
+        index: i32,
+    ) -> Result<Option<ow_world::world::skeletal::MeshBounds>, String> {
+        let typer = ow_package::schema::SchemaTyper::new_empty();
+        let read = ow_assets::skeletal_lods::read_lod_models(package, index, EXPORT_PROPERTY_OFFSET, &typer).map_err(|e| e.to_string())?;
+        let p = &read.prefix;
+        Ok(Some(ow_world::world::skeletal::MeshBounds { origin: p.bounds_origin, extent: p.bounds_extent, bones: p.bones }))
+    }
 }
 
 /// Where an export's tagged properties start in its payload (after the 4-byte net index), as the asset commands pass

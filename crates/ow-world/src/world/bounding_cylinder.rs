@@ -318,10 +318,8 @@ pub(crate) fn component_check(space: &ObjectSpace, c: ObjRef) -> Result<(), VmEr
 
 /// The cylinder entry's refusal when its world position is not the owner's `Location` by the note's rule.
 pub const WORLD_TRANSFORM: &str = "Actor.GetBoundingCylinder: the component's world transform";
-/// A skeletal mesh entry: the bounds update's early returns and source choice were not read.
-pub const SKELETAL_SOURCE: &str = "Actor.GetBoundingCylinder: a skeletal mesh component's bounds source";
-/// A skeletal mesh entry on the branch that uses the current bone transforms, and its layer (#599's).
-pub const SKELETAL_BOUNDS: &str = "Actor.GetBoundingCylinder: a skeletal mesh component's bounds";
+/// A skeletal mesh entry's bone-transform layer (#599's), named by the physics-asset sources' refusal text
+/// (`skeletal_bounds::BODIES`).
 pub const BONES_LAYER: &str = "a skeletal mesh component's bone transforms";
 /// A static mesh entry with a mesh, and its layer.
 pub const STATIC_BOUNDS: &str = "Actor.GetBoundingCylinder: a static mesh component's bounds";
@@ -335,9 +333,8 @@ pub const BOUNDS_RECORD: &str = "docs/verification/NATIVE_COMPONENT_BOUNDS.md";
 ///   owner's `Location`, only when the component's `Translation` is zero, none of `AbsoluteTranslation`,
 ///   `AbsoluteRotation` and `AbsoluteScale` is set, and its `Owner` is `owner`. Else `NotYet { NotRead }`
 ///   ([`WORLD_TRANSFORM`]);
-/// - `Engine.SkeletalMeshComponent`: `NotYet { NotRead }` ([`SKELETAL_SOURCE`]). The two early returns and the choice
-///   between the physics-asset branch (which uses the current bone transforms: `LayerAbsent`, [`BONES_LAYER`]) and
-///   the mesh's stored bounds were not read, so no branch can be picked;
+/// - `Engine.SkeletalMeshComponent`: the skeletal bounds update's rule, NATIVE_COMPONENT_BOUNDS.md section 9.6
+///   (lane IMPL-SKELMESH-BOUNDS-SOURCE, [`crate::world::skeletal_bounds::skeletal_box`]);
 /// - `Engine.StaticMeshComponent`: `NotYet { LayerAbsent }` ([`STATIC_LAYER`]);
 /// - any other primitive class: `NotYet { NotRead }`, "the bounds update of <class>".
 pub fn entry_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32; 3]), VmError> {
@@ -359,7 +356,7 @@ pub fn entry_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32; 3
         return Ok((origin, [r, r, h]));
     }
     if exactly("Engine.SkeletalMeshComponent") {
-        return Err(NotYet::not_read(SKELETAL_SOURCE, BOUNDS_RECORD).into());
+        return crate::world::skeletal_bounds::skeletal_box(vm, owner, c);
     }
     if exactly("Engine.StaticMeshComponent") {
         return Err(NotYet::layer_absent(STATIC_BOUNDS, STATIC_LAYER, BOUNDS_RECORD).into());
@@ -370,7 +367,7 @@ pub fn entry_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32; 3
 
 /// The (X, Y, Z) floats of vector field `name` of `o`, read by name lookup only (no interning). Another shape is a
 /// `VmError::Script` naming the field.
-fn vector(space: &ObjectSpace, o: ObjRef, v: &Value, name: &str) -> Result<[f32; 3], VmError> {
+pub(crate) fn vector(space: &ObjectSpace, o: ObjRef, v: &Value, name: &str) -> Result<[f32; 3], VmError> {
     let bad = |why: String| VmError::Script {
         function: NATIVE.to_string(),
         message: format!("{}.{name} {why}", class_path(space, o)),
@@ -399,7 +396,7 @@ fn bounds_refusal() -> VmError {
 
 /// Refusal N unless `o` is resident: neither a lazy handle the store has not loaded nor a stand-in with no slots. Never
 /// a load.
-fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+pub(crate) fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     let space = &vm.space;
     let obj = space.heap.get(o)?;
     let full = u32::try_from(obj.slots.len()).ok() == space.classes.get_layout(obj.class).map(|l| l.slot_count());

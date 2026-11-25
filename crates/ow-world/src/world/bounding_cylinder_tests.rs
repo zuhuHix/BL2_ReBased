@@ -36,13 +36,29 @@ fn engine() -> Vec<u8> {
         "ScriptStruct",
         "StructProperty",
         "IntProperty",
+        "ByteProperty",
+        "Enum",
     ]);
     let object = t.class("Object", 0);
     let vector = ow_package::testkit::reflect::toy_struct(&mut t, object, "Vector", None);
     for f in ["X", "Y", "Z"] {
         t.prop("Float", vector, f, 0, 0);
     }
+    // Lane IMPL-SKELMESH-BOUNDS-SOURCE: a rotator, for the components' and actors' `Rotation`.
+    let rotator = ow_package::testkit::reflect::toy_struct(&mut t, object, "Rotator", None);
+    for f in ["Pitch", "Yaw", "Roll"] {
+        t.prop("Int", rotator, f, 0, 0);
+    }
     let primitive = t.class("PrimitiveComponent", object);
+    // The fields the skeletal bounds rule reads on every primitive (NATIVE_COMPONENT_BOUNDS.md section 9).
+    for b in ["HiddenGame", "bIgnoreOwnerHidden", "bCastHiddenShadow"] {
+        t.prop("Bool", primitive, b, 0, 0);
+    }
+    t.prop("Byte", primitive, "DetailMode", 0, 0);
+    t.prop("Float", primitive, "Scale", 0, 0);
+    t.prop("Struct", primitive, "Scale3D", 0, vector);
+    t.prop("Float", primitive, "BoundsScale", 0, 0);
+    t.prop("Struct", primitive, "Rotation", 0, rotator);
     t.prop("Bool", primitive, "bAttached", 0, 0);
     t.prop("Bool", primitive, "CollideActors", 0, 0);
     t.prop("Bool", primitive, "BulletListener", 0, 0);
@@ -54,7 +70,24 @@ fn engine() -> Vec<u8> {
     let cylinder = t.class("CylinderComponent", primitive);
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
-    t.class("SkeletalMeshComponent", primitive);
+    let skeletal = t.class("SkeletalMeshComponent", primitive);
+    t.prop("Int", skeletal, "FramesPhysicsAsleep", 0, 0);
+    for b in ["bSkipUpdateSkelPose", "bComponentUseFixedSkelBounds", "bUseBoundsFromParentAnimComponent", "bHasValidBodies"] {
+        t.prop("Bool", skeletal, b, 0, 0);
+    }
+    for o in ["SkeletalMesh", "ParentAnimComponent", "PhysicsAsset"] {
+        t.prop("Object", skeletal, o, 0, object);
+    }
+    t.prop("Struct", skeletal, "RootBoneTranslation", 0, vector);
+    let bases = t.p.next_export();
+    t.prop("Array", skeletal, "SpaceBases", 0, bases + 1);
+    t.prop("Int", bases, "SpaceBases", 0, 0);
+    t.class("ToySkeletalKind", skeletal);
+    let mesh = t.class("SkeletalMesh", object);
+    let kdops = t.p.next_export();
+    t.prop("Array", mesh, "PerPolyCollisionBones", 0, kdops + 1);
+    t.prop("Int", kdops, "PerPolyCollisionBones", 0, 0);
+    t.class("PhysicsAsset", object);
     // Lane IMPL-SKIP-FLAG: two more primitive classes whose per-component check was not read, and a toy one.
     t.class("StaticMeshComponent", primitive);
     t.class("ParticleSystemComponent", primitive);
@@ -67,6 +100,24 @@ fn engine() -> Vec<u8> {
     t.class("DynamicLightEnvironmentComponent", object);
     let actor = t.class("Actor", object);
     t.prop("Struct", actor, "Location", 0, vector);
+    // The owner fields the skeletal bounds rule reads: `Physics` (an `EPhysics` byte), `bHidden`, the draw scales and
+    // `Rotation`.
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    let values = ["PHYS_None", "PHYS_Walking", "PHYS_Falling", "PHYS_RigidBody"];
+    payload.extend(ow_package::testkit::ints(&[0, values.len() as i32]));
+    for v in values {
+        let bytes = t.p.fname(v, 0);
+        payload.extend_from_slice(&bytes);
+    }
+    let mut e = ow_package::testkit::Export::new(t.import("Enum"), "EPhysics", payload);
+    e.outer = actor;
+    let physics = t.p.add_export_with(e);
+    t.prop("Byte", actor, "Physics", 0, physics);
+    t.prop("Bool", actor, "bHidden", 0, 0);
+    t.prop("Float", actor, "DrawScale", 0, 0);
+    t.prop("Struct", actor, "DrawScale3D", 0, vector);
+    t.prop("Struct", actor, "Rotation", 0, rotator);
     // Review r1 of #660, item 1: a float the radius can be written to, and an object the height cannot.
     let toy_radius = t.p.next_export() + 1;
     t.prop("Float", actor, "ToyRadius", 0, 0);
@@ -179,6 +230,9 @@ fn fx_mode(mode: ParityMode) -> Fx {
         "Engine.Trigger",
         "Engine.CylinderComponent",
         "Engine.SkeletalMeshComponent",
+        "Engine.ToySkeletalKind",
+        "Engine.SkeletalMesh",
+        "Engine.PhysicsAsset",
         "Engine.PrimitiveComponent",
         "Engine.StaticMeshComponent",
         "Engine.ParticleSystemComponent",
@@ -774,7 +828,7 @@ fn a_skip_flag_of_another_kind_is_a_script_error() {
 
 /// IMPL-COMPONENT-CHECK (NATIVE_COMPONENT_SKIP_FLAG.md section 6.1, tests 1, 2, 4 and 7): on a live, recorded,
 /// attached, colliding entry with the bit clear, every primitive class passes the per-component check and meets its
-/// box rule. The skeletal component gets `SKELETAL_SOURCE`, the static mesh component the static layer's `LayerAbsent`,
+/// box rule. The static mesh component gets the static layer's `LayerAbsent`,
 /// and the particle component and the toy script-only subclasses of `PrimitiveComponent` and `CylinderComponent` "the
 /// bounds update of <class>". On a template the same entry meets refusal L, not the check. Not colliding, or with the bit
 /// set, none is asked. No answer carries the retired "the component check of" text.
@@ -785,7 +839,6 @@ fn every_primitive_entry_passes_the_component_check() {
     let t = x.template("Engine.Actor");
     let update = |class: &str| format!("Actor.GetBoundingCylinder: the bounds update of {class}");
     let cases: Vec<(&str, Missing, String)> = vec![
-        ("Engine.SkeletalMeshComponent", Missing::NotRead, SKELETAL_SOURCE.to_string()),
         ("Engine.StaticMeshComponent", Missing::LayerAbsent(STATIC_LAYER), STATIC_BOUNDS.to_string()),
         ("Engine.ParticleSystemComponent", Missing::NotRead, update("Engine.ParticleSystemComponent")),
         ("Engine.ToyPrimitiveKind", Missing::NotRead, update("Engine.ToyPrimitiveKind")),
@@ -1015,4 +1068,287 @@ fn both_class_tests_give_the_same_answer() {
     }
     assert!(matches!(part_class(space, declared, Some(primitive)), PartClass::Other));
     assert!(matches!(part_class(space, native, None), PartClass::Uncertain(_)));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lane IMPL-SKELMESH-BOUNDS-SOURCE: a live skeletal mesh entry's bounds (NATIVE_COMPONENT_BOUNDS.md section 9.6,
+// tests of section 9.7). Every value is invented.
+
+use crate::world::skeletal::{MeshBounds, ReferenceSkeleton, SkeletalMeshes, SkeletonSource};
+use crate::world::skeletal_bounds::{
+    BODIES, BODIES_LAYER, DETAIL_MODE, HIDDEN_NO_MESH, PARENT_BOUNDS, PARENT_ROOT, PER_BONE, SKELETAL_BOUNDS,
+    SKIP_POSE, SLEEPING, STORED_LAYER, UNBOUNDED,
+};
+
+/// A source whose only answer is the mesh bounds it was given, for any mesh export.
+struct Bounds(MeshBounds);
+
+impl SkeletonSource for Bounds {
+    fn skeleton(&self, _: &str, _: &str, _: &str) -> Result<Option<ReferenceSkeleton>, String> {
+        Ok(None)
+    }
+    fn mesh_bounds_in(&self, _: &ow_package::package::Package, _: i32) -> Result<Option<MeshBounds>, String> {
+        Ok(Some(self.0))
+    }
+}
+
+/// The bounds the stub source answers: origin (1, 2, 3), extent (4, 5, 6), two bones.
+const TOY_BOUNDS: MeshBounds = MeshBounds { origin: [1.0, 2.0, 3.0], extent: [4.0, 5.0, 6.0], bones: 2 };
+
+impl Fx {
+    /// Member `m` of struct field `n` of `o` set to `v`.
+    fn member(&mut self, o: ObjRef, n: &str, m: &str, v: Value) {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, n).unwrap();
+        let mut s = self.vm.space.read(o, PropAddr::scalar(p)).unwrap().clone();
+        let ty = s.as_struct().unwrap().ty;
+        let id = self.vm.space.names.find(m).unwrap();
+        let (i, _) = self.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        s.struct_mut().unwrap().fields[usize::try_from(i).unwrap()] = v;
+        self.set(o, n, s);
+    }
+
+    fn vector3(&mut self, o: ObjRef, n: &str, v: [f32; 3]) {
+        for (m, f) in ["X", "Y", "Z"].into_iter().zip(v) {
+            self.member(o, n, m, Value::Float(f));
+        }
+    }
+
+    /// A live pickup with one entry: a live, recorded, colliding `SkeletalMeshComponent` (class defaults otherwise).
+    fn skeletal(&mut self) -> (ObjRef, ObjRef) {
+        let pickup = self.live("WillowGame.WillowPickup");
+        let c = self.live("Engine.SkeletalMeshComponent");
+        self.attach(pickup, c);
+        self.set(c, "CollideActors", Value::Bool(true));
+        self.components(pickup, vec![Some(c)]);
+        (pickup, c)
+    }
+
+    /// Unit scales on the component and its owner (the uniform, unit combined scale), and `BoundsScale`.
+    fn unit_scales(&mut self, pickup: ObjRef, c: ObjRef, bounds_scale: f32) {
+        self.set(c, "Scale", Value::Float(1.0));
+        self.vector3(c, "Scale3D", [1.0; 3]);
+        self.set(c, "BoundsScale", Value::Float(bounds_scale));
+        self.set(pickup, "DrawScale", Value::Float(1.0));
+        self.vector3(pickup, "DrawScale3D", [1.0; 3]);
+    }
+
+    /// A mesh the store can place in a package export (the accessor's precondition), resident.
+    fn mesh_export(&mut self) -> ObjRef {
+        self.export("Engine.SkeletalMesh")
+    }
+
+    fn bounds_source(&mut self, b: MeshBounds) {
+        SkeletalMeshes::install(&mut self.vm, Box::new(Bounds(b))).unwrap();
+    }
+}
+
+fn not_read() -> Missing {
+    Missing::NotRead
+}
+
+fn stored() -> Missing {
+    Missing::LayerAbsent(STORED_LAYER)
+}
+
+/// 9.7 test 1: class defaults and no mesh take source e, the base rule (origin 0, a half extent of 262144), alone and
+/// beside the pickup's cylinder; `BoundsScale` 2 changes nothing, because source e returns first. The per-component
+/// check passes on the way.
+#[test]
+fn a_skeletal_entry_with_no_mesh_takes_the_base_rule() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
+    let want = (unbounded[0], unbounded[2]);
+    x.answers(pickup, want, "the base rule");
+    x.set(c, "BoundsScale", Value::Float(2.0));
+    x.answers(pickup, want, "BoundsScale is not applied");
+    let cyl = x.cylinder(64.0, 20.0);
+    x.attach(pickup, cyl);
+    x.set(cyl, "CollideActors", Value::Bool(true));
+    x.components(pickup, vec![Some(cyl), Some(c)]);
+    let location = [0.0, 0.0, 0.0];
+    let both = box_cylinder(&[(location, [64.0, 64.0, 20.0]), ([0.0; 3], [UNBOUNDED; 3])]);
+    x.answers(pickup, (both[0], both[2]), "the union with the pickup cylinder");
+}
+
+/// 9.7 tests 2 and 9a: a mesh takes source f. With no accessor answer, the stored-bounds `LayerAbsent`. With one, the
+/// simplest transform gives `Location` + the mesh origin + `RootBoneTranslation` and the extent × `BoundsScale`; a
+/// non-zero owner `Rotation`, a non-unit scale or a component `Translation` is the world transform's `NotRead`.
+#[test]
+fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    x.bounds_source(TOY_BOUNDS);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.unit_scales(pickup, c, 2.0);
+    x.vector3(pickup, "Location", [10.0, 20.0, 30.0]);
+    x.vector3(c, "RootBoneTranslation", [0.5, 0.0, 0.0]);
+    let want = box_cylinder(&[([11.5, 22.0, 33.0], [8.0, 10.0, 12.0])]);
+    x.answers(pickup, (want[0], want[2]), "the simplest transform");
+    x.member(pickup, "Rotation", "Yaw", Value::Int(16384));
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.member(pickup, "Rotation", "Yaw", Value::Int(0));
+    x.set(c, "Scale", Value::Float(2.0));
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.set(c, "Scale", Value::Float(1.0));
+    x.vector3(c, "Translation", [0.0, 0.0, 1.0]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(c, "Translation", [0.0; 3]);
+    // A non-empty SpaceBases with a mesh that lists per-poly collision bones: the per-bone step, not read.
+    x.set(c, "SpaceBases", Value::array(vec![Value::Int(0), Value::Int(0)]));
+    x.set(mesh, "PerPolyCollisionBones", Value::array(vec![Value::Int(0)]));
+    x.refuses(pickup, not_read(), PER_BONE, BOUNDS_RECORD);
+    x.set(mesh, "PerPolyCollisionBones", Value::array(vec![]));
+    x.answers(pickup, (want[0], want[2]), "no per-poly collision bones");
+}
+
+/// 9.7 tests 3, 3a, 4 and 5: visibility and source a. `HiddenGame` (or an owner's `bHidden` without
+/// `bIgnoreOwnerHidden`, or `bComponentUseFixedSkelBounds`) takes source a: with no mesh the "no mesh" `NotRead`, with
+/// one the stored-bounds `LayerAbsent`. `bCastHiddenShadow` makes a hidden component visible again.
+#[test]
+fn a_hidden_or_fixed_skeletal_entry_takes_source_a() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
+    x.set(c, "HiddenGame", Value::Bool(true));
+    x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
+    // 3a: a parent with a fixed-bounds mesh does not come first.
+    let parent = x.live("Engine.SkeletalMeshComponent");
+    let parent_mesh = x.mesh_export();
+    x.set(parent, "SkeletalMesh", Value::Object(Some(parent_mesh)));
+    x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(true));
+    x.set(c, "ParentAnimComponent", Value::Object(Some(parent)));
+    x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
+    x.set(c, "ParentAnimComponent", Value::Object(None));
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    x.set(c, "SkeletalMesh", Value::Object(None));
+    x.set(c, "bCastHiddenShadow", Value::Bool(true));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "a hidden shadow caster is visible: source e");
+    x.set(c, "bCastHiddenShadow", Value::Bool(false));
+    x.set(c, "HiddenGame", Value::Bool(false));
+    // 4: the owner hidden.
+    x.set(pickup, "bHidden", Value::Bool(true));
+    x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
+    x.set(c, "bIgnoreOwnerHidden", Value::Bool(true));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "the owner's bHidden ignored");
+    x.set(pickup, "bHidden", Value::Bool(false));
+    // 5: fixed bounds while visible.
+    x.set(c, "bComponentUseFixedSkelBounds", Value::Bool(true));
+    x.refuses(pickup, not_read(), HIDDEN_NO_MESH, BOUNDS_RECORD);
+}
+
+/// 9.7 tests 6, 7 and 8: the early refusals, before any source. `DetailMode` 1; a sleeping rigid-body owner (5 frames
+/// or another `Physics` goes on); `bSkipUpdateSkelPose`.
+#[test]
+fn the_early_returns_refuse_before_the_source() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
+    x.set(c, "DetailMode", Value::Byte(1));
+    x.refuses(pickup, not_read(), DETAIL_MODE, BOUNDS_RECORD);
+    x.set(c, "DetailMode", Value::Byte(0));
+    x.set(pickup, "Physics", Value::Byte(3));
+    x.set(c, "FramesPhysicsAsleep", Value::Int(6));
+    x.refuses(pickup, not_read(), SLEEPING, BOUNDS_RECORD);
+    x.set(c, "FramesPhysicsAsleep", Value::Int(5));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "five frames asleep goes on");
+    x.set(c, "FramesPhysicsAsleep", Value::Int(6));
+    x.set(pickup, "Physics", Value::Byte(2));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "another Physics goes on");
+    x.set(c, "bSkipUpdateSkelPose", Value::Bool(true));
+    x.refuses(pickup, not_read(), SKIP_POSE, BOUNDS_RECORD);
+}
+
+/// 9.7 tests 9 and 10: the physics sources. Its own `PhysicsAsset` with `bHasValidBodies` clear is skipped; set, with
+/// a uniform scale, a mesh and a matching bone count, the bodies' `LayerAbsent` (its text naming the bones layer).
+/// With `SpaceBases` empty the count is false (skipped to f); with it non-empty and no accessor answer, the
+/// stored-bounds `LayerAbsent`. A parent with a fixed-bounds mesh is source b; a parent with a `PhysicsAsset` and
+/// `bUseBoundsFromParentAnimComponent` is the parent's stored `Bounds` (`BOUNDS_LAYER`); a lazy parent is refusal N.
+#[test]
+fn the_physics_and_parent_sources() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let unbounded = box_cylinder(&[([0.0; 3], [UNBOUNDED; 3])]);
+    let asset = x.live("Engine.PhysicsAsset");
+    x.set(c, "PhysicsAsset", Value::Object(Some(asset)));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "bHasValidBodies clear: skipped to e");
+    x.set(c, "bHasValidBodies", Value::Bool(true));
+    x.answers(pickup, (unbounded[0], unbounded[2]), "no mesh: cannot use the bones");
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.unit_scales(pickup, c, 1.0);
+    // SpaceBases empty: the count is false, so c is skipped to f (no accessor: the stored-bounds layer).
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    // SpaceBases not empty and no accessor answer: the count cannot be decided.
+    x.set(c, "SpaceBases", Value::array(vec![Value::Int(0), Value::Int(0)]));
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    x.bounds_source(TOY_BOUNDS);
+    assert!(BODIES.contains(BONES_LAYER), "the bodies' refusal names the bones layer");
+    x.refuses(pickup, Missing::LayerAbsent(BODIES_LAYER), BODIES, BOUNDS_RECORD);
+    // A count that does not match: c is skipped, and source f answers through the simplest transform.
+    x.set(c, "SpaceBases", Value::array(vec![Value::Int(0)]));
+    let want = box_cylinder(&[([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])]);
+    x.answers(pickup, (want[0], want[2]), "a bone count that differs");
+    x.set(c, "PhysicsAsset", Value::Object(None));
+    // Source b.
+    let parent = x.live("Engine.SkeletalMeshComponent");
+    let parent_mesh = x.mesh_export();
+    x.set(parent, "SkeletalMesh", Value::Object(Some(parent_mesh)));
+    x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(true));
+    x.set(c, "ParentAnimComponent", Value::Object(Some(parent)));
+    x.refuses(pickup, not_read(), PARENT_ROOT, BOUNDS_RECORD);
+    // Source d.
+    x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(false));
+    let parent_asset = x.live("Engine.PhysicsAsset");
+    x.set(parent, "PhysicsAsset", Value::Object(Some(parent_asset)));
+    x.set(c, "bUseBoundsFromParentAnimComponent", Value::Bool(true));
+    x.refuses(pickup, l(), PARENT_BOUNDS, BOUNDS_RECORD);
+    x.set(c, "bUseBoundsFromParentAnimComponent", Value::Bool(false));
+    x.refuses(pickup, Missing::LayerAbsent(BODIES_LAYER), BODIES, BOUNDS_RECORD);
+    // A lazy parent: refusal N.
+    let lazy = x.lazy("HolderCyl");
+    x.set(c, "ParentAnimComponent", Value::Object(Some(lazy)));
+    x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
+}
+
+/// 9.7 tests 10 (no accessor) and 11: source b with no accessor answer is the stored-bounds `LayerAbsent`; a field of
+/// the wrong kind is a `VmError::Script` naming it, with nothing written.
+#[test]
+fn source_b_without_an_accessor_and_wrong_kinds() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let parent = x.live("Engine.SkeletalMeshComponent");
+    let parent_mesh = x.mesh_export();
+    x.set(parent, "SkeletalMesh", Value::Object(Some(parent_mesh)));
+    x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(true));
+    x.set(c, "ParentAnimComponent", Value::Object(Some(parent)));
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    x.set(c, "ParentAnimComponent", Value::Object(None));
+    for (o, name) in [(c, "DetailMode"), (pickup, "bHidden")] {
+        let class = x.vm.space.heap.get(o).unwrap().class;
+        let p = x.vm.space.prop(class, name).unwrap();
+        let old = x.vm.space.read(o, PropAddr::scalar(p)).unwrap().clone();
+        *x.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = Value::Int(1);
+        let r = x.same("a data error", |x| answer(&x.vm, pickup));
+        script_error(r, name);
+        *x.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = old;
+    }
+}
+
+/// 9.7 test 12: a `SkeletalMeshComponent` subclass is not the exact class: "the bounds update of <class>".
+#[test]
+fn a_skeletal_subclass_keeps_the_unread_bounds_update() {
+    let mut x = fx();
+    let pickup = x.live("WillowGame.WillowPickup");
+    let c = x.live("Engine.ToySkeletalKind");
+    x.attach(pickup, c);
+    x.set(c, "CollideActors", Value::Bool(true));
+    x.components(pickup, vec![Some(c)]);
+    x.refuses(pickup, Missing::NotRead, "Actor.GetBoundingCylinder: the bounds update of Engine.ToySkeletalKind", BOUNDS_RECORD);
 }
