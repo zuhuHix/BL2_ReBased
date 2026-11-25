@@ -22,7 +22,10 @@ the store has not loaded (a load is a write)". A failed handle is "..., whose lo
 **The shot helper** (`ow-combat` `hit::shot::firing_mode`, the note's settled switch) now calls the same rule. Its step
 loads each object the rule reaches, so its loading stays on the rule's path. Its elemental case answers the elemental
 part's mode, where it refused before. The `Part_ElementalMode` test now expects that mode, and a new test runs the
-helper and the native's rule on the same resident parts for each step and asserts the same answer.
+helper and the native's rule on the same resident parts for each step and asserts the same answer. **Off only**
+(review of #735): the Off shot path now also takes the note's declaration check (a mode field not declared as an
+object is a data error), while Reference keeps the earlier reading exactly, its lenient field reads and its refusal of
+an elemental part with its own mode.
 
 **Tests.** `firing_mode_tests.rs`, on invented classes: the note's section 5 in 7 tests. Every call asserts #518's
 counters, `class_code_loads` and the name table unchanged. Lazy objects are slotless stand-ins. The failed-load text
