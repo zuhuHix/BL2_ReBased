@@ -25,7 +25,7 @@ check changed.
 - **Review r1 of #681:** both walks call the class test for every entry, also when the class table has no
   `Engine.PrimitiveComponent` (the helper takes it as an `Option`). Before, the callers skipped every entry first in
   that case, so a stand-in still gave a silent zero. Without the class no package entry is a primitive, but a chain
-  through a stand-in is still `NotRead`. A regression test for each walk covers it.
+  through a stand-in is still `NotRead`. A spawn-extent regression covers the caller, and a shared-helper test covers the class test without the class (review r2 of #681: the cylinder test calls the helper directly).
 - **Only the class-test lines changed**, so the change rebases over #677.
 - **Tests (synthetic):** both walks refuse a native stand-in entry with `NotRead` naming it, with the heap, the RNG,
   #518's counters and the name table unchanged. A package class that is not a primitive is still skipped, and a
