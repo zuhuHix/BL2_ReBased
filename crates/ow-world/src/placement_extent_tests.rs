@@ -264,3 +264,34 @@ fn a_field_the_classes_do_not_declare_is_a_script_error() {
         other => panic!("expected a Script error, got {other:?}"),
     }
 }
+
+/// Lane UNDECLARED-COMPONENT-CLASS: a `Components` entry whose class is an engine-native stand-in (no package export)
+/// is `NotRead` naming that class, before any skip decision and write-free; a package class that is not a primitive
+/// is still skipped, and a primitive takes its usual path.
+#[test]
+fn a_native_stand_in_component_class_is_not_read_and_a_package_one_is_decided() {
+    let mut x = fx();
+    let t = x.obj("Engine.Actor");
+    // As the definition store makes one for a class with no package export: defined under Core.Object, native.
+    let object = x.vm.space.classes.by_path("Core.Object").unwrap();
+    let native = x.vm.space.classes.define("Test.NativeOnlyComponent", Some(object), vec![]).unwrap();
+    x.vm.space.classes.mark_native(native).unwrap();
+    let entry = x.vm.space.alloc_stand_in(native, "Native", Origin::Resource { package: 0, index: -1 }).unwrap();
+    let audio = x.obj("Test.AudioComponent");
+    x.components(t, vec![Some(audio), Some(entry)]);
+    let vm = &x.vm;
+    let before = (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    let what = not_read(extent(&x.vm, t).unwrap_err());
+    assert!(what.contains("engine-native stand-in class") && what.contains("Test.NativeOnlyComponent"), "{what}");
+    assert!(what.starts_with(BOUNDING_CYLINDER_OF), "{what}");
+    let vm = &x.vm;
+    let after = (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
+    assert_eq!(after, before, "write-free, load-free, draw-free and intern-free");
+    // A defined non-primitive alone is skipped: the zero extent.
+    x.components(t, vec![Some(audio)]);
+    assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3]);
+    // A defined primitive, unattached, is decided as before (not counted).
+    let quiet = x.primitive(false, true);
+    x.components(t, vec![Some(audio), Some(quiet)]);
+    assert_eq!(extent(&x.vm, t).unwrap(), [0.0; 3]);
+}
