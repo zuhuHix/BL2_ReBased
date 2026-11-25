@@ -24,8 +24,8 @@ pub mod material;
 pub mod lighting;
 pub mod lightmap;
 
-/// The code packages every Borderlands 2 install holds in `WillowGame/CookedPCConsole`. Only their presence is
-/// checked; nothing is read from them here.
+/// The code packages every Borderlands 2 install holds in its cooked folder. Only their presence is checked; nothing
+/// is read from them here.
 pub const REQUIRED_PACKAGES: [&str; 3] = ["Core.upk", "Engine.upk", "WillowGame.upk"];
 
 /// The folders of an install that the host reads from.
@@ -41,6 +41,9 @@ pub enum InstallError {
     NotADirectory(PathBuf),
     NoCookedFolder(PathBuf),
     MissingPackage(PathBuf),
+    /// Two entries whose names differ only in case stand where one install folder or package is looked for
+    /// (`ow_core::install`): refused, not guessed.
+    AmbiguousName(String),
 }
 
 impl fmt::Display for InstallError {
@@ -48,27 +51,31 @@ impl fmt::Display for InstallError {
         match self {
             InstallError::NotADirectory(p) => write!(f, "{} is not a folder", p.display()),
             InstallError::NoCookedFolder(p) => {
-                write!(f, "{} has no WillowGame/CookedPCConsole folder", p.display())
+                write!(f, "{} has no WillowGame/CookedPCConsole (or steamassets/WillowGame/CookedPCConsole) folder", p.display())
             }
             InstallError::MissingPackage(p) => write!(f, "missing {}", p.display()),
+            InstallError::AmbiguousName(why) => f.write_str(why),
         }
     }
 }
 
 impl std::error::Error for InstallError {}
 
-/// Checks that `root` looks like a Borderlands 2 install: a folder with `WillowGame/CookedPCConsole` holding the
-/// code packages in [`REQUIRED_PACKAGES`].
+/// Checks that `root` looks like a Borderlands 2 install: a folder whose cooked folder holds the code packages in
+/// [`REQUIRED_PACKAGES`]. The cooked folder is `WillowGame/CookedPCConsole` (the Windows build) or
+/// `steamassets/WillowGame/CookedPCConsole` (Aspyr's Linux build, every name in lower case), each name matched
+/// exactly first and then ignoring case (`ow_core::install::cooked_folder`). Both are the player's own installed
+/// game; without either the host refuses to start (AGENTS.md rule 11).
 pub fn find_install(root: &Path) -> Result<Install, InstallError> {
     if !root.is_dir() {
         return Err(InstallError::NotADirectory(root.to_path_buf()));
     }
-    let cooked = root.join("WillowGame").join("CookedPCConsole");
-    if !cooked.is_dir() {
+    let ambiguous = |e: ow_core::install::PathCaseError| InstallError::AmbiguousName(e.to_string());
+    let Some(cooked) = ow_core::install::cooked_folder(root).map_err(ambiguous)? else {
         return Err(InstallError::NoCookedFolder(root.to_path_buf()));
-    }
+    };
     for name in REQUIRED_PACKAGES {
-        let package = cooked.join(name);
+        let package = ow_core::install::resolve_or_join(&cooked, name).map_err(ambiguous)?;
         if !package.is_file() {
             return Err(InstallError::MissingPackage(package));
         }
@@ -141,6 +148,24 @@ mod tests {
             fs::write(cooked.join(name), b"").unwrap();
         }
         assert_eq!(find_install(&dir), Ok(Install { root: dir.clone(), cooked }));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Lane LINUX-PATHS: Aspyr's layout, every name in lower case, is an install too; its packages are the files
+    /// found, in their own case.
+    #[test]
+    fn accepts_aspyr_s_lower_case_layout() {
+        let dir = scratch("aspyr");
+        let cooked = dir.join("steamassets").join("willowgame").join("cookedpcconsole");
+        fs::create_dir_all(&cooked).unwrap();
+        for name in REQUIRED_PACKAGES {
+            fs::write(cooked.join(name.to_ascii_lowercase()), b"").unwrap();
+        }
+        let found = find_install(&dir).unwrap();
+        assert!(found.cooked.ends_with("steamassets/willowgame/cookedpcconsole"), "{:?}", found.cooked);
+        assert_eq!(found.root, dir);
+        fs::remove_file(cooked.join("core.upk")).unwrap();
+        assert!(matches!(find_install(&dir), Err(InstallError::MissingPackage(_))), "a missing package still refuses");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

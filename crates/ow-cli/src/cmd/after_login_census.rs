@@ -21,11 +21,10 @@ mod tests {
                                (NATIVE_LOGIN_URL_CONFIG_INPUT.md sections 1.3 and 2.3)";
 
     fn cooked() -> std::path::PathBuf {
-        std::env::var_os("OW_GAME")
+        let root = std::env::var_os("OW_GAME")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2"))
-            .join("WillowGame")
-            .join("CookedPCConsole")
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2"));
+        ow_core::install::cooked_or_join(&root).unwrap()
     }
 
     /// The keys an Off world over the installed packages binds with `packs` on top of the world's own pack.

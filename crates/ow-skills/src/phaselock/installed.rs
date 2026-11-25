@@ -169,7 +169,13 @@ fn run_all(root: PathBuf, mode: ParityMode) -> String {
         out,
         "# AI-assisted (Claude Code). W6-SKILLS installed-game run for Maya, local only. {mode:?}."
     );
-    let cooked = root.join("WillowGame").join("CookedPCConsole");
+    let cooked = match ow_core::install::cooked_or_join(&root) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = writeln!(out, "store: {e}");
+            return out;
+        }
+    };
     let defs = match DefStore::open(cooked, IdentityPolicy::FirstInScanOrder, mode) {
         Ok(d) => d,
         Err(e) => {
@@ -394,11 +400,9 @@ fn part_infobox(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         .ok_or("OW_BL2_ROOT")?;
     let mut loc = ow_core::DetMap::new();
     for pkg in ["GD_Siren_Streaming_SF", "GD_Siren_Skills"] {
-        let path = root
-            .join("WillowGame")
-            .join("Localization")
-            .join("INT")
-            .join(format!("{pkg}.int"));
+        let content = ow_core::install::content_root(&root).map_err(|e| e.to_string())?;
+        let path = ow_core::install::resolve_or_join(&content, &format!("WillowGame/Localization/INT/{pkg}.int"))
+            .map_err(|e| e.to_string())?;
         let m = crate::skills::read_localization(&path).map_err(|e| e.to_string())?;
         let _ = writeln!(out, "localization {pkg}.int: {} entries", m.len());
         for (k, v) in m.iter() {
