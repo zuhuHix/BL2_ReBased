@@ -2,10 +2,10 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-GETWEAPONHOLDDEF (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh 15cd21c0):** AI-assisted (Claude Code,
+**IMPL-GETWEAPONHOLDDEF (2026-11-25, pc-hummer, on fix/rust-link1-head-mesh fff815f4):** AI-assisted (Claude Code,
 Opus 5.5). `BodyClassDefinition.GetWeaponHoldDef` in Off, from NATIVE_GET_WEAPON_HOLD_DEF.md section 3, and link 1's
 set-up walk goes on to the body class's weapon holds and parent chain (exports of the pawn's package file only;
-UNVERIFIED stand-in, hub ruling). `cargo test --workspace -j 8` 3,659 passed / 0 failed / 57 ignored;
+UNVERIFIED stand-in, hub ruling). `cargo test --workspace -j 8` 3,668 passed / 0 failed / 57 ignored;
 `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 5 ok / 2 NotYet
 / 7 errors, `links ok 5/14`, `step share X = 5.783/14 = 41.3%`. Links 1, 3, 4, 5, 13 and 14 stop at `maya:8`, an error
 at the unbound `AnimNodeAimOffset.SetActiveProfileByName(name)`. No real-game run.
