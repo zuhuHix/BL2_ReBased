@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-MAYA9-NATIVES (2026-11-26, pc-hummer, on fix/rust-maya9-natives, rebased onto main 1fed25cc):** AI-assisted (Claude
+Code, Opus 5.5). `WillowPlayerPawn.SetDefaultStance` / `WillowPawn.SetDefaultStance`, the `ShieldResourcePool`
+idle-reset hook, `FlagDefinition.ApplyFlagInitializationData` and
+`BalanceModifierDefinition.ApplyPlayThroughBasedPlayerAttributeEffects` in Off (NATIVE_MAYA9_AND_AFTER.md section 3). `cargo test --workspace -j 8 --no-fail-fast`
+3,896 passed (on 1fed25cc) / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build,
+under the machine lock): this branch alone 6 ok / 8 not ok, 51.2%, links 1, 3, 4, 5, 13 and 14 at the unbound
+`Pawn.IsPlayerPawn()` (unchanged); merged locally with fix/is-player-pawn-and-unbound-keys and
+fix/preload-bodyclass-definitions (before they landed as #780 and #779), 6 ok / 8 not ok, 51.2%, the same links stop earlier in `maya:8`, at pass 2 of
+`InitializeBehaviorProviders`: a sequence's `CustomEnableCondition` needs its owner (the mission tracker's observers,
+`LayerAbsent`; the note's caveat 1), so none of this lane's natives is reached in the installed run yet. Every other
+row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **GATE-SETUP-HARNESS-LINES (2026-11-26, pc-hummer, on fix/gate-setup-harness-lines, rebased onto main 37a1f3e):** AI-assisted
 (Claude Code, Opus 5.5). The gate's combat rows carry the world set-up's harness lines, marked `world set-up: `;
 `set_physx_level` logs its no-engine case. `cargo test --workspace -j 8 --no-fail-fast` 3,861 passed / 0 failed / 59
