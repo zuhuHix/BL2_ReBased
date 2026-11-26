@@ -1169,9 +1169,9 @@ fn a_skeletal_entry_with_no_mesh_refuses_on_its_template() {
 }
 
 /// NATIVE_LINK67_PICKUP_GUN_INIT.md section 7, test 5 (lane IMPL-LINK67-PICKUP-GUN-INIT): the pickup's copied component
-/// with an export mesh. No mesh layer: the stored-bounds `LayerAbsent`; a layer with the gun's `Scale` 0.92: the world
-/// transform's `NotRead` (the combined scale is not exactly 1); `Scale` 1: the box (origin plus the root offset, the
-/// extent times `BoundsScale`).
+/// with an export mesh. No mesh layer: the stored-bounds `LayerAbsent`. With a layer and the gun's `Scale` 0.92, a
+/// uniform scale, the scaled box (the hub's ruling, lane SCALED-BOUNDS-TRANSFORM; before it, the world transform's
+/// `NotRead`); `Scale` 1: the box (origin plus the root offset, the extent times `BoundsScale`).
 #[test]
 fn the_pickup_gun_s_copied_component_takes_source_f() {
     let mut x = fx();
@@ -1181,17 +1181,59 @@ fn the_pickup_gun_s_copied_component_takes_source_f() {
     x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
     x.bounds_source(TOY_BOUNDS);
     x.unit_scales(pickup, c, 1.0);
-    x.set(c, "Scale", Value::Float(0.92));
-    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    let s = 0.92f32;
+    x.set(c, "Scale", Value::Float(s));
+    let scaled = box_cylinder(&[([s * 1.0, s * 2.0, s * 3.0], [4.0 * s, 5.0 * s, 6.0 * s])]);
+    x.answers(pickup, (scaled[0], scaled[2]), "the gun's uniform 0.92");
     x.set(c, "Scale", Value::Float(1.0));
     x.vector3(c, "RootBoneTranslation", [0.5, 0.0, 0.0]);
     let want = box_cylinder(&[([1.5, 2.0, 3.0], [4.0, 5.0, 6.0])]);
     x.answers(pickup, (want[0], want[2]), "the stored box at unit scale");
 }
 
+/// The hub's ruling (lane SCALED-BOUNDS-TRANSFORM): a uniform, positive combined scale is answered, the box scaled by
+/// it (the extents, so the cylinder's radius and height); the factor may come from the owner's `DrawScale`. A
+/// non-uniform scale (the component's `Scale3D` or the owner's `DrawScale3D`), a zero, a negative or a NaN scale is the
+/// world transform's `NotRead`.
+#[test]
+fn a_uniform_positive_scale_scales_the_stored_box() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.bounds_source(TOY_BOUNDS);
+    x.unit_scales(pickup, c, 1.0);
+    let unit = box_cylinder(&[([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])]);
+    x.answers(pickup, (unit[0], unit[2]), "unit scale");
+    let s = 0.92f32;
+    x.set(c, "Scale", Value::Float(s));
+    let scaled = box_cylinder(&[([s * 1.0, s * 2.0, s * 3.0], [4.0 * s, 5.0 * s, 6.0 * s])]);
+    x.answers(pickup, (scaled[0], scaled[2]), "0.92");
+    assert!(scaled[0] < unit[0] && scaled[2] < unit[2], "the radius and the height shrink");
+    // The factor through the owner: DrawScale 0.5 with the component at 1.
+    x.set(c, "Scale", Value::Float(1.0));
+    x.set(pickup, "DrawScale", Value::Float(0.5));
+    let half = box_cylinder(&[([0.5, 1.0, 1.5], [2.0, 2.5, 3.0])]);
+    x.answers(pickup, (half[0], half[2]), "the owner's DrawScale");
+    x.set(pickup, "DrawScale", Value::Float(1.0));
+    // Non-uniform: the component's Scale3D, then the owner's DrawScale3D.
+    x.vector3(c, "Scale3D", [1.0, 1.0, 0.5]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(c, "Scale3D", [1.0; 3]);
+    x.vector3(pickup, "DrawScale3D", [2.0, 1.0, 1.0]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(pickup, "DrawScale3D", [1.0; 3]);
+    // Zero, negative and NaN.
+    for bad in [0.0f32, -1.0, f32::NAN] {
+        x.set(c, "Scale", Value::Float(bad));
+        x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    }
+}
+
 /// 9.7 tests 2 and 9a: a mesh takes source f. With no accessor answer, the stored-bounds `LayerAbsent`. With one, the
-/// simplest transform gives `Location` + the mesh origin + `RootBoneTranslation` and the extent × `BoundsScale`; a
-/// non-zero owner `Rotation`, a non-unit scale or a component `Translation` is the world transform's `NotRead`.
+/// simplest transform gives `Location` + the mesh origin + `RootBoneTranslation` and the extent × `BoundsScale`, each
+/// times a uniform scale (lane SCALED-BOUNDS-TRANSFORM); a non-zero owner `Rotation`, a non-uniform scale or a component
+/// `Translation` is the world transform's `NotRead`.
 #[test]
 fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
     let mut x = fx();
@@ -1200,8 +1242,10 @@ fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
     x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
     x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
     x.bounds_source(TOY_BOUNDS);
-    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
     x.unit_scales(pickup, c, 2.0);
+    x.vector3(c, "Scale3D", [1.0, 1.0, 2.0]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(c, "Scale3D", [1.0; 3]);
     x.vector3(pickup, "Location", [10.0, 20.0, 30.0]);
     x.vector3(c, "RootBoneTranslation", [0.5, 0.0, 0.0]);
     let want = box_cylinder(&[([11.5, 22.0, 33.0], [8.0, 10.0, 12.0])]);
@@ -1209,8 +1253,10 @@ fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
     x.member(pickup, "Rotation", "Yaw", Value::Int(16384));
     x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
     x.member(pickup, "Rotation", "Yaw", Value::Int(0));
+    // A uniform 2: the box scaled about the owner (origin and root offset times 2, the extent times 2 × BoundsScale).
     x.set(c, "Scale", Value::Float(2.0));
-    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    let doubled = box_cylinder(&[([13.0, 24.0, 36.0], [16.0, 20.0, 24.0])]);
+    x.answers(pickup, (doubled[0], doubled[2]), "a uniform scale of 2");
     x.set(c, "Scale", Value::Float(1.0));
     x.vector3(c, "Translation", [0.0, 0.0, 1.0]);
     x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
@@ -1318,9 +1364,9 @@ fn the_physics_and_parent_sources() {
     x.set(c, "ParentAnimComponent", Value::Object(Some(parent)));
     x.refuses(pickup, not_read(), PARENT_ROOT, BOUNDS_RECORD);
     // Review r1 of #707: PARENT_ROOT only in the simplest transform; otherwise the world transform's NotRead.
-    x.set(c, "Scale", Value::Float(2.0));
+    x.vector3(c, "Scale3D", [1.0, 2.0, 1.0]);
     x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
-    x.set(c, "Scale", Value::Float(1.0));
+    x.vector3(c, "Scale3D", [1.0; 3]);
     // Source d.
     x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(false));
     let parent_asset = x.live("Engine.PhysicsAsset");
