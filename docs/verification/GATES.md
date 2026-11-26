@@ -60,14 +60,14 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-LINKS-3-4-TAIL (2026-11-26, pc-hummer, on fix/rust-links-3-4-tail, stacked on #815, rebased onto its r2 head
-2470002):** AI-assisted
+**IMPL-LINKS-3-4-TAIL (2026-11-26, pc-hummer, on fix/rust-links-3-4-tail, stacked on #815, rebased onto its landing head
+7b50b95):** AI-assisted
 (Claude Code, Opus 5.5). #812's rows for links 3 and 4, Off: the plain reads, `IsFriendlyFire`'s interface argument by
 option (B) (pending the hub's ruling), `AdjustDamage`'s hit-region cap with `HitRegionCapReduction` fed back,
 `GetDisplayNameAtGrade`, `NotifyKilledEnemy`'s gates, `IsActionSkillRunning`, the dialog globals' `Get` with a logged
 set-up preload of `Dialog`, the shield stage and protection timer as a plan, and `DoForceFeedbackWaveform`'s waveform
-residency past the gates (row 6). `cargo test --workspace` 4,111 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the
-machine lock, on 25356dda): 8 ok / 6 not ok, 9.000/14 = 64.3% (#815: 67.9%). **Link 3 runs through the hit-region cap,
+residency past the gates (row 6). `cargo test --workspace` 4,118 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the
+machine lock, on 5606844d): 8 ok / 6 not ok, 9.000/14 = 64.3% (#815: 67.9%). **Link 3 runs through the hit-region cap,
 `GetDisplayNameAtGrade`, `NotifyKilledEnemy`, `IsActionSkillRunning` and the dialog globals** and stops later in its hit
 at "engine query WorldController { index: 0 }" (an attribute context resolver needs the world's controller list; by fit
 `AddKillStreakScore`'s attribute reads, which #812 did not read), a `NotYet` after partial writes. That sticky stop of
