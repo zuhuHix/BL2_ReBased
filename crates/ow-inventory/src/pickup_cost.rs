@@ -25,8 +25,10 @@
 //! **`PayForPickupable`** (section 2.2): steps 1 to 4 and step 6's not-loaded check and cast only, not step 5. Golden
 //! keys raise the controller's `SpendGoldenKey` once per unit (an amount of 0 or less: none). Any other type, with the
 //! cast replication info, calls `AddCurrencyOnHand(type, -amount)` last; a failed cast does nothing. Every refusal
-//! of the checks comes before the first call. A raised `SpendGoldenKey` is a write: an error of a later raise is marked
-//! "stopped after partial writes" (review of #774), as the crate's other natives mark one after their first write. The note's `GetCurrencyOnHand` read whose answer is dropped is not made (it writes
+//! of the checks comes before the first call. A raised `SpendGoldenKey` is a write, and so is whatever a handler does
+//! before it refuses: an error of either call is marked "stopped after partial writes" when a key was raised before it
+//! or #518's counters moved since the native was entered (reviews of #774, rounds 1 and 2; `pickup_rb`'s
+//! `WriteCounters`). The note's `GetCurrencyOnHand` read whose answer is dropped is not made (it writes
 //! nothing).
 //!
 //! **`UpdateAmmoCounts(bSilent)`** (section 4): [`AMMO_REFRESH`] (`NotRead`), nothing written.
@@ -182,6 +184,7 @@ fn can_afford(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// `PayForPickupable(Pickupable)` (module documentation).
 fn pay_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowPlayerController.PayForPickupable";
+    let counters = crate::attach_mesh::pickup_rb::WriteCounters::of(c.vm);
     let controller = c.this.ok_or_else(|| bad(WHAT, "called without a controller"))?;
     let pickupable = pickupable_arg(c, WHAT)?;
     let Some(cost) = cost_of(c.vm, pickupable, PAY_FOR_NAME)? else {
@@ -192,8 +195,10 @@ fn pay_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         if units > 0 {
             let f = method(c.vm, controller, "SpendGoldenKey", WHAT)?;
             for raised in 0..units {
-                // A raised event is a write: a later raise's error follows it (review of #774).
-                c.vm.call(f, Some(controller), vec![]).map_err(|e| if raised > 0 { after_writes(e) } else { e })?;
+                // A raised event is a write, and so is anything a handler did before refusing (review of #774).
+                if let Err(e) = c.vm.call(f, Some(controller), vec![]) {
+                    return Err(if raised > 0 { after_writes(e) } else { counters.mark(c.vm, e) });
+                }
             }
         }
         return Ok(Value::None);
@@ -203,7 +208,9 @@ fn pay_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     };
     let f = method(c.vm, info, "AddCurrencyOnHand", WHAT)?;
     let delta = cost.amount.checked_neg().ok_or_else(|| bad(WHAT, "the cost amount cannot be negated"))?;
-    c.vm.call(f, Some(info), vec![Value::Byte(cost.currency), Value::Int(delta)])?;
+    if let Err(e) = c.vm.call(f, Some(info), vec![Value::Byte(cost.currency), Value::Int(delta)]) {
+        return Err(counters.mark(c.vm, e));
+    }
     Ok(Value::None)
 }
 

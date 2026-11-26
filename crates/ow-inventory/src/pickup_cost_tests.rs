@@ -73,6 +73,10 @@ struct Fx {
     currency_calls: Rc<Cell<u32>>,
     /// The `SpendGoldenKey` call that refuses (0: none), and the calls so far.
     key_fail_on: Rc<Cell<u32>>,
+    /// Whether a refusing handler (`SpendGoldenKey`'s, or `AddCurrencyOnHand` when `add_fails`) first writes the
+    /// replication info's money (review r2 of #774).
+    write_then_fail: Rc<Cell<bool>>,
+    add_fails: Rc<Cell<bool>>,
 }
 
 impl Drop for Fx {
@@ -112,6 +116,7 @@ fn fx_in(mode: ParityMode) -> Fx {
     // Toy stand-ins for the bound currency natives (ow-combat's in the slice) and the controller's event, counting.
     let (keys_spent, currency_calls) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
     let key_fail_on = Rc::new(Cell::new(0u32));
+    let (write_then_fail, add_fails) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
     if mode == ParityMode::Off {
         let calls = currency_calls.clone();
         vm.register_native(
@@ -124,10 +129,18 @@ fn fx_in(mode: ParityMode) -> Fx {
             }),
         )
         .unwrap();
+        let (writes, fails) = (write_then_fail.clone(), add_fails.clone());
         vm.register_native(
             "WillowPlayerReplicationInfo.AddCurrencyOnHand(byte,int)",
-            Rc::new(|c: &mut NativeCall<'_>| {
+            Rc::new(move |c: &mut NativeCall<'_>| {
                 let me = c.this.unwrap();
+                if fails.get() {
+                    if writes.get() {
+                        let p = money_prop(c.vm, me);
+                        c.vm.space.write(me, PropAddr::scalar(p), Value::Int(-7))?;
+                    }
+                    return Err(ow_core::NotYet::not_read("a toy currency refusal", "TOY.md").into());
+                }
                 let Value::Int(delta) = *c.arg(1)? else { panic!("delta") };
                 let p = money_prop(c.vm, me);
                 let Value::Int(now) = *c.vm.space.read(me, PropAddr::scalar(p))? else { panic!("money") };
@@ -137,11 +150,19 @@ fn fx_in(mode: ParityMode) -> Fx {
         )
         .unwrap();
         let (spent, fail_on, key_calls) = (keys_spent.clone(), key_fail_on.clone(), Rc::new(Cell::new(0u32)));
+        let writes = write_then_fail.clone();
         vm.register_native(
             "WillowPlayerController.SpendGoldenKey()",
-            Rc::new(move |_: &mut NativeCall<'_>| {
+            Rc::new(move |c: &mut NativeCall<'_>| {
                 key_calls.set(key_calls.get() + 1);
                 if key_calls.get() == fail_on.get() {
+                    if writes.get() {
+                        // A heap write before the refusal: the controller's replication info's money.
+                        let me = c.this.unwrap();
+                        let class = c.vm.space.heap.get(me)?.class;
+                        let p = c.vm.space.prop(class, "PlayerReplicationInfo").unwrap();
+                        c.vm.space.write(me, PropAddr::scalar(p), Value::Object(None))?;
+                    }
                     return Err(ow_core::NotYet::not_read("a toy golden-key refusal", "TOY.md").into());
                 }
                 spent.set(spent.get() + 1);
@@ -150,7 +171,7 @@ fn fx_in(mode: ParityMode) -> Fx {
         )
         .unwrap();
     }
-    Fx { vm, dir, keys_spent, currency_calls, key_fail_on }
+    Fx { vm, dir, keys_spent, currency_calls, key_fail_on, write_then_fail, add_fails }
 }
 
 fn fx() -> Fx {
@@ -376,5 +397,33 @@ fn a_later_golden_key_raise_s_refusal_is_after_partial_writes() {
             other => panic!("{other:?}"),
         }
         assert_eq!(x.keys_spent.get(), fail_on - 1, "the raises before the failing one");
+    }
+}
+
+/// Review r2 of #774: a handler that writes and then refuses on the FIRST call is marked "stopped after partial
+/// writes" too (#518's counters moved since the native was entered), for `SpendGoldenKey` and for
+/// `AddCurrencyOnHand`. One that refuses without writing stays unmarked.
+#[test]
+fn a_first_call_that_writes_then_refuses_is_after_partial_writes() {
+    let marked_of = |r: Result<Value, VmError>| match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY.md"), "{n}");
+            ow_core::notyet::is_partial_writes(&n.what)
+        }
+        other => panic!("{other:?}"),
+    };
+    for writes in [true, false] {
+        let mut x = fx();
+        x.key_fail_on.set(1);
+        x.write_then_fail.set(writes);
+        let (pc, _) = x.controller(0);
+        let keys = x.pickup(Some((GOLDEN_KEYS, 2)));
+        assert_eq!(marked_of(x.pay(pc, Some(keys))), writes, "SpendGoldenKey, writing first: {writes}");
+        let mut x = fx();
+        x.add_fails.set(true);
+        x.write_then_fail.set(writes);
+        let (pc, _) = x.controller(9);
+        let p = x.pickup(Some((0, 5)));
+        assert_eq!(marked_of(x.pay(pc, Some(p))), writes, "AddCurrencyOnHand, writing first: {writes}");
     }
 }
