@@ -276,7 +276,7 @@ fn refused(x: &mut Fx, c: ObjRef, what: &str) {
     match x.update(c) {
         Err(VmError::NotYet(n)) => {
             assert_eq!(n.missing, Missing::NotRead, "{n}");
-            assert_eq!(&*n.what, what, "{n}");
+            assert!(n.what == what || (what == NOT_LOADED && n.what.starts_with(NOT_LOADED)), "{n}");
         }
         other => panic!("{other:?}"),
     }
@@ -443,6 +443,11 @@ fn the_lookup_and_its_refusals() {
     x.link(n, c, &[lazy]);
     refused(&mut x, c, NOT_LOADED);
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "still unloaded");
+    // The refusal names the role and the handle's path.
+    match x.update(c) {
+        Err(VmError::NotYet(n)) => assert_eq!(&*n.what, not_loaded("the anim set", "Engine.Set_Lazy")),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Test 8: an unknown node class: its `NotRead`, nothing written.
