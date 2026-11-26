@@ -72,6 +72,11 @@ classes' starting-value attributes (`Attribute_EnemyNonWeaponDamageMultiplier`,
 `Attribute_DamageToVehiclesOnCollisionMultiplier`, `Attribute_HealthMultiplier`, `Attribute_ExperienceMultiplier`),
 their resolvers and the XP multiplier definitions, each logged. Link 7 is at the HUD's pickup targeting (#810 is not on
 this base); 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+With #811's fixed note (0b0a1e6): the preload runs on `ow-attr`'s shared preflight walk (`walk_set_base_value`), a
+looping parent chain stops, and the set-up copy is logged. `cargo test --workspace` 4,063 passed / 0 failed / 59
+ignored. Installed Off strict `--slice-gate` (release build, under the machine lock, on 07a60ed6): 8 ok / 6 not ok,
+8.500/14 = 60.7%, the same. Links 3, 4 and 13 stop at the unbound `ApplyGradeCustomizations` (5 and 14 blocked), with
+four set-up copies and 16 objects preloaded (none failed), each logged.
 
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read

@@ -1,29 +1,30 @@
 //! Owner: lane IMPL-SPAWN-SETBASEVALUE (decision 2026-11-26-NNN). The combat world's set-up preload of the attribute
 //! starting values' definitions, in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
-//! **Clean room.** Implemented from docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811 at 3aedca6) alone;
+//! **Clean room.** Implemented from docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811, fixed at 0b0a1e6) alone;
 //! this lane did not read the executable. **UNVERIFIED in the running game**: the game keeps these definitions
 //! resident; the port loads them at set-up, a logged harness input, so that `SetBaseValue`'s own preflight (which
 //! refuses an unloaded handle, #572) finds them. The native is unchanged. Reference does nothing and logs nothing.
 //!
-//! **The walk**, for one AI pawn archetype (a copy of its export, as the spawn makes one, freed after):
+//! **The walk**, for one AI pawn archetype (a copy of its export, as the spawn makes one, logged ([`copy_line`]) and
+//! freed after):
 //! 1. its `AIClass`, then that class's `AttributeParentClass` chain. Each class object is loaded when it is a handle
 //!    (logged), after its class's declarations are checked: `AttributeStartingValues` an array of structs,
-//!    `AttributeParentClass` an object (else `VmError::Script`, nothing loaded);
+//!    `AttributeParentClass` an object (else `VmError::Script`, nothing loaded). The chain ends at a None parent or at
+//!    a class already seen, so a loop cannot run forever;
 //! 2. a class whose `AttributeStartingValuesNew` is declared and non-empty is [`CATEGORIES`] (`NotRead`: the category
 //!    entries' layout is not read), decided before any definition loads;
 //! 3. the starting values, parents first, then the archetype's own list: each entry's `Attribute` (an object), and its
 //!    `BaseValue` read with the evaluator's own data reader (`ow_attr::eval::init_data`): its `BaseValueAttribute` and
 //!    `InitializationDefinition`;
-//! 4. what `SetBaseValue`'s own preflight walks (`ow_attr::eval::preflight_set_base_value`; the hub's point (b) on
-//!    #811): each attribute found (the destination, a base-value attribute, an expression operand), with its
-//!    `ContextResolverChain` entries and its `ValueResolverChain` entries up to the first None; and each
-//!    initialization definition, followed into the nested data its evaluation reaches: the enabled formula's four
-//!    terms, else the enabled conditional's entries (each expression's two attribute operands, its `BaseValueIfTrue`;
-//!    the scan stops at an entry with no expressions, else `DefaultBaseValue`), the enabled variance's two bounds and
-//!    the enabled range limits, recursively to the preflight's own depth. A part that does not read as the evaluator
-//!    reads it is left: the native's preflight then refuses it with its own typed error, so what this walk does not
-//!    cover still shows.
+//! 4. the closure `SetBaseValue`'s preflight walks, by that preflight's own walk (`AttributeSystem::walk_set_base_value`
+//!    in `ow-attr`, the note's step 5, so the two cannot drift): the destination with its context resolvers and its
+//!    value resolvers up to the first None; the base value's attribute and definition, followed into the nested data
+//!    the evaluation reaches (the enabled formula's four terms, else the enabled conditional's reached entries and
+//!    operands, the enabled variance bounds and range limits), to the preflight's depth. Each object is loaded before
+//!    its fields are read. A field the preflight requires that is missing or of another kind is the preflight's own
+//!    error here too (`VmError::Script` at set-up); the preflight's class checks are not made, so what they would
+//!    refuse is left to the native.
 //!
 //! Each unloaded object is loaded through the store and logged, "harness input: preload <path> (a SetBaseValue
 //! definition the game keeps resident; UNVERIFIED)", then its outcome. A failed load is logged and left, so the native's

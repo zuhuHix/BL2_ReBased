@@ -1,7 +1,7 @@
 ## 2026-11-26: The combat world preloads the attribute starting values' definitions
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-SPAWN-SETBASEVALUE, on main c1058de. Clean room: implemented from
-docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811 at 3aedca6) alone; this lane did not read the
+docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811 at 3aedca6, then as fixed at 0b0a1e6) alone; this lane did not read the
 executable. No session was run. Every rule is UNVERIFIED in the running game.
 
 - **What was decided** (Off only; Reference does nothing and logs nothing), in `ow-combat` `starting_values`, called
@@ -30,10 +30,34 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
     prediction; this lane's installed gate measured it (below);
   - a store that holds no such package (a toy world) has nothing to spawn and nothing to preload;
   - `SetBaseValue` is unchanged: its preflight still refuses an unloaded handle.
+- **The fixed note (#811 r1, 0b0a1e6), its three phases:**
+  - discovery: each spawn kind's archetype is found by its package and path and copied once. The copy is logged as a
+    harness input, "set-up copy of <archetype> to read its starting values; UNVERIFIED", never placed, and freed
+    after. Each class of the chain is loaded (logged) before its fields are read, and a parent chain that comes back
+    to a class already seen now stops there instead of being a script error, as the note says;
+  - the closure: taken, not the bounded alternative. As the note recommends, `ow-attr`'s `check_definition` and
+    `check_init` now take a visitor in place of their refusal of an unloaded handle. `preflight_set_base_value`
+    refuses as before, through the same code. The new `AttributeSystem::walk_set_base_value` hands each object, in
+    the preflight's order and before its fields are read, to a callback (here: load and log), and does not make the
+    preflight's class checks. `ow-combat`'s hand-written mirror of the walk is removed, so the preload and the
+    preflight cannot drift apart. A field the preflight requires that is missing or of another kind is the
+    preflight's own error at set-up;
+  - the loads: unchanged (logged, a failed load logged and left).
+  - **The bounded alternative's remaining refusal**, named because this lane did not take that alternative: a nested
+    value naming an unloaded definition would still meet `SetBaseValue`'s preflight refusal, "a definition the
+    SetBaseValue preflight reaches is not loaded (a load is a write): an object of class <class>"
+    (`ow_attr::eval::PREFLIGHT_UNLOADED`). With the closure, that refusal is left only for a load that failed.
+    Outside the guarantee, as in the note: what the evaluation reaches beyond the preflight's walk (a resolver's own
+    definitions), which `ow-attr` loads during the evaluation under #572's partial-writes prefix.
 - **The note's open question 1** (set-up preload or a counted load in the spawn) was taken as the hub's brief says, a
   set-up preload, the threshold-attribute preload's shape. The note's later stops (sections 4 and 5) are not
   answered here: `ApplyGradeCustomizations` is #808's, and the rest need rulings or reads.
-- **Tests** (an invented package, `starting_values_tests.rs`): the note's tests 1 to 6. They cover the walk (seven
+- **Tests for the fixed note:** discovery through a package and path (the copy logged once and freed; the same
+  package's `AIClass` resolved by the copy's decode, its unloaded parent loaded and logged); an unloaded `AIClass` and
+  its unloaded parent loaded child first; a looping chain stopping with the same loads; and the note's test 4, where
+  the native's preflight refuses with `PREFLIGHT_UNLOADED` before the preload and passes after it. `ow-attr`'s
+  existing preflight tests pass unchanged on the shared walk.
+- **Tests** (an invented package, `starting_values_tests.rs`): the first note's tests 1 to 6. They cover the walk (seven
   objects loaded, parents first, the value resolver after the None left, a second run loading and logging nothing),
   the archetype's own list, a mistyped list and a missing `AIClass` with nothing loaded, a non-empty category list
   refused before any definition loads (and an empty one passing), a failed load logged with the walk going on, and
