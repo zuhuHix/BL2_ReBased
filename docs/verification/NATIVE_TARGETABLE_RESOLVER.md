@@ -122,7 +122,7 @@ here reaches the slice as "stopped after partial writes", as today's does. Add, 
 
 ### 5.1 Step 0: is the resolver resident with its attribute? (addendum, 2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-EVALUATOR-LOADS-RESOLVER (decision 2026-11-26-NNN). Read with Ghidra
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-EVALUATOR-LOADS-RESOLVER (decision 2026-11-26-45). Read with Ghidra
 12.1.4, headless and read-only, under the machine lock; raw output under ignored `local/analysis/resid/`. UNVERIFIED in
 the running game.
 
