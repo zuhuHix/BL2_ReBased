@@ -209,7 +209,15 @@ impl ow_world::world::aim_profiles::ProfileSource for AssetProfiles {
         property_offset: usize,
     ) -> Result<ow_world::world::aim_profiles::SourceProfiles, String> {
         let read = ow_assets::aim_profiles::read_export(package, index, property_offset).map_err(|e| e.to_string())?;
-        Ok((read.profiles.map(|p| p.into_iter().map(|x| x.profile_name).collect()), read.tags_end))
+        let profiles = read.profiles.map(|p| {
+            p.into_iter()
+                .map(|x| ow_world::world::aim_profiles::SourceProfile {
+                    name: x.profile_name,
+                    bones: x.components.into_iter().map(|c| c.bone_name).collect(),
+                })
+                .collect()
+        });
+        Ok((profiles, read.tags_end))
     }
 }
 

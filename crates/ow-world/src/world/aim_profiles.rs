@@ -31,21 +31,29 @@ use crate::world::aim_offset::{PROFILES, PROFILES_LAYER, RECORD};
 /// Where an ordinary object's tags start in its export payload (the store's `PropertyPrefix::Ordinary`).
 pub const PROPERTY_OFFSET: usize = 4;
 
-/// What a source read from one export: the profile names (`None` without a `Profiles` tag) and where the export's tag
+/// One profile as a source read it: its name and its aim components' bone names, in order, as text (`Name_N` for a
+/// numbered name; lane IMPL-AIMOFFSET-REBUILD, NATIVE_AIMOFFSET_REBUILD.md section 3 step 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceProfile {
+    pub name: String,
+    pub bones: Vec<String>,
+}
+
+/// What a source read from one export: the profiles (`None` without a `Profiles` tag) and where the export's tag
 /// stream ended, from its payload start.
-pub type SourceProfiles = (Option<Vec<String>>, usize);
+pub type SourceProfiles = (Option<Vec<SourceProfile>>, usize);
 
 /// The reader of a node's binary-serialized `Profiles`, installed by the caller (`ow-cli`).
 pub trait ProfileSource {
-    /// The profile names of export `index` of `package`, its tags read from `property_offset`. `Err(text)`: the read
-    /// was refused (an oracle failed).
+    /// The profiles of export `index` of `package`, its tags read from `property_offset`. `Err(text)`: the read was
+    /// refused (an oracle failed).
     fn profiles_in(&self, package: &Package, index: i32, property_offset: usize) -> Result<SourceProfiles, String>;
 }
 
 /// The layer: the source and the names read so far, by node.
 pub struct AimProfiles {
     source: Box<dyn ProfileSource>,
-    cache: DetMap<(ObjRef, u32, i32), Rc<Vec<String>>>,
+    cache: DetMap<(ObjRef, u32, i32), Rc<Vec<SourceProfile>>>,
 }
 
 impl AimProfiles {
@@ -99,6 +107,12 @@ pub fn no_profiles_tag() -> VmError {
 
 /// The profile names of `node`, a loaded definition whose `Profiles` the store skipped (module documentation).
 pub fn profile_names(vm: &Vm, node: ObjRef) -> Result<Rc<Vec<String>>, VmError> {
+    Ok(Rc::new(profiles(vm, node)?.iter().map(|p| p.name.clone()).collect()))
+}
+
+/// The profiles of `node`, with their components' bone names (module documentation; the same refusals and cache as
+/// [`profile_names`]).
+pub fn profiles(vm: &Vm, node: ObjRef) -> Result<Rc<Vec<SourceProfile>>, VmError> {
     let Some(cell) = vm.service::<AimProfiles>() else {
         return Err(absent(None));
     };

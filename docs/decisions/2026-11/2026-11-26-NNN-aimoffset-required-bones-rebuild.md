@@ -1,0 +1,43 @@
+## 2026-11-26: the aim-offset node's required-bones rebuild in Off
+
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-AIMOFFSET-REBUILD, on main 4c01c9a1. It implements
+docs/verification/NATIVE_AIMOFFSET_REBUILD.md section 3 (lane E's note, #741 with its r1 fix, on main). Clean room:
+this lane did not read the executable. No real-game session was run. **Every rule is UNVERIFIED in the running
+game.** Reference keeps the stub policy.
+
+**Where.** `ow-world` `world::aim_offset`: the `REBUILD` refusal (a mesh on `SkelComponent`) is replaced by the
+rebuild, and `world::aim_profiles`' source answer gains each profile's component bone names (`SourceProfile`, read by
+`ow-cli`'s source from `ow_assets::aim_profiles`' `components[..].bone_name`).
+
+**The rule**, in the preflight (write-free and load-free), the first refusal the answer:
+1. the gate: no `SkelComponent`, or a resident one with `SkeletalMesh` None, writes both arrays empty; a component
+   not loaded is `COMPONENT_NOT_LOADED`;
+2. the mesh's reference skeleton through `skeletal::reference_skeleton`, its refusals standing;
+3. more than 256 bones: `NotYet { NotRead }`, "AnimNodeAimOffset: a required-bones rebuild past a byte";
+4. the current profile's components' bone names (a decoded `AimComponents` with a name `BoneName`, else
+   `VmError::Script`; or the layer's text names); more than 255 components: the same `NotRead`;
+5. the match, interning nothing: text through `ReferenceSkeleton::bone_index`, a name id by each bone's
+   `names.find`; no bone or a `None` name is skipped. A match appends the bone and sets its table entry (one 255 per
+   bone) to the component's position;
+6. the ascending sort, then the parent pass (each missing ancestor directly before the first bone needing it; bones 3
+   and 4, with 1 and 3 children of the root and 4 a child of 1, give 0, 3, 1, 4).
+
+Then the writes: `CurrentProfileIndex`, `RequiredBones`, `AimCpntIndexLUT`, as byte arrays. Every refusal comes
+before the first write.
+
+**Tests.** `aim_offset_rebuild_tests.rs` (6), on invented classes, invented `Engine.upk` mesh exports and a toy
+skeleton source, cover the note's section 5. Test 8 compares the layer's text names and the decoded ids directly. The
+skeleton-layer cases (no source, a mesh not loaded) are in `aim_offset_tests.rs`, whose toy mesh class is now
+`Engine.SkeletalMesh`, and the gate's cases are there already.
+
+**The slice gate** (installed Off strict, release build, under the machine lock, on main 4c01c9a1, without #742):
+- before: 6 ok / 8 NotYet / 0 errors, `links ok 6/14`, 47.0%, with link 1 at the rebuild's `NotRead`;
+- after: 6 ok / 2 NotYet / 6 errors, `links ok 6/14`, `step share X = 6.583/14 = 47.0%`.
+
+Links 1, 3, 4, 5, 13 and 14 pass the rebuild and `FindAllAnimNodes` (#739), and stop at an **error, the unbound
+`WillowAnimNodeFeatherBlend.SetBlendTarget(float,float)`**. The feather blend declares its own native, which shares
+`AnimNodeBlend`'s exec (NATIVE_LINK1_TAIL_SETTERS.md 2.B), and #739 bound only `AnimNodeBlend.SetBlendTarget`'s key.
+That key was the one #739 had not verified. Binding the feather key to the same rule is a one-line follow-up there.
+The hub predicted InitializeRBPhysics's unbound native on plain main: the run stops before it.
+
+**Gates.** `cargo test --workspace -j 8`: 3,723 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.

@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-AIMOFFSET-REBUILD (2026-11-26, pc-hummer, on main 4c01c9a1):** AI-assisted (Claude Code, Opus 5.5). The
+aim-offset required-bones rebuild in Off from NATIVE_AIMOFFSET_REBUILD.md, the profiles layer's source carrying the
+component bone names. `cargo test --workspace -j 8` 3,723 passed / 0 failed / 58 ignored; `crate_edges_test.py`
+OK. Installed Off strict `--slice-gate` (under the machine lock): before 6 ok / 8 NotYet / 0 errors; after 6 ok / 2
+NotYet / 6 errors, 47.0%. Links 1, 3, 4, 5, 13 and 14 pass the rebuild and stop at the unbound
+`WillowAnimNodeFeatherBlend.SetBlendTarget(float,float)`. No real-game run.
+
 **ANALYST-LINK67-TOUCH-TEMPLATE (2026-11-26, pc-hummer, docs only, on docs/native-touch-component-template from main
 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_COMPONENT_TEMPLATE.md reads what the game's `new` does
 with a template, for links 6 and 7's `TEMPLATE` stop. It takes five operands: the handler reads five. The structural

@@ -53,7 +53,8 @@ fn package_with(cdo: bool) -> Vec<u8> {
     let object = t.class("Object", 0);
     let node = t.class("AnimNode", object);
     let mesh_comp = t.class("ToyMeshComponent", object);
-    let mesh = t.class("ToyMesh", object);
+    // Lane IMPL-AIMOFFSET-REBUILD: the mesh class is `Engine.SkeletalMesh`, so a mesh reaches the skeletal layer.
+    let mesh = t.class("SkeletalMesh", object);
     t.prop("Object", mesh_comp, "SkeletalMesh", 0, mesh);
     t.prop("Object", node, "SkelComponent", 0, mesh_comp);
     let aim = t.class("AnimNodeAimOffset", node);
@@ -150,7 +151,7 @@ fn fx_of(mode: ParityMode, cdo: bool) -> Fx {
     let bytes = package_with(cdo);
     let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
-    for c in ["Engine.WillowAnimNodeAimOffset", "Engine.ToyPawn", "Engine.ToyMeshComponent", "Engine.ToyMesh"] {
+    for c in ["Engine.WillowAnimNodeAimOffset", "Engine.ToyPawn", "Engine.ToyMeshComponent", "Engine.SkeletalMesh"] {
         vm.find_class(c).unwrap();
     }
     if mode != ParityMode::Reference {
@@ -299,30 +300,33 @@ fn by_index_in_range_and_changed_only() {
     assert_eq!(x.current(n), 1);
 }
 
-/// Test 4: a change on a node whose `SkelComponent` holds a mesh is the rebuild's `NotRead`, before any write. A
-/// component with no mesh is the routine's gate: the change goes through.
+/// Test 4, since lane IMPL-AIMOFFSET-REBUILD (NATIVE_AIMOFFSET_REBUILD.md test 6): a change on a node whose
+/// `SkelComponent` holds a mesh asks the skeletal layer, whose refusals stand before any write: no skeleton source,
+/// or a mesh the store has not loaded, is its `LayerAbsent`. A component with no mesh is the gate: the change goes
+/// through.
 #[test]
-fn a_change_with_a_mesh_is_the_rebuild_s_not_read() {
+fn a_change_with_a_mesh_asks_the_skeletal_layer() {
     let mut x = fx();
     let n = x.node("Node_3", &["A", "B"]);
     let comp = x.obj("ToyMeshComponent", "Comp_0");
     x.set(n, "SkelComponent", Value::Object(Some(comp)));
     x.by_name(n, "B").unwrap();
     assert_eq!(x.current(n), 1, "no mesh: the change goes through");
-    let mesh = x.obj("ToyMesh", "Mesh_0");
+    let mesh = x.obj("SkeletalMesh", "Mesh_0");
     x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
     x.vm.space.names.intern("A");
     let e = x.refusal(|x| x.by_name(n, "A"));
-    assert_eq!((e.missing, &*e.what), (Missing::NotRead, REBUILD));
+    assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
+    assert!(e.what.contains("no skeleton source is installed"), "{e}");
     assert_eq!(x.current(n), 1);
     // A change that is no change is still nothing, mesh or not.
     x.nothing(|x| x.by_index(n, 1));
-    // Any mesh set, not resident included, is the rebuild's NotRead without being resolved.
-    let class = x.vm.space.classes.by_path("Engine.ToyMesh").unwrap();
-    let lazy_mesh = x.vm.space.alloc_stand_in(class, "LazyMesh", Origin::Resource { package: 0, index: 1 }).unwrap();
+    // A mesh the store has not loaded: the skeletal layer's LayerAbsent, nothing loaded.
+    let class = x.vm.space.classes.by_path("Engine.SkeletalMesh").unwrap();
+    let lazy_mesh = x.vm.space.alloc_stand_in(class, "LazyMesh", Origin::Default { class }).unwrap();
     x.set(comp, "SkeletalMesh", Value::Object(Some(lazy_mesh)));
     let e = x.refusal(|x| x.by_name(n, "A"));
-    assert_eq!((e.missing, &*e.what), (Missing::NotRead, REBUILD));
+    assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
 }
 
 /// Test 5, today's store behaviour (the interim rule): an empty `Profiles` on the list's owner is the profiles'
@@ -404,7 +408,8 @@ fn malformed_declarations_are_script_errors() {
 
 /// Test 8, maya:8's shape: a `WillowAnimNodeAimOffset` copy (its own `Profiles` empty, as the copy fix-up leaves it)
 /// whose `TemplateNode` is a loaded template with `Default`, `Soldier`, `Merc`, `Unarmed`, `CurrentProfileIndex` 0,
-/// called through the pawn's script `SetAimOffsetProfile('Unarmed')`: 3 with no mesh, the rebuild's `NotRead` with one.
+/// called through the pawn's script `SetAimOffsetProfile('Unarmed')`: 3 with no mesh; with one and no skeleton source,
+/// the skeletal layer's `LayerAbsent` (the rebuild itself is `aim_offset_rebuild_tests.rs`'s).
 #[test]
 fn maya_s_unarmed_profile_through_the_pawn_s_script() {
     for with_mesh in [false, true] {
@@ -414,7 +419,7 @@ fn maya_s_unarmed_profile_through_the_pawn_s_script() {
         x.set(copy, "TemplateNode", Value::Object(Some(template)));
         if with_mesh {
             let comp = x.obj("ToyMeshComponent", "Comp_1");
-            let mesh = x.obj("ToyMesh", "Skel_Toy");
+            let mesh = x.obj("SkeletalMesh", "Skel_Toy");
             x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
             x.set(copy, "SkelComponent", Value::Object(Some(comp)));
         }
@@ -425,7 +430,10 @@ fn maya_s_unarmed_profile_through_the_pawn_s_script() {
         let out = x.vm.call(f, Some(pawn), vec![unarmed]);
         if with_mesh {
             match out {
-                Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, REBUILD)),
+                Err(VmError::NotYet(n)) => {
+                    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                    assert!(n.what.contains("no skeleton source is installed"), "{n}");
+                }
                 other => panic!("{other:?}"),
             }
             assert_eq!(x.current(copy), 0);
@@ -464,7 +472,12 @@ impl crate::world::aim_profiles::ProfileSource for Fake {
             return Err(why.to_string());
         }
         let walked = ow_package::props::read_tagged(package, index, offset, &ow_package::props::NoArrayTypes).map_err(|e| e.to_string())?;
-        Ok((Some(self.names.iter().map(|n| n.to_string()).collect()), self.end.unwrap_or(walked.end)))
+        let profiles = self
+            .names
+            .iter()
+            .map(|n| crate::world::aim_profiles::SourceProfile { name: n.to_string(), bones: Vec::new() })
+            .collect();
+        Ok((Some(profiles), self.end.unwrap_or(walked.end)))
     }
 }
 
