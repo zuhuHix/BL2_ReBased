@@ -15,7 +15,7 @@ bounding-cylinder rule of (0, 45, 0) ± (118.5, 118.5, 32.7), which meets the li
 14 are at `AttributeInitializationDefinition.SetBaseValue` (as on main); 1, 2 and 8 to 12 are ok. **Begun play (ruling 2's
 first form) was measured** and broke link 6: its `make` stopped at the spawn's "the base search after PostBeginPlay"
 (7 ok / 14, 50.0%), so the registration fallback is used. Before the review rulings, with the line check answered no
-hit outright, link 7 passed (9 ok / 14, 64.3%). UNVERIFIED in game. Decision 2026-11-26-NNN.
+hit outright, link 7 passed (9 ok / 14, 64.3%). UNVERIFIED in game. Decision 2026-11-26-66.
 
 **IMPL-PLAYER-PAWN-FLAG (2026-11-26, pc-hummer, on fix/rust-player-pawn-on, on main c1058de6):** AI-assisted (Claude
 Code, Opus 5.5). In Off, the slice's combat set-up turns on the player set-up's `Pawn` (logged), and #805's

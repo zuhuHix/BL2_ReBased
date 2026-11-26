@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK7-HUD-TARGETING (decision 2026-11-26-NNN). The inputs link 7's pickup targeting needs in the
+//! Owner: lane IMPL-LINK7-HUD-TARGETING (decision 2026-11-26-66). The inputs link 7's pickup targeting needs in the
 //! headless pickup world, as the hub's four rulings on NATIVE_LINK7_HUD_TARGETING.md (#806) allow them: each Off only,
 //! logged as a harness input, **UNVERIFIED**. AI-assisted (Claude Code).
 //!
