@@ -42,6 +42,16 @@ can carry a mesh:
 
    *Read 2026-11-26 in NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3 (decision 2026-11-26-02): the game's handler
    reads five operands, and a census of the packages fits that count.*
+
+   *Changed 2026-11-26 (lane NEW-FIVE-OPERANDS, decision 2026-11-26-NNN), so the four-operand reading above no longer
+   holds:*
+   - *both decoders read five operands. The argument-count check (`research/script_disasm.py --arg-check`) finds 0
+     calls with an extra argument, and the same 12,968 of 12,978 functions decode. The template is now the fifth
+     operand of the `New` at offset 0, not a bare statement at offset 19;*
+   - *the port's Off `New` evaluates all five operands and refuses a template, by the first of the checks in
+     NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.3 that fails. For `AttachMeshToPickup` that is "new: instancing a
+     template's components", the stop of links 6 and 7 now;*
+   - *the template copy itself (option B) is still not ported, and part 2 below still holds.*
 2. **The template has no mesh on links 6 and 7.** The pickup links prepare their gun with `equip_run::prepare` alone.
    They make the weapon, a pawn, a controller and a manager, and never run the weapon's `init`
    (`InitializeInternal`). So `InitMeshes` never sets `ThirdPersonMesh`'s skeletal mesh.

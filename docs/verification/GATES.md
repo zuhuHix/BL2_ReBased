@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**NEW-FIVE-OPERANDS (2026-11-26, pc-hummer, on fix/new-five-operands from main 1709b8a8):** AI-assisted (Claude
+Code, Opus 5.5). `New` decodes with five operands in `research/script_disasm.py` and `ow-script`. Off `new_object`
+evaluates all five and refuses a template by NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.3; Reference keeps the C++
+order. `script_disasm.py --arg-check` (installed, counts only): 12,978 functions, 12,968 decoding, 30,324 calls
+resolved, 0 with an extra argument (5 with four operands). `tests/script_disasm_test.py` OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock), base 1709b8a8 and this change: 6 ok / 8 NotYet on both.
+Links 6 and 7 move from `touch`'s bounds template `NotRead` to `make`'s "new: instancing a template's components", so
+the step share goes from 47.0% to 42.9%; every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-INITIALIZE-BEHAVIOR-PROVIDERS (2026-11-26, pc-hummer, on fix/rust-initialize-behavior-providers from main
 4c01c9a1):** AI-assisted (Claude Code, Opus 5.5). From NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md in Off:
 `WillowPawn.InitializeBehaviorProviders` (the `PID` -1 gate, a write-free preflight, then registration and the kernel
