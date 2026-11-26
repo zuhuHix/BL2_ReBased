@@ -81,7 +81,8 @@ So `HUDDef` is a data read that happens to sit beside the movie's creation.
 - with `WPlayerOwner` and `HUDDef` (`GD_HUD.HUDDefinition`, `PickupRange` 400) set directly, the pass goes on to the
   view point's `LayerAbsent`.
 
-**Proposed** (the hub's call; Off only, logged, UNVERIFIED, Reference unchanged): **a harness HUD, data steps only.**
+**Hub ruling (review of #806): yes, a harness HUD, data steps only** (Off only, logged as a harness input,
+UNVERIFIED, Reference unchanged). No movie native is called:
 - spawn the `GameInfo.HUDType` class owned by the controller into `myHUD`, as `ClientSetHUD` does;
 - set `PlayerOwner` := the controller (HUD's `PostBeginPlay`), `WPlayerOwner` := the controller (`WillowHUD`'s), and
   `HUDDef` := the globals definition's `HUDDefinition` (`CreateHUDMovie`'s first step);
@@ -99,12 +100,20 @@ begun play (`ow_world::actors`, "after play began"). Only the map bring-up begin
 and 7) never does. So neither pickup is in `PickupList`, the pass has no candidate, and it answers "no winner" (the
 probe).
 
-**Proposed** (the hub's call): **the pickup world begins play at set-up** (Off only, logged), so each spawn runs its
-begin-play events as in the game, where the level has begun play before anything drops.
+**Hub ruling (review of #806): yes, begun play or the equivalent registration** (Off only, logged as a harness
+input, UNVERIFIED, Reference unchanged). This note's choice is **the pickup world begins play at set-up**, so each
+spawn runs its begin-play events as in the game, where the level has begun play before anything drops.
 - this changes link 6's path too: its pickup and gun would run their `PostBeginPlay`. The implementer re-runs link 6
   under the setting;
 - the narrower alternative, registering the two pickups with `AddPickup` at the drop, leaves the rest of
-  `PostBeginPlay` out and is a stand-in of its own.
+  `PostBeginPlay` out and is a stand-in of its own. It is the fallback if begun play breaks link 6;
+- **how to confirm link 6 keeps passing** (the hub's condition):
+  - an installed Off strict `--slice-gate`, under the machine lock, with the setting on: link 6 ok, steps 3/3, the
+    same as without it (main eef4f83: ok, 3/3); the overall count must not drop;
+  - in that run's call trace, each of link 6's spawns (the pickup and its gun) runs `PreBeginPlay` and
+    `PostBeginPlay` once, and the pickup is in `PickupList` once;
+  - the synthetic tests in section 9, row 2;
+  - if link 6 regresses, report the new stop and fall back to the `AddPickup` registration.
 
 ## 5. The view point: `GetPlayerViewPoint`
 
@@ -123,9 +132,14 @@ The exec calls the controller's class-table virtual:
 **So the view needs a camera layer:** the `WillowPlayerCamera` actor and its per-tick point of view (its camera modes),
 plus the controller's offsets and time. It is not Flash, and it is not a pure read of actor state.
 
-**Proposed** (the hub's call): keep the `LayerAbsent` naming the camera, or rule a stand-in view. A candidate is the
-pawn's eye point (`Location` + `BaseEyeHeight`, here (0, 0, 75)) with the controller's `Rotation` (zero): the
-first-person view by fit, logged and UNVERIFIED. The probe used it.
+**Hub ruling (review of #806): yes, a view stand-in at the pawn's eye point** (Off only, logged as a harness input,
+UNVERIFIED, Reference unchanged):
+- the point: the pawn's `Location` plus (0, 0, `BaseEyeHeight`); here (0, 0, 75). The reading gives nothing more
+  exact headlessly: the camera's own point of view (its modes) is not read;
+- the rotation: the controller's `Rotation` (zero here);
+- with no pawn: the camera `LayerAbsent` stays;
+- the first-person view by fit. The probe used it.
+- Declared, else `VmError::Script`: `Pawn`, `Location`, `BaseEyeHeight` (a float), the controller's `Rotation`.
 
 ## 6. The probe's sequence, with every input stood in
 
@@ -185,10 +199,13 @@ play's effect on link 6 (section 4) was not measured.
 
 ## 8. Predicted stop
 
-- **Today** (main): the no-HUD `LayerAbsent`, unchanged until the hub rules section 3.
-- **With sections 3 to 5 ruled in** (a harness HUD, begun play or registration, a view stand-in), the bounds from the
-  port's rule, the line check answered under the world's `NoLevel` service, and section 7's rule: **`look` passes, and
-  on main eef4f83 (SetBase bound) link 7 passes** (the probe). No further stop on link 7's path.
+- **Today** (main): the no-HUD `LayerAbsent`.
+- **The line check under `NoLevel`. Hub ruling (review of #806): it hits nothing**, the same rule as the base-search
+  stand-in (Off only, logged as a harness input, UNVERIFIED, Reference unchanged). So the aimed gun's line is
+  clear, as in the probe.
+- **With the four rulings in** (a harness HUD, begun play, the eye-point view, the line check), the bounds from the
+  port's rule, and section 7's rule: **`look` passes, and on main eef4f83 (SetBase bound) link 7 passes** (the
+  probe). No further stop on link 7's path.
 
 ## 9. Tests (synthetic fixtures)
 
@@ -196,16 +213,25 @@ play's effect on link 6 (section 4) was not measured.
    - after set-up: `myHUD` is a toy `WillowHUD`, its `PlayerOwner` and `WPlayerOwner` the controller, its `HUDDef` the
      globals definition's, and no movie made;
    - an unloaded definition: `NotRead` before any write.
+   - (hub ruling) with the setting off: the no-HUD `LayerAbsent`; Reference with it on: unchanged; one harness-input
+     log line.
 2. **Begun play:** a toy `WillowPickup` spawned in a world that has begun play is in `PickupList`; one spawned before is
    not.
+   - (hub ruling) with the setting on, a toy pickup world: begins play at set-up; a toy pickup and a toy gun spawned
+     after it each run `PreBeginPlay` and `PostBeginPlay` once, and the pickup is in `PickupList` once;
+   - with it off: neither event, `PickupList` empty; Reference: unchanged.
 3. **The view stand-in:** a toy pawn with `BaseEyeHeight` 64 and a controller rotation give that eye point and rotation;
    with the setting off, the camera `LayerAbsent`.
-4. **The shrink step:**
+   - (hub ruling) a controller with no pawn: the camera `LayerAbsent`; a mistyped `BaseEyeHeight`: `VmError::Script`;
+     one harness-input log line; Reference: unchanged.
+4. **(hub ruling) The line check under `NoLevel`:** with the setting on, a toy pickup beyond a quarter of
+   `PickupRange` is clear and can win; with it off, the line check's own refusal; Reference: unchanged.
+5. **The shrink step:**
    - three toy pickups with `LifeSpan` 20, 18 and 5, duration 15, `MaxNumPickups` 1: `BeginShrinking` on the 18;
    - with `MaxNumPickups` 2: nothing;
    - a client world, or a split-screen owner: nothing counted.
-5. **Link 7's look on a toy fixture,** with all of the above: the aimed pickup wins and is reported.
-6. Reference: unchanged.
+6. **Link 7's look on a toy fixture,** with all of the above: the aimed pickup wins and is reported.
+7. Reference: unchanged.
 
 ## Open questions
 
@@ -214,11 +240,11 @@ play's effect on link 6 (section 4) was not measured.
    - `MaxNumPickups`' place;
    - the eye-point view as the first-person camera's answer.
 3. **Not read:** the camera's per-tick point of view (`WillowPlayerCamera`).
-4. **For the hub:**
+4. **Ruled by the hub on #806** (all four yes, Off only, logged, UNVERIFIED, Reference unchanged):
    - the harness HUD (section 3);
-   - begun play or registration (section 4), and its effect on link 6;
-   - the view stand-in (section 5);
-   - the line check under `NoLevel` (cleared in the probe).
+   - begun play or registration (section 4), with link 6 confirmed as section 4 says;
+   - the eye-point view (section 5);
+   - the line check under `NoLevel` hits nothing (section 8).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

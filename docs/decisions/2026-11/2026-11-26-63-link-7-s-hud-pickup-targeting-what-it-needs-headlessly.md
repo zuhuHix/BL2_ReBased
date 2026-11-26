@@ -31,9 +31,13 @@ check changed.
   - the shrink step is read: not a split-screen player; the limit `MaxNumPickups` (by fit);
   - with every input stood in, the `look` passes; rerun on main eef4f83 (SetBase bound), link 7 passes all four
     steps.
-- **Needs the hub:**
-  - a harness HUD with its data steps only;
-  - begun play (or registration) for the pickup world, with its effect on link 6;
-  - a view stand-in (the pawn's eye point);
-  - the line check under `NoLevel`.
+- **Hub ruling (review of #806):** all four yes, each Off only, logged as a harness input, UNVERIFIED, with Reference
+  unchanged:
+  - a harness HUD that runs its data steps only, with no movie natives;
+  - begun play for the pickup world (the `AddPickup` registration as the fallback). Link 6 must keep passing: an
+    installed Off strict `--slice-gate` with the setting on, link 6 ok 3/3, each spawn's begin-play events once;
+  - a view stand-in at the pawn's eye point, `Location` plus `BaseEyeHeight`, with the controller's `Rotation`;
+  - the line check under `NoLevel` hits nothing, as the base-search stand-in does.
+
+  Written into the note (sections 3, 4, 5, 8, the tests and the open questions).
 - **Clean room:** a different lane implements this note.
