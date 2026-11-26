@@ -610,3 +610,36 @@ fn a_row_s_harness_list_is_route_then_set_up_then_steps() {
     let as_above = [ROUTE_AS_ABOVE.to_string()];
     assert_eq!(row_harness(&route, false, &setup, &steps), [&as_above[..], &setup[..], &steps[..]].concat());
 }
+
+fn bare_vm(mode: ParityMode) -> ow_vm::api::Vm {
+    let mut space = ow_object::heap::ObjectSpace::new();
+    space.classes.define("Core.Object", None, vec![]).unwrap();
+    ow_vm::api::Vm::new(space, ow_defs::DefStore::new_empty(), Rc::new(ow_attr::AttributeSystem::new_empty()), mode)
+}
+
+/// Lane IMPL-COMBAT-WORLD-COLLISION: the combat world's two stand-ins, Off only, each logged as a harness input in
+/// order; a second call and Reference refuse, and Reference writes nothing.
+#[test]
+fn the_combat_world_gets_no_level_collision_and_the_base_search_setting_in_off_only() {
+    use ow_world::world::set_physics::{BASE_STAND_IN_INPUT, NoLevelBaseSearch};
+    let mut vm = bare_vm(ParityMode::Off);
+    combat_world_collision(&mut vm).unwrap();
+    assert!(ow_world::placement::collision_model(&vm).unwrap().is_some(), "the collision service");
+    assert!(vm.service::<NoLevelBaseSearch>().is_some(), "the base search's setting");
+    assert_eq!(vm.log, [COMBAT_COLLISION_SETUP.to_string(), BASE_STAND_IN_INPUT.to_string()]);
+    assert_eq!(setup_harness(&vm.log, &[]).len(), 2, "both lines reach the rows as set-up inputs");
+    assert!(matches!(combat_world_collision(&mut vm), Err(ow_vm::error::VmError::Registration { .. })), "twice");
+    let mut r = bare_vm(ParityMode::Reference);
+    assert!(matches!(combat_world_collision(&mut r), Err(ow_vm::error::VmError::Registration { .. })));
+    assert!(ow_world::placement::collision_model(&r).unwrap().is_none(), "Reference installs nothing");
+    assert!(r.service::<NoLevelBaseSearch>().is_none());
+    assert!(r.log.is_empty());
+}
+
+/// The set-up lines are single-spaced (a string continuation lost its backslash once).
+#[test]
+fn the_combat_set_up_lines_have_no_runs_of_spaces() {
+    for line in [TRACE_MISS_SETUP, COMBAT_COLLISION_SETUP, ow_world::world::set_physics::BASE_STAND_IN_INPUT] {
+        assert!(!line.contains("  "), "{line}");
+    }
+}

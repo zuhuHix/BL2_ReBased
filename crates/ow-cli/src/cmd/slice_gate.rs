@@ -679,6 +679,28 @@ pub fn row_harness(route_notes: &[String], first: bool, setup: &[String], steps:
 pub const TRACE_MISS_SETUP: &str = "harness input: the combat world answers Actor.TraceComponent on an attached \
      component with a miss (the hub's ruling on #799; UNVERIFIED)";
 
+/// The set-up line of [`combat_world_collision`].
+pub const COMBAT_COLLISION_SETUP: &str = "harness input: the combat world's collision service is link 9's NoLevel (an \
+     UNVERIFIED stand-in, the hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION: this world loads no level, so no \
+     level geometry answers a trace or a box test)";
+
+/// The slice's combat world without a map (lane IMPL-COMBAT-WORLD-COLLISION, the hub's ruling): link 9's `NoLevel`
+/// collision service, logged as [`COMBAT_COLLISION_SETUP`], then `SetPhysics`' no-floor base search under its harness
+/// setting (review of #798, R1), which logs its own line. Both are UNVERIFIED stand-ins for a world that loads no
+/// level, so they are Off only: in Reference this refuses before writing anything. The `--map` route loads a level
+/// and gets neither.
+pub fn combat_world_collision(vm: &mut ow_vm::api::Vm) -> Result<(), ow_vm::error::VmError> {
+    if vm.parity != ParityMode::Off {
+        return Err(ow_vm::error::VmError::Registration {
+            key: "the combat world's collision stand-ins".to_string(),
+            reason: "the combat world's NoLevel collision and base search are Off harness settings",
+        });
+    }
+    ow_world::placement::install_collision(vm, Rc::new(ow_world::placement::NoLevel))?;
+    vm.log.push(COMBAT_COLLISION_SETUP.to_string());
+    ow_world::world::set_physics::enable_no_level_base_search(vm)
+}
+
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.
 fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
     let mut route_notes: Vec<String> = Vec::new();
@@ -686,6 +708,8 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
         let (world, bridge) = match map {
             None => {
                 let mut world = combat::world(cooked, ParityMode::Off)?;
+                // The hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION: the world's collision stand-ins.
+                combat_world_collision(&mut world.vm)?;
                 let bridge = combat::MissionBridge::new(&mut world)?;
                 (world, bridge)
             }

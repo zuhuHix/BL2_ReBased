@@ -84,7 +84,8 @@ pub const BASE_SETTER: &str = "Actor.SetPhysics: the base search's base setter";
 pub const BASE_STAND_IN: &str = "harness input: Actor.SetPhysics' base search found no floor (a world with no level \
      geometry and no other actor with collision; UNVERIFIED stand-in, the hub's ruling on #793)";
 /// The set-up line of [`enable_no_level_base_search`].
-pub const BASE_STAND_IN_INPUT: &str = "harness input: the world turns on SetPhysics' no-floor base search for a world      with no level geometry (the hub's ruling on review of #798, R1; UNVERIFIED)";
+pub const BASE_STAND_IN_INPUT: &str = "harness input: the world turns on SetPhysics' no-floor base search for a world \
+     with no level geometry (the hub's ruling on review of #798, R1; UNVERIFIED)";
 /// The registration key of [`NoLevelBaseSearch`].
 pub const BASE_STAND_IN_KEY: &str = "NoLevelBaseSearch";
 
