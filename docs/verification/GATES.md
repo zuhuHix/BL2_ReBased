@@ -17,6 +17,14 @@ and 4's steps after a player step, under the machine lock, reverted) shows the c
 0.0, and the spawn's next stop `WillowPawn.SetDefaultPhysics` past its gates (NATIVE_MIND_ROUTE.md section 1). No code
 changed, so no measured number moved. UNVERIFIED in game. Decision 2026-11-26-41.
 
+**IMPL-PASS2-CONDITION-PRELOAD (2026-11-26, pc-hummer, on fix/pass2-condition-preload from main 785c2a4):**
+AI-assisted (Claude Code, Opus 5.5). #779's body-class preload also loads each definition's pass-2 conditions and their
+linked objectives (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4); pass 2's not-loaded refusals name the object. `cargo test
+-p ow-cli -p ow-behavior` all pass; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under
+the machine lock), main and this change: 6 ok / 8 NotYet, 51.2% on both; 7 pass-2 objects preloaded. Links 1, 3, 4, 5,
+13 and 14 move from the unloaded condition's `NotRead` to `WillowPlayerPawn.SetDefaultStance` ("the class's own
+implementation is not resolved"); every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, on fix/rust-behavior-kernel-pass2 from main c345fdb0):**
 AI-assisted (Claude Code, Opus 5.5). Off pass 2 of `IntializeBehaviorProviderForConsumer`
 (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4): link, register, react, behind `ow-vm`'s mission-condition service; the
