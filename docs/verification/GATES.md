@@ -9,6 +9,7 @@ ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release 
 X 51.2%, every result unchanged. Link 1's row gains "world set-up: harness input: the engine object's PhysXLevel = 0
 …" and the empty scene layer's line. No real-game run.
 
+
 **ANALYST-TARGETABLE-RESOLVER (2026-11-26, pc-hummer, docs only, on docs/native-targetable-resolver from main 5dd2906):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_TARGETABLE_RESOLVER.md: the resolver answers 1.0 only for a native
 `ITargetable` whose `IsChampion` is true (an AI pawn's balance `Champion`). A local probe (Off `--combat-run`, links 3's
