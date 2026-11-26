@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-UPDATEANIMATIONS-TREE-TICKS (2026-11-26, pc-hummer, on fix/rust-updateanimations-tree-ticks from main
+afde0d73):** AI-assisted (Claude Code, Opus 5.5). `UpdateAnimations`' per-node step in Off from
+NATIVE_UPDATEANIMATIONS_TREE_TICKS.md (`ow_world::world::tree_ticks`): the tag, nothing on the 28 empty-step classes,
+the sequence family's reset with its guard, and the additive re-set and lookup, after a load-free preflight.
+`cargo test --workspace -j 8 --no-fail-fast` 3,788 passed / 0 failed / 58 ignored; `crate_edges_test.py` OK. Installed
+Off strict `--slice-gate` (release build, under the machine lock), base afde0d73 and this change: 6 ok / 8 NotYet,
+42.9% on both. Links 1, 3, 4, 5, 13 and 14 move in `maya:8` from "UpdateAnimations: the tree nodes' ticks" to the
+lookup's not-loaded `NotRead` for the anim set `Anim_Siren.Unarmed_Siren` (the note's section 7 second case; a preload
+is the hub's call). UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **REBUILD-TEST-GAPS (2026-11-26, pc-hummer, on main afde0d73):** AI-assisted (Claude Code, Opus 5.5). #745's review
 gaps: the unloaded-mesh text with a skeleton source installed, NATIVE_AIMOFFSET_REBUILD.md test 8 through the profiles
 layer, the literal 257-bone / 256-component case, a comment; no rule changed. `cargo test --workspace -j 8` 3,778
