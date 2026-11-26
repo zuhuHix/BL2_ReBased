@@ -43,6 +43,34 @@ enum Kind {
     MistypedParams,
     /// `WillowGame.GlobalsDefinition` held by a package but not in the class table (item 4).
     ColdDefinition,
+    /// The manager class only declared (its id reserved, no layout), as a property declaration leaves it (r2 item 4).
+    ReservedManager,
+    /// `OnSpawnCustomizations` declared as an `array<int>` (r2 item 5).
+    IntCustomizations,
+    /// A store holding a params export the fixture reaches as a cold handle (r2 item 1).
+    ColdParams,
+}
+
+/// A store whose `ToyMusic` package holds a holder class with one object field `Cold`, a `ToyParams` export of it
+/// and a `ToyHolderObject` whose `Cold` names `ToyParams`: loading the holder leaves `Cold` a handle not yet loaded.
+fn params_store(mode: ParityMode) -> DefStore {
+    use ow_package::testkit::ints;
+    use ow_package::testkit::script::ScriptToy;
+    let mut t = ScriptToy::new(&["Object"]);
+    // No parent (the store holds no Core package); the field names its own class.
+    let holder = t.class("ToyMusicHolder", 0);
+    t.prop("Object", holder, "Cold", 0, holder);
+    let mut empty = ints(&[0]);
+    empty.extend_from_slice(&t.none);
+    let params = t.p.add_export(holder, "ToyParams", empty);
+    let mut h = ints(&[0]);
+    h.extend(t.p.object_tag("Cold", params));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "ToyHolderObject", h);
+    let bytes = t.build();
+    let dir = std::env::temp_dir().join(format!("ow-combat-music-params-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    DefStore::from_synthetic(&dir, &[("ToyMusic.upk", bytes.as_slice())], ow_defs::identity::IdentityPolicy::FirstInScanOrder, mode).unwrap()
 }
 
 /// A store whose `WillowGame` package holds a `GlobalsDefinition` class the table does not (item 4).
@@ -59,11 +87,21 @@ fn cold_store(mode: ParityMode) -> DefStore {
 }
 
 fn fx_kind(mode: ParityMode, kind: Kind) -> Fx {
-    let manager = kind != Kind::NoManager;
+    let manager = !matches!(kind, Kind::NoManager | Kind::ReservedManager);
     let mut space = ObjectSpace::new();
     let object = space.classes.define("Core.Object", None, vec![]).unwrap();
-    let store = if kind == Kind::ColdDefinition { cold_store(mode) } else { DefStore::new_empty() };
+    let store = match kind {
+        Kind::ColdDefinition => cold_store(mode),
+        Kind::ColdParams => params_store(mode),
+        _ => DefStore::new_empty(),
+    };
     let mut vm = Vm::new(space, store, Rc::new(AttributeSystem::new_empty()), mode);
+    // ColdParams: the params fields typed with the store's holder class (it has no parent in the store).
+    let cold_class = (kind == Kind::ColdParams).then(|| {
+        let path = ow_core::ObjectPath::parse("ToyMusic.ToyHolderObject").unwrap();
+        let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        vm.space.heap.get(holder).unwrap().class
+    });
     let props = vec![decl(&mut vm, "bCausedByWorld", PropKind::Bool)];
     let damage = vm.space.classes.define("Engine.DamageType", Some(object), props).unwrap();
     let o = PropKind::Object { class: object };
@@ -74,7 +112,8 @@ fn fx_kind(mode: ParityMode, kind: Kind) -> Fx {
     let props = vec![decl(&mut vm, "CurrentPlaythrough", PropKind::Int)];
     vm.space.classes.define("WillowGame.WillowGameReplicationInfo", Some(actor), props).unwrap();
     vm.space.classes.define("Engine.GameReplicationInfo", Some(actor), vec![]).unwrap();
-    let props = vec![decl(&mut vm, "OnSpawnCustomizations", objects), decl(&mut vm, "MeshMaterial", o.clone())];
+    let customizations = if kind == Kind::IntCustomizations { PropKind::Array(Box::new(PropKind::Int)) } else { objects };
+    let props = vec![decl(&mut vm, "OnSpawnCustomizations", customizations), decl(&mut vm, "MeshMaterial", o.clone())];
     let play_through = vm.space.classes.define_struct("WillowGame.AIPawnBalanceDefinition.PlayThroughData", None, props).unwrap();
     let base = vm.space.classes.define("Engine.BaseBalanceDefinition", Some(object), vec![]).unwrap();
     let props = vec![decl(&mut vm, "PlayThroughs", PropKind::Array(Box::new(PropKind::Struct(play_through))))];
@@ -87,18 +126,24 @@ fn fx_kind(mode: ParityMode, kind: Kind) -> Fx {
     // The music manager, its parameters, the game info, the globals and their definition.
     let props = vec![decl(&mut vm, "EnemyDamagesPlayerWeight", PropKind::Float)];
     vm.space.classes.define("WillowGame.CombatMusicParameters", Some(object), props).unwrap();
-    let params_kind = if kind == Kind::MistypedParams { PropKind::Object { class: damage } } else { o.clone() };
+    let params_kind = match (kind, cold_class) {
+        (Kind::MistypedParams, _) => PropKind::Object { class: damage },
+        (_, Some(class)) => PropKind::Object { class },
+        _ => o.clone(),
+    };
     let props = vec![
         decl(&mut vm, "bCombatMusicManagerEnabled", PropKind::Bool),
         decl(&mut vm, "CombatMusicParams", params_kind),
     ];
     if manager {
         vm.space.classes.define("WillowGame.CombatMusicManager", Some(object), props).unwrap();
+    } else if kind == Kind::ReservedManager {
+        vm.space.classes.declare("WillowGame.CombatMusicManager").unwrap();
     }
     let props = vec![decl(&mut vm, "GlobalCombatMusicManager", o.clone())];
     vm.space.classes.define("WillowGame.WillowGameInfo", Some(actor), props).unwrap();
     let gearbox = vm.space.classes.define("GearboxFramework.GearboxGlobalsDefinition", Some(object), vec![]).unwrap();
-    let props = vec![decl(&mut vm, "CombatMusicProperties", o.clone())];
+    let props = vec![decl(&mut vm, "CombatMusicProperties", cold_class.map_or(o.clone(), |class| PropKind::Object { class }))];
     if kind != Kind::ColdDefinition {
         vm.space.classes.define("WillowGame.GlobalsDefinition", Some(gearbox), props).unwrap();
     }
@@ -353,8 +398,9 @@ fn music_world(x: &mut Fx, definition_class: &str) -> (ObjRef, ObjRef) {
     let globals = x.make("WillowGame.WillowGlobals");
     let definition = x.make(definition_class);
     let params = x.make("WillowGame.CombatMusicParameters");
-    if x.vm.space.prop(x.class(definition_class), "CombatMusicProperties").is_some() {
-        x.set(definition, "CombatMusicProperties", Value::Object(Some(params)));
+    if let Some(p) = x.vm.space.prop(x.class(definition_class), "CombatMusicProperties") {
+        // A field typed with another class (the ColdParams variant) keeps None; its test sets it.
+        let _ = x.vm.space.write(definition, PropAddr::scalar(p), Value::Object(Some(params)));
     }
     x.set(globals, "TheGlobalsDefinition", Value::Object(Some(definition)));
     let q = ow_world::query::install(&mut x.vm).unwrap();
@@ -411,4 +457,68 @@ fn the_no_op_gates_answer_before_the_damage_default() {
     // Past every gate, the missing weight is a data error.
     x.set(default, "bCausedByWorld", Value::Bool(false));
     assert!(matches!(damage_gates(&x.vm, manager, Some(enemy), Some(damage)), Err(VmError::Script { .. })));
+}
+
+/// Review r2 of #808, item 4: a manager class whose id is only reserved (no layout defined) is the manager class's
+/// NotRead, not a script error, with nothing written.
+#[test]
+fn a_reserved_manager_class_is_not_read() {
+    let mut x = fx_kind(ParityMode::Off, Kind::ReservedManager);
+    let game = x.make("WillowGame.WillowGameInfo");
+    let before = x.marks();
+    assert_eq!(not_read(combat_music_manager(&mut x.vm, game).unwrap_err()), MANAGER_CLASS);
+    assert_eq!(x.marks(), before);
+}
+
+/// Review r2 of #808, item 5: `OnSpawnCustomizations` declared as an `array<int>` is a data error, even empty.
+#[test]
+fn integer_customizations_are_a_data_error() {
+    let mut x = fx_kind(ParityMode::Off, Kind::IntCustomizations);
+    x.world(0);
+    let pawn = x.make("WillowGame.WillowAIPawn");
+    let entry = x.entry(vec![Value::Int(7)], None);
+    let balance = x.balance(vec![entry]);
+    assert!(matches!(plan(&x, balance, Some(pawn)), Err(VmError::Script { .. })));
+    let entry = x.entry(vec![], None);
+    let balance = x.balance(vec![entry]);
+    assert!(matches!(plan(&x, balance, Some(pawn)), Err(VmError::Script { .. })), "empty");
+}
+
+/// Review r2 of #808, item 1: with the definition's `CombatMusicProperties` a handle the store has not loaded, the lazy
+/// creation is a NotRead with nothing made; [`preload_manager_inputs`] loads it with its logged harness line, and the
+/// creation then succeeds. Off only.
+#[test]
+fn the_manager_inputs_preload_lets_the_creation_succeed() {
+    let mut x = fx_kind(ParityMode::Off, Kind::ColdParams);
+    let (game, _) = music_world(&mut x, "WillowGame.GlobalsDefinition");
+    let cold = {
+        let path = ow_core::ObjectPath::parse("ToyMusic.ToyHolderObject").unwrap();
+        let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
+        match x.get(holder, "Cold") {
+            Value::Object(Some(o)) => o,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold), "the params start unloaded");
+    let globals = x.vm.service::<ow_world::query::WorldQuery>().unwrap().borrow().globals().unwrap();
+    let definition = match x.get(globals, "TheGlobalsDefinition") {
+        Value::Object(Some(d)) => d,
+        other => panic!("{other:?}"),
+    };
+    x.set(definition, "CombatMusicProperties", Value::Object(Some(cold)));
+    let before = x.marks();
+    assert!(matches!(combat_music_manager(&mut x.vm, game), Err(VmError::NotYet(_))), "cold params");
+    assert_eq!(x.marks(), before, "nothing made");
+    // Reference: the preload does nothing.
+    x.vm.parity = ParityMode::Reference;
+    assert_eq!(preload_manager_inputs(&mut x.vm).unwrap(), 0);
+    x.vm.parity = ParityMode::Off;
+    let logged = x.vm.log.len();
+    assert_eq!(preload_manager_inputs(&mut x.vm).unwrap(), 1);
+    assert!(x.vm.log[logged..].iter().any(|l| l == &manager_input_line("ToyMusic.ToyParams")), "{:?}", &x.vm.log[logged..]);
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, cold));
+    let manager = combat_music_manager(&mut x.vm, game).unwrap();
+    assert_eq!(x.get(manager, "CombatMusicParams"), Value::Object(Some(cold)));
+    // A second preload loads nothing.
+    assert_eq!(preload_manager_inputs(&mut x.vm).unwrap(), 0);
 }

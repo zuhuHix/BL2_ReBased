@@ -11,12 +11,12 @@ under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%, as on main: links 3,
 `AttributeInitializationDefinition.SetBaseValue` ("a definition it names is not loaded"), so these natives are still
 not reached; link 7 at the HUD's pickup targeting; 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision
 2026-11-26-65.
-
-(hub ruling on review of #801), Off. `cargo test --workspace` 4,023 passed / 0 failed / 59 ignored;
-`crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 7 not ok,
-8.167/14 = 58.3%, unchanged: links 3, 4, 5, 13 and 14 at "the base search's floor trace" (the combat world installs no
-collision service), so these natives are not reached; link 6 at `Actor.SetBase` (#800 is not on this base); link 7 at
-the HUD's pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+Review of #808, r1: the spawn customisations through a write-aware runner, both reference types checked before the
+manager is made, the no-op gates first, the definition classes from the class table only. r2: the combat set-up sets
+the globals' `TheGlobalsDefinition` when the route left it unset and preloads it and its `CombatMusicProperties`
+(logged harness inputs, UNVERIFIED); the counted runner's preflight looks methods up read-only (cold code is NotRead)
+and recomputes the partial-writes prefix from the counters; a manager class without a defined layout is NotRead;
+`OnSpawnCustomizations` must be an array of objects.
 
 **ANALYST-COMBAT-TAIL-LINKS-3-4 (2026-11-26, pc-hummer, docs only, on docs/native-links-3-4-tail from main
 d118d2bb, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_3_4_TAIL.md reads links 3

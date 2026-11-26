@@ -25,6 +25,11 @@ use crate::kernel::natives::{OUTPUT_LINK, Pack, collect};
 
 const NATIVE: u32 = 0x400 | 0x20000;
 
+thread_local! {
+    /// The inner behaviour the toy `Nester` walks (review r2 of #808, item 3).
+    static NESTED: Cell<Option<ObjRef>> = const { Cell::new(None) };
+}
+
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 struct Toy {
@@ -115,6 +120,8 @@ fn package() -> Vec<u8> {
     let behavior = t.class("ToyBehavior", base);
     // Review of #808: a field the toy Writer behaviour writes (a heap write the write-aware policy counts).
     t.prop("Int", behavior, "ToyWrites", 0, 0);
+    // Review r2 of #808: a behaviour subclass a test leaves cold (its layout only, no class code).
+    t.class("ToyColdBehavior", behavior);
     let with_ref = |kind: &str, name: &str, flags: u64, type_ref: i32| Param { flags, type_ref, ..Param::new(kind, name) };
     let apply = [
         with_ref("Object", "SelfObject", 0, object),
@@ -323,6 +330,13 @@ fn toy_with(mode: ParityMode, extra: &[(&str, &[u8])]) -> Toy {
             if me == "Waiter" {
                 next = with(c.vm, &next, "NextExecutionDelayTime", Value::Float(1.0));
             }
+            if me == "Nester" {
+                // A nested walk whose first inner behaviour refuses (review r2 of #808, item 3); the inner behaviour
+                // made by the test beforehand, so the nesting itself writes nothing.
+                let inner = NESTED.with(|n| n.get()).expect("the test's inner behaviour");
+                let f = c.vm.find_function(RUN_BEHAVIORS)?;
+                c.vm.call(f, None, vec![Value::Array(Rc::new(vec![Value::Object(Some(inner))])), Value::Object(None)])?;
+            }
             if me == "Writer" {
                 let this = c.this.unwrap();
                 let class = c.vm.space.heap.get(this)?.class;
@@ -479,6 +493,49 @@ fn the_counted_walk_prefixes_only_after_a_write() {
     let list = t.behaviors(&[Some("A"), None, Some("B")]);
     run_behaviors_counted(&mut t.vm, &list, None, None).unwrap();
     assert_eq!(t.log.borrow().len(), 2);
+}
+
+/// Review r2 of #808, item 3: the counted walk recomputes its prefix from its own counters. A nested native walk that
+/// refuses on its first inner behaviour marks its refusal (its own policy), but nothing was written, so the counted
+/// walk answers it unmarked.
+#[test]
+fn the_counted_walk_drops_a_nested_prefix_when_nothing_was_written() {
+    let mut t = toy(ParityMode::Off);
+    let inner = t.behaviors(&[Some("Waiter")]);
+    let Value::Array(items) = &inner else { unreachable!() };
+    let Value::Object(waiter) = items[0] else { unreachable!() };
+    NESTED.with(|n| n.set(waiter));
+    let list = t.behaviors(&[Some("Nester")]);
+    match run_behaviors_counted(&mut t.vm, &list, None, None).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(n.what.contains("open question 1"), "the inner refusal: {n}");
+            assert!(!n.what.contains(PARTIAL_WRITES), "no write: no prefix: {n}");
+        }
+        e => panic!("expected NotYet, got {e}"),
+    }
+}
+
+/// Review r2 of #808, item 2: the counted walk's preflight loads nothing. A behaviour whose class code is not loaded is
+/// the NotRead before anything runs, with no class code loaded.
+#[test]
+fn the_counted_walk_s_preflight_loads_no_class_code() {
+    let mut t = toy(ParityMode::Off);
+    let cold = {
+        let (code, store) = t.vm.defs.code_mut();
+        let key = code.find_class(store, "Engine.ToyColdBehavior").unwrap();
+        code.define_layout(store, &mut t.vm.space.names, &mut t.vm.space.classes, key).unwrap()
+    };
+    let b = t.vm.space.alloc(cold, "Cold", None, Origin::Runtime).unwrap();
+    let loads = t.vm.class_code_loads();
+    match run_behaviors_counted(&mut t.vm, &Value::Array(Rc::new(vec![Value::Object(Some(b))])), None, None).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.contains("is not loaded") && !n.what.contains(PARTIAL_WRITES), "{n}");
+        }
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert_eq!(t.vm.class_code_loads(), loads, "no class code loaded");
+    assert!(t.log.borrow().is_empty(), "nothing ran");
 }
 
 /// Reference binds none of these (R3): the C++ has no such rule.

@@ -49,6 +49,15 @@ alone; this lane did not read the executable. No session was run. Every rule is 
   answers its no-params and no-enemy gates before the damage default, and reads the threat weight only past the
   world-damage gate. Tests: the counted walk on both sides of the first write, a mistyped params field, a cold
   definition class with the reflection count unchanged, and the gate order.
+- **Review of #808, r2:** the slice's combat set-up prepares the manager's inputs as logged harness inputs, Off only
+  and UNVERIFIED: when the route left the globals' `TheGlobalsDefinition` unset it is set as the Fire driver sets it,
+  then `preload_manager_inputs` loads the definition and its `CombatMusicProperties` when either is a handle the store
+  has not loaded (the game keeps them resident). The counted runner's preflight looks `ApplyBehavior` up in loaded
+  code only (a class whose code is not loaded is `NotRead`, nothing loaded), and its prefix is recomputed from the
+  counters, so a nested walk's prefix is removed when nothing was written. A manager class whose id is only reserved
+  (no layout) is the manager class's `NotRead`, and `OnSpawnCustomizations` must be an array of objects (an
+  `array<int>` is `VmError::Script`). Tests: the preload then a successful creation, a nested walk refusing on its
+  first behaviour, a cold behaviour class in the counted preflight, the reserved manager class, and the integer array.
 - **Measured:** see the GATES row of this lane. On the installed gate these natives are not reached yet: on main
   74b06d8 the spawns of links 3, 4, 5, 13 and 14 stop first at `AttributeInitializationDefinition.SetBaseValue` ("a
   definition it names is not loaded").

@@ -236,8 +236,9 @@ pub fn grade_plan(vm: &Vm, balance: ObjRef, pawn: Option<ObjRef>) -> Result<Grad
         return Ok(GradePlan::Answer { answer: false, base_error: false });
     };
     let (behaviors, kind) = member(vm, &entry, "OnSpawnCustomizations", WHAT)?;
-    if !matches!(kind, PropKind::Array(_)) {
-        return Err(bad(WHAT, "OnSpawnCustomizations is not declared as an array"));
+    // An array of behaviour references (review r2 of #808, item 5): any other element kind is a data error.
+    if !matches!(&kind, PropKind::Array(inner) if matches!(**inner, PropKind::Object { .. })) {
+        return Err(bad(WHAT, format!("OnSpawnCustomizations is declared as {kind:?}, not an array of objects")));
     }
     let instigator = object(vm, actor, "Instigator", WHAT)?;
     if behaviors.elements().is_none_or(|e| e.is_empty()) {
@@ -296,7 +297,11 @@ pub fn update_material(vm: &Vm, pawn: ObjRef) -> Result<(), VmError> {
 /// What the lazy creation needs, settled write-free and load-free (section 5): the manager class and the params.
 fn manager_plan(vm: &mut Vm, game: ObjRef) -> Result<(ClassId, Option<ObjRef>), VmError> {
     const WHAT: &str = "WillowGameInfo.GetCombatMusicManager";
-    let Some(class) = vm.space.classes.by_path(MANAGER) else {
+    // A class id the table holds only as a reserved reference (its layout not loaded) is the same NotRead (review r2
+    // of #808, item 4).
+    let Some(class) =
+        vm.space.classes.by_path(MANAGER).filter(|&c| vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()))
+    else {
         return Err(NotYet::not_read(MANAGER_CLASS, RECORD).into());
     };
     object(vm, game, "GlobalCombatMusicManager", WHAT)?;
@@ -327,6 +332,51 @@ fn manager_plan(vm: &mut Vm, game: ObjRef) -> Result<(ClassId, Option<ObjRef>), 
         }
     }
     Ok((class, params))
+}
+
+/// The harness line of [`preload_manager_inputs`]' loads.
+pub fn manager_input_line(path: &str) -> String {
+    format!("harness input: preload {path} (the combat music manager's input, which the game keeps resident; UNVERIFIED)")
+}
+
+/// The combat world's set-up for the manager's lazy creation (review r2 of #808, item 1): the globals definition
+/// (`TheGlobalsDefinition`, which the caller sets first when the route left it unset) and its `CombatMusicProperties`,
+/// each loaded when it is a handle the store has not loaded, and logged ([`manager_input_line`]); a failed load is
+/// logged and left, so the creation's own refusal shows it. Off only; the number loaded.
+pub fn preload_manager_inputs(vm: &mut Vm) -> Result<usize, VmError> {
+    const WHAT: &str = "the combat music manager's set-up";
+    if vm.parity != ParityMode::Off {
+        return Ok(0);
+    }
+    let globals = ow_inventory::globals::world_globals(vm)?;
+    let Some(definition) = object(vm, globals, "TheGlobalsDefinition", WHAT)? else { return Ok(0) };
+    let mut loaded = 0;
+    let mut load = |vm: &mut Vm, o: ObjRef| -> bool {
+        if !vm.defs.is_unloaded(&vm.space, o) {
+            return !vm.defs.is_failed(&vm.space, o);
+        }
+        let path = vm.defs.handle_path(o).unwrap_or_else(|| path(vm, o));
+        vm.log.push(manager_input_line(&path));
+        let r = vm.defs.ensure_loaded(&mut vm.space, o);
+        vm.log.extend(vm.defs.take_log());
+        match r {
+            Ok(()) => {
+                loaded += 1;
+                true
+            }
+            Err(e) => {
+                vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+                false
+            }
+        }
+    };
+    if !load(vm, definition) {
+        return Ok(loaded);
+    }
+    if let Some(params) = object(vm, definition, "CombatMusicProperties", WHAT)? {
+        load(vm, params);
+    }
+    Ok(loaded)
 }
 
 /// The refusal for a definition class the resident class table does not hold.
