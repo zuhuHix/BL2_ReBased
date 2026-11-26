@@ -82,12 +82,14 @@ prediction from the data; a bound behavior could change it, and none runs on the
 5. type 3: `NotYet { NotRead }`, "CanAffordToPickUpPickupable: the controller's golden-key count". The body of
    `GetNumGoldenKeysAvailable` is the controller's table slot, which was not read; `interactive.rs` refuses the same
    case the same way;
-6. otherwise the controller's `PlayerReplicationInfo`: None, or not a `WillowPlayerReplicationInfo`, **true**.
+6. otherwise the controller's `PlayerReplicationInfo`: a handle the store has not loaded is `NotYet { NotRead }`
+   (checked before the class test; review of #772); None, or not a `WillowPlayerReplicationInfo`, **true**.
    Otherwise the answer is **amount ≤ `GetCurrencyOnHand(type)`**, through the port's bound native (`ow_combat`'s
    `down.rs`).
 
-Nothing is written, so no answer carries the partial-writes prefix. `PayForPickupable` takes the same preflight, then
-its writes (2.2); a refusal after `AddCurrencyOnHand` cannot come, since that native is the last step.
+Nothing is written, so no answer carries the partial-writes prefix. `PayForPickupable` takes steps 1-4 and step 6's
+not-loaded check and cast only, **not step 5** (review of #772): its golden-key branch only raises `SpendGoldenKey`
+once per unit (amount 0 or less: none) and needs no count. Then its writes (2.2); a refusal after `AddCurrencyOnHand` cannot come, since that native is the last step.
 
 ## 3. Link 7's `look`: what the targeting needs from the HUD
 
