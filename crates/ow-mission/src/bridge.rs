@@ -502,6 +502,11 @@ fn player_archetype(vm: &mut Vm, controller: ObjRef) -> Result<Option<ObjRef>, M
 /// `WorldInfo` (the origin, as the class-default pawn) and with no collision placement asked. Play has not begun, so no
 /// begin-play event runs. The spawn marks a refusal after its writes ("stopped after partial writes"). A spawn that
 /// makes nothing is a script error. `pawn_for` sets `Controller` afterwards, as for the class-default pawn.
+///
+/// **A refusal after the actor is in the level list ends the run** (review of #766, item 3). The spawn leaves the
+/// actor in place, as it does for every spawned actor. The bridge does not cache it (the spawn answers an error, not
+/// the actor), so a later call would spawn a second pawn. A partial-writes `NotYet` is terminal in the harness: the
+/// slice gate and the combat run stop at it and make no later call.
 fn spawn_player_pawn(vm: &mut Vm, archetype: ObjRef, controller: ObjRef) -> Result<ObjRef, MissionError> {
     let class = vm.space.heap.get(archetype).map_err(VmError::from)?.class;
     let actors = ow_world::actors::actors_of(vm)?;
