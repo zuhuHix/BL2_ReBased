@@ -525,30 +525,98 @@ pub(crate) fn anim_set_preload_line(path: &str) -> String {
     format!("harness input: set-up preload: {path} (UNVERIFIED: the game streams it with the character)")
 }
 
-/// The anim sets of Maya's mesh component, and their sequences (lane PRELOAD-MAYA-ANIMSETS, the hub's ruling on the
-/// lookups of NATIVE_UPDATEANIMATIONS_TREE_TICKS.md and NATIVE_ANIM_NODE_INIT.md): in the game they are resident when
-/// she spawns, because they load with her character's packages. The port loads **exactly** the sets the archetype's
-/// `Mesh` component lists in `AnimSets`, then each set's `Sequences`, through the store, each logged as a harness input
-/// ([`anim_set_preload_line`]), an UNVERIFIED stand-in for that streaming load. Nothing else is loaded: not the sets
-/// `UpdateAnimSets` adds later, not a sequence's own references. A `Mesh`, `AnimSets` or `Sequences` the archetype does
-/// not have, or a None entry, is skipped; a load that fails is the step's error. The function checks no parity mode:
-/// it runs wherever the `maya` step's harness inputs run.
+/// The anim sets of Maya's mesh component and of her body class's weapon holds, and their sequences (lane
+/// PRELOAD-MAYA-ANIMSETS, the hub's rulings on the lookups of NATIVE_UPDATEANIMATIONS_TREE_TICKS.md and
+/// NATIVE_ANIM_NODE_INIT.md): in the game they are resident when she spawns, because they stream with her character.
+/// The port loads **exactly** these sets, in this order, each once, then each set's `Sequences`, through the store,
+/// each logged as a harness input ([`anim_set_preload_line`]), an UNVERIFIED stand-in for that streaming load:
+/// 1. the sets the archetype's `Mesh` component lists in `AnimSets`;
+/// 2. the weapon holds' sets ([`hold_anim_sets`]): what `BodyClassDefinition.GetWeaponHoldAnimSets` can return for her
+///    holds, which `WillowPawn.UpdateAnimSets` appends to that list.
+///
+/// Nothing else is loaded: not a hold, a body class or a sequence's own references. A field the object does not
+/// have, a None entry, or an object that is not resident is skipped and logged; a load that fails is the step's error.
+/// The function checks no parity mode: it runs wherever the `maya` step's harness inputs run.
 pub(crate) fn preload_mesh_anim_sets(vm: &mut Vm, archetype: ObjRef) -> Result<(), VmError> {
-    let Some(mesh) = object_slot(vm, archetype, "Mesh")? else {
-        vm.log.push("harness input: set-up preload: no Mesh component on the archetype".to_string());
-        return Ok(());
-    };
-    if vm.defs.is_unloaded(&vm.space, mesh) {
-        vm.log.push(format!("harness input: set-up preload: the Mesh component {} is not resident; skipped", object_path(vm, mesh)));
-        return Ok(());
+    let mut sets: Vec<ObjRef> = Vec::new();
+    match object_slot(vm, archetype, "Mesh")? {
+        None => vm.log.push("harness input: set-up preload: no Mesh component on the archetype".to_string()),
+        Some(mesh) if vm.defs.is_unloaded(&vm.space, mesh) => vm.log.push(format!(
+            "harness input: set-up preload: the Mesh component {} is not resident; skipped",
+            object_path(vm, mesh)
+        )),
+        Some(mesh) => sets.extend(objects_of(vm, mesh, "AnimSets")?),
     }
-    for set in objects_of(vm, mesh, "AnimSets")? {
+    match object_slot(vm, archetype, "BodyClass")? {
+        None => vm.log.push("harness input: set-up preload: no BodyClass on the archetype, so no weapon-hold sets".to_string()),
+        Some(body) => {
+            for set in hold_anim_sets(vm, body)? {
+                if !sets.contains(&set) {
+                    sets.push(set);
+                }
+            }
+        }
+    }
+    for set in sets {
         preload_one(vm, set)?;
         for sequence in objects_of(vm, set, "Sequences")? {
             preload_one(vm, sequence)?;
         }
     }
     Ok(())
+}
+
+/// The anim sets `BodyClassDefinition.GetWeaponHoldAnimSets` can return for the body class `body`, read only (the script
+/// read of `GetWeaponHoldAnimSets` and `BodyWeaponHoldDefinition.GetAnimSets`): for `body`, then each class up its
+/// `WeaponActionParentClass` chain, every hold in `WeaponHoldDefs` and its `DefaultWeaponHoldDef`; for each hold, up
+/// its `ParentDefinition` chain from the farthest, the sets its `AnimSetList` names. In that order, each once. A body
+/// class or hold that is not resident is skipped and logged (holds are not preloaded); a chain that comes back to a
+/// visited object stops there. The first-person holds (`GetFirstPersonWeaponHoldAnimSets`, the arms) are not read.
+pub(crate) fn hold_anim_sets(vm: &mut Vm, body: ObjRef) -> Result<Vec<ObjRef>, VmError> {
+    let mut out: Vec<ObjRef> = Vec::new();
+    let mut classes: Vec<ObjRef> = Vec::new();
+    let mut cursor = Some(body);
+    while let Some(class) = cursor {
+        if classes.contains(&class) {
+            break;
+        }
+        classes.push(class);
+        if vm.defs.is_unloaded(&vm.space, class) {
+            vm.log.push(format!("harness input: set-up preload: the body class {} is not resident; skipped", object_path(vm, class)));
+            break;
+        }
+        let mut holds = objects_of(vm, class, "WeaponHoldDefs")?;
+        if let Some(d) = object_slot(vm, class, "DefaultWeaponHoldDef")?
+            && !holds.contains(&d)
+        {
+            holds.push(d);
+        }
+        for hold in holds {
+            // The hold's chain, farthest parent first, as GetAnimSets appends the parent's sets before its own.
+            let mut chain: Vec<ObjRef> = Vec::new();
+            let mut h = Some(hold);
+            while let Some(x) = h {
+                if chain.contains(&x) {
+                    break;
+                }
+                if vm.defs.is_unloaded(&vm.space, x) {
+                    vm.log.push(format!("harness input: set-up preload: the weapon hold {} is not resident; skipped", object_path(vm, x)));
+                    break;
+                }
+                chain.push(x);
+                h = object_slot(vm, x, "ParentDefinition")?;
+            }
+            for x in chain.into_iter().rev() {
+                for set in objects_of(vm, x, "AnimSetList")? {
+                    if !out.contains(&set) {
+                        out.push(set);
+                    }
+                }
+            }
+        }
+        cursor = object_slot(vm, class, "WeaponActionParentClass")?;
+    }
+    Ok(out)
 }
 
 /// The objects array property `name` of the resident `o` holds, None entries left out (empty when not declared).
