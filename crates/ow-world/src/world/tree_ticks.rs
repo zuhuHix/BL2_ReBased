@@ -49,7 +49,8 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::additive_override::{self, Reads, resident};
+use super::additive_override::{self, Reads};
+use super::skeletal;
 
 /// The analyst note.
 pub const RECORD: &str = "docs/verification/NATIVE_UPDATEANIMATIONS_TREE_TICKS.md";
@@ -180,6 +181,13 @@ fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
 }
 
 /// `o` resident, else [`not_loaded`] naming `role` and its handle path.
+/// This module's residency test, as it was before the shared helper (review r1 of #758): not a handle the store has
+/// not loaded, not a stand-in with **no** slots (`skeletal::resident`), and not a failed load. An object with some but
+/// not all of its slots counts as resident here, unlike `additive_override::resident`.
+fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    Ok(skeletal::resident(vm, o)? && !vm.defs.is_failed(&vm.space, o))
+}
+
 fn require(vm: &Vm, o: ObjRef, role: &str) -> Result<(), VmError> {
     if !resident(vm, o)? {
         return Err(refuse_not_loaded(vm, o, role));
@@ -214,6 +222,7 @@ pub struct Plan {
 /// [`additive_override::find_sequence`] with this module's field checks and refusal texts.
 fn lookup(vm: &Vm, sets: Vec<Value>, reverse: bool, text: &str) -> Result<Option<ObjRef>, VmError> {
     let reads = Reads {
+        resident: &resident,
         array: &|vm, o, name| elements(&declared(vm, o, name, Want::Array)?, name),
         name: &|vm, o, name| Ok(name_of(&declared(vm, o, name, Want::Name)?)),
         not_loaded: &refuse_not_loaded,

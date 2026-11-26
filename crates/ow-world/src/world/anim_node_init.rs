@@ -55,7 +55,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::additive_override::{self, Reads};
+use super::additive_override::{self, Reads, resident};
 use super::anim_tree_copy::{class_of, class_path, elements, object_of, read, truth, write};
 use super::body_composition::{field, set_field};
 use super::per_bone_weights::Build;
@@ -366,6 +366,7 @@ fn additive_lookup(vm: &Vm, component: ObjRef, node: ObjRef, target: &str) -> Re
     }
     let in_order = truth(&read(vm, node, "bReverseAnimSeqSearchOrder")?);
     let reads = Reads {
+        resident: &resident,
         array: &|vm, o, name| elements(&read(vm, o, name)?, name),
         name: &|vm, o, name| match read(vm, o, name)? {
             Value::Name(n) => Ok(n),

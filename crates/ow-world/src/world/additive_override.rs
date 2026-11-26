@@ -4,8 +4,9 @@
 //! `super::aim_offset` share. AI-assisted (Claude Code). **Every rule is UNVERIFIED in the running game**, as in the
 //! notes behind its callers (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md sections 3 to 5, NATIVE_ANIM_NODE_INIT.md D).
 //!
-//! Each caller keeps its own refusal texts, field checks and the order in which it reads its fields: the lookup takes
-//! them as [`Reads`], and its search order as a flag the caller has read.
+//! Each caller keeps its own refusal texts, field checks, residency test and the order in which it reads its fields:
+//! the lookup takes them as [`Reads`], and its search order as a flag the caller has read. [`resident`] is the strict
+//! test `aim_offset` and `anim_node_init` use; `tree_ticks` keeps its own (review r1 of #758).
 
 use ow_object::ids::{NameId, ObjRef};
 use ow_object::value::Value;
@@ -20,8 +21,10 @@ pub(crate) fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
 }
 
-/// How a caller reads the lookup's fields and refuses an object not resident, with its own texts.
+/// How a caller reads the lookup's fields, tests residency and refuses an object not resident, with its own texts.
 pub(crate) struct Reads<'a> {
+    /// Whether `o` is resident, by the caller's own test.
+    pub resident: &'a dyn Fn(&Vm, ObjRef) -> Result<bool, VmError>,
     /// Array field `name` of `o`, its elements.
     pub array: &'a dyn Fn(&Vm, ObjRef, &str) -> Result<Vec<Value>, VmError>,
     /// Name field `name` of `o`.
@@ -54,11 +57,11 @@ pub(crate) fn find_sequence(
         sets.reverse();
     }
     for set in sets.iter().filter_map(object) {
-        if !resident(vm, set)? {
+        if !(reads.resident)(vm, set)? {
             return Err((reads.not_loaded)(vm, set, "the anim set"));
         }
         for sequence in (reads.array)(vm, set, "Sequences")?.iter().filter_map(object) {
-            if !resident(vm, sequence)? {
+            if !(reads.resident)(vm, sequence)? {
                 return Err((reads.not_loaded)(vm, sequence, "the anim sequence"));
             }
             let name = (reads.name)(vm, sequence, "SequenceName")?;
