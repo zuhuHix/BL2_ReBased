@@ -45,7 +45,7 @@
 //!     `NotYet { NotRead }`, "the class <path>, not loaded (a class load is a write)".
 //!
 //! - **`DroppedPickup.Pickupable_IsEnabled()` and `WillowPickup.Pickupable_IsEnabled()`** (lane
-//!   IMPL-PICKUPABLE-ISENABLED, decision 2026-11-26-NNN), coded from NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5
+//!   IMPL-PICKUPABLE-ISENABLED, decision 2026-11-26-22), coded from NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5
 //!   alone (clean room: analyst lane F read the native, this lane did not), UNVERIFIED. Both keys share one rule:
 //!   - a receiver of class `WillowGame.WillowPickup` or a subclass (the class table by path, so no code is loaded):
 //!     its `bPickupable`, read **by name** through the class layout, never by offset (the note places the field after

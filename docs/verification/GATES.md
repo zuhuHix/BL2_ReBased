@@ -8,7 +8,7 @@ Update this file in the commit that changes a number. Paste real output in repor
 --no-fail-fast` 3,822 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
 (release build, under the machine lock): 6 ok / 8 not ok, 47.0% to 51.2%. Links 6 and 7 pass `touch`: link 6 stops in
 `key` at the unbound `WillowPlayerController.CanAffordToPickUpPickupable(interface)`, link 7 in `look` at the pickup
-targeting's HUD refusal; every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+targeting's HUD refusal; every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-22.
 
 **SCALED-BOUNDS-TRANSFORM (2026-11-26, pc-hummer, on fix/scaled-bounds-transform, stacked on #761 @ 4062b4ab):**
 AI-assisted (Claude Code, Opus 5.5). `skeletal_bounds`' stored box answers a uniform, positive combined scale (the box
