@@ -1,6 +1,6 @@
 # Link 6's take: UpdateAmmoCounts and PickupPickupable to the end of `key` (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-UPDATEAMMOCOUNTS (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-UPDATEAMMOCOUNTS (decision 2026-11-26-43), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/ammo/`. This note is
 in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
