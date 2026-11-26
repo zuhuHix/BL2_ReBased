@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, docs only, on docs/native-behavior-kernel-pass2 from main
+0147a0b9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BEHAVIOR_KERNEL_PASS2.md reads the kernel's pass 2 for a
+conditioned sequence. The condition is linked, then registered with the world's mission tracker, whose immediate
+level-load reaction is the initial verdict. So the game evaluates at registration, not later, and again on every
+tracker notification. Maya's four `PlayerEvents_Siren` conditions are all `BehaviorSequenceEnableByMission` on
+not-started story missions, so all are false and pass 2 disables only `Ep10_MordecaiChatter`. Proposed: register in
+full with a read-only verdict over the bridge's existing rules, through a service. A side finding: the direct native
+lacks the empty-definition gate. No code changed, so no measured number moved; the slice gate was not run for this
+lane. UNVERIFIED in game.
+
 **BOUNDS-AND-PICKUPABLE-FOLLOWUPS (2026-11-26, pc-hummer, on fix/bounds-pickupable-followups from main 4d2fd17c):**
 AI-assisted (Claude Code, Opus 5.5). The #764/#765 review LOWs:
 - `Pickupable_IsEnabled` checks the `bPickupable` declaration before the loaded test;
