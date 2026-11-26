@@ -293,6 +293,22 @@ fn off_another_balance_class_and_lazy_objects_are_not_read() {
     assert_eq!(x.refused(lazy_pawn), super::targetable::CONTEXT_NOT_LOADED);
 }
 
+// Step 0 (review of #783): a resolver the store has not loaded is not loaded by the get.
+#[test]
+fn off_an_unloaded_resolver_is_not_read_and_not_loaded() {
+    let mut x = Off::new(true);
+    let pawn = x.make("WillowGame.WillowPlayerPawn");
+    let class = x.fx.w.space.heap.get(x.resolver).unwrap().class;
+    x.fx.w.space.heap.get_mut(x.resolver).unwrap().slots.clear();
+    assert!(x.fx.w.space.classes.get_layout(class).unwrap().slot_count() > 0);
+    let before = x.marks();
+    let mut cx = EvalCx::new(&mut x.fx.w);
+    let e = super::targetable::read_off(&mut cx, x.resolver, Some(pawn)).unwrap_err();
+    let AttrError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotRead, super::targetable::RESOLVER_NOT_LOADED));
+    assert_eq!(x.marks(), before, "nothing loaded");
+}
+
 #[test]
 fn writes_are_not_yet_in_both_modes() {
     for (m, expected) in [
