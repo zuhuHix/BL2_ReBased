@@ -11,7 +11,7 @@ at "the base search's floor trace", link 7 at the HUD's pickup targeting, and 1,
 (never pushed): this branch merged with #803 (fix/rust-links-13-14 @ dc0e9ef), with lane E's deferred
 `PlayerPawnDuringSetUp` forced on in the combat set-up. It also gave 8 ok / 14, 60.7%, with **link 1 spawn_maya ok,
 steps 2/2**. The stand-in's line was logged once on link 1, so the trade proxy's `SetCollisionSize`, `SetHardAttach`
-and `SetBase` ran. Every other row was as above. UNVERIFIED in game. Decision 2026-11-26-NNN.
+and `SetBase` ran. Every other row was as above. UNVERIFIED in game. Decision 2026-11-26-62.
 
 **ANALYST-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, docs only, on docs/native-link7-hud-targeting, probed on main 21a668a7,
 rebased onto eef4f83e):**

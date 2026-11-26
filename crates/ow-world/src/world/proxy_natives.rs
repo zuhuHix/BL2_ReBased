@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-PAWN-INTERACTION-PROXY (decision 2026-11-26-NNN). `Actor.SetCollisionSize(Radius, Height)` and
+//! Owner: lane IMPL-PAWN-INTERACTION-PROXY (decision 2026-11-26-62). `Actor.SetCollisionSize(Radius, Height)` and
 //! `Actor.SetHardAttach(optional bNewHardAttach)` in `ParityMode::Off`, for the player's trade interaction proxy.
 //! AI-assisted (Claude Code).
 //!
