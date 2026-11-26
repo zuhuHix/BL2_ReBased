@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SCALED-BOUNDS-TRANSFORM (2026-11-26, pc-hummer, on fix/scaled-bounds-transform, stacked on #761 @ 4062b4ab):**
+AI-assisted (Claude Code, Opus 5.5). `skeletal_bounds`' stored box answers a uniform, positive combined scale (the box
+scaled by it; the hub's ruling, UNVERIFIED engine maths). `cargo test --workspace -j 8 --no-fail-fast` 3,818 passed / 0
+failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine
+lock), #761 head and this change: 6 ok / 8 not ok, 47.0% on both. Links 6 and 7 get past `GetBoundingCylinder` and stop
+in `touch` at the unbound `WillowPickup.Pickupable_IsEnabled()` (graded an error, so exit 1, not 3); every other row is
+unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, on fix/rust-link67-pickup-gun-init from main 457c46e4):**
 AI-assisted (Claude Code, Opus 5.5). Links 6 and 7's world is `equip_world` plus the pickup set-up; `card::preflight`
 before `make`; the pickup routes get the manufacturer inputs; each gun runs link 8's preloads, the mesh layer, the

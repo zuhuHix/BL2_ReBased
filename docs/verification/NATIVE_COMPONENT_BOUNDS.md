@@ -467,6 +467,11 @@ wrong kind is a `VmError::Script` naming it. In order:
    translation to the owner's `Location`, and the box is (`Location` + mesh origin + `RootBoneTranslation`, mesh
    extent), with the extent times `BoundsScale` (no per-bone step while `SpaceBases` is empty). In every other case it
    is `WORLD_TRANSFORM`'s `NotRead`, as the cylinder case uses.
+   - **The hub's ruling (lane SCALED-BOUNDS-TRANSFORM, decision 2026-11-26-NNN):** a **uniform, positive** combined
+     scale `s` is answered too, the three axes exactly equal, finite and above 0. The box is then (`Location` + `s` ×
+     mesh origin + `s` × `RootBoneTranslation`, mesh extent × `s` × `BoundsScale`), the standard UE3 bounds transform
+     with no rotation. **UNVERIFIED**: the port's reading of the engine maths, not read from the native. A non-uniform,
+     zero, negative or non-finite scale stays `WORLD_TRANSFORM`'s `NotRead`.
 
 **The mesh-bounds accessor.** Main already reads the data. `ow-assets`' `skeletal_lods::read_lod_count` (#673,
 landed) returns the mesh's stored bounds (`bounds_origin`, `bounds_extent`) and its bone count (`bones`), and #693
