@@ -675,10 +675,11 @@ pub fn row_harness(route_notes: &[String], first: bool, setup: &[String], steps:
     route.into_iter().chain(setup.iter().cloned()).chain(steps.iter().cloned()).collect()
 }
 
-/// The combat group (module documentation): what each of its links did, with the report rows each one added.
 /// The set-up line of the `TraceComponent` miss stand-in (the hub's ruling on #799).
-pub const TRACE_MISS_SETUP: &str = "harness input: the combat world answers Actor.TraceComponent on an attached      component with a miss (the hub's ruling on #799; UNVERIFIED)";
+pub const TRACE_MISS_SETUP: &str = "harness input: the combat world answers Actor.TraceComponent on an attached \
+     component with a miss (the hub's ruling on #799; UNVERIFIED)";
 
+/// The combat group (module documentation): what each of its links did, with the report rows each one added.
 fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
     let mut route_notes: Vec<String> = Vec::new();
     let mut setup = || -> Result<Run, ow_vm::error::VmError> {

@@ -7,8 +7,8 @@
 //! `VmError::Script`; each object read must be resident, else `NotRead`.
 //!
 //! - **`Actor.TraceComponent(...)`** (section 3): no component, or one whose `bAttached` is clear: false, nothing
-//!   written. A component the attach record does not know: the bounding cylinder's refusal L. Known but not attached to
-//!   the receiver: false. Attached: [`TRACE_LINE_CHECK`] (`LayerAbsent`); under the Off-only [`TraceComponentMiss`]
+//!   written. A component the attach record does not know, or one not attached to the receiver (recorded under
+//!   another owner, or stale): the bounding cylinder's refusal L (the hub's ruling on review of #804). Attached: [`TRACE_LINE_CHECK`] (`LayerAbsent`); under the Off-only [`TraceComponentMiss`]
 //!   harness setting (the hub's ruling on #799), a logged miss instead: false, no out written.
 //! - **`WillowPawn.TryFullBodyGib(...)`** (section 4): `bGibbed` set or no `MyDeathDef`: `bGibbed`. Unless
 //!   `bDidServerGibPawn`, a live pawn (health above 0) answers `bGibbed`; a dead one is [`GIB_TEST`]. With
@@ -168,16 +168,15 @@ pub fn trace_component_gate(vm: &Vm, actor: ObjRef, component: Option<ObjRef>) -
         Some(layer) => layer.try_borrow().map_err(|_| VmError::ServiceBorrowed("SceneLayer"))?.entry(component).is_some(),
         None => false,
     };
-    if !known {
+    // A component the record does not know, or one it records under another owner or that is stale, is refusal L,
+    // as `GetBoundingCylinder` answers it (the hub's ruling on review of #804, item 1).
+    if !known || !ow_world::actors::attached_to(vm, component, actor)? {
         return Err(NotYet::layer_absent(
             ow_world::world::bounding_cylinder::REFUSAL_L,
             ow_world::world::bounding_cylinder::BOUNDS_LAYER,
             ow_world::world::bounding_cylinder::RECORD,
         )
         .into());
-    }
-    if !ow_world::actors::attached_to(vm, component, actor)? {
-        return Ok(Some(false));
     }
     Ok(None)
 }
@@ -289,6 +288,10 @@ pub fn shield(vm: &Vm, pawn: ObjRef) -> Result<(f32, f32), VmError> {
     };
     let (current, max) = (plain("ShieldVar")?, plain("ShieldMaxVar")?);
     let r = ow_world::pools::read_ref(&vm.space, &reference)?;
+    // The manager is read by the resolve, so it must be resident first (review of #804, item 2).
+    if let Some(m) = r.manager {
+        resident(vm, m)?;
+    }
     if let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)? {
         resident(vm, pool)?;
         return Ok((number(vm, pool, "CurrentValue", WHAT)?, number(vm, pool, "MaxValue", WHAT)?));

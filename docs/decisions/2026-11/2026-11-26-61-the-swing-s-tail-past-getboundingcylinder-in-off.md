@@ -40,6 +40,12 @@ running game.** Reference is unchanged.
     `ShakeView`, the force-feedback gates, the music manager, and the declarations;
   - `ow-world` (2): the skeletal translated case with unit scale, scale 2 and a rotation; the cylinder with a
     translation, plus `PrePivot`, an Absolute flag and another `Owner`.
-- **Not in this change:** #799's new index rows; their port cells are filled once it lands. This change edits only
-  the shared go-down row (`GetParent`) and the bounding-cylinder row.
+- **Review of #804 (fix round):**
+  - **the hub's ruling:** `TraceComponent` on a component the record holds under another owner, or a stale one, is
+    refusal L, as `GetBoundingCylinder` answers it, instead of false. This replaces the note's "known but not attached
+    to the receiver: false" for the port. It is also refusal L with the miss setting on, and nothing is logged;
+  - the shield getters check that `ShieldArmor`'s manager is resident before the resolve reads it;
+  - the slice gate's trace-miss set-up line sits above the combat group's doc comment again, single-spaced;
+  - the tests cover both new refusals and the unloaded manager;
+  - #799's index rows were filled during the rebase onto main.
 - **Sensitive files:** none.

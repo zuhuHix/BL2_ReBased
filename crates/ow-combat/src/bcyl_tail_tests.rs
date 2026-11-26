@@ -162,7 +162,11 @@ fn trace_component_s_cases() {
     ow_world::actors::publish_attach(&mut x.vm, c, actor).unwrap();
     let other = x.make("Engine.Actor");
     let before = x.marks();
-    assert!(!trace_answer(&mut x.vm, other, Some(c)).unwrap(), "attached to another actor");
+    // Review of #804, item 1: recorded under another owner is refusal L, as GetBoundingCylinder answers it.
+    match trace_answer(&mut x.vm, other, Some(c)).unwrap_err() {
+        VmError::NotYet(n) => assert_eq!(n.what.as_ref(), ow_world::world::bounding_cylinder::REFUSAL_L, "another owner"),
+        other => panic!("{other:?}"),
+    }
     match trace_answer(&mut x.vm, actor, Some(c)).unwrap_err() {
         VmError::NotYet(n) => {
             assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
@@ -178,6 +182,14 @@ fn trace_component_s_cases() {
     assert_eq!(x.vm.log[logged..], [TRACE_MISS_LINE.to_string()]);
     assert!(!trace_answer(&mut x.vm, actor, None).unwrap(), "unchanged without a component");
     assert_eq!(x.vm.log.len(), logged + 1, "only the attached case logs");
+    // Review of #804, item 1: a stale entry (an Owner write after publication, even of the same owner) is refusal L,
+    // also with the miss setting on, and logs nothing.
+    x.set(c, "Owner", Value::Object(Some(actor)));
+    match trace_answer(&mut x.vm, actor, Some(c)).unwrap_err() {
+        VmError::NotYet(n) => assert_eq!(n.what.as_ref(), ow_world::world::bounding_cylinder::REFUSAL_L, "stale"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.vm.log.len(), logged + 1, "the stale refusal logs nothing");
     let mut r = fx_in(ParityMode::Reference);
     assert!(matches!(enable_trace_component_miss(&mut r.vm), Err(VmError::Registration { .. })));
 }
@@ -248,6 +260,10 @@ fn the_shield_getters_read_the_pool_or_the_plain_fields() {
     let before = x.marks();
     assert_eq!(shield(&x.vm, pawn).unwrap(), (12.0, 90.0));
     assert_eq!(x.marks(), before, "write-free");
+    // Review of #804, item 2: a manager the store has not loaded is the NotRead, before the resolve reads it.
+    x.vm.space.heap.get_mut(manager).unwrap().slots.clear();
+    let text = not_read(shield(&x.vm, pawn).unwrap_err());
+    assert!(text.contains("ResourcePoolManager") && text.contains("not loaded"), "{text}");
 }
 
 /// Test 6: `ShakeView` copies the struct and sets the three lengths; another receiver is the `NotRead`.
