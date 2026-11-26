@@ -1,6 +1,6 @@
 # The spawn's attribute starting values, and where links 3, 4, 5, 13 and 14 go next (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SPAWN-SETBASEVALUE (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SPAWN-SETBASEVALUE (decision 2026-11-26-68), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/sbv/` and
 `local/analysis/l1314/probe/`. The note is in our own words: no decompiler output, pseudo-code, addresses, offsets or
 listing structure. **Every rule here is UNVERIFIED in the running game.**

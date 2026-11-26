@@ -3,7 +3,7 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **ANALYST-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on docs/native-spawn-setbasevalue, on main d118d2bb):**
-AI-assisted (Claude Code, Opus 5.5). Docs only: NATIVE_SPAWN_SETBASEVALUE.md, the index rows and decision 2026-11-26-NNN;
+AI-assisted (Claude Code, Opus 5.5). Docs only: NATIVE_SPAWN_SETBASEVALUE.md, the index rows and decision 2026-11-26-68;
 no code, so no test numbers change. The installed Off strict `--slice-gate` on #807's head 0a9cfdaf (the base of the
 note): **8 ok / 14, X = 8.5/14 = 60.7%**. Links 3, 4, 5, 13 and 14 stop at the spawn's `SetBaseValue`, a starting
 value's unloaded attribute. A local probe (temporary, reverted) under the machine lock, with IMPL-COMBAT-MUSIC's and
