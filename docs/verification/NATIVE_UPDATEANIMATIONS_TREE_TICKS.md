@@ -1,6 +1,6 @@
 # UpdateAnimations' per-node step on Maya's tree (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-UPDATEANIMATIONS-TREE-TICKS (decision 2026-11-26-NNN), the analyst
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-UPDATEANIMATIONS-TREE-TICKS (decision 2026-11-26-06), the analyst
 half of the clean room: **another lane implements this note.** Raw output stays under ignored
 `local/analysis/treeticks/`. This note is in our own words: no decompiler output, pseudo-code, addresses or listing
 structure. **Every rule here is UNVERIFIED in the running game.**
