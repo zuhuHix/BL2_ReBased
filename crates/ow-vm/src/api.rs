@@ -318,17 +318,45 @@ pub type ScriptBody<'b> = dyn FnMut(&mut Vm) -> Result<CallResult, VmError> + 'b
 pub type ScriptWrapFn = Rc<dyn Fn(&mut Vm, Option<ObjRef>, &mut ScriptBody<'_>) -> Result<CallResult, VmError>>;
 
 /// What an engine iterator native (`Actor.AllActors`, `Actor.DynamicActors`) gives a `foreach`: the values the loop
-/// visits, in order, each assigned to the call's out parameter `out_param` (C++ `IteratorResult`).
+/// visits, in order, each assigned to the call's out parameter `out_param` (C++ `IteratorResult`). An optional
+/// [`IteratorGuard`] runs at each `IteratorNext`, after the body and before the next element (lane
+/// IMPL-UPDATEAMMOCOUNTS: an iterator whose game counterpart re-reads its source can refuse when the body changed it).
 #[non_exhaustive]
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub struct IteratorResult {
     pub out_param: usize,
     pub items: Vec<Value>,
+    pub guard: Option<IteratorGuard>,
 }
+
+/// A check run after each body of an engine iterator's loop; an error ends the loop with it.
+pub type IteratorGuard = Rc<dyn Fn(&Vm) -> Result<(), VmError>>;
 
 impl IteratorResult {
     pub fn new(out_param: usize, items: Vec<Value>) -> Self {
-        IteratorResult { out_param, items }
+        IteratorResult { out_param, items, guard: None }
+    }
+
+    /// The result with `guard` run after each body.
+    pub fn with_guard(mut self, guard: IteratorGuard) -> Self {
+        self.guard = Some(guard);
+        self
+    }
+}
+
+impl std::fmt::Debug for IteratorResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IteratorResult")
+            .field("out_param", &self.out_param)
+            .field("items", &self.items)
+            .field("guard", &self.guard.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for IteratorResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.out_param == other.out_param && self.items == other.items && self.guard.is_none() == other.guard.is_none()
     }
 }
 

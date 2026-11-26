@@ -362,6 +362,7 @@ fn build_with(
     write(vm, pawn, "Location", origin)?;
     *wrote = true;
     let pickup = drop(vm, class, weapon, pawn, AIMED_AT)?;
+    level_world_info(vm, pickup, &[controller, pawn])?;
     let decoy = if decoy {
         // The decoy's gun, after the first gun's drop: the same steps.
         let w = gun(vm, line, false, prepare, init, wrote)?;
@@ -370,6 +371,34 @@ fn build_with(
         None
     };
     Ok(Pickup { weapon, pawn, controller, pickup, decoy, wrote: true })
+}
+
+/// The log line of [`level_world_info`].
+pub const WORLD_INFO_INPUT: &str = "harness input: the pickup world's controller and pawn take the level's WorldInfo      (the pickup's; an UNVERIFIED stand-in: in the game every spawned actor has its level's WorldInfo,      NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 4.1)";
+
+/// NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 4.1 (lane IMPL-UPDATEAMMOCOUNTS): the pickup world's controller and
+/// pawn had no `WorldInfo`, so `PickupPickupable`'s `WorldInfo.Game.PickupQuery` on the controller read through None.
+/// In the game every spawned actor has its level's `WorldInfo`; here each of `actors` whose `WorldInfo` is None takes
+/// the pickup's, logged once. Nothing when the pickup's class declares no `WorldInfo` or holds none (a toy fixture).
+fn level_world_info(vm: &mut Vm, pickup: ObjRef, actors: &[ObjRef]) -> Result<(), VmError> {
+    let class = vm.space.heap.get(pickup)?.class;
+    if vm.space.prop(class, "WorldInfo").is_none() {
+        return Ok(());
+    }
+    let Some(info) = object(&read(vm, pickup, "WorldInfo")?) else {
+        return Ok(());
+    };
+    let mut wrote = false;
+    for &a in actors {
+        if object(&read(vm, a, "WorldInfo")?).is_none() {
+            write(vm, a, "WorldInfo", Value::Object(Some(info)))?;
+            wrote = true;
+        }
+    }
+    if wrote {
+        vm.log.push(WORLD_INFO_INPUT.to_string());
+    }
+    Ok(())
 }
 
 /// One gun of `make`: made by `prepare` (owned by Maya, or none for the decoy), then given `init`, before its drop.

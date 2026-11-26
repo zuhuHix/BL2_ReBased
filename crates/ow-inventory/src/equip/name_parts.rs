@@ -218,21 +218,27 @@ fn priority(vm: &Vm, o: ObjRef) -> Result<f32, VmError> {
 
 /// One `AttributeExpressionData` value as `ow-attr`'s expression (enum bytes by the package values).
 fn expr_data(vm: &Vm, v: &Value) -> Result<ExprData, VmError> {
+    expr_data_for(vm, v, NATIVE)
+}
+
+/// [`expr_data`] for the native `what` (its data errors name it; lane IMPL-UPDATEAMMOCOUNTS shares it with
+/// `AttributeExpression.EvaluateExpressions`).
+pub(crate) fn expr_data_for(vm: &Vm, v: &Value, what: &str) -> Result<ExprData, VmError> {
     let byte = |name: &str| match field(vm, v, name)? {
         Value::Byte(b) => Ok(i64::from(b)),
-        other => Err(bad(NATIVE, format!("{name} holds {}, not a byte", other.kind_name()))),
+        other => Err(bad(what, format!("{name} holds {}, not a byte", other.kind_name()))),
     };
     let float = |name: &str| match field(vm, v, name)? {
         Value::Float(x) => Ok(x),
-        other => Err(bad(NATIVE, format!("{name} holds {}, not a float", other.kind_name()))),
+        other => Err(bad(what, format!("{name} holds {}, not a float", other.kind_name()))),
     };
     Ok(ExprData {
-        attribute_operand1: object_of(&field(vm, v, "AttributeOperand1")?, NATIVE)?,
+        attribute_operand1: object_of(&field(vm, v, "AttributeOperand1")?, what)?,
         comparison_operator: Comparison::from_raw(byte("ComparisonOperator")?)
-            .ok_or_else(|| bad(NATIVE, "ComparisonOperator outside its enum"))?,
+            .ok_or_else(|| bad(what, "ComparisonOperator outside its enum"))?,
         operand2_usage: Operand2Usage::from_raw(byte("Operand2Usage")?)
-            .ok_or_else(|| bad(NATIVE, "Operand2Usage outside its enum"))?,
-        attribute_operand2: object_of(&field(vm, v, "AttributeOperand2")?, NATIVE)?,
+            .ok_or_else(|| bad(what, "Operand2Usage outside its enum"))?,
+        attribute_operand2: object_of(&field(vm, v, "AttributeOperand2")?, what)?,
         constant_operand2: float("ConstantOperand2")?,
     })
 }

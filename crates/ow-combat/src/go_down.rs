@@ -23,7 +23,8 @@
 //!   (NATIVE_RESPAWN_STATIONS.md 3.1), the revived and killed events' telemetry ([`TELEMETRY`], hub ruling R3 of
 //!   #504, NATIVE_MISSION_TEXT_LIST.md section 6: nothing, a port answer), `GearboxDialogComponent.StopTalking` with no live line and no flag (NATIVE_DIALOG.md);
 //! - `NotRead`: the overridable implementations of 3.2, `ClearAllStatusEffects` (3.3), `SetCollision` and
-//!   `SetCollisionSize` (4.1), `SetLocation`, `SetRotation`, `IsUsingVehicle`,
+//!   `SetCollisionSize` (4.1), `SetLocation`, `SetRotation` (`IsUsingVehicle` moved to `ow_world::world::actor_take`,
+//!   lane IMPL-UPDATEAMMOCOUNTS),
 //!   `ResetAI`'s entries and `StaticTriggerTemplateEvent`'s contents;
 //! - `NotPorted`: `Pawn.SetAnchor` (read as bookkeeping in NATIVE_DOWN_TIMERS.md, not ported here) and the parts of
 //!   `StopTalking` this lane does not port;
@@ -78,7 +79,7 @@ pub const UNRESOLVED: [&str; 13] = [
 ];
 
 /// The natives answered `NotRead` with a fixed text, and that text's record.
-pub const NOT_READ: [(&str, &str, &str); 8] = [
+pub const NOT_READ: [(&str, &str, &str); 7] = [
     (
         "WillowGame.StatusEffectsComponent.ClearAllStatusEffects",
         "StatusEffectsComponent.ClearAllStatusEffects: the per-kind removal and the skill manager step",
@@ -88,7 +89,6 @@ pub const NOT_READ: [(&str, &str, &str); 8] = [
     ("Engine.Actor.SetCollisionSize", "Actor.SetCollisionSize: the component's world update", RECORD),
     ("Engine.Actor.SetLocation", "Actor.SetLocation: not read", RECORD_RESPAWN),
     ("Engine.Actor.SetRotation", "Actor.SetRotation: not read", RECORD_RESPAWN),
-    ("Engine.Controller.IsUsingVehicle", "Controller.IsUsingVehicle", RECORD),
     ("WillowGame.WillowGameInfo.ResetAI", "WillowGameInfo.ResetAI: the per-entry conditions and the AI resets", RECORD_DOWN),
     (
         "WillowGame.WillowDialogGlobalsDefinition.StaticTriggerTemplateEvent",

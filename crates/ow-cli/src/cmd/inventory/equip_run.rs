@@ -640,7 +640,50 @@ pub(crate) fn pickup_world(
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
     particle_preload(&mut world.vm, definition)?;
     pickup_game_info(&mut world)?;
+    // Link 6's take (lane IMPL-UPDATEAMMOCOUNTS, the hub's two rulings): the eight ammo definitions preloaded, and
+    // GetSaveRotation's at-rest answer turned on, both UNVERIFIED harness inputs.
+    preload_ammo_definitions(&mut world.vm, definition)?;
+    ow_inventory::pickup_take::enable_at_rest_body_pose(&mut world.vm)?;
+    world.vm.log.push(AT_REST_INPUT.to_string());
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
+}
+
+/// The log line of the at-rest ruling's set-up.
+pub(crate) const AT_REST_INPUT: &str = "harness input: the pickup world turns on GetSaveRotation's at-rest answer (the \
+     hub's ruling on NATIVE_PICKUP_SAVE_ROTATION.md section 5; UNVERIFIED)";
+
+/// The log line of one ammo-definition preload.
+pub(crate) fn ammo_preload_line(path: &str) -> String {
+    format!("harness input: set-up preload: {path} (UNVERIFIED: an ammo definition the game has resident)")
+}
+
+/// The hub's ruling for `UpdateAmmoCounts` (lane IMPL-UPDATEAMMOCOUNTS): the eight ammo definitions the globals
+/// definition lists (`ow_inventory::pickup_take::AMMO`'s fields, in that order) are loaded through the store at the
+/// pickup world's set-up, each logged before its load; one already resident is neither loaded nor logged, and a
+/// None field is skipped. Nothing else: the native's preflight reads only their residency, and nothing they
+/// reference is loaded. The native itself still refuses a definition the store has not loaded and never loads one.
+/// Answers the number loaded.
+pub(crate) fn preload_ammo_definitions(vm: &mut Vm, definition: ObjRef) -> Result<usize, VmError> {
+    let class = vm.space.heap.get(definition)?.class;
+    let mut loaded = 0;
+    for (field, _, _) in ow_inventory::pickup_take::AMMO {
+        let Some(p) = vm.space.prop(class, field) else {
+            continue;
+        };
+        let Value::Object(Some(ammo)) = vm.space.read(definition, PropAddr::scalar(p))?.clone() else {
+            continue;
+        };
+        if !vm.defs.is_unloaded(&vm.space, ammo) {
+            continue;
+        }
+        let path = vm.defs.handle_path(ammo).unwrap_or_else(|| format!("{ammo:?}"));
+        vm.log.push(ammo_preload_line(&path));
+        let r = vm.defs.ensure_loaded(&mut vm.space, ammo);
+        vm.log.extend(vm.defs.take_log());
+        r.map_err(VmError::from)?;
+        loaded += 1;
+    }
+    Ok(loaded)
 }
 
 /// The game-info class of [`pickup_game_info`].
@@ -1457,6 +1500,10 @@ mod game_info_tests;
 #[cfg(test)]
 #[path = "equip_run_material_tests.rs"]
 mod material_tests;
+
+#[cfg(test)]
+#[path = "equip_run_ammo_tests.rs"]
+mod ammo_tests;
 
 #[cfg(test)]
 mod tests {

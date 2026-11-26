@@ -65,12 +65,20 @@ struct State {
     resume: usize,
 }
 
-#[derive(Debug)]
 enum Source {
     /// A dynamic array, read through its place at each step.
     Array(Place),
-    /// The list an engine iterator returned.
-    Engine(Vec<Value>),
+    /// The list an engine iterator returned, and its guard (run after each body).
+    Engine(Vec<Value>, Option<crate::api::IteratorGuard>),
+}
+
+impl std::fmt::Debug for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::Array(p) => f.debug_tuple("Array").field(p).finish(),
+            Source::Engine(items, guard) => f.debug_tuple("Engine").field(items).field(&guard.is_some()).finish(),
+        }
+    }
 }
 
 impl Iterators {
@@ -244,6 +252,7 @@ fn engine(
     }
     let mut item: Option<Place> = None;
     let mut items = Vec::new();
+    let mut guard = None;
     match receiver {
         Some(receiver) => {
             vm.tick()?;
@@ -267,6 +276,7 @@ fn engine(
                 };
                 if item.is_some() {
                     items = result.items;
+                    guard = result.guard;
                 }
             }
         }
@@ -285,7 +295,7 @@ fn engine(
     iterators.push(
         f,
         State {
-            source: Source::Engine(items),
+            source: Source::Engine(items, guard),
             item,
             index: None,
             position: 0,
@@ -326,12 +336,15 @@ fn next(vm: &mut Vm, iterators: &mut Iterators, pc: usize) -> Result<usize, VmEr
     let Some(state) = iterators.states.last_mut() else {
         return Ok(pc + 1);
     };
+    if let Source::Engine(_, Some(guard)) = &state.source {
+        guard(vm)?;
+    }
     state.position += 1;
     let value = match &state.source {
         Source::Array(array) => read(vm, array)?
             .elements()
             .and_then(|items| items.get(state.position).cloned()),
-        Source::Engine(items) => {
+        Source::Engine(items, _) => {
             while items.get(state.position).is_some_and(|v| destroyed(vm, v)) {
                 state.position += 1;
             }
@@ -348,7 +361,7 @@ fn next(vm: &mut Vm, iterators: &mut Iterators, pc: usize) -> Result<usize, VmEr
             Ok(state.resume)
         }
         None => {
-            if matches!(state.source, Source::Engine(_)) {
+            if matches!(state.source, Source::Engine(..)) {
                 store(vm, &state.item, Value::Object(None))?;
             }
             Ok(pc + 1)
@@ -777,6 +790,47 @@ mod tests {
         assert_eq!(r.on(s, "Core.Seeker.CountChildren", vec![crate_]), int(2));
         let census = r.vm.census.take().unwrap();
         assert_eq!(census.native_calls.get("Core.Actor.ChildActors"), Some(&1));
+    }
+
+    /// An engine iterator's guard (lane IMPL-UPDATEAMMOCOUNTS, for `Actor.ComponentList`) runs after each body, before
+    /// the loop moves on: three items run it three times; a guard that refuses on its second run stops the loop with
+    /// its error after two bodies.
+    #[test]
+    fn an_engine_iterator_s_guard_runs_after_each_body() {
+        for (refuse_on, want) in [(0u32, Ok(3)), (2, Err(2))] {
+            let mut x = actors();
+            x.declare("CountChildren", &[], false, |ids, a| {
+                loop_function(ids, a, 305, false, Body::Count, false, 2)
+            });
+            let mut r = x.toy.run(ParityMode::Off);
+            let list: Vec<Value> = (0..3).map(|_| Value::Object(Some(r.object("Core.Crate")))).collect();
+            let s = r.object("Core.Seeker");
+            let runs = Rc::new(std::cell::Cell::new(0u32));
+            let seen = runs.clone();
+            let guard: crate::api::IteratorGuard = Rc::new(move |_vm: &crate::api::Vm| {
+                seen.set(seen.get() + 1);
+                if seen.get() == refuse_on {
+                    return Err(crate::error::VmError::Script { function: "a toy guard".into(), message: "refused".into() });
+                }
+                Ok(())
+            });
+            let fixed: crate::api::IteratorFn =
+                Rc::new(move |_| Ok(IteratorResult::new(1, list.clone()).with_guard(guard.clone())));
+            r.vm.register_iterator("Actor.ChildActors(class,object)", fixed).unwrap();
+            let crate_ = class(&mut r, "Core.Crate");
+            let f = r.vm.find_function("Core.Seeker.CountChildren").unwrap();
+            let out = r.vm.call(f, Some(s), vec![crate_]);
+            match want {
+                Ok(n) => {
+                    assert_eq!(out.unwrap().ret, int(n));
+                    assert_eq!(runs.get(), 3, "once after each body");
+                }
+                Err(n) => {
+                    assert!(matches!(out, Err(crate::error::VmError::Script { .. })), "{out:?}");
+                    assert_eq!(runs.get(), n);
+                }
+            }
+        }
     }
 
     /// A native iterator with no native index, called by `FinalFunction` (as every `Actor.LocalPlayerControllers`

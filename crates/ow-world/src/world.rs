@@ -557,6 +557,9 @@ impl NativePack for Pack {
             // maya:8 after InitializeRBPhysics (NATIVE_GETPHYSXLEVEL_AND_AFTER.md, UNVERIFIED; lane
             // SOCKETS-PUBLISH-AND-PHYSX-LEVEL): GetPhysXLevel, SetHasPhysicsAssetInstance and DoInitRBPhys, Off only.
             physx_level::register(vm)?;
+            // Link 6's take (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md, UNVERIFIED; lane IMPL-UPDATEAMMOCOUNTS):
+            // ComponentList, MakeNoise, IsUsingVehicle and SetOwner, Off only.
+            actor_take::register(vm)?;
             // Pawn.IsPlayerPawn() (NATIVE_BODYCOMP_RENDER_HOOKS.md section 6, UNVERIFIED; lane
             // FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS): hook 2's pawn test as the native; keep-existing by key, Off only.
             render_hooks::register(vm)?;
@@ -675,6 +678,7 @@ pub mod online;
 pub mod after_login;
 pub mod aim_offset;
 pub mod player_pawn_tail;
+pub mod actor_take;
 pub mod physx_level;
 pub mod aim_profiles;
 pub mod blend_setters;

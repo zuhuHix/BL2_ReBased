@@ -339,21 +339,11 @@ fn pay_for_pickupable_spends_the_cost() {
     assert_eq!(x.money(info), Value::Int(7));
 }
 
-/// Test 8: `UpdateAmmoCounts` is its `NotRead`, nothing written.
-#[test]
-fn update_ammo_counts_is_not_read() {
-    let mut x = fx();
-    let (pc, _) = x.controller(0);
-    let before = x.marks();
-    assert_eq!(not_read(x.call("UpdateAmmoCounts", pc, vec![Value::Bool(true)])), AMMO_REFRESH);
-    assert_eq!(x.marks(), before);
-}
-
 /// Test 9: Reference binds none of the three keys (the stub policy answers).
 #[test]
 fn reference_binds_nothing() {
     let x = fx_in(ParityMode::Reference);
-    for key in [CAN_AFFORD, PAY_FOR, UPDATE_AMMO_COUNTS] {
+    for key in [CAN_AFFORD, PAY_FOR] {
         assert!(!x.vm.has_native(key), "{key}");
     }
 }
