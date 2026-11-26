@@ -293,3 +293,57 @@ fn set_active_child_is_not_read() {
     let f = x.active_child;
     assert_eq!(not_read(x.refusal(f, n, vec![Value::Int(1), Value::Float(0.0)])), SET_ACTIVE_CHILD);
 }
+
+/// Review of #739, item 1: a plain `AnimNodeBlend` on the timed path with a malformed `Children` (an element that is
+/// not the child struct, or a child struct whose `Weight` is no float) is `VmError::Script`, nothing written.
+#[test]
+fn a_malformed_children_is_a_script_error_on_every_path() {
+    let mut x = fx();
+    let n = x.blend_node(x.blend, "Malformed");
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "Children").unwrap();
+    *x.vm.space.slot_mut(n, PropAddr::scalar(p)).unwrap() = Value::array(vec![Value::Int(1), Value::Int(2)]);
+    let f = x.blend_fn;
+    for (target, time) in [(0.5, 0.3), (0.5, 0.0)] {
+        match x.refusal(f, n, vec![Value::Float(target), Value::Float(time)]) {
+            VmError::Script { message, .. } => assert!(message.contains("Children[0]"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    let bad_weight = Value::structure(x.child, vec![Value::Object(None), Value::Int(1)]);
+    *x.vm.space.slot_mut(n, PropAddr::scalar(p)).unwrap() = Value::array(vec![bad_weight.clone(), bad_weight]);
+    match x.refusal(f, n, vec![Value::Float(0.5), Value::Float(0.3)]) {
+        VmError::Script { message, .. } => assert!(message.contains("float Weight"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review of #739, item 2: a NaN or infinite `BlendTime` or `BlendTarget` is `VmError::Script` (the port's choice,
+/// UNVERIFIED), nothing written.
+#[test]
+fn a_non_finite_argument_is_refused() {
+    let mut x = fx();
+    let n = x.blend_node(x.blend, "Finite");
+    let f = x.blend_fn;
+    for (target, time) in [(0.5, f32::NAN), (f32::NAN, 0.0), (0.5, f32::INFINITY), (f32::NEG_INFINITY, 0.0)] {
+        match x.refusal(f, n, vec![Value::Float(target), Value::Float(time)]) {
+            VmError::Script { message, .. } => assert!(message.contains("not finite"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+/// Review of #739, item 3: a `Nodes` out argument holding no array is a data error, not an empty list.
+#[test]
+fn a_nodes_argument_that_is_no_array_is_a_script_error() {
+    let mut x = fx();
+    let (root, _, _) = x.tree(&["X"]);
+    let name = x.name("X");
+    let f = x.find;
+    let before = x.marks();
+    match x.vm.call(f, Some(root), vec![Value::Int(3), name]) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Nodes holds"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(x.marks(), before);
+}

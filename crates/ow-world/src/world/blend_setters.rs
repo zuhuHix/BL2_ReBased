@@ -130,15 +130,25 @@ pub fn find_all_anim_nodes(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let node = c.this.ok_or_else(|| bad(FIND, "called without a node"))?;
     let matches = find_plan(c, node)?;
     if !matches.is_empty() {
-        let mut nodes = c.arg(0)?.elements().map(<[Value]>::to_vec).unwrap_or_default();
+        // Review of #739, item 3: an out argument holding no array is a data error, not an empty list.
+        let current = c.arg(0)?;
+        let mut nodes = current
+            .elements()
+            .map(<[Value]>::to_vec)
+            .ok_or_else(|| bad(FIND, format!("Nodes holds {}, not an array", current.kind_name())))?;
         nodes.extend(matches);
         c.set_out(0, Value::array(nodes))?;
     }
     Ok(Value::None)
 }
 
+/// A float argument. A NaN or an infinity is refused (review of #739, item 2): **the port's choice**, UNVERIFIED (the
+/// game's behaviour on a non-finite target or time is not read).
 fn float_arg(c: &NativeCall<'_>, i: usize, name: &str) -> Result<f32, VmError> {
     match c.arg(i)? {
+        Value::Float(f) if !f.is_finite() => {
+            Err(bad(BLEND, format!("{name} is {f}, not finite (the port refuses it; the game's answer is not read)")))
+        }
         Value::Float(f) => Ok(*f),
         other => Err(bad(BLEND, format!("{name} holds {}, not a float", other.kind_name()))),
     }
@@ -166,6 +176,35 @@ fn with_weight(vm: &Vm, children: &[Value], i: usize, w: f32) -> Result<Vec<Valu
     Ok(out)
 }
 
+/// `Children`'s declaration (an array of a struct with a float `Weight`) and every element (that struct, its `Weight` a
+/// float), on every path and before any write (review of #739, item 1). Else `VmError::Script`.
+fn check_children(vm: &Vm, node: ObjRef, children: &[Value]) -> Result<(), VmError> {
+    let ty = match super::component_setters::declared(vm, node, "Children", BLEND)? {
+        PropKind::Array(inner) => match *inner {
+            PropKind::Struct(ty) => ty,
+            other => return Err(bad(BLEND, format!("Children is declared as an array of {other:?}, not of a struct"))),
+        },
+        _ => return Err(bad(BLEND, "Children is not declared as an array")),
+    };
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(|| bad(BLEND, "the child struct has no layout"))?;
+    let (at, decl) = vm
+        .space
+        .names
+        .find("Weight")
+        .and_then(|n| layout.field(n))
+        .ok_or_else(|| bad(BLEND, "the child struct has no Weight"))?;
+    if !matches!(decl.kind, PropKind::Float) {
+        return Err(bad(BLEND, "the child struct's Weight is not a float"));
+    }
+    for (i, child) in children.iter().enumerate() {
+        match child {
+            Value::Struct(s) if s.ty == ty && matches!(s.fields.get(at as usize), Some(Value::Float(_))) => {}
+            other => return Err(bad(BLEND, format!("Children[{i}] holds {}, not a child struct with a float Weight", other.kind_name()))),
+        }
+    }
+    Ok(())
+}
+
 /// 2.B's plan: the writes, in order, decided before any of them.
 fn blend_plan(vm: &Vm, node: ObjRef, target: f32, time: f32) -> Result<Vec<(&'static str, Value)>, VmError> {
     let class = vm.space.heap.get(node)?.class;
@@ -187,6 +226,7 @@ fn blend_plan(vm: &Vm, node: ObjRef, target: f32, time: f32) -> Result<Vec<(&'st
         BLEND,
     )?;
     let children = read(vm, node, "Children")?.elements().map(<[Value]>::to_vec).unwrap_or_default();
+    check_children(vm, node, &children)?;
     let t = if target < 0.0 { 0.0 } else if target > 1.0 { 1.0 } else { target };
     let mut immediate = time <= 0.0;
     if !immediate && bool_of(&read(vm, node, "bSkipBlendWhenNotRendered")?, "bSkipBlendWhenNotRendered", BLEND)? {

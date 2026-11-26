@@ -1,6 +1,6 @@
 ## 2026-11-26: InitializeRBPhysics and the player pawn's last natives in Off
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-LINK1-RBPHYSICS, on main 59f0d2ea. It implements
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-LINK1-RBPHYSICS, rebased onto main 773108e7 (with #739). It implements
 docs/verification/NATIVE_LINK1_RBPHYSICS_AND_AFTER.md section 2 (lane F's note, #738 with its r1 fix, on main). Clean
 room: this lane did not read the executable. No real-game session was run. **Every rule is UNVERIFIED in the running
 game.** Reference keeps the stub policy.
@@ -31,6 +31,11 @@ both branches need routines not read. **2.F** writes `ImmuneToFallingDamage` := 
 **#736's two LOW findings.** `inventory_actors.rs`'s stand-in test is now `ow-attr`'s `slotless_refusal` shape (an
 `Origin::Resource` object with no slots), and `manager.rs`'s long doc line is re-wrapped.
 
+**#739's three LOW findings** (its review by Opus high, a separate commit): `SetBlendTarget` checks `Children`'s
+declaration and every element (the child struct, a float `Weight`) on every path before any write; a NaN or infinite
+`BlendTarget` or `BlendTime` is `VmError::Script`, the port's choice (UNVERIFIED: the game's answer is not read); and
+a `FindAllAnimNodes` `Nodes` argument holding no array is a data error. One test each.
+
 **Tests.** `player_pawn_tail_tests.rs` (8): 2.A's nine cases, 2.B and 2.E, 2.D with the byte-3 bits (`0x3C40C0C2`, the
 divide's `0x3C40C0C1`), 2.F, and Reference. Each refusal leaves #518's counters, `class_code_loads` and the name table
 unchanged, and `InitializeRBPhysics` is asserted never to write. `weapon_hold_tests.rs`: #728's cases on the
@@ -40,4 +45,4 @@ first-person fields (one test; the fixture now takes either native).
 8 NotYet / 0 errors, `links ok 6/14`, `step share X = 6.583/14 = 47.0%`. Link 1 is still at the aim-offset rebuild's
 `NotRead`, so it does not reach these natives yet (the expected result).
 
-**Gates.** `cargo test --workspace -j 8`: 3,714 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.
+**Gates.** `cargo test --workspace -j 8`: 3,729 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.
