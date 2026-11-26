@@ -32,4 +32,12 @@ bounds check changed.
   - tests listed.
 - **Next** (a prediction, not a run): with option B and this rule, `new` passes on links 6 and 7, then the `TEMPLATE`
   `NotRead` again (the fixture's template has no mesh); with the gun's init, source f's `LayerAbsent`.
+- **Review r1 (#749):**
+  - the rule covers `new` with no template too, with the class default's values; main's no-template path checks
+    neither bit today, which is recorded as a gap against main's code;
+  - object fields are classified only when their value is non-None, so a None value needs no class walk, and a chain
+    that cannot be walked without a load is refused only then;
+  - fields declared on the class or any super class, in a fixed walk order;
+  - the predicted stop restated against #746: `NEW_INSTANCING` today, then `NEW_TEMPLATE_COPY` until option B's copy
+    lands.
 - **Clean room:** a different lane implements this note.

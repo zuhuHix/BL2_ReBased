@@ -102,28 +102,56 @@ happens.** `SkeletalMeshComponent` does not have the bit (#743 section 2).
 
 ## 3. The Off answer (for a separate implementer)
 
-This replaces #743 section 3.3's blanket refusal for bit 23 and refines its bit-10 refusal. It is part of option B's
+This replaces #743 section 3.3's blanket refusal for bit 23 and refines its bit-10 refusal. On main (#746) those are
+`ow-vm` `interp/eval.rs`'s `NEW_INSTANCING` and `NEW_CONFIG` in `template_refusal`. It is part of option B's
 interpreter change, **the hub's call**. **Every rule is UNVERIFIED.**
 
-**The component fields of a class** (the port's stand-in for the game's list, by the census in section 1):
-- each declared field that is an object reference to `Core.Component` or a class descending from it;
-- each dynamic array whose element is such a reference;
-- each struct field whose struct (recursively) has such a field.
+**Both paths of `new`.** The pass runs whether or not a template is given (section 2.1): with a template its source is
+the template, and with none it is the class default object. So the rule below applies to both:
+- **with a template:** the would-be values are the template's, and the class default's for transient fields;
+- **with no template:** the would-be values are the class default object's, all of them.
+
+Main's no-template path (`new_object`, straight to `instantiate_from_defaults`) checks neither bit 23 nor bit 10 today.
+So a bit-23 class whose class default holds a non-None component value gets that component shared, where the game
+makes a new one. A bit-10 class skips its configuration read. **That is a gap against main's code**, which the
+implementer closes with the same preflight on that path.
+
+**The object fields the rule looks at:** every field declared on the new class **or any super class**, that is:
+- an object reference;
+- a dynamic array of object references;
+- a struct holding such fields (recursively).
 
 Class and struct fields only: parameters and locals do not count.
 
-**Preflight** (write-free and load-free, before the object is made, together with #743's checks):
-1. **the would-be value of each component field.** This is the template's value, or the class default's value for a
-   field declared transient (#743 section 3.2), read without writing. With bit 23 set on the new class:
-   - **every value None** (every element, for arrays and struct members): the pass would do nothing. **No refusal;**
-   - **any non-None value:** `NotYet { NotRead }`, "new: instancing a referenced component". The graph's lookup is
-     read, but its engine-state branches (section 2.2, step 3) are not. Making a nested component would also
+**The walk order** (fixed, so the first failing check names the refusal):
+1. super class first, down to the new class;
+2. within a class or struct, the fields in declaration order;
+3. within an array, element index order;
+4. within a struct field, its members by the same rules, recursively.
+
+**Preflight** (write-free and load-free, before the object is made, together with #743's checks). With bit 23 set on
+the new class, for each object field's would-be value, in the walk order:
+1. **the value is None** (or the array is empty): nothing to check. **A None value needs no classification**, so its
+   field's declared class is never walked;
+2. **the value is not None:** classify the field. Its declared class is a component class when its chain reaches
+   `Core.Component` (the census stand-in of section 1):
+   - **the chain cannot be walked without a load** (a super class the store has not loaded):
+     `NotYet { NotRead }`, "new: classifying an object field whose class is not loaded (a load is a write)";
+   - **a component class:** `NotYet { NotRead }`, "new: instancing a referenced component". The graph's lookup is
+     read, but its engine-state branches (section 2.2, step 3) are not, and making a nested component would also
      recurse through `new`'s whole rule;
-   - a struct or array value that is not resident, or a component field whose class the store has not loaded:
-     `NotYet { NotRead }` (a load is a write);
-2. **bit 10** set on the new class: `NotYet { NotRead }`, "new: a per-object configuration read", as in #743. With
-   the bit clear: nothing, and no refusal;
-3. **the native-field skip** (section 2.2) does not need a port check while every value is None.
+   - **any other class:** not a component field. Nothing, and the walk goes on;
+3. **a struct or array value that is not resident** (a store handle not loaded): `NotYet { NotRead }` (a load is a
+   write).
+
+Then **bit 10** set on the new class: `NotYet { NotRead }`, "new: a per-object configuration read", as in #743. With
+the bit clear: nothing, and no refusal.
+
+**The native-field skip** (section 2.2) needs no port check while every component value is None.
+
+**Links 6 and 7:** every component field of the template is None (section 4). Its other non-None object fields
+(such as a material or a mesh reference) are declared with engine classes the store has loaded, so they classify as
+non-component without a load. So no refusal is expected there (an expectation, not a run).
 
 **Commit:** with every component value None, the pass writes nothing. The made object and its interned name stay the
 only writes (#743). Since the refusals all come before the object is made, none carries the partial-writes prefix.
@@ -164,13 +192,23 @@ source-root test in 2.2. Not read for the game's live values.
    pass);
 7. bit 10 set: the configuration `NotRead`. Clear: nothing;
 8. a parameter or local of component type (not a field) is not a component field: it never takes part.
+9. **the no-template path:** a bit-23 class whose class default holds a toy component in a component field: the
+   `NotRead`, no object made. The same class with that field None on the class default: made, as today;
+10. a field of a class whose super chain is not loaded: holding None, nothing; holding an object, the classification
+    `NotRead`;
+11. a field declared on a super class with a non-None component value, and one on the new class: the super class's is
+    met first, and names the refusal;
+12. an object field of a non-component class holding an object: no refusal.
 
 ## 6. Predicted next stop
 
-Unchanged from NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.4 once option B lands with this rule:
-- **today:** `TEMPLATE` `NotRead` (the port's `new` still ignores the template);
-- **with option B and this rule:** `new` passes on links 6 and 7, then the same `TEMPLATE` `NotRead`, because the
-  fixture's template has no mesh;
+Against main after #746:
+- **today:** `new` refuses with `NEW_INSTANCING`, "new: instancing a template's components" (the blanket bit-23
+  refusal; links 6 and 7 show it with the partial-writes prefix of the step that ran before `new`);
+- **with this rule:** the pass answers nothing on links 6 and 7, so `new` goes on to main's next refusal,
+  `NEW_TEMPLATE_COPY` (`NotPorted`, "new: copying a template's values"), until option B's template copy lands;
+- **with option B's copy as well:** `new` makes the component, then `skeletal_bounds`' source e gives the same
+  `TEMPLATE` `NotRead`, because the fixture's template has no mesh (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.4);
 - **with the gun's init as well:** source f's stored-bounds `LayerAbsent`.
 
 ## Open questions
