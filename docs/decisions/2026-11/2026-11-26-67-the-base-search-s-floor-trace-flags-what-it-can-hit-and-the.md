@@ -33,4 +33,12 @@ and no bounds check changed.
   - the touch trace gets the same `Owner`-chain correction, and the implementer re-runs links 6 and 7.
 
   Written into the note (section 6 and test row 8).
+- **Review r1 (#809):**
+  - rebased onto main c1058de6, both GATES entries kept;
+  - the approved harness change keeps today's `holds_no_geometry()` guard (a map-backed service stays `NotRead`);
+    the BSP sweep and hit handling move to a separate, unapproved later path;
+  - the swept-box test clears a candidate only with finite, non-negative extents and finite bounds; anything else is
+    `NotRead`;
+  - the volume row gains the `bWorldGeometry` shortcut (bit 128, not `bPawnsOnly`);
+  - the predicted effect on main updated: past the floor trace, at `SetBaseValue`.
 - **Clean room:** a different lane implements this note.

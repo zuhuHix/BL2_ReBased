@@ -3,7 +3,8 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **ANALYST-FLOOR-TRACE-FLAGS (2026-11-26, pc-hummer, docs only, on docs/native-floor-trace-flags from main
-153ac950, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md reads the base search's floor trace:
+153ac950, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md reads the
+base search's floor trace:
 the flags (8415: pawns, movers, the BSP, volumes, other actors, blocking only, world geometry, terrain; one result
 added, no stop at the first hit), a box swept with the actor's collision cylinder (not a line), the actor as source.
 It reads what it can hit (world geometry always; pawns, movers, volumes and other actors through the source's

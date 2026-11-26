@@ -86,14 +86,17 @@ returns"), with these flags:
 |---|---|
 | `Actor` rule (`Actor`, `StaticMeshActor`, `Brush`, `Terrain`) with `bWorldGeometry` | always (bit 128), no blocking test |
 | `Actor` rule without `bWorldGeometry` | the source's blocked-by test passes (bit 16, then bit 64) |
-| `Volume` | as NATIVE_SPAWN_PLACEMENT.md section 7 (bit 8, then the bit 64 narrowing; `bPawnsOnly`: the source's volume test, not read) |
+| `Volume` with `bWorldGeometry`, not `bPawnsOnly` | always (bit 128), no blocking test (review r1 of #809) |
+| `Volume` with `bPawnsOnly` | the source's volume test, not read |
+| `Volume` without either | the source's blocked-by test passes (bit 8, then bit 64) |
 | `InterpActor`, `KActor` | the source's blocked-by test passes (bit 2, then bit 64) |
 | `Pawn` | not `bIgnoreAllTraces`, and the source's blocked-by test passes (bit 1, then bit 64) |
 | `WillowPawn`, `WillowAIPawn`, `WillowPlayerPawn` | the `WillowPawn` step below, then the `Pawn` row |
 | any other class | its own filter, not read |
 
 **So pawns can be the floor.** A pawn under another pawn is tested, and blocks when the blocked-by test passes. World
-geometry always can. Movers, volumes and other actors can, through the same test.
+geometry always can: world-geometry actors, and world-geometry volumes that are not `bPawnsOnly`, pass on bit 128
+whatever the blocked-by test says. Movers, other volumes and other actors can, through that test.
 
 **The `WillowPawn` filter step** (one body for the three Willow pawn tables), before the `Pawn` row:
 - a primitive that is a `MeshComponent` is passed over when the query sets bit 2147483648, or when the candidate's
@@ -168,24 +171,31 @@ the swept box, with `S` the trace start:
 - S.z + Hs < C.z − H (wholly below it).
 
 Touching counts as meeting. Rs and Hs come from section 2's extent, read with the same load-free reads; a source
-whose extent is not the cylinder case (no cylinder `CollisionComponent`) keeps the `NotRead`. On the combat run the
+whose extent is not the cylinder case (no cylinder `CollisionComponent`) keeps the `NotRead`.
+
+**Only well-formed values clear a candidate** (review r1 of #809): `S`, Rs and Hs finite, with Rs and Hs not negative;
+the candidate's `C`, R and H finite, with R and H not negative. Anything else is `NotRead`, "Actor.SetPhysics: the base
+search's swept box (a malformed extent or bounds)", decided before the mode write. Without this, a source radius of −5
+against a candidate radius of 10 at an X gap of 8 would pass the miss test (8 > 10 − 5). On the combat run the
 spawns stand 1000 units apart on X, far beyond R + Rs, so the corrected test clears them as `clear_of` does.
 
 ## 6. Proposed Off answer (for a separate implementer)
 
-In `Actor.SetPhysics`' preflight, replacing `BASE_TRACE_FLAGS`' "its trace flags are not decoded". All decided before
-the mode write, so nothing carries the partial-writes prefix.
+In `Actor.SetPhysics`' preflight. All decided before the mode write, so nothing carries the partial-writes prefix.
+
+**Two parts** (review r1 of #809):
+- **6.1, the approved harness change** (items 1 to 5 below): it applies only where today's guard holds, the
+  `NoLevelBaseSearch` setting on **and** the collision service's `holds_no_geometry()`. A service holding geometry (a
+  map-backed one) keeps `BASE_TRACE_FLAGS`' `NotRead`, with or without the setting, decided first. So under the
+  harness change the level part is never swept and no BSP hit reaches the base setter;
+- **6.2, a later map-backed path** (after the list): a proposal for a later lane, not approved, and not part of the
+  harness change.
 1. **No collision service:** `LayerAbsent`, as today.
 2. **The extent:** the cylinder case of section 2, else `NotRead`, "Actor.SetPhysics: the base search's extent (the
    bounding-cylinder fallback)". Declared, else `VmError::Script`: `CollisionComponent`, `CollisionRadius`,
    `CollisionHeight`, `Location`.
-3. **The level part:** the service's swept box (`box_sweep` with the extent) from the start down by 8.
-   - `Unsupported`: `NotRead`, "Actor.SetPhysics: the base search's level sweep";
-   - `Hit`: the floor is `WorldInfo`, unless an actor candidate lies within the hit plus 5 units, which needs the
-     unread comparator: `NotRead` naming `trace_filter::BSP_ACTOR_COMPARATOR`. A `WorldInfo` floor that differs from
-     `Base` reaches the base setter, which keeps `BASE_SETTER`'s `NotRead` for classes outside NATIVE_ACTOR_SETBASE.md's
-     list;
-   - `Clear`: go on.
+3. **The level part:** none under the harness change. The guard holds (`holds_no_geometry()`), so the level holds
+   nothing to hit; any other service is `BASE_TRACE_FLAGS`' `NotRead` (6.1).
 4. **The actor part**, over every live actor's primitives, in the placement walk's order:
    - passed over without reading any filter field: the owner is the source; the owner is in the source's `Owner`
      chain or the source is in the owner's (section 4; each chain read load-free, bounded by the links seen; an
@@ -198,6 +208,14 @@ the mode write, so nothing carries the partial-writes prefix.
      (section 3), but several Willow steps read unnamed fields, and the primitive's own test is unread.
 5. **No candidate left and the level clear:** no floor. With `Base` None nothing changes (the stand-in's log line);
    with a `Base` set, `BASE_SETTER`'s `NotRead`.
+
+**6.2, later: a map-backed level part** (not approved; for a later lane, behind its own ruling). With a service that
+holds geometry, the level part would be the service's swept box (`box_sweep` with the extent) from the start down by 8:
+- `Unsupported`: `NotRead`, "Actor.SetPhysics: the base search's level sweep";
+- `Hit`: the floor is `WorldInfo`, unless an actor candidate lies within the hit plus 5 units, which needs the unread
+  comparator: `NotRead` naming `trace_filter::BSP_ACTOR_COMPARATOR`. A `WorldInfo` floor that differs from `Base`
+  reaches the base setter, which keeps `BASE_SETTER`'s `NotRead` for classes outside NATIVE_ACTOR_SETBASE.md's list;
+- `Clear`: the actor part as above.
 
 **Hub rulings (review of #809): all three yes**, under the existing `NoLevelBaseSearch` setting, Off only, UNVERIFIED:
 1. **The stand-in's skip widens to the `Owner` chains, both ways**, as the game's walkers do (section 4): the actor
@@ -216,11 +234,10 @@ Reference is unchanged for all three.
 
 ## 7. Predicted effect
 
-- **On main today:** none. The combat world has no collision service, so links 3, 4, 5, 13 and 14 stop at the floor
-  trace's `LayerAbsent`.
-- **With #807** (the combat run's spawn positions and `clear_of`): those links pass the floor trace. With section 5's
-  correction they still do: the spawns stand 1000 units apart. With section 4's chains, Maya's controller is passed
-  over by the rule rather than by geometry.
+- **On main** (review r1 of #809; #807 has landed: the combat world's `NoLevel` service, the spawn positions and
+  `clear_of`): links 3, 4, 5, 13 and 14 are past the floor trace and stop at the spawn's `SetBaseValue`.
+- **With the rulings:** they stay past it. With section 5's box the spawns, 1000 units apart, still clear; with section
+  4's chains Maya's controller is passed over by the rule rather than by geometry.
 - **The touch trace's correction** may change which actors links 6 and 7 pass over (the pickup's owner chain, and the
   actors it owns, in place of its `Base` chain). Not probed.
 
@@ -234,11 +251,16 @@ Reference is unchanged for all three.
    only the source's `Base`: **not** passed over (it meets the box: `NotRead`).
 3. **Section 5's box:** another cylinder with its axis 35 units from the line, radius 10, the source's radius 30:
    meets the box (35 < 40), so `NotRead` (where `clear_of` would clear it); at 45 units: passed over; a cylinder
-   wholly below the swept box: passed over; touching: `NotRead`.
+   wholly below the swept box: passed over; touching: `NotRead`; a source radius of −5 against a candidate radius of
+   10 at an X gap of 8, a NaN or infinite `Location`, a negative candidate height: each `NotRead` (review r1 of #809);
 4. **The read flags:** a candidate with `CollideActors` clear, its owner's `bCollideActors` clear, or
    `BlockNonZeroExtent` clear: passed over without its filter fields loaded.
-5. **The level part:** `Unsupported`: its `NotRead`; `Hit` with no actor candidate and `Base` None: the base setter's
-   `NotRead` (a toy pawn class outside SetBase's list); `Clear` and nothing else: no floor, the log line.
+5. **The level part:** under the harness change, a service holding geometry with the setting on: `BASE_TRACE_FLAGS`'
+   `NotRead`, nothing written (review r1 of #809); a `NoLevel` service: no floor, the log line. (6.2's sweep cases,
+   for its later lane: `Unsupported`, its `NotRead`; `Hit` with no actor candidate and `Base` None, the base setter's
+   `NotRead`.)
+5a. **A world-geometry volume** (not `bPawnsOnly`) whose bounds meet the swept box, with a source whose blocked-by
+   test would refuse: tested (bit 128), so the candidate's `NotRead` (review r1 of #809).
 6. **Each refusal before the mode write,** with #518's three counters unchanged.
 7. **The touch trace:** a candidate owned by the source pickup, and the pickup's own `Owner`: passed over; the
    pickup's `Base` alone: no longer passed over.
