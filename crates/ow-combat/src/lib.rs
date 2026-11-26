@@ -15,6 +15,7 @@ pub mod down;
 pub mod firing;
 pub mod go_down;
 pub mod hit;
+pub mod hit_region_cap;
 pub mod holds;
 pub mod bcyl_tail;
 pub mod combat_music;

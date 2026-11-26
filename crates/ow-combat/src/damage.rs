@@ -598,8 +598,19 @@ fn adjust_damage_stages(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )?;
     }
 
-    // 12 to 14: the hit-region cap, averted death and the protection timer are not implemented; each is said once.
-    if let Some(r) = region
+    // 13, Off: the hit-region cap (lane IMPL-LINKS-3-4-TAIL, NATIVE_LINKS_3_4_TAIL.md section 4). The capped damage
+    // goes on through the pipeline, and `HitRegionCapReduction` is what the cap took.
+    if vm.parity == ParityMode::Off
+        && let (Some(r), Some(v)) = (region, victim)
+    {
+        let before = damage;
+        damage = crate::hit_region_cap::cap(vm, v, r, instigator, type_definition, damage, health, max_health)?;
+        store(vm, &mut summary, "HitRegionCapReduction", Value::Float(before - damage));
+    }
+    // 12 to 14 in Reference: the hit-region cap, averted death and the protection timer are not implemented; each is
+    // said once.
+    if vm.parity == ParityMode::Reference
+        && let Some(r) = region
         && get(vm, r, "bTrackDamage")?.is_some_and(|v| truth(vm, &v))
     {
         let p = path_of(vm, Some(r));
