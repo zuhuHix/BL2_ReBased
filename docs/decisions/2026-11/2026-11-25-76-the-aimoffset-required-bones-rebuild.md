@@ -18,7 +18,9 @@ in the running game.
 - **The proposed Off answer:** it replaces the `REBUILD` refusal of NATIVE_AIMOFFSET_SET_PROFILE.md step 5 and stays
   write-free and load-free in the preflight:
   - it reads the mesh's reference skeleton through the skeletal layer, whose refusals and kinds stand;
-  - a skeleton or profile past 256 entries is a typed `NotRead`;
+  - a skeleton of more than 256 bones, or a profile of more than 255 components (255 is the table's "none"), is a
+    typed `NotRead`, the bone limit checked first; a skeleton with repeated bone names is the skeletal layer's
+    `VmError::Script` (review r1 of #741);
   - the profiles layer's source is extended with the component bone names its reader already decodes.
 - **For Maya** (a prediction): `Unarmed`'s 11 components all match her 27-bone mesh. The parent pass adds 2 ancestors,
   for 13 required bones. The path past the native is already read by NATIVE_LINK1_TAIL_SETTERS.md.

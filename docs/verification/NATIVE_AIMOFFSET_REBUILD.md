@@ -47,53 +47,66 @@ On the node, once `CurrentProfileIndex` is written:
    - the component's `BoneName` is looked up in the mesh's bone-name table (an exact name match: a `None` name, or a
      name the mesh lacks, is no bone);
    - no bone: the component is skipped;
-   - bone `b`: `b` is appended to `RequiredBones`, and `AimCpntIndexLUT[b]` := `i`.
+   - bone `b`: `b` is appended to `RequiredBones`, and the table's entry for `b` takes the position `i`.
 
    Both are stored as **bytes**. Two components on one bone append it twice, and the table keeps the later position.
 5. **The sort:** `RequiredBones` in ascending order (equal bytes are interchangeable, so the algorithm does not matter).
-6. **The parent pass,** a walk with a position `k` from 0 while `k` is below the list's current length:
-   - the bone `b` at `k`, if it is the root (0) or not below the bone count: `k` moves on;
-   - otherwise its parent `p` (from the reference skeleton). When `p` is already anywhere in the list, `k` moves on;
-   - otherwise `p` is **inserted at `k`**, before `b`, and `k` stays, so `p` is looked at next.
+6. **The parent pass** adds every missing ancestor, from the reference skeleton's parents:
+   - each missing ancestor goes directly before the first bone in the list that needs it, and the ancestors of an
+     ancestor go before it in turn;
+   - a parent already anywhere in the list is not added again;
+   - the root (bone 0), and a bone not below the bone count, need nothing.
 
-   So each missing ancestor goes just before the first bone that needs it. **The result is not always sorted:** with
-   bones 3 and 4 required, 3 and 1 children of the root and 4 a child of 1, the list ends as 0, 3, 1, 4.
-7. Both arrays are trimmed to their lengths, a storage step with no effect on their values.
+   **The result is not always sorted:** with bones 3 and 4 required, 3 and 1 children of the root and 4 a child of 1,
+   the list ends as 0, 3, 1, 4.
 
 **Nothing else is written:** not the profile, the component, the mesh or the tree.
 
-**For Maya** (a prediction from the data, not a run): `CurrentProfileIndex` := 3; all 11 components match. The parent
-pass inserts 2 ancestors, so `RequiredBones` holds 13 bones, and here it ends in ascending order. `AimCpntIndexLUT` has
-27 entries, 11 of them set.
+**For Maya** (a prediction from the data, not a run): `CurrentProfileIndex` becomes 3, and all 11 components match. The
+parent pass inserts 2 ancestors, so `RequiredBones` holds 13 bones, and here it ends in ascending order.
+`AimCpntIndexLUT` has 27 entries, 11 of them set.
 
 ## 3. Proposed Off answer (for the implementer)
 
 This replaces the `REBUILD` refusal in `ow_world::world::aim_offset` (NATIVE_AIMOFFSET_SET_PROFILE.md step 5). It stays
 in the preflight, **write-free and load-free** (no store load, no class-code load, nothing interned). The writes come
-after it: `CurrentProfileIndex`, then `RequiredBones`, then `AimCpntIndexLUT`.
+after it: `CurrentProfileIndex`, then `RequiredBones`, then `AimCpntIndexLUT`. **Every refusal below is raised before
+the first write, so none carries the partial-writes prefix** (review r1 of #741). The steps run in this order, and the
+first refusal met is the answer:
 
 1. **The gate,** as section 2 step 2. A `SkelComponent` the store has not loaded stays `COMPONENT_NOT_LOADED`
    (`NotRead`). With no component, or a resident one with `SkeletalMesh` None, both arrays are written empty (as
    today).
 2. **The mesh's reference skeleton:** `ow_world::world::skeletal::reference_skeleton` on the `SkeletalMesh`. Its own
    refusals stand, with their kinds: no skeleton source installed (`LayerAbsent`), a mesh the store has not loaded
-   (the layer's `LayerAbsent`, nothing loaded), and a skeleton that does not parse (`VmError::Script`). On the slice,
-   the port reads Maya's skeleton from the package (row SLICE-GATE-READING in GATES.md).
-3. **A skeleton of more than 256 bones:** `NotYet { NotRead }`, "AnimNodeAimOffset: a required-bones rebuild past a
-   byte". The game stores bone indices and component positions as bytes, and what it does past 255 was not read. The
-   same holds for a profile of more than 256 components. Neither is reached on the slice (27 bones, 11 components).
-4. **The components' bone names:**
+   (the layer's `LayerAbsent`, nothing loaded), and a skeleton that does not parse or fails its checks
+   (`VmError::Script`). Those checks include repeated bone names: `check_skeleton` refuses two bones whose names are
+   equal under ASCII case folding, before any match (review r1 of #569). On the slice, the port reads Maya's skeleton
+   from the package (row SLICE-GATE-READING in GATES.md).
+3. **The bone limit:** a skeleton of more than 256 bones is `NotYet { NotRead }`, "AnimNodeAimOffset: a required-bones
+   rebuild past a byte". The game stores bone indices as bytes (0 to 255), and what it does past them was not read. A
+   skeleton of exactly 256 bones is answered.
+4. **The components' bone names, and the component limit** (after step 3, before any component is matched):
    - a decoded `Profiles` list: each entry's `AimComponents`, each a struct with a `BoneName` (a name), else
      `VmError::Script` naming the field;
    - a list the profiles layer read (`world::aim_profiles`, #737): that layer gives only the profile names today. The
      implementer extends its `ProfileSource` answer with each profile's component bone names, which
-     `ow_assets::aim_profiles` already reads (`AimProfile::components[..].bone_name`).
-5. **The match:** a bone name against the reference skeleton's bone names, compared as names are (case-insensitive,
-   the reader's `Name_N` text form for a numbered name). The skeleton layer's `find_bone` takes the first of two equal
-   names, an **UNVERIFIED** choice, as the `Parent` link records; Maya's mesh has none.
+     `ow_assets::aim_profiles` already reads (`AimProfile::components[..].bone_name`). That layer's refusals stand;
+   - **the component limit** (review r1 of #741): a profile of more than 255 components is `NotYet { NotRead }`,
+     "AnimNodeAimOffset: a required-bones rebuild past a byte". The table stores a component's position as a byte, and
+     255 is its "none", so only positions 0 to 254 can be told from an unset entry; what the game does with a 256th
+     component was not read. A profile of exactly 255 components is answered. Neither limit is reached on the slice
+     (27 bones, 11 components).
+5. **The match,** per component, in order. Neither lookup interns a name:
+   - a name from the profiles layer is text: `ReferenceSkeleton::bone_index(&str)`, which compares case-insensitively
+     (a numbered name is in the reader's `Name_N` form);
+   - a decoded `BoneName` is a name id: `skeletal::find_bone`, which compares each bone's name through `names.find`;
+   - no bone, or a `None` name: the component is skipped.
+
+   The skeleton has no repeated names (step 2), so each name matches at most one bone.
 6. **The sort and the parent pass,** exactly as section 2 steps 5 and 6, with the skeleton's parent of each bone. The
    root (`parent` None) is bone 0.
-7. **The writes:** `RequiredBones` := the list, and `AimCpntIndexLUT` := the table, as byte arrays.
+7. **The writes:** the list into `RequiredBones`, and the table into `AimCpntIndexLUT`, as byte arrays.
 
 ## 4. maya:8 after SetActiveProfileByName
 
@@ -117,11 +130,14 @@ class-code loads and the name table unchanged:
 5. the gate: no `SkelComponent`, or one with no mesh: both arrays written empty, `CurrentProfileIndex` written;
 6. an unloaded `SkelComponent`: `COMPONENT_NOT_LOADED`. An unloaded mesh, or no skeleton source: the skeletal layer's
    `LayerAbsent`. All write-free, with nothing loaded;
-7. a skeleton of 257 bones: the byte `NotRead`, write-free;
+7. the limits and their order: a skeleton of 257 bones is the byte `NotRead`, and one of 256 bones is answered; a
+   profile of 256 components is the byte `NotRead`, and one of 255 components is answered. A 257-bone skeleton with a
+   256-component profile is the bone limit's refusal (step 3 comes before step 4). All refusals write-free;
 8. profiles from the profiles layer: the components' bone names come through the source (a toy source), and give the
-   same lists as the decoded form;
+   same lists as the decoded form. One bone has a numbered name, given as the layer's `Name_N` text and as the
+   decoded name id: both match the same bone, and nothing is interned;
 9. malformed declarations (`AimComponents` not an array of a struct with a name `BoneName`): `VmError::Script`, nothing
-   written;
+   written. A toy skeleton with two bones of one name (case-folded): the layer's `VmError::Script`, nothing written;
 10. link 1's shape: a template node with 7 profiles and `Unarmed` at index 3, with 11 components on a 27-bone toy
     skeleton: `CurrentProfileIndex` 3, the lists the rule gives;
 11. Reference: unchanged.
@@ -131,5 +147,6 @@ class-code loads and the name table unchanged:
 1. **UNVERIFIED:** every rule above.
 2. **By fit:** the mesh's native fields (its reference skeleton, the bone count, each bone's parent, the bone-name
    table).
-3. **Not read:** what the game does with bone indices or component positions past 255 (the port refuses); which bone a
-   duplicated bone name maps to (Maya has none).
+3. **Not read:** what the game does with bone indices past 255 or component positions past 254 (the port refuses);
+   which bone the game's name table gives for a duplicated bone name (the port refuses such a skeleton; Maya's has
+   none).
