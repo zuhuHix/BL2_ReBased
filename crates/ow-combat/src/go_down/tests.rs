@@ -481,7 +481,12 @@ fn the_out_vehicle_the_half_line_and_the_named_kinds() {
     let p = make(&mut e.vm, e.player_pawn, "Maya_3");
     let err = e.vm.call(anchor, Some(p), vec![Value::Object(None)]).unwrap_err();
     assert!(matches!(kind(&err), Some(Missing::NotPorted)), "SetAnchor: {err:?}");
-    assert!(not_read(&e.vm.call(stance, Some(p), vec![]).unwrap_err()), "SetDefaultStance");
+    // SetDefaultStance has its rule now (lane IMPL-MAYA9-NATIVES, `crate::stance`): this toy player pawn declares none
+    // of the fields the rule reads, so it is the rule's own script error, not the old placeholder's NotRead.
+    assert!(
+        matches!(e.vm.call(stance, Some(p), vec![]), Err(VmError::Script { .. })),
+        "SetDefaultStance"
+    );
     assert!(not_read(&e.vm.call(hidden, Some(p), vec![Value::Bool(true)]).unwrap_err()), "SetHidden");
 }
 
