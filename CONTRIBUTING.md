@@ -19,12 +19,12 @@ project's primary correctness method. Build the reader (README, *Build and run i
   and `python tools/census.py ...` against your install. Report the totals,
   your platform (Steam/Epic), which DLC you own, and whether the UHD pack is
   installed. Different installs are different test cases.
-- In-host map comparison waits for the Rust host: the UE5 host that could
+- In-host map comparison is still outstanding: the UE5 host that could
   open a prepared map left the tree on 2026-11-14. The Rust host (`ow-host`,
   an own engine on wgpu + winit, picked 2026-11-15,
   [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md))
-  draws and walks Sanctuary, but nothing in it is checked against the real
-  game yet. Until it is, `cargo build --workspace` and
+  draws and walks Sanctuary, but it has no comparison against the real game
+  yet. Until it has, `cargo build --workspace` and
   `cargo test --workspace` on your machine are a useful report, with
   `cargo --version` and your platform.
 

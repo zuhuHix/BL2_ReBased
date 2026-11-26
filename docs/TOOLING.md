@@ -556,8 +556,9 @@ when it ran green on that commit, or on an earlier commit in which every file it
 the batch landed (amended 2026-11-11 from "every suite on every tested commit"). The UE5 host's suites, the suite map
 and its helper (`tools/suites.txt`, `tools/suites_due.py`, `tools/run_suites.ps1`, all removed 2026-11-14) left the
 tree with the host, so the suite half of the standing approval has nothing to run today. What a tested commit must pass
-in its place, until a Rust host has heavy runs of its own, is not decided in this file; the checks every change runs are
-in [GATES.md](verification/GATES.md), "Every change". The full old text: `git show 08bcf3e:docs/TOOLING.md`. Nothing
+in its place is not decided in this file. The Rust host has heavy runs of its own by now, with recorded baselines
+([GATES.md](verification/GATES.md), "When the Rust host changes"), but this file names none of them as a condition for
+landing; the checks every change runs are in [GATES.md](verification/GATES.md), "Every change". The full old text: `git show 08bcf3e:docs/TOOLING.md`. Nothing
 else about the checks above changes: with `-t`, the chain's tree must still be byte-identical to the tested commit's.
 
 ## `ow-package`: the package reader

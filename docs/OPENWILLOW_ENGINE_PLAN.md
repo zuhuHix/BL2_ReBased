@@ -331,7 +331,8 @@ Your eye is the test.
 **Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually verified against the real game →
 move on to Phase 2 for the vertical slice. Full 82/82 map coverage remains this phase's eventual completion target
 but is deferred until the Phase 4 vertical-slice gate is met (§5.0); see Phase 5. If no map can be loaded, stop and
-reassess honestly; the loop isn't holding (three maps loaded in the retired UE5 host; none in the Rust host yet).
+reassess honestly; the loop isn't holding (three maps loaded in the retired UE5 host; the Rust host loads Sanctuary,
+and its comparison against the real game is pending).
 
 ### Phase 2: UnrealScript VM (M2)
 
