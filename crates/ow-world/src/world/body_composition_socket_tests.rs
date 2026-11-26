@@ -174,6 +174,31 @@ fn a_socket_attached_component_is_recorded_under_the_pawn() {
     assert!(crate::actors::attached_to(&e.vm, parent, p).unwrap(), "the parent too");
 }
 
+/// Review of #773, LOW (a): a socket child whose class declares no `Owner` (it could not take its parent's before the
+/// publish) is a `VmError::Script` naming the field, found by the preflight: #518's counters and the name table are
+/// unchanged and no entry or component is made.
+#[test]
+fn a_socket_child_whose_class_declares_no_owner_refuses_before_any_write() {
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let object = e.object;
+    // Everything the socket attach reads but `Owner` (so the `Owner` check is the one that refuses).
+    let ownerless = class(&mut e.vm, "Test.ToyOwnerlessComponent", object, &[("bAttached", PropKind::Bool)]);
+    let orphan = make(&mut e.vm, ownerless, "Orphan_Template");
+    let p = body(&mut e, pt, &[(orphan, "Shield")]);
+    let before = Counters::read(&e.vm);
+    let names = e.vm.space.names.len();
+    match run(&mut e, p) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Owner"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(Counters::read(&e.vm), before, "nothing written");
+    assert_eq!(e.vm.space.names.len(), names);
+    assert!(entries(&e, p).is_empty());
+}
+
 /// Test 2: a bone hit (no socket of that name) has zero offsets and the name as its bone; a socket and a bone of the
 /// same name: the socket wins.
 #[test]
@@ -613,4 +638,31 @@ fn a_socket_attached_mesh_asks_its_template_s_owner_before_any_write() {
     answer_owner_for_tests(None);
     assert_eq!((missing, what.as_str()), (Missing::NotRead, REFUSED_FOR_TESTS));
     assert_eq!(handles_after, handles, "no object made");
+}
+
+/// Review of #773, LOW c, composed: the body composition's socket build, then the pawn's `InitializeRBPhysics` on the
+/// same world. The socket child, recorded under the pawn with the pawn as `Owner`, is visited through its parent's
+/// `Attachments` and fixed, as the parent is.
+#[test]
+fn a_socket_build_then_initialize_rb_physics_fixes_the_child() {
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let head = child(&mut e, "Shield_Template");
+    let p = body(&mut e, pt, &[(head, "Shield")]);
+    run(&mut e, p).unwrap();
+    let (parent, _) = parent_list(&e, p);
+    let made = made_of(&e, &entries(&e, p)[1]);
+    let path = format!("{}.InitializeRBPhysics", crate::world::pawn_meshes::WILLOW_PAWN);
+    let key = crate::world::player_pawn_tail::INITIALIZE_RB_PHYSICS;
+    let d = FunctionDecl::native(ObjectPath::parse(&path).unwrap(), key).with_owner(e.pawn);
+    let rb = e.vm.declare_function(d).unwrap();
+    crate::world::player_pawn_tail::register(&mut e.vm).unwrap();
+    for o in [parent, made] {
+        assert_eq!(prop(&e.vm, o, "bSkelCompFixed"), Value::Bool(false), "not fixed before");
+    }
+    e.vm.call(rb, Some(p), vec![]).unwrap();
+    assert_eq!(prop(&e.vm, parent, "bSkelCompFixed"), Value::Bool(true), "the parent");
+    assert_eq!(prop(&e.vm, made, "bSkelCompFixed"), Value::Bool(true), "the socket child, through the record");
 }
