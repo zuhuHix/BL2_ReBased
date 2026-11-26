@@ -44,6 +44,9 @@ implemented from docs/verification/NATIVE_UPDATEANIMATIONS_TREE_TICKS.md alone (
   - Preloading it would be a harness input, which is the hub's call. The predicted `InitializeRBPhysics` stop is not
     reached yet.
 - **Verified:** the tests on invented data (the note's 11) and the installed slice gate's rows above.
-- **Not verified:** everything in the running game, including the `InitTag` fit, the lookup walk standing in for the set's map, and which
-  anim sets her list holds in the game.
+- **Not verified:** everything in the running game, including the lookup walk standing in for the set's map, and
+  which anim sets her list holds in the game. **UNVERIFIED (fitted)** names: the `InitTag` field; the fields the note
+  places past `CachedNumDesiredBones` by a 4-byte shift (`bIsIssuingNotifies`, `bReverseAnimSeqSearchOrder`,
+  `bAutoGenerateAdditiveSeqName`, `AddAnimSeqName`); and the list names `AnimSets` and `Sequences` (review of #751,
+  LOW 1, edited by decision 2026-11-26-NNN).
 - **Sensitive files:** none.
