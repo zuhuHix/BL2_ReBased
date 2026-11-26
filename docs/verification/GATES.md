@@ -5,7 +5,7 @@ Update this file in the commit that changes a number. Paste real output in repor
 **IMPL-MAYA-PAWN-FROM-ARCHETYPE (2026-11-26, pc-hummer, on fix/maya-pawn-from-archetype from main 5f43a0b9):**
 AI-assisted (Claude Code, Opus 5.5). In Off, with a `PlayerClass`, the bridge spawns the player pawn from the class's
 pawn archetype through the world's spawn (NATIVE_MAYA_PAWN_SPAWN_SOURCE.md route B). The old `Mesh` /
-`CylinderComponent` release is refused only when the attach record holds it. `cargo test --workspace -j 8
+`CylinderComponent` release is refused when the port cannot tell it is unattached (no scene layer, recorded under the pawn, or owned by the pawn; review r1, decision 23); these figures were measured before that narrowing. `cargo test --workspace -j 8
 --no-fail-fast` 3,820 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
 (release build, under the machine lock), before (5f43a0b9) and after: 6 ok / 8 NotYet, 47.0%, every row unchanged.
 Links 1, 3, 4, 5, 13 and 14 stop at 2.A's rigid-body `LayerAbsent`, now on the archetype pawn. No real-game run.
