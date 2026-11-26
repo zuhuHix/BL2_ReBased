@@ -102,7 +102,8 @@ This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`
 - `WillowPawn.GetParent` (also reached as `WillowAIPawn.GetParent`): resolved since, NATIVE_BOUNDING_CYLINDER_AND_AFTER.md
   section 5;
 - `WillowPawn.SetDefaultStance` (also reached as `WillowPlayerPawn.SetDefaultStance` and `WillowAIPawn`'s);
-- `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`)
+- `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`;
+  resolved since for `Actor`'s table and `PawnInteractionProxy`'s: NATIVE_PAWN_INTERACTION_PROXY.md section 4)
   and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up). `SetBase`'s
   implementation was resolved and read later for the inventory and pickup chain only, in NATIVE_ACTOR_SETBASE.md (its
   arguments are `NewBase`, `NewFloor`, `SkelComp` and `AttachName`). A pawn's call keeps this section's `NotRead`;
@@ -214,7 +215,8 @@ is `WorldInfo.Game` is an **Off assumption** (UNVERIFIED).
   each primitive. The rest, including where and when the three flags are stored, was **not read**. The touch and
   component steps belong to the world's collision hash, which the VM world does not model.
 - **`SetCollisionSize(Radius, Height)`.** When the actor's `CollisionComponent` is a cylinder, its radius and height
-  are set. Two further steps follow that were not read, and the actor's `bNetDirty` is then set.
+  are set. Two further steps follow that were not read, and the actor's `bNetDirty` is then set. (Read since: the
+  touch update and the `CollisionChanged` event, NATIVE_PAWN_INTERACTION_PROXY.md section 3.)
 
 **Off answer:** `NotRead`, naming "Actor.SetCollision: the collision hash and touch updates" and
 "Actor.SetCollisionSize: the component's world update", each a plain `NotRead` at entry; the caller layer that wrote

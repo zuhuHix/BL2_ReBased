@@ -131,7 +131,8 @@ placeholders first.
 **Only for the inventory and pickup chain** (review r1 of #795). Section 1 read seven class tables: `Engine.Actor`,
 `Engine.Inventory`, `Engine.Weapon`, `WillowGame.WillowWeapon`, `Engine.WillowInventory`, `Engine.DroppedPickup` and
 `WillowGame.WillowPickup`. The rule applies to a receiver whose first native class (by the class table, nothing loaded)
-is one of those seven. Any other receiver keeps NATIVE_GO_DOWN_PATH.md 3.2's `NotRead`, "SetBase: the class's own
+is one of those seven (an eighth, `WillowGame.PawnInteractionProxy`, read since: NATIVE_PAWN_INTERACTION_PROXY.md
+section 5, with step 8's hard-attach identity case). Any other receiver keeps NATIVE_GO_DOWN_PATH.md 3.2's `NotRead`, "SetBase: the class's own
 implementation is not resolved", decided first in the preflight. That covers the pawns links 13 and 14 reach, whose
 tables were not read here.
 

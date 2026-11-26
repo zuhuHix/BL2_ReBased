@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-PAWN-INTERACTION-PROXY (2026-11-26, pc-hummer, docs only, on docs/native-pawn-interaction-proxy, probed on main
+03a8a09d, rebased onto eef4f83):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PAWN_INTERACTION_PROXY.md reads the
+trade proxy that `WillowPlayerPawn.SetUpTradeInteraction` spawns once the controller's `Pawn` is set (lane E's
+deferred flag). It reads `SetCollisionSize` (the cylinder setter, a touch update, the `CollisionChanged` event and
+`bNetDirty`), resolves `SetHardAttach` (`Actor`'s body; a no-op for the proxy) and extends NATIVE_ACTOR_SETBASE.md to
+an eighth table, `PawnInteractionProxy`, with step 8's hard-attach identity case. A local probe (an installed Off
+`--combat-run` of `maya:8` with the flag emulated, each stop stubbed, reverted and not committed) puts the next stop at
+the class-level part of #796 section 3. No code changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-LINK6-AFTER-TAKE (2026-11-26, pc-hummer, on fix/rust-link6-after-take from main 7a67b9f):** AI-assisted
 (Claude Code, Opus 5.5). `Actor.SetBase` for the seven read classes, GetAmmoCount, SelectAkEvent, PlayAkEvent (the
 Off audio stand-in), the empty-EndState destroy lift, RemovePickup and AllControllers, Off. `cargo test --workspace`
