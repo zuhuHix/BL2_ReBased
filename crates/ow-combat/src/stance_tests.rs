@@ -57,6 +57,11 @@ fn class(vm: &mut Vm, path: &str, base: Option<ClassId>, props: &[(&str, PropKin
 }
 
 fn env() -> Env {
+    env_with(true)
+}
+
+/// The environment, its pawn class declaring `ConsumerHandle` only when `handle` (review r2 of #781, item 2).
+fn env_with(handle_declared: bool) -> Env {
     let dir = std::env::temp_dir().join(format!("ow-combat-stance-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let core = {
@@ -121,6 +126,8 @@ fn env() -> Env {
         ("OverrideStance", o.clone()),
         ("ConsumerHandle", PropKind::Struct(handle)),
     ];
+    let pawn_fields: Vec<(&str, PropKind)> =
+        pawn_fields.into_iter().filter(|(n, _)| handle_declared || *n != "ConsumerHandle").collect();
     let willow_pawn = class(&mut vm, "WillowGame.WillowPawn", Some(bare), &pawn_fields);
     let pawn = class(&mut vm, "WillowGame.WillowPlayerPawn", Some(willow_pawn), &[]);
     let ai = class(&mut vm, "WillowGame.WillowAIPawn", Some(willow_pawn), &[]);
@@ -209,8 +216,10 @@ impl Env {
         self.set(p, "AimOffset", Value::Object(Some(node)));
         self.set(p, "Role", Value::Byte(3));
         self.set(p, "LeftHandIKHolds", Value::array(vec![]));
-        let handle = self.vm.space.classes.struct_by_path("Toy.BehaviorConsumerHandle").unwrap();
-        self.set(p, "ConsumerHandle", Value::structure(handle, vec![Value::Int(-1)]));
+        if self.vm.space.prop(self.pawn, "ConsumerHandle").is_some() {
+            let handle = self.vm.space.classes.struct_by_path("Toy.BehaviorConsumerHandle").unwrap();
+            self.set(p, "ConsumerHandle", Value::structure(handle, vec![Value::Int(-1)]));
+        }
         let archetype = self.make(self.pawn, "Pawn_Toy");
         self.set(archetype, "bCanCrouch", Value::Bool(true));
         self.vm.space.heap.get_mut(p).unwrap().archetype = Some(archetype);
@@ -279,7 +288,8 @@ fn a_kernel_consumer_without_the_provider_answers_nothing_and_a_crate_consumer_i
 /// Review of #781, item 2: the positive event case. With a current stance and a new one, both with providers, on a
 /// kernel consumer: one OnExitStance on the old provider, then one OnEnterStance on the new one; with no current
 /// stance, OnEnterStance once and no OnExitStance. (The dispatch is recorded where the native hands the event to the
-/// kernel; registering a provider on the process needs the kernel's own provider fixtures.)
+/// kernel; registering a provider on the process needs the kernel's own provider fixtures.) **The count is of the
+/// hand-off to the kernel, not of a registered provider's `fire_event`** (the hub's ruling on review r2 of #781).
 #[test]
 fn the_events_go_once_each_to_the_kernel_in_order() {
     let mut e = env();
@@ -547,4 +557,23 @@ fn playthrough_effects_are_nothing_at_one_or_below_and_not_read_above() {
         other => panic!("{other:?}"),
     }
     assert_eq!(e.writes(), before, "reads only");
+}
+
+/// Review r2 of #781, item 2: a pawn class that declares no `ConsumerHandle`, with a stance event to route, is
+/// `VmError::Script` from the preflight, with nothing written.
+#[test]
+fn an_undeclared_consumer_handle_is_a_script_error_before_any_write() {
+    let mut e = env_with(false);
+    let (b, five) = e.body("Body");
+    let p = e.pawn(b);
+    let provider = e.make(e.bare, "Provider");
+    e.set(five[0], "BehaviorProviderDefinition", Value::Object(Some(provider)));
+    let before = e.writes();
+    match e.run(p) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("ConsumerHandle"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(e.writes(), before, "nothing written");
+    assert_eq!(e.get(p, "CurrentStance"), Value::Object(None));
+    assert!(fired().is_empty());
 }

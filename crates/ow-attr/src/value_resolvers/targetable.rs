@@ -24,8 +24,8 @@
 //!   2. no context: **0.0**; a context the store has not loaded (a handle, or a stand-in without its slots):
 //!      [`CONTEXT_NOT_LOADED`];
 //!   3. the `ITargetable` cast by the context's class chain (the class table only): none of [`TARGETABLE_CLASSES`] on
-//!      it: **0.0**; an ancestry that ends, short of `Core.Object`, at a class with no super class cannot answer:
-//!      `NotRead`;
+//!      it: **0.0**; a chain it cannot walk to its end cannot answer: an ancestry that ends, short of
+//!      `Core.Object`, at a class with no super class, a class with no layout, or more than 256 classes: `NotRead`;
 //!   4. `IsChampion` by the context's first native class: `Engine.Pawn`, `WillowGame.WillowPawn` and
 //!      `WillowGame.WillowPlayerPawn` **0.0**; `WillowGame.WillowAIPawn` its `BalanceDefinitionState.BalanceDefinition`
 //!      (None **0.0**; not loaded [`BALANCE_NOT_LOADED`]; first native class `WillowGame.AIPawnBalanceDefinition`: its
@@ -109,12 +109,22 @@ fn first_native(space: &ObjectSpace, defs: Option<&ow_defs::DefStore>, class: Cl
 }
 
 /// The `ITargetable` cast by the class chain (module documentation, step 3).
-fn targetable(space: &ObjectSpace, class: ClassId) -> Result<bool, AttrError> {
+pub(super) fn targetable(space: &ObjectSpace, class: ClassId) -> Result<bool, AttrError> {
     let mut cursor = Some(class);
     let mut steps = 0;
-    while let Some(c) = cursor.filter(|_| steps < 256) {
+    // A chain that cannot be walked to its end cannot prove "no" (review of #786, items 4 and 5): a class with no
+    // layout, an ancestry that stops short of `Core.Object`, and a chain past 256 classes are each `NotRead`.
+    let unknown = |what: String| -> AttrError {
+        NotYet::not_read(format!("TargetableAttributeValueResolver: the ITargetable cast over {what}"), RECORD_OFF).into()
+    };
+    while let Some(c) = cursor {
+        if steps >= 256 {
+            return Err(unknown("a class chain longer than 256 classes".to_string()));
+        }
         steps += 1;
-        let Some(layout) = space.classes.get_layout(c) else { break };
+        let Some(layout) = space.classes.get_layout(c) else {
+            return Err(unknown(format!("a class with no layout ({c:?})")));
+        };
         let path = layout.path().as_str();
         if TARGETABLE_CLASSES.iter().any(|t| t.eq_ignore_ascii_case(path)) {
             return Ok(true);

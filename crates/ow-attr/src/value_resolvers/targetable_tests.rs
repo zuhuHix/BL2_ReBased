@@ -338,3 +338,30 @@ fn writes_are_not_yet_in_both_modes() {
         assert!(text(&e).contains(expected), "{m:?}: {e}");
     }
 }
+
+/// Review of #786, item 4: an ancestry that stops, short of `Core.Object`, at a class with no super class (an
+/// import-only stand-in) cannot prove the cast fails: `NotRead`, "super class is not known".
+#[test]
+fn off_an_import_only_ancestry_is_not_read() {
+    let mut x = Off::new(true);
+    let space = &mut x.fx.w.space;
+    let stand_in = space.classes.define("Toy.ImportOnly", None, vec![]).unwrap();
+    let below = space.classes.define("Toy.BelowImportOnly", Some(stand_in), vec![]).unwrap();
+    let o = space.alloc(below, "Toy", None, Origin::Runtime).unwrap();
+    let what = x.refused(o);
+    assert!(what.contains("Toy.ImportOnly, whose super class is not known"), "{what}");
+}
+
+/// Review of #786, item 5: a class on the chain with no layout is `NotRead`, not 0.0. The class table gives every
+/// class it declares a layout, so the walk is asked directly about an id the table does not hold.
+#[test]
+fn off_a_class_with_no_layout_on_the_chain_is_not_read() {
+    let x = Off::new(true);
+    let space = &x.fx.w.space;
+    let missing = ClassId::new(1_000_000);
+    assert!(space.classes.get_layout(missing).is_none(), "no layout");
+    let e = super::targetable::targetable(space, missing).unwrap_err();
+    let AttrError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.missing, Missing::NotRead);
+    assert!(n.what.contains("a class with no layout"), "{e}");
+}
