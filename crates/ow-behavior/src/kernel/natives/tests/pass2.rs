@@ -789,14 +789,17 @@ impl P2 {
 }
 
 /// Review of #775, item 3 (the hub's ruling): a refusal from commit step C always carries the partial-writes prefix,
-/// since pass 1 has run by then. A true verdict enables the sequence, and its enabled event's first behavior refuses
-/// before any heap write (so #518's counters alone would not mark it).
+/// since pass 1 has run by then. A true verdict enables the sequence, and its enabled event's first behavior refuses.
+/// The rule is called directly, past the native's counter check (which would add the prefix on its own once pass 1's
+/// writes moved #518's counters), so only the commit's own marking can put the prefix there (review r2 of #775,
+/// item 1).
 #[test]
 fn a_refusal_from_the_reaction_carries_the_prefix() {
     let mut x = p2(true);
     let (h, d, c, _) = standard(&mut x, ("TestPass2Refuse", "ToyPass2Refuse"));
     x.verdict(c, true);
-    match x.register(&h, d) {
+    let pid = crate::kernel::natives::consumer_pid(&x.t.vm, &h).expect("a kernel handle");
+    match crate::kernel::natives::provider_into(&mut x.t.vm, pid, d) {
         Err(VmError::NotYet(n)) => {
             assert_eq!(n.missing, Missing::NotRead);
             assert!(ow_core::notyet::is_partial_writes(&n.to_string()), "{n}");

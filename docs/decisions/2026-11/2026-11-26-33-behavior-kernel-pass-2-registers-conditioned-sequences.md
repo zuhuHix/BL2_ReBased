@@ -65,3 +65,7 @@ unchanged. Links 1, 3, 4, 5, 13 and 14 stop in `maya:8` at the unbound `Pawn.IsP
 `WillowPawn.ApplyBodyClassStartingValues` that call sets `bAlwaysRelevant`, **before** `InitializeBehaviorProviders`,
 so pass 2 is not reached on the installed run yet. The prediction that link 1 finishes `maya:8` waits on
 `IsPlayerPawn`.
+
+The installed Fire run (`tools/verify_fire_event_order.py`, the slice's completed set through the new verdict):
+Reference 33 of 33 rules; Off 31 of 33, the same 2 Off failures as on main, both from the unbound
+`Trigger.TriggerDetachSprites` (pre-existing, not this change).

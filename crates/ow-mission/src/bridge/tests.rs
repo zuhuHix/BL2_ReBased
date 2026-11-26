@@ -2513,6 +2513,9 @@ fn the_bridge_re_evaluates_kernel_registered_conditions_after_its_observers() {
     // The kernel-registered condition, stored under the mission's stock path.
     let vm = env.vm();
     let cell = vm.service::<MissionConditions>().unwrap();
+    // The key the kernel stores a condition under is the mission's stock path: a change of either format fails here
+    // (review r2 of #775, item 2).
+    assert_eq!(ow_behavior::provider::stock_path(vm, mission).unwrap(), s.inner.mission.path());
     cell.borrow_mut().store(s.inner.mission.path(), c);
     s.notify(vm, Notification::StatusChanged).unwrap();
     assert_eq!(*counts.borrow(), ["load", "status"], "the observer reacts once; the condition is not called");
