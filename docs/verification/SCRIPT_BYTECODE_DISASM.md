@@ -37,6 +37,15 @@ start. A wrong operand size desynchronises the stream and fails one of these wit
 instructions. Some opcode layouts had two candidates that decode equally (for example
 `DynArrayFindStruct` as `EwP` versus `EwEP`); those are marked UNVERIFIED in the source.
 
+**An exception the structural oracle cannot see: `New`** (decision 2026-11-26-05). A bare expression is a valid
+statement, so an opcode that is short by one trailing *expression* operand still decodes exactly: the missing operand
+is read as the next statement. `New` was decoded with four operands; the game's handler reads five (outer, name,
+flags, class, template), and both tables pass every check above. The check that tells them apart compares each
+resolved call's argument count with the callee's declared parameters: `python research/script_disasm.py --arg-check`
+(counts only). With five operands it reports 12,968 of 12,978 functions decoding, 30,324 calls resolved, 0 with an
+extra or a missing argument; with four, 5 calls pass an extra argument, each with a `New` among them. Run it as well as
+`--check` after any change to an opcode's operands.
+
 ```text
 python research/script_disasm.py --check
 Core.upk                              44 script functions      44 decode exactly      0 fail

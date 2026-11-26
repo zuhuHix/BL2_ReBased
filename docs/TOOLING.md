@@ -1476,6 +1476,7 @@ listings belong under ignored `local/`.
 
 ```text
 python research/script_disasm.py --check                      # structural validation, ~10 s
+python research/script_disasm.py --arg-check                  # argument counts against declared parameters (counts only)
 python research/script_disasm.py WillowGame.upk StatusMenuInventoryPanelGFxObject.PanelOnInputKey
 python tests/script_disasm_test.py                            # synthetic tests, no game needed
 ```
