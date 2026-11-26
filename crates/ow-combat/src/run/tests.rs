@@ -2300,11 +2300,32 @@ fn the_ai_adopt_gives_the_mind_its_character_class_in_off_only() {
     assert!(!vm.log.iter().any(|l| l.contains("the AI adopt sets the mind's CharacterClass")));
 }
 
-/// Section 8, test 2: the Off player set-up runs `ApplyCharacterClassDefaults` with the controller's `Pawn` set to the
-/// player's pawn, logged once; the `Pawn` stays set afterwards. Reference: no `Pawn` change.
+/// The deferred player side (the hub's ruling on IMPL-LINKS-13-14): off by default, the Off player set-up leaves the
+/// controller's `Pawn` as it was and logs nothing.
+#[test]
+fn the_player_set_up_pawn_is_off_by_default() {
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("maya:4");
+    assert_eq!(run.errors(), Vec::<String>::new());
+    let vm = &mut run.world().vm;
+    assert!(vm.service::<crate::run::player::PlayerPawnDuringSetUp>().is_none(), "off by default");
+    assert_eq!(object(vm, fake.controller, "Pawn").unwrap(), None);
+    let line = crate::run::player::player_pawn_line(vm, fake.pawn);
+    assert!(!vm.log.contains(&line));
+    let (mut run, _fake, _dir) = bridged(ParityMode::Reference, true);
+    assert!(matches!(
+        crate::run::player::enable_player_pawn_during_set_up(&mut run.world().vm),
+        Err(VmError::Registration { .. })
+    ));
+}
+
+/// Section 8, test 2, with the deferred setting turned on: the Off player set-up runs `ApplyCharacterClassDefaults`
+/// with the controller's `Pawn` set to the player's pawn, logged once; the `Pawn` stays set afterwards. Reference: no
+/// `Pawn` change.
 #[test]
 fn the_player_set_up_sets_the_controller_s_pawn_and_keeps_it() {
     let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    crate::run::player::enable_player_pawn_during_set_up(&mut run.world().vm).unwrap();
     run.apply("maya:4");
     run.apply("mayahealth:0.5");
     assert_eq!(run.errors(), Vec::<String>::new());
