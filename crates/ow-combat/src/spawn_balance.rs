@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (decision 2026-11-26-NNN). The spawn's pawn balance, a logged,
+//! Owner: lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (decision 2026-11-26-50). The spawn's pawn balance, a logged,
 //! UNVERIFIED harness input in `ParityMode::Off` (NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 3, the hub's
 //! ruling on #788). AI-assisted (Claude Code).
 //!

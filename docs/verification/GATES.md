@@ -11,7 +11,7 @@ order with its own part, the spawn's balance input and archetype record, Off. `c
 7 ok / 7 not ok, 58.3%, the same links at `Actor.SetPhysics`' "the base search for a walking-type mode", the note's
 first predicted stop, with **no** partial-writes prefix (the note expected one). The picks logged: 
 `PawnBalance_PrimalBeast_Monglet` for the baby and `PawnBalance_PrimalBeastAdult` for the adult. Links 6 and 7 unchanged; 1, 2 and
-8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-50.
 
 **ANALYST-LINK34-AFTER-MIND (2026-11-26, pc-hummer, docs only, on docs/native-link34-after-mind, read and probed on main
 d3be3e5e, rebased onto fc860b5c):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK34_AFTER_MIND.md reads the natives on links 3 and 4 past the mind. It

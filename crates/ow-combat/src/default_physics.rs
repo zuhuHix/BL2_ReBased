@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (decision 2026-11-26-NNN). `WillowPawn.SetDefaultPhysics()` past
+//! Owner: lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (decision 2026-11-26-50). `WillowPawn.SetDefaultPhysics()` past
 //! its gates, and `WillowPawn.StaticCanCloak()` / `StaticSetCanCloak(bool)`, in `ParityMode::Off`. AI-assisted (Claude
 //! Code).
 //!
