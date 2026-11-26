@@ -38,7 +38,10 @@ its two steps, and whether links 3, 4, 5, 13 and 14 then reach their own steps.
   - pass 2's conditions (#771);
   - the rest of section 2's stops, in order.
 
-  The stubs are not answers. They only show the order.
+  The stubs are not answers. They only show the order. **The stubs for rows 7 to 14 wrote nothing** (review r1 of
+  #776, item 3): `SetDefaultStance`'s current stance, `bCanCrouch` and `AimOffset`, the shield's `bPrimed` and the rest
+  stayed as they were. So no later step that reads `CurrentStance` or `AimOffset` was exercised as the game would run
+  it.
 
 ## 2. What link 1 meets, in order (measured by the probe, with each earlier stop stubbed)
 
@@ -57,7 +60,7 @@ that call from `RestartPlayer`.
 | 6 | `SetDeathDefinition` | the direct provider native with `Death_Siren` (empty) | #771 section 5 | — |
 | 7 | the player part | `WillowPlayerPawn.SetDefaultStance` | bound to `NotRead` (NATIVE_GO_DOWN_PATH.md 3.2) | **3.1** |
 | 8 | the arms | `Actor.AttachComponent` | **the rule exists** (`ow-inventory` `attach_mesh`); **unbound in the combat world** | 4.3 |
-| 9 | the arms' materials | `MaterialInstanceConstant.SetParent` and `.SetVectorParameterValue` | **the rules exist** under the `MaterialInstance` keys; the `MaterialInstanceConstant` keys are **unbound** | 4.4 |
+| 9 | the arms' materials (`SetParent`), then `UpdatePreferredColors` through `GetInstancedMaterialInstanceConstant` (`SetVectorParameterValue`) | `MaterialInstanceConstant.SetParent` and `.SetVectorParameterValue` | **the rules exist** under the `MaterialInstance` keys; the `MaterialInstanceConstant` keys are **unbound** | 4.4 |
 | 10 | `ApplyCharacterClassDefaults` → `SetShieldResourcePoolDefinition` → the pool's `ResetIdleTimer` | the `ShieldResourcePool` idle-reset hook | `NotRead`, after the stamp (NATIVE_RESOURCE_POOL_IDLE.md) | **3.2** |
 | 11 | `SetPlayerFOVFromProfile`, `SetSplitDirectionFromProfile` | script and bound natives | runs | — |
 | 12 | `ApplyAttributeStartingValues` → `GetAttributeStartingValuesFromCharacterClass` | `FlagDefinition.ApplyFlagInitializationData(array, object)` | **unbound** | **3.3** |
@@ -121,7 +124,7 @@ The exec only calls the pawn's virtual:
 - then the same on `NextControl`, for as long as the control just set has `bPropagateSetActive`.
 
 **Fitted, UNVERIFIED:**
-- the current and override stance fields sit 4 bytes after the places the layout tool gives `CurrentStance` and
+- the current and override stance fields sit one field after the layout tool's places for `CurrentStance` and
   `OverrideStance`. They are named by their use: the field compared, written and passed to the exit event is the
   current one;
 - `bIsSprinting` is read at its own place exactly.
@@ -132,7 +135,9 @@ The exec only calls the pawn's virtual:
   body class's `AimOffset`;
 - `Pawn_Siren`'s `bCanCrouch` is true;
 - `RunStance0`'s provider has no sequences, so it was never registered (#740). `OnEnterStance` then reaches no
-  registered provider, and the kernel's answer for that (by fit: nothing) was not read.
+  registered provider: **nothing** (the hub's ruling on review r1 of #776, item 1; UNVERIFIED, by fit). The game has
+  no consumer registration of that provider to dispatch the event to. The kernel's own routine for this case was not
+  read.
 
 **Proposed Off answer:**
 - **preflight** (write-free and load-free), each else `VmError::Script`:
@@ -143,7 +148,8 @@ The exec only calls the pawn's virtual:
 - every object read must be resident (the body classes, the stance, the current stance, the archetype), else
   `NotYet { NotRead }`;
 - the rotation branch, when it would run: `NotYet { NotRead }` ("the controller's rotation set");
-- the event firings by the kernel rule, with its own refusals;
+- the event firings by the kernel rule, with its own refusals. An event on a provider the consumer has not registered
+  answers **nothing**, with no write (the hub's ruling; UNVERIFIED, by fit);
 - the node lookup and `SetSkelControlActive` by the rules above, planned before the first write.
 
 All refusals come before the first write. A refusal from a behavior the events run comes after writes and carries the
@@ -237,8 +243,10 @@ in the probe (`len 0`). So nothing happens.
 - `Pawn`, `GearboxPawn`, `WillowPawn` and `WillowAIPawn`: a resident `Controller` with `bIsPlayer`;
 - any other class: undecided.
 
-**Proposed:** bind the native key `Pawn.IsPlayerPawn()` in Off to that one rule. The undecided case is its
-`NotYet { NotRead }`, and a lazy `Controller` is its `NotRead`. No second copy.
+**Proposed:** bind the native key `Pawn.IsPlayerPawn()` in Off to that one rule body, through a public wrapper with
+the native's own refusal texts and record (review r1 of #776, item 5): the undecided class, a lazy `Controller` and an
+unloaded receiver are each its `NotYet { NotRead }`. Hook 2 keeps its own texts. No second copy of the rule. (Done in
+the key-binding PR, fix/is-player-pawn-and-unbound-keys.)
 
 ### 4.2 The body class's stance objects
 
@@ -274,7 +282,9 @@ they are; `MaterialInstanceTimeVarying`'s keys stay unbound until something reac
   Caveats:
   - the probe skipped pass 2's conditions, so a condition's or a linked objective's residency (#771, open question 2)
     may stop it at row 5;
-  - the probe's `IsPlayerPawn` stub answered true for the player pawn, as the pawn test does.
+  - the probe's `IsPlayerPawn` stub answered true for the player pawn, as the pawn test does;
+  - the stubs for rows 7 to 14 wrote nothing (section 1). A later step reading `CurrentStance` or `AimOffset` may
+    meet what this probe could not show.
 - **Links 3, 4, 13 and 14:**
   - they then reach **their own first step**: `spawn:baby:6` for link 3, `spawn:adult:7` for the others;
   - they stop at `TargetableAttributeValueResolver`'s Off `get` (NATIVE_ATTRIBUTES.md, "Not read yet"), a `NotRead`
@@ -287,7 +297,9 @@ they are; `MaterialInstanceTimeVarying`'s keys stay unbound until something reac
 1. `SetDefaultStance` on a toy player pawn, with no current stance, Run selected:
    - the current stance is set, `bNetDirty` set;
    - `bCanCrouch` from the archetype;
-   - `OnEnterStance` fired once, and no `OnExitStance`.
+   - `OnEnterStance` fired once, and no `OnExitStance`;
+   - with the stance's provider not registered on the consumer (Maya's case): the same writes, and the event
+     answers nothing (no refusal, no further write).
 2. The pick: injured, then crouched, then sprinting (`bIsSprinting` 1), each selecting its stance;
    `bUseParentStances` with a parent reads the parent's stances.
 3. The same stance again: nothing written. An override held, then a Run stance: nothing written.
@@ -320,7 +332,7 @@ they are; `MaterialInstanceTimeVarying`'s keys stay unbound until something reac
 1. **UNVERIFIED:** every rule above.
 2. **Not read:**
    - the controller's rotation set (3.1 step 9);
-   - the kernel's answer for an event on an unregistered provider;
+   - the kernel's own routine for an event on an unregistered provider (ruled "nothing", by fit);
    - the run-time name of 3.2's event;
    - the flag value resolver's set-up step (3.3);
    - the level number and effect applier of 3.4;

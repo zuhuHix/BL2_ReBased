@@ -6,8 +6,9 @@ Update this file in the commit that changes a number. Paste real output in repor
 AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA9_AND_AFTER.md lists what link 1 meets after its predicted
 `InitializeBehaviorProviders` stop, measured by a local probe: an installed Off strict `--slice-gate` with each earlier
 stop stubbed and a call trace, reverted and not committed. Today's stop sits in the health set-up's
-`ApplyCharacterClassDefaults` → `BodySelectClass`. Four natives are read, each a no-op for Maya: `SetDefaultStance`,
-the shield idle hook, `ApplyFlagInitializationData` and the playthrough effects. Four wiring gaps have rules on main
+`ApplyCharacterClassDefaults` → `BodySelectClass`. Four natives are read: three no-ops for Maya (the shield idle hook,
+the flag list, the playthrough effects); `SetDefaultStance` writes the Run stance, and its event reaches no registered
+provider (by fit). Four wiring gaps have rules on main
 (`IsPlayerPawn`, `AttachComponent` in the combat world, the `MaterialInstanceConstant` keys, the stance objects'
 preload). With every stop stubbed link 1 is ok, and links 3, 4, 13 and 14 reach their own spawn steps
 (`TargetableAttributeValueResolver`). No code changed, so no measured number moved. UNVERIFIED in game.

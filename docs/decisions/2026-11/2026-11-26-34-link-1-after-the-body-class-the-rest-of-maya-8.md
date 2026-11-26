@@ -24,11 +24,21 @@ check changed.
   - after lane E's two stops it meets, in order: `IsPlayerPawn` (unbound); `RunStance0` unloaded;
     `SetDefaultStance`; `AttachComponent` in the combat world; the `MaterialInstanceConstant` keys; the shield idle
     hook; `ApplyFlagInitializationData`; the playthrough effects;
-  - the four natives read are no-ops for Maya: no shield, an empty flag list, playthrough 0, and the run stance's
-    provider not registered;
+  - of the four natives read, three are no-ops for Maya: the shield idle hook (no shield), the flag list (empty) and
+    the playthrough effects (playthrough 0). `SetDefaultStance` writes the Run stance (the current stance,
+    `bNetDirty`, `bCanCrouch`, the `AimOffset` lookup), and its `OnEnterStance` reaches no registered provider (by
+    fit);
   - with every stop stubbed, link 1 is ok, and links 3, 4, 13 and 14 stop at their own spawn steps.
 - **Proposed:**
   - Off answers for the four natives;
   - bind the three existing rules where they are missing;
   - a labelled harness preload of the body class's objects (the hub's call).
+- **Review r1 (#776):**
+  - an event on an unregistered provider answers nothing (the hub's ruling; UNVERIFIED, by fit), with a test;
+  - `SetDefaultStance` is no longer called a no-op;
+  - the probe's stubs for rows 7 to 14 wrote nothing, so later reads of `CurrentStance` or `AimOffset` were not
+    exercised;
+  - row 9 names `UpdatePreferredColors`;
+  - `IsPlayerPawn` gets a public wrapper with its own refusals, done in the key-binding PR;
+  - a field place is said as "one field after", not as an offset.
 - **Clean room:** a different lane implements this note.
