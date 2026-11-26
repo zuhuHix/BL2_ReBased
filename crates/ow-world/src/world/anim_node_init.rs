@@ -55,6 +55,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
+use super::additive_override::{self, Reads};
 use super::anim_tree_copy::{class_of, class_path, elements, object_of, read, truth, write};
 use super::body_composition::{field, set_field};
 use super::per_bone_weights::Build;
@@ -328,13 +329,6 @@ fn resets(vm: &Vm, node: ObjRef) -> Result<bool, VmError> {
     Ok(!(issuing && named))
 }
 
-/// Whether `o` is resident: neither a handle the store has not loaded (or failed) nor a slotless stand-in.
-fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
-    let x = vm.space.heap.get(o)?;
-    let slotless = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
-    Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
-}
-
 /// The text of the name the additive override looks up on `node`, or `None` for no lookup (the name None).
 /// `AddAnimSeqName` is read as a name whatever the auto-name flag (review r1 of #752, item 1: the write reads or
 /// writes it either way, so a malformed declaration is refused here, before any write).
@@ -366,31 +360,21 @@ fn additive_lookup(vm: &Vm, component: ObjRef, node: ObjRef, target: &str) -> Re
     if object_of(&read(vm, component, "SkeletalMesh")?).is_none() {
         return Ok(());
     }
-    let mut sets = elements(&read(vm, component, "AnimSets")?, "AnimSets")?;
+    let sets = elements(&read(vm, component, "AnimSets")?, "AnimSets")?;
     if sets.is_empty() {
         return Ok(());
     }
-    if !truth(&read(vm, node, "bReverseAnimSeqSearchOrder")?) {
-        sets.reverse();
-    }
-    for s in sets {
-        let Some(set) = object_of(&s) else { continue };
-        if !resident(vm, set)? {
-            return Err(not_read(not_loaded(vm, set)));
-        }
-        for q in elements(&read(vm, set, "Sequences")?, "Sequences")? {
-            let Some(seq) = object_of(&q) else { continue };
-            if !resident(vm, seq)? {
-                return Err(not_read(not_loaded(vm, seq)));
-            }
-            match read(vm, seq, "SequenceName")? {
-                Value::Name(n) if vm.space.names.text(n).eq_ignore_ascii_case(target) => {
-                    return Err(not_read(ADDITIVE_LINKUP));
-                }
-                Value::Name(_) => {}
-                other => return Err(script(format!("SequenceName holds {}, not a name", other.kind_name()))),
-            }
-        }
+    let in_order = truth(&read(vm, node, "bReverseAnimSeqSearchOrder")?);
+    let reads = Reads {
+        array: &|vm, o, name| elements(&read(vm, o, name)?, name),
+        name: &|vm, o, name| match read(vm, o, name)? {
+            Value::Name(n) => Ok(n),
+            other => Err(script(format!("{name} holds {}, not a name", other.kind_name()))),
+        },
+        not_loaded: &|vm, o, _role| not_read(not_loaded(vm, o)),
+    };
+    if additive_override::find_sequence(vm, &reads, sets, in_order, target)?.is_some() {
+        return Err(not_read(ADDITIVE_LINKUP));
     }
     Ok(())
 }
@@ -696,16 +680,13 @@ pub fn write_head(vm: &mut Vm, component: ObjRef, node: ObjRef, build: Option<&B
             // The additive override (D's corrections): the auto-name (interned only here), then the re-set. The
             // preflight refused a lookup match, so `AddAnimSeq` is None.
             if class_path(vm, class_of(vm, node)?) == ADDITIVE {
-                let name = if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) {
-                    let n = Value::Name(vm.space.names.intern(AUTO_NAME));
-                    write(vm, node, "AddAnimSeqName", n.clone())?;
-                    n
-                } else {
-                    read(vm, node, "AddAnimSeqName")?
+                let auto = truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?);
+                // An int goes through `write_int` (its declared kind), as this module writes every index.
+                let put = |vm: &mut Vm, o: ObjRef, name: &str, v: Value| match v {
+                    Value::Int(i) => write_int(vm, o, name, i),
+                    v => write(vm, o, name, v),
                 };
-                write(vm, node, "AddAnimSeqName", name)?;
-                write(vm, node, "AddAnimSeq", Value::Object(None))?;
-                write_int(vm, node, "AddAnimLinkupIndex", -1)?;
+                additive_override::write_override(vm, node, auto, AUTO_NAME, &read, &put)?;
             }
             write_int(vm, node, "CachedNumDesiredBones", 0)?;
             write(vm, node, "AnimSeqName", kept)?;

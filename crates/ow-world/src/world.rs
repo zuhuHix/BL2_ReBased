@@ -651,6 +651,9 @@ pub mod skeletal;
 pub mod bone_transform;
 // UpdateAnimations' per-node step (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md; lane IMPL-UPDATEANIMATIONS-TREE-TICKS).
 pub mod tree_ticks;
+// The additive override and the residency test tree_ticks, anim_node_init and aim_offset share (lane
+// ADDITIVE-OVERRIDE-HELPER).
+pub(crate) mod additive_override;
 
 pub mod localize;
 
