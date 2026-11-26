@@ -76,7 +76,7 @@ pub fn expression_class_not_ready() -> String {
     format!("GetScalarParameterValue: the class {SCALAR_EXPRESSION}, not loaded (a class load is a write)")
 }
 
-fn class_path(vm: &Vm, c: ClassId) -> String {
+pub(super) fn class_path(vm: &Vm, c: ClassId) -> String {
     vm.space.classes.get_layout(c).map(|l| l.path().to_string()).unwrap_or_else(|| format!("{c:?}"))
 }
 
@@ -92,7 +92,7 @@ fn resident(vm: &Vm, o: ObjRef, refusal: &'static str) -> Result<(), VmError> {
 
 /// The path of `class`'s first native class, from `class` up: the class body's fitted native bit where the code index
 /// holds the class (a body that did not decode counts as native), else the class table's mark. Reads only.
-fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
+pub(super) fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
     let code = vm.defs.code();
     let mut cursor = Some(class);
     while let Some(c) = cursor {
@@ -113,14 +113,23 @@ fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
 
 /// What `SetMaterial` will do, decided before any write.
 #[derive(Debug, Clone, PartialEq)]
-enum MaterialPlan {
+pub(super) enum MaterialPlan {
     Nothing,
-    /// The new `Materials` array, then `bNeedsReattach` = true.
-    Write(Vec<Value>),
+    /// The new `Materials` array (the material at `index`), then `bNeedsReattach` = true.
+    Write { entries: Vec<Value>, index: usize },
+}
+
+/// The material `SetMaterial` is given: an object (or None), or one not made yet, which no entry can hold
+/// (`GetInstancedMaterialInstanceConstant`'s, `super::material_instances`). For that one the plan's entry at the index
+/// is a None placeholder the caller replaces with the made object.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Setting {
+    Material(Option<ObjRef>),
+    NotMadeYet,
 }
 
 /// `SetMaterial`'s preflight (module documentation), read only.
-fn plan_set_material(vm: &Vm, component: ObjRef, index: i32, material: Option<ObjRef>) -> Result<MaterialPlan, VmError> {
+pub(super) fn plan_set_material(vm: &Vm, component: ObjRef, index: i32, material: Setting) -> Result<MaterialPlan, VmError> {
     resident(vm, component, SET_MATERIAL_NOT_LOADED)?;
     // 1. The declarations first.
     component_setters::schemas(vm, component, &component_setters::REATTACH_FIELDS, SET_WHAT)?;
@@ -136,9 +145,12 @@ fn plan_set_material(vm: &Vm, component: ObjRef, index: i32, material: Option<Ob
     let Some(entries) = list.elements() else {
         return Err(bad(SET_WHAT, format!("Materials holds {}, not an array", list.kind_name())));
     };
-    // 3. The entry already holds the material.
-    let want = Value::Object(material);
-    if entries.get(index) == Some(&want) {
+    // 3. The entry already holds the material (never for one not made yet).
+    let want = match material {
+        Setting::Material(m) => Value::Object(m),
+        Setting::NotMadeYet => Value::Object(None),
+    };
+    if material != Setting::NotMadeYet && entries.get(index) == Some(&want) {
         return Ok(MaterialPlan::Nothing);
     }
     // 4. The deferred reattach's refusals (today's reattach_check; PR #709 amends its owner branch).
@@ -149,7 +161,15 @@ fn plan_set_material(vm: &Vm, component: ObjRef, index: i32, material: Option<Ob
         next.resize(index + 1, Value::Object(None));
     }
     next[index] = want;
-    Ok(MaterialPlan::Write(next))
+    Ok(MaterialPlan::Write { entries: next, index })
+}
+
+/// `SetMaterial`'s commit: `Materials`, then `bNeedsReattach` = true, every write after the first marked by
+/// `component_setters::after_writes`.
+pub(super) fn commit_set_material(vm: &mut Vm, component: ObjRef, entries: Vec<Value>) -> Result<(), VmError> {
+    component_setters::write(vm, component, "Materials", Value::array(entries), SET_WHAT)?;
+    component_setters::write(vm, component, "bNeedsReattach", Value::Bool(true), SET_WHAT)
+        .map_err(component_setters::after_writes)
 }
 
 /// `MeshComponent.SetMaterial(int ElementIndex, MaterialInterface Material)` in Off (module documentation).
@@ -163,13 +183,9 @@ pub fn set_material(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Object(o) | Value::Interface(o) => *o,
         other => return Err(bad(SET_WHAT, format!("Material holds {}, not an object", other.kind_name()))),
     };
-    match plan_set_material(c.vm, component, index, material)? {
+    match plan_set_material(c.vm, component, index, Setting::Material(material))? {
         MaterialPlan::Nothing => {}
-        MaterialPlan::Write(entries) => {
-            component_setters::write(c.vm, component, "Materials", Value::array(entries), SET_WHAT)?;
-            component_setters::write(c.vm, component, "bNeedsReattach", Value::Bool(true), SET_WHAT)
-                .map_err(component_setters::after_writes)?;
-        }
+        MaterialPlan::Write { entries, .. } => commit_set_material(c.vm, component, entries)?,
     }
     Ok(Value::None)
 }
