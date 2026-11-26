@@ -2390,6 +2390,7 @@ fn the_player_set_up_pawn_is_off_by_default() {
 fn the_player_set_up_sets_the_controller_s_pawn_and_keeps_it() {
     let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
     crate::run::player::enable_player_pawn_during_set_up(&mut run.world().vm).unwrap();
+    assert_eq!(run.world().vm.log.iter().filter(|l| **l == crate::run::PLAYER_PAWN_SETUP).count(), 1, "the set-up line");
     run.apply("maya:4");
     run.apply("mayahealth:0.5");
     assert_eq!(run.errors(), Vec::<String>::new());

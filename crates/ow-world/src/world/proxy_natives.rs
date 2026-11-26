@@ -12,8 +12,10 @@
 //! event resolved as Off event dispatch resolves it, in loaded code only (code not loaded is [`EVENT_NOT_LOADED`]); then
 //! **the touch update**: a world with no collision service is [`TOUCH_UPDATE`] (`LayerAbsent`), unless the Off-only
 //! harness setting [`NothingTouched`] is on (the hub's ruling on review of #802: no touch begins or ends, one
-//! harness-input line, [`NOTHING_TOUCHED_LINE`]); a world with one is [`TOUCH_RULE`] (`NotRead`, the overlap rule is
-//! not read). The commit, in the note's order: `CollisionHeight` := Height, `CollisionRadius` := Radius (by fit), the
+//! harness-input line, [`NOTHING_TOUCHED_LINE`]); under the same setting a service with no level geometry
+//! ([`crate::placement::NoLevel`], which the combat world installs since #807) takes the stand-in too, with its own
+//! line [`NOTHING_TOUCHED_NO_LEVEL_LINE`] (lane IMPL-PLAYER-PAWN-FLAG, UNVERIFIED); any other service is
+//! [`TOUCH_RULE`] (`NotRead`, the overlap rule is not read). The commit, in the note's order: `CollisionHeight` := Height, `CollisionRadius` := Radius (by fit), the
 //! deferred reattach (`bNeedsReattach`), the event, then `bNetDirty` := true. A refusal after the first write is
 //! prefixed.
 //!
@@ -51,6 +53,11 @@ pub const HARD_ATTACH_CLASSES: [&str; 4] =
 /// The harness line of the touch update's stand-in, once per call.
 pub const NOTHING_TOUCHED_LINE: &str = "harness input: Actor.SetCollisionSize's touch update found nothing (a world \
      with no collision service; UNVERIFIED stand-in, the hub's ruling on review of #802)";
+/// The harness line of the same stand-in in a world whose collision service holds no geometry (lane
+/// IMPL-PLAYER-PAWN-FLAG), once per call.
+pub const NOTHING_TOUCHED_NO_LEVEL_LINE: &str = "harness input: Actor.SetCollisionSize's touch update found nothing (a \
+     collision service with no level geometry; UNVERIFIED stand-in, the hub's ruling on review of #802, extended for \
+     lane IMPL-PLAYER-PAWN-FLAG)";
 /// The set-up line of [`enable_nothing_touched`].
 pub const NOTHING_TOUCHED_INPUT: &str = "harness input: the world turns on SetCollisionSize's nothing-touched stand-in \
      (the hub's ruling on review of #802; UNVERIFIED)";
@@ -144,8 +151,8 @@ pub struct SizePlan {
     pub cylinder: Option<ObjRef>,
     /// Whether `CollisionChanged` resolves to a function (else no event).
     pub event: bool,
-    /// Whether the touch update is the stand-in (log its line).
-    pub stand_in: bool,
+    /// The touch update's stand-in line to log, when the stand-in applies.
+    pub stand_in: Option<&'static str>,
 }
 
 /// [`SizePlan`] for `actor` (module documentation). Reads only.
@@ -168,8 +175,11 @@ pub fn plan_collision_size(vm: &Vm, actor: ObjRef) -> Result<SizePlan, VmError> 
         None => return Err(NotYet::not_read(EVENT_NOT_LOADED, RECORD).into()),
     };
     let stand_in = match crate::placement::collision_model(vm)? {
+        // A service with no geometry (link 9's NoLevel, which the combat world installs since #807) under the setting:
+        // the same stand-in (lane IMPL-PLAYER-PAWN-FLAG; UNVERIFIED, NATIVE_SPAWN_SETBASEVALUE.md open question 4).
+        Some(m) if m.holds_no_geometry() && vm.service::<NothingTouched>().is_some() => Some(NOTHING_TOUCHED_NO_LEVEL_LINE),
         Some(_) => return Err(NotYet::not_read(TOUCH_RULE, RECORD).into()),
-        None if vm.service::<NothingTouched>().is_some() => true,
+        None if vm.service::<NothingTouched>().is_some() => Some(NOTHING_TOUCHED_LINE),
         None => return Err(NotYet::layer_absent(TOUCH_UPDATE, TOUCH_LAYER, RECORD).into()),
     };
     Ok(SizePlan { cylinder, event, stand_in })
@@ -185,8 +195,8 @@ pub fn set_collision_size(vm: &mut Vm, actor: ObjRef, radius: f32, height: f32) 
             setters::write(vm, c, "CollisionRadius", Value::Float(radius), SIZE)?;
             setters::write(vm, c, "bNeedsReattach", Value::Bool(true), SIZE)?;
         }
-        if plan.stand_in {
-            vm.log.push(NOTHING_TOUCHED_LINE.to_string());
+        if let Some(line) = plan.stand_in {
+            vm.log.push(line.to_string());
         }
         if plan.event {
             crate::actors::send_event(vm, actor, "CollisionChanged", vec![])?;

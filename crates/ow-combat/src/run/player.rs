@@ -551,12 +551,19 @@ pub(crate) fn with_player_pawn<T>(
 /// The harness setting that sets the controller's `Pawn` during the player set-up (the hub's ruling on #796; a VM
 /// service, its presence turns it on). **Deferred, off by default** (the hub's ruling on IMPL-LINKS-13-14): setting
 /// the `Pawn` runs `WillowPlayerPawn.SetUpTradeInteraction`, whose `PawnInteractionProxy.Initialize` calls
-/// `SetCollisionSize`, `SetHardAttach` and `SetBase` on the proxy, outside NATIVE_ACTOR_SETBASE.md's seven tables; it
-/// is turned on once those are read (queue 0aq).
+/// `SetCollisionSize`, `SetHardAttach` and `SetBase` on the proxy, outside NATIVE_ACTOR_SETBASE.md's seven tables. Those
+/// three are read and bound since #805 (queue 0aq), so the slice gate's combat set-up turns it on (lane
+/// IMPL-PLAYER-PAWN-FLAG); it stays off by default everywhere else.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlayerPawnDuringSetUp;
 
-/// Turns [`PlayerPawnDuringSetUp`] on (Off only, else a registration refusal; twice is a registration refusal too).
+/// The set-up line of [`enable_player_pawn_during_set_up`].
+pub const PLAYER_PAWN_SETUP: &str = "harness input: the player set-up sets the controller's Pawn before \
+     ApplyCharacterClassDefaults, as the possess leaves it in the game (the hub's ruling on #796, turned on for lane \
+     IMPL-PLAYER-PAWN-FLAG; UNVERIFIED)";
+
+/// Turns [`PlayerPawnDuringSetUp`] on, logging [`PLAYER_PAWN_SETUP`] (Off only, else a registration refusal; twice is
+/// a registration refusal too).
 pub fn enable_player_pawn_during_set_up(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Err(VmError::Registration {
@@ -564,7 +571,9 @@ pub fn enable_player_pawn_during_set_up(vm: &mut Vm) -> Result<(), VmError> {
             reason: "the player set-up's Pawn is an Off harness setting",
         });
     }
-    vm.add_service(PlayerPawnDuringSetUp).map(|_| ())
+    vm.add_service(PlayerPawnDuringSetUp)?;
+    vm.log.push(PLAYER_PAWN_SETUP.to_string());
+    Ok(())
 }
 
 /// The harness line of the player set-up's controller `Pawn` (the hub's ruling on #796).

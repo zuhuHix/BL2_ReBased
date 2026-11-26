@@ -301,12 +301,29 @@ fn set_collision_size_writes_in_order_under_the_stand_in() {
     x.size(b).unwrap();
     assert_eq!(x.get(b, "bNetDirty"), Value::Bool(true));
     assert_eq!(x.get(other, "bNeedsReattach"), Value::Bool(false), "no reattach on a non-cylinder");
-    // A collision service: the overlap rule's NotRead, nothing written.
+    // A collision service with no geometry (NoLevel) under the setting (lane IMPL-PLAYER-PAWN-FLAG): the stand-in, with
+    // its own line.
     crate::placement::install_collision(x.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
-    let (d, _) = sized(&mut x, "Engine.Actor");
-    let before = x.counters();
-    assert_eq!(not_yet(x.size(d)), (Missing::NotRead, TOUCH_RULE.to_string()));
-    assert_eq!(x.counters(), before);
+    let (d, dc) = sized(&mut x, "Engine.Actor");
+    let logged = x.w.vm.log.len();
+    x.size(d).unwrap();
+    assert_eq!(x.get(dc, "bNeedsReattach"), Value::Bool(true));
+    assert_eq!(&x.w.vm.log[logged..], [NOTHING_TOUCHED_NO_LEVEL_LINE.to_string()], "one line");
+    // A service with geometry: the overlap rule's NotRead, nothing written.
+    let mut g = fx();
+    enable_nothing_touched(g.vm()).unwrap();
+    crate::placement::install_collision(g.vm(), Rc::new(WithGeometry)).unwrap();
+    let (e, _) = sized(&mut g, "Engine.Actor");
+    let before = g.counters();
+    assert_eq!(not_yet(g.size(e)), (Missing::NotRead, TOUCH_RULE.to_string()));
+    assert_eq!(g.counters(), before);
+    // NoLevel without the setting: the overlap rule's NotRead too.
+    let mut n = fx();
+    crate::placement::install_collision(n.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
+    let (f, _) = sized(&mut n, "Engine.Actor");
+    let before = n.counters();
+    assert_eq!(not_yet(n.size(f)), (Missing::NotRead, TOUCH_RULE.to_string()));
+    assert_eq!(n.counters(), before);
     // The setting is Off only and turned on once.
     assert!(matches!(enable_nothing_touched(x.vm()), Err(VmError::Registration { .. })), "twice");
     let mut r = fx_in(ParityMode::Reference);
@@ -521,5 +538,20 @@ fn reference_binds_neither() {
     for path in ["Engine.Actor.SetCollisionSize", "Engine.Actor.SetHardAttach"] {
         let f = x.vm().find_function(path).unwrap();
         assert!(!x.w.vm.is_bound(f), "{path}");
+    }
+}
+
+/// A collision service with level geometry (it answers clear, but does not claim to hold none).
+struct WithGeometry;
+
+impl crate::placement::SpawnCollision for WithGeometry {
+    fn box_test(&self, _: [f32; 3], _: [f32; 3], _: crate::placement::Mode) -> Result<crate::placement::Test, VmError> {
+        Ok(crate::placement::Test::Clear)
+    }
+    fn box_sweep(&self, _: [f32; 3], _: [f32; 3], _: [f32; 3]) -> Result<crate::placement::Sweep, VmError> {
+        Ok(crate::placement::Sweep::Clear)
+    }
+    fn point_sweep(&self, _: [f32; 3], _: [f32; 3]) -> Result<crate::placement::Sweep, VmError> {
+        Ok(crate::placement::Sweep::Clear)
     }
 }
