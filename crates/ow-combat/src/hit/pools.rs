@@ -41,6 +41,13 @@ fn float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
 /// in `WillowGame`. The note names the classes without their package. Before this, all five were matched under
 /// `Engine`, so the installed `WillowGame.AmmoResourcePool` met the unrecorded-override refusal.
 pub fn reset_idle_timer(vm: &mut Vm, pool: ObjRef) -> Result<(), VmError> {
+    // The shield's hook (lane IMPL-MAYA9-NATIVES, NATIVE_MAYA9_AND_AFTER.md section 3.2) is planned before the stamp:
+    // it reads nothing the stamp writes, so its refusals come before any write.
+    let class = vm.space.heap.get(pool)?.class;
+    let shield_path = vm.space.classes.get_layout(class).is_some_and(|l| {
+        l.path().as_str().eq_ignore_ascii_case("willowgame.shieldresourcepool")
+    });
+    let shield = if shield_path { shield_plan(vm, pool)? } else { None };
     let time = vm.world_time_seconds()?;
     set_required(
         vm,
@@ -59,13 +66,148 @@ pub fn reset_idle_timer(vm: &mut Vm, pool: ObjRef) -> Result<(), VmError> {
     match path.to_ascii_lowercase().as_str() {
         "engine.resourcepool" | "engine.healthresourcepool" | "willowgame.ammoresourcepool"
         | "willowgame.experienceresourcepool" => Ok(()),
-        "willowgame.shieldresourcepool" => Err(NotYet::not_read(
-            "ShieldResourcePool idle-reset hook: provider chain and final function (stamp already written)", RECORD,
-        ).into()),
+        "willowgame.shieldresourcepool" => match shield {
+            // `bPrimed` changed: written, then the shield's script event (its refusals come after the stamp).
+            Some((shield, primed)) => {
+                let p = vm.space.prop(vm.space.heap.get(shield)?.class, "bPrimed").ok_or_else(|| shield_bad("no bPrimed"))?;
+                vm.space.write(shield, ow_object::ids::PropAddr::scalar(p), Value::Bool(primed))?;
+                super::call_method(vm, shield, SHIELD_EVENT, Vec::new())
+                    .map(|_| ())
+                    .map_err(|e| match e {
+                        VmError::NotYet(n) => VmError::NotYet(n.after_partial_writes()),
+                        other => other,
+                    })
+            }
+            None => Ok(()),
+        },
         _ => Err(NotYet::not_read(
             format!("{path} native idle-reset hook/override (stamp already written)"), RECORD,
         ).into()),
     }
+}
+
+/// The record of the shield hook (lane IMPL-MAYA9-NATIVES).
+pub const RECORD_SHIELD: &str = "docs/verification/NATIVE_MAYA9_AND_AFTER.md (section 3.2)";
+/// The shield's script event (by fit: the routine finds it by a name kept at run time, not read).
+pub const SHIELD_EVENT: &str = "ShieldPrimedStateChanged";
+pub const SHIELD_NOT_LOADED: &str = "ShieldResourcePool idle-reset hook: an object the store has not loaded (a load is a write)";
+pub const SHIELD_NO_DEFINITION: &str =
+    "ShieldResourcePool idle-reset hook: a shield without a definition (the game reads it unchecked)";
+
+fn shield_bad(message: impl Into<String>) -> VmError {
+    VmError::Script { function: "ShieldResourcePool idle-reset hook".to_string(), message: message.into() }
+}
+
+/// `o`'s `name` with its declared kind, read without a load, else a script error naming it.
+fn shield_read(vm: &Vm, o: ObjRef, name: &str) -> Result<(Value, PropKind), VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm.space.prop(class, name).ok_or_else(|| shield_bad(format!("declares no {name}")))?;
+    let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| shield_bad(format!("{name} undeclared")))?;
+    Ok((vm.space.read(o, ow_object::ids::PropAddr::scalar(p))?.clone(), kind))
+}
+
+fn shield_object(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    match shield_read(vm, o, name)? {
+        (Value::Object(x), PropKind::Object { .. }) => Ok(x),
+        _ => Err(shield_bad(format!("{name} is not declared as an object"))),
+    }
+}
+
+fn shield_float(vm: &Vm, o: ObjRef, name: &str) -> Result<f32, VmError> {
+    match shield_read(vm, o, name)? {
+        (Value::Float(f), PropKind::Float | PropKind::FloatAttribute) => Ok(f),
+        _ => Err(shield_bad(format!("{name} is not declared as a float"))),
+    }
+}
+
+fn shield_bool(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    match shield_read(vm, o, name)? {
+        (Value::Bool(b), PropKind::Bool) => Ok(b),
+        _ => Err(shield_bad(format!("{name} is not declared as a bool"))),
+    }
+}
+
+fn shield_resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        return Err(NotYet::not_read(SHIELD_NOT_LOADED, RECORD_SHIELD).into());
+    }
+    Ok(())
+}
+
+fn shield_is_a(vm: &Vm, o: ObjRef, path: &str) -> Result<bool, VmError> {
+    let mut cursor = Some(vm.space.heap.get(o)?.class);
+    let mut steps = 0;
+    while let Some(c) = cursor.filter(|_| steps < 256) {
+        steps += 1;
+        let Some(l) = vm.space.classes.get_layout(c) else { return Ok(false) };
+        if l.path().as_str().eq_ignore_ascii_case(path) {
+            return Ok(true);
+        }
+        cursor = l.super_class();
+    }
+    Ok(false)
+}
+
+/// Whether a shield is primed by mechanism `mechanism` (NATIVE_MAYA9_AND_AFTER.md section 3.2's table): C the pool's
+/// `CurrentValue`, Min its `MinValue`, Max its `MaxValue`, F its `bHasPoolBeenFullSinceLastBeingDepleted`. Ordered
+/// float compares, so a NaN fails each.
+pub fn primed(mechanism: u8, c: f32, min: f32, max: f32, full: bool) -> bool {
+    match mechanism {
+        1 => c == max,
+        2 => c <= min || !full,
+        3 => c <= min,
+        4 => true,
+        5 => c > min,
+        6 => c > min && full,
+        _ => false,
+    }
+}
+
+/// The shield hook's plan (section 3.2), read only: `Some((shield, primed))` when `bPrimed` changes.
+fn shield_plan(vm: &Vm, pool: ObjRef) -> Result<Option<(ObjRef, bool)>, VmError> {
+    let (c, min, max) = (
+        shield_float(vm, pool, "CurrentValue")?,
+        shield_float(vm, pool, "MinValue")?,
+        shield_float(vm, pool, "MaxValue")?,
+    );
+    let full = shield_bool(vm, pool, "bHasPoolBeenFullSinceLastBeingDepleted")?;
+    if shield_object(vm, pool, "Definition")?.is_none() {
+        return Ok(None);
+    }
+    let Some(provider) = shield_object(vm, pool, "AssociatedProvider")? else { return Ok(None) };
+    shield_resident(vm, provider)?;
+    if !shield_is_a(vm, provider, "Engine.Controller")? {
+        return Ok(None);
+    }
+    let Some(pawn) = shield_object(vm, provider, "Pawn")? else { return Ok(None) };
+    shield_resident(vm, pawn)?;
+    if !shield_is_a(vm, pawn, "WillowGame.WillowPawn")? {
+        return Ok(None);
+    }
+    let first = match shield_read(vm, pawn, "EquippedItems")? {
+        (v, _) => v.elements().and_then(|e| e.first()).and_then(|v| match v {
+            Value::Object(o) => *o,
+            _ => None,
+        }),
+    };
+    let Some(shield) = first else { return Ok(None) };
+    shield_resident(vm, shield)?;
+    if !shield_is_a(vm, shield, "WillowGame.WillowShield")? {
+        return Ok(None);
+    }
+    let Some(def) = shield_object(vm, shield, "ShieldDef")? else {
+        return Err(NotYet::not_read(SHIELD_NO_DEFINITION, RECORD_SHIELD).into());
+    };
+    shield_resident(vm, def)?;
+    let mechanism = match shield_read(vm, def, "ShieldPrimeMechanism")? {
+        (Value::Byte(b), PropKind::Byte { .. }) => b,
+        _ => return Err(shield_bad("ShieldPrimeMechanism is not declared as a byte")),
+    };
+    let now = primed(mechanism, c, min, max, full);
+    let was = shield_bool(vm, shield, "bPrimed")?;
+    Ok((now != was).then_some((shield, now)))
 }
 
 /// Strict stored-float delay comparison; only a passed delay clears the stamp. No world read or regeneration.
