@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-GETPHYSXLEVEL-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-getphysxlevel-and-after from main
+2db1433d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_GETPHYSXLEVEL_AND_AFTER.md reads `Engine.GetPhysXLevel`. It
+returns the engine's transient `PhysXLevel`, copied at start-up from the player's `[SystemSettings] PhysXLevel` (clamped
+0 to 2; shipped default 0; no hardware query). It proposes a harness setting, default 0, logged and UNVERIFIED. At 0
+`SetupSkeletalMeshPhysicsForPhysXEffects` writes nothing. Above 0 it needs a physics layer: the physics-asset instance,
+two foot force fields and a bone attach. Predicted next stop on maya:8: `InitializeBehaviorProviders`' pass-2
+`LayerAbsent` (`PlayerEvents_Siren`). No code changed, so no measured number moved; the slice gate was not run for this
+lane. UNVERIFIED in game.
+
 **ANALYST-LINK1-RIGID-BODY-LAYER (2026-11-26, pc-hummer, docs only, on docs/native-link1-rigid-body-layer from main
 e9479199):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK1_RIGID_BODY_LAYER.md reads the component rigid-body set-up
 that `InitializeRBPhysics` calls. For Maya's attached components the game makes no body: the actor components' bodies are
