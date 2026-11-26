@@ -147,15 +147,17 @@ default states. **At a fresh character's spawn**, the three missions are NotStar
 | After-link: `WorldInfo` → `GRI` → `MissionTracker` | the bridge's graph holds these objects (`MissionScript`, both routes) | covered (the objects); the walk is new |
 | The tracker's register: authority, immediate level-load, the store rule | `RegisterMissionObserver` bound by the bridge for **script** observers: it calls `MissionReactionLevelLoad` by name and always stores | partly: the Complete-and-not-repeatable rule is missing, and a condition's reaction is a native the VM does not bind |
 | The verdict's mission status | the bridge's `GetMissionStatus` rule: its own mission's status, any other NotStarted | covered |
-| The objective state, the set restrictions | the bridge's `IsMissionObjectiveActive` / `IsMissionObjectiveComplete` / `IsObjectiveSetActive` rules; the Fire slice's `condition_holds` (`ow-mission` `slice.rs`) computes this same verdict for the dummy | covered (for the bridge's own mission) |
+| The objective state, the set restrictions | the bridge's `IsMissionObjectiveActive` / `IsMissionObjectiveComplete` / `IsObjectiveSetActive` rules; the Fire slice's `condition_holds` (`ow-mission` `slice.rs`) computes a near copy of this verdict for the dummy, differing on other missions (open question 4) | covered (for the bridge's own mission) |
 | Per-instance objectives (`bRememberItemsWithinObjective`) | none | **unread** (the key derivation) |
 | Waypoint hooks (`bCreateWaypoint`) | none | presentation, not read further |
-| Later notifications reaching a kernel-registered condition | the bridge notifies by script call | not needed for the slice (2.6's missions never change there) |
+| Later notifications reaching a kernel-registered condition | the bridge notifies every stored observer by calling `MissionReactionLevelLoad` (or its kind's reaction) **by name**. A condition's reaction is a native the VM does not bind, so a condition in that list would make the next notification fail | **a hazard**: the hub's ruling keeps these conditions in a separate list (section 4, "Later notifications") |
 | `IntializeBehaviorProviderForConsumer`'s own gate: an empty `BehaviorSequences` registers nothing | the pawn's list applies it; the **direct native does not** (it registers an empty provider) | a gap: `SetDeathDefinition` reaches it with `Death_Siren` (section 5) |
 
-**Crate edges:** `ow-mission` depends on `ow-behavior`, never the reverse. So the kernel cannot call the bridge. It
-reads the tracker's answers through a VM service that the bridge registers (section 4, step C). The service's shape
-is the implementer's choice.
+**Crate edges:** `ow-mission` depends on `ow-behavior`, never the reverse. So the kernel cannot call the bridge.
+**The hub's ruling** (review of #771): one VM service trait, in `ow-vm` or `ow-core` (wherever the crate edges allow).
+It answers "is this mission or objective condition true now", read-only. The bridge implements it and the harness
+installs it. The kernel reads it in preflight step 8; the same service also keeps the conditions' observer list
+(commit step B).
 
 ## 4. Proposed Off answer: register in full, evaluate at once, as the game does
 
@@ -185,16 +187,27 @@ in order:
    - `bInstanced`, `bIsObjectiveSpecific` and `bCreateWaypoint`, bools;
    - `MissionStatesToLinkTo` (six bools) and `ObjectiveStatesToLinkTo` (three bools), structs;
    - `ObjectiveSetRestrictions`, an array of objects;
-4. `bInstanced` set: no link. That sequence's pass 2 is nothing, and the rest of this list is skipped for it;
-5. the tracker walk (2.2). Any link missing means no after-link. This rule is the game's, and nothing is refused;
-6. with a tracker:
-   - its `Role` not the authority's, or `LinkedMission` None: no register;
+4. **the client test** (2.2; review r1 of #771): the world's `NetMode` is `NM_Client`, by the kernel's existing helper
+   (`is_client` in `ow-behavior` `kernel/run.rs`, which finds the value by its place in the declared enum, never a
+   constant). A client means no link and no after-link: that sequence's pass 2 is nothing, and the rest of this list
+   is skipped for it. The helper's own refusals stand: a world that declares no `NetMode` is `VmError::Script`, and
+   one not declared with its enum is its `NotYet { NotRead }`;
+5. `bInstanced` set: no link. That sequence's pass 2 is nothing, and the rest of this list is skipped for it;
+6. the tracker walk (2.2). Any link missing means no after-link. This rule is the game's, and nothing is refused;
+7. with a tracker:
+   - its `Role` not the authority's, or `LinkedMission` None: no register, and steps 8 and 9 are skipped;
    - `LinkedObjective` set and not resident: `NotYet { NotRead }`;
    - its `bRememberItemsWithinObjective` set: `NotYet { NotRead }`, "per-instance objectives (the key is not read)";
-7. `bCreateWaypoint` set on a condition whose verdict would change its record's state: `NotYet { NotRead }`, "the
-   waypoint hooks";
-8. the verdict computed now, read-only, from the tracker service. With a tracker but no service:
-   `NotYet { LayerAbsent }`, "the mission tracker's answers".
+8. **the verdict and the store decision, both computed here** (reviews r1 of #771, items 2 and 4):
+   - the verdict, read-only, from the service. With a tracker but no service: `NotYet { LayerAbsent }`, "the mission
+     tracker's answers";
+   - the mission's status, from the same service. When it is Complete, the store decision reads `LinkedMission`'s
+     `bRepeatable`. The mission must be resident, else `NotYet { NotRead }`. `bRepeatable` must be declared as a bool
+     on its class, else `VmError::Script` naming it. Any other status means "store" without reading `bRepeatable`;
+9. the waypoint test, against the verdict just computed: `bCreateWaypoint` set, and the verdict would change the state
+   of **any** record in the condition's list once this record is linked, is `NotYet { NotRead }`, "the waypoint
+   hooks". That list holds this consumer's new record and every record that other consumers of the same definition
+   linked before (the list is shared, 2.2).
 
 Every refusal above comes before the first write.
 
@@ -202,14 +215,27 @@ Every refusal above comes before the first write.
 - **A. link:** add (handle, record) to the condition's list. The port keeps the list in the kernel's state, keyed by
   the condition object: it is native state, so no VM field is written. A kernel's lists start empty, and one kernel
   per world plays the instance tag's part;
-- **B. register:** store the condition under `LinkedMission` in the service's observer list, unless the mission is
-  Complete and not `bRepeatable`;
+- **B. register:** a service write that cannot fail. It applies preflight step 8's store decision: the condition is
+  stored under `LinkedMission`, unless that step found the mission Complete and not `bRepeatable`. Nothing is read
+  here. The list is **separate from the bridge's script observers** (the hub's ruling; "Later notifications" below);
 - **C. react:** apply the preflight's verdict to every record in the condition's list, by the
   `ChangeBehaviorSequenceActivationStatus` kernel rule. The game reacts before it stores; the port's order of A, C, B
   writes the same result, since C reads nothing B writes;
 - a refusal from a behavior run by a fired enabled or disabled event comes after writes. It carries the
   "stopped after partial writes: " prefix (#518's counters), with its kind and record kept. Nothing before pass 1's
   first write has the prefix.
+
+**Later notifications** (the hub's ruling on review r1 of #771, item 3; an Off rule, the game's re-evaluation):
+- the bridge's script notification still walks only its own observers, which are script objects. It never walks the
+  kernel-registered conditions, so no condition's unbound reaction is called by name;
+- after the bridge has notified its observers of a mission, for any of the six kinds, it asks the kernel to
+  re-evaluate every kernel-registered condition stored under that mission, in registration order:
+  - each condition's verdict is computed again by the same service verdict;
+  - it is applied to every record in that condition's list by the same kernel rule as commit step C;
+- a re-evaluation that cannot be answered is that refusal, typed, with its kind and record kept: an unloaded object, a
+  per-instance objective, or a waypoint condition whose state would change. The bridge has already changed its own
+  state by then, so it carries the "stopped after partial writes: " prefix;
+- Maya's four conditions are stored under missions the slice never changes, so no later notification reaches them.
 
 **Without a tracker** (a world that has none): pass 1, and the links, and nothing else. This is the game's answer for
 that world. Maya's `maya:8` world has the bridge's tracker.
@@ -253,7 +279,20 @@ The port's direct native has no such gate: it decodes and registers an empty pro
    - a waypoint condition whose verdict changes the record: `NotRead`;
    - a tracker with no service: `LayerAbsent`.
 9. The direct native with an empty definition: nothing registered (section 5).
-10. A Complete, non-repeatable mission: the verdict applied, the condition not stored.
+10. A Complete, non-repeatable mission: the verdict applied, the condition not stored. A Complete, repeatable one:
+    stored. A Complete mission whose `bRepeatable` is declared as an int: `VmError::Script`, nothing written.
+11. A client world (`NetMode` `NM_Client`): no link, no register, no verdict. The sequences as pass 1 left them.
+12. The separate list (review r1 of #771, item 3): a script observer and a kernel-registered condition stored under
+    the bridge's own mission, then a status change:
+    - the script observer gets its reaction by name, once;
+    - the condition is re-evaluated through the service, and its sequence follows the new verdict;
+    - no reaction is called by name on the condition, and the notification does not fail.
+
+    With the condition's objective made unloaded before the change: the typed `NotRead`, prefixed "stopped after
+    partial writes".
+13. The waypoint test over another consumer's record: a `bCreateWaypoint` condition with a false verdict, a first
+    consumer's record already linked and disabled, and a second consumer's record enabled in pass 1: `NotRead`,
+    nothing written.
 
 ## 7. Predicted next stop (a prediction, not a run)
 
@@ -264,7 +303,7 @@ With this rule, Maya's `InitializeBehaviorProviders` completes:
 
 Two caveats:
 - **if** the store holds a `LinkedObjective` (in `GD_Episode11` or `GD_Episode17`) as an unloaded handle at that
-  point, the stop is preflight step 6's `NotRead`. That is open question 2, the first thing a run will show;
+  point, the stop is preflight step 7's `NotRead`. That is open question 2, the first thing a run will show;
 - `SetDeathDefinition`'s empty provider (section 5) does not stop the run, but differs from the game until fixed.
 
 After that, `ApplyBodyClassStartingValues` reaches the natives that NATIVE_LINK1_RBPHYSICS_AND_AFTER.md section 3
@@ -289,9 +328,13 @@ So no stop is predicted inside it. Which native after it stops maya:8 was not re
    - the kernel's deferred-registration branch (#740's second branch);
    - `BehaviorSequenceEnableByMultipleConditions`;
    - whether anything re-registers a condition that met no tracker.
-4. **The hub's call:**
-   - the service's shape between `ow-mission` and `ow-behavior`;
-   - whether the Fire slice's `condition_holds` should become the one verdict both use.
+4. **Ruled by the hub** (review of #771):
+   - one VM service trait (section 3);
+   - the Fire slice's `condition_holds` and the kernel's pass-2 verdict become one verdict behind it.
+
+   **A difference to resolve:** for a mission other than the bridge's own, `condition_holds` counts one in the
+   slice's completed set as Complete. The bridge's `GetMissionStatus` answers NotStarted for every mission but its
+   own. The hub's ruling resolves it toward `GetMissionStatus`; the implementer makes the one verdict follow it.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

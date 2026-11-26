@@ -28,10 +28,19 @@ bounds check changed.
     enabled;
   - side finding: the port's direct `IntializeBehaviorProviderForConsumer` registers an empty definition, which the
     game's gate skips (`SetDeathDefinition` with `Death_Siren`).
-- **Proposed Off answer:** no deferral. The kernel registers in full, with a write-free, load-free preflight and a
-  read-only verdict over the bridge's existing status, objective and set rules, read through a VM service the bridge
-  registers (crate edges). It gives typed refusals for other condition classes, unloaded objects, per-instance
+- **Proposed Off answer:** no deferral. The kernel registers in full, with a write-free, load-free preflight. The
+  verdict and the store decision are computed in the preflight, read-only, over the bridge's existing status,
+  objective and set rules, through one VM service the bridge implements (crate edges). The observer list is a
+  service write that cannot fail. It gives typed refusals for other condition classes, unloaded objects, per-instance
   objectives and waypoint conditions.
 - **Next** (a prediction, not a run): `InitializeBehaviorProviders` completes, unless the store holds a linked
   objective unloaded (then its `NotRead`). No stop is predicted in the rest of `ApplyBodyClassStartingValues`.
+- **Review r1 (#771):**
+  - the client net-mode test is a preflight step, with a test;
+  - the Complete-and-not-repeatable decision and `bRepeatable`'s declaration check are in the preflight;
+  - the verdict comes before the waypoint test, which covers every linked record, other consumers' too;
+  - the hub's rulings are recorded:
+    - kernel-registered conditions are kept in a list the script notification does not walk;
+    - a later notification re-evaluates them by the same verdict, with a typed refusal, and gets a test;
+  - the Fire slice's verdict difference on other missions is named, to be resolved toward `GetMissionStatus`.
 - **Clean room:** a different lane implements this note.
