@@ -46,7 +46,7 @@ That decision's "Not verified" line now labels the note's other fits UNVERIFIED 
     first, so one order gives the link-up and the other the not-loaded refusal;
   - a new test covers `AUTO_NAME_ISSUING`, and a flag-clear additive node under the guard (re-set and lookup still
     run).
-- **Verified:** the tests on invented data (exactly the listed sets and their sequences load, five load transitions;
+- **Verified:** the tests on invented data (exactly the listed sets and their sequences load, eleven load transitions (4 sets and 7 sequences);
   a second run loads nothing), and the installed gate rows above.
 - **Not verified:** that the game's streaming load makes these sets resident (the hub's premise); everything in the
   running game.
