@@ -223,7 +223,8 @@ fn flag(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
 
 /// The class table on the attached, resident `entry` (module documentation): reads only. A skeletal entry that
 /// passes adds its writes to `writes`, then its attachments in the record under `owner` are planned the same way.
-/// `seen` stops a component met twice (a data error: the attach record gives a component one parent).
+/// `seen` stops a component met twice: a port guard (a data error here); the note does not rule a double visit, and the
+/// attach record maps a component to its owner actor, not to an attachment parent (review of #768).
 fn plan(
     vm: &Vm,
     owner: ObjRef,
