@@ -19,6 +19,7 @@ pub mod manager;
 pub mod navigation;
 pub mod pickup;
 pub mod pickup_cost;
+pub mod pickup_take;
 pub mod pickup_targeting;
 pub mod sort;
 pub mod spawn;

@@ -366,6 +366,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     // Link 6's key: the pickup's cost and the ammo refresh (NATIVE_LINK67_KEY_AND_LOOK.md; lane IMPL-LINK67-KEY).
     crate::pickup_cost::register(vm)?;
+    // Link 6's take after affordability (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md; lane IMPL-UPDATEAMMOCOUNTS).
+    crate::pickup_take::register(vm)?;
     // The touch trace refuses a script None in place of a vector (step 3), so the interpreter hands it over.
     vm.keep_struct_none(TOUCH_PICKUP_TRACE);
     Ok(())

@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-LINK67-KEY (queue 0ah). Link 6's `key`, the pickup's cost: `WillowPlayerController`'s
-//! `CanAffordToPickUpPickupable(Pickupable)` and `PayForPickupable(Pickupable)`, and `UpdateAmmoCounts(bSilent)`'s
-//! refusal. AI-assisted (Claude Code).
+//! `CanAffordToPickUpPickupable(Pickupable)` and `PayForPickupable(Pickupable)`. `UpdateAmmoCounts(bSilent)`, once a
+//! `NotRead` here, is `crate::pickup_take`'s rule since lane IMPL-UPDATEAMMOCOUNTS. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_LINK67_KEY_AND_LOOK.md sections 2 and 4 alone (lane
 //! ANALYST-LINK67-KEY-AND-LOOK, #772 with the hub's review fixes, on main c345fdb); this lane did not read the
@@ -31,7 +31,6 @@
 //! `WriteCounters`). The note's `GetCurrencyOnHand` read whose answer is dropped is not made (it writes
 //! nothing).
 //!
-//! **`UpdateAmmoCounts(bSilent)`** (section 4): [`AMMO_REFRESH`] (`NotRead`), nothing written.
 //!
 //! A method the VM resolves from a class whose code is not loaded is a named `NotRead` (a class load is a write).
 
@@ -51,7 +50,6 @@ pub const RECORD: &str = "NATIVE_LINK67_KEY_AND_LOOK.md";
 /// The native keys.
 pub const CAN_AFFORD: &str = "WillowPlayerController.CanAffordToPickUpPickupable(interface)";
 pub const PAY_FOR: &str = "WillowPlayerController.PayForPickupable(interface)";
-pub const UPDATE_AMMO_COUNTS: &str = "WillowPlayerController.UpdateAmmoCounts(bool)";
 /// The refusals.
 /// The two natives' names, which start their shared refusals' texts (`"<name>: <text>"`).
 pub const CAN_AFFORD_NAME: &str = "CanAffordToPickUpPickupable";
@@ -61,7 +59,6 @@ pub const PICKUPABLE_NOT_LOADED: &str = "a pickupable the store has not loaded (
 pub const COST_QUERY: &str = "the cost query of";
 pub const GOLDEN_KEY_COUNT: &str = "CanAffordToPickUpPickupable: the controller's golden-key count";
 pub const INFO_NOT_LOADED: &str = "a replication info the store has not loaded (a load is a write)";
-pub const AMMO_REFRESH: &str = "UpdateAmmoCounts: the controller's ammo refresh";
 /// The currency type of golden keys.
 pub const GOLDEN_KEYS: u8 = 3;
 /// The replication info class the cast asks for.
@@ -222,10 +219,9 @@ fn after_writes(e: VmError) -> VmError {
 /// Binds the three keys in Off (the caller checks the mode). No pack bound them before (checked by grep), so a
 /// duplicate is a registration error.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
-    let natives: [(&str, NativeFn); 3] = [
+    let natives: [(&str, NativeFn); 2] = [
         (CAN_AFFORD, Rc::new(can_afford)),
         (PAY_FOR, Rc::new(pay_for)),
-        (UPDATE_AMMO_COUNTS, Rc::new(|_: &mut NativeCall<'_>| Err(NotYet::not_read(AMMO_REFRESH, RECORD).into()))),
     ];
     for (key, f) in natives {
         vm.register_native(key, f)?;

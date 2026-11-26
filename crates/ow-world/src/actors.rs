@@ -552,16 +552,46 @@ pub fn send_event(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Resul
 /// otherwise `LostChild(actor)` to the old owner (stopping if script changed the owner meanwhile), the field set,
 /// then `GainedChild(actor)` to the new owner.
 pub fn set_owner(vm: &mut Vm, actor: ObjRef, owner: Option<ObjRef>) -> Result<(), VmError> {
+    set_owner_completed(vm, actor, owner).map(|_| ())
+}
+
+/// Whether [`set_owner`] would change nothing: the owner unchanged, `actor` destroyed, or an ownership loop (a looping
+/// chain that never reaches `actor` is its data error). Reads only.
+pub fn set_owner_is_noop(vm: &Vm, actor: ObjRef, owner: Option<ObjRef>) -> Result<bool, VmError> {
     let old = object(&vm.space, actor, "Owner")?;
     if old == owner || is_destroyed(&vm.space, actor)? {
-        return Ok(());
+        return Ok(true);
+    }
+    let Some(new) = owner else {
+        return Ok(false);
+    };
+    let mut seen = FixedHashSet::default();
+    let mut cursor = Some(new);
+    while let Some(c) = cursor {
+        if c == actor {
+            return Ok(true);
+        }
+        if !seen.insert(c) {
+            return Err(rule_error("SetOwner", "the new owner's owner chain loops without reaching the actor".to_string()));
+        }
+        cursor = object(&vm.space, c, "Owner")?;
+    }
+    Ok(false)
+}
+
+/// [`set_owner`], answering whether it ran to its end (the owner set, and neither event changed it again); `false` for
+/// every early stop (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 3.7: the native's further steps run only then).
+pub fn set_owner_completed(vm: &mut Vm, actor: ObjRef, owner: Option<ObjRef>) -> Result<bool, VmError> {
+    let old = object(&vm.space, actor, "Owner")?;
+    if old == owner || is_destroyed(&vm.space, actor)? {
+        return Ok(false);
     }
     if let Some(new) = owner {
         let mut seen = FixedHashSet::default();
         let mut cursor = Some(new);
         while let Some(c) = cursor {
             if c == actor {
-                return Ok(()); // an ownership loop: refused
+                return Ok(false); // an ownership loop: refused
             }
             if !seen.insert(c) {
                 return Err(rule_error(
@@ -575,14 +605,17 @@ pub fn set_owner(vm: &mut Vm, actor: ObjRef, owner: Option<ObjRef>) -> Result<()
     if let Some(o) = old {
         send_event(vm, o, "LostChild", vec![Value::Object(Some(actor))])?;
         if object(&vm.space, actor, "Owner")? != old {
-            return Ok(());
+            return Ok(false);
         }
     }
     set_field(&mut vm.space, actor, "Owner", Value::Object(owner))?;
     if let Some(n) = owner {
         send_event(vm, n, "GainedChild", vec![Value::Object(Some(actor))])?;
+        if object(&vm.space, actor, "Owner")? != owner {
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
