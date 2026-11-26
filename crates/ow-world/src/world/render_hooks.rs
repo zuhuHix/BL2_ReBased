@@ -181,7 +181,7 @@ pub fn gear_likeness(vm: &Vm, class: ClassId) -> Result<(), VmError> {
 /// The path of `class`'s first native class, from `class` up: the fitted native bit of the class body where the code
 /// index holds the class (a body that did not decode counts as native), else the class table's mark, as
 /// `set_physics` walks it. `None` when no class of the chain is native. Reads only: no class code is loaded.
-pub(crate) fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
+pub fn first_native(vm: &Vm, class: ClassId) -> Option<String> {
     let code = vm.defs.code();
     let mut cursor = Some(class);
     while let Some(c) = cursor {

@@ -59,6 +59,17 @@
 //!
 //!   Nothing is written, loaded or drawn.
 //!
+//! - **`WillowPlayerController.GetPawnInventoryManager()`** (lane IMPL-GETPAWNINVENTORYMANAGER, decision
+//!   2026-11-26-NNN), coded from NATIVE_CONTROLLER_HELPERS.md, "WillowPlayerController.GetPawnInventoryManager" alone
+//!   (high confidence; the vehicle seats medium), UNVERIFIED. It writes and loads nothing:
+//!   - no `Pawn`: None;
+//!   - the pawn's first native class `WillowGame.WillowPawn` or `WillowGame.WillowPlayerPawn` (whose "vehicle/base"
+//!     virtual is the base `WillowPawn`'s do-nothing stub, so the pawn is on foot): its `InvManager` when that is a
+//!     `WillowInventoryManager`, else None;
+//!   - any other pawn class, a vehicle among them: [`INVENTORY_MANAGER_OTHER`] (`NotRead`): its virtual, and so
+//!     whether its `Driver` answers, was not read;
+//!   - a pawn or manager the store has not loaded: [`INVENTORY_MANAGER_UNLOADED`] (`NotRead`).
+//!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so Reference binds nothing here (R3).
 
 use std::rc::Rc;
@@ -90,6 +101,18 @@ pub const NATIVE_DEFINITION_QUERY: &str = crate::definition::GET_INVENTORY_DEFIN
 
 /// The native keys [`register`] binds in Off.
 pub const GET_INVENTORY_PAWN: &str = "WillowPlayerController.GetInventoryPawn()";
+pub const GET_PAWN_INVENTORY_MANAGER: &str = "WillowPlayerController.GetPawnInventoryManager()";
+/// `GetPawnInventoryManager`'s record.
+pub const RECORD_HELPERS: &str = "NATIVE_CONTROLLER_HELPERS.md";
+/// The first native pawn classes whose "vehicle/base" virtual is the base stub (an on-foot pawn).
+pub const ON_FOOT_PAWNS: [&str; 2] = ["WillowGame.WillowPawn", "WillowGame.WillowPlayerPawn"];
+/// The start of the `NotRead` for any other pawn: "<this> <class> (...)".
+pub const INVENTORY_MANAGER_OTHER: &str = "GetPawnInventoryManager on a";
+/// The `NotRead` for a pawn or manager the store has not loaded.
+pub const INVENTORY_MANAGER_UNLOADED: &str =
+    "GetPawnInventoryManager: a pawn or inventory manager the store has not loaded (a load is a write)";
+/// The class `GetPawnInventoryManager` answers.
+pub const INVENTORY_MANAGER: &str = "WillowGame.WillowInventoryManager";
 pub const ADD_TO_NAVIGATION: &str = "DroppedPickup.AddToNavigation()";
 pub const REMOVE_PICKUP: &str = "WillowGlobals.RemovePickup(object)";
 pub const TOUCH_PICKUP_TRACE: &str = "DroppedPickup.TouchPickupTrace(vector,vector)";
@@ -279,13 +302,51 @@ fn get_inventory_pawn(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Object(Some(pawn)))
 }
 
+/// `GetPawnInventoryManager()` (module documentation).
+fn get_pawn_inventory_manager(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const WHAT: &str = "WillowPlayerController.GetPawnInventoryManager";
+    let controller = c.this.ok_or_else(|| bad(WHAT, "called without a controller"))?;
+    let vm: &Vm = c.vm;
+    let Some(pawn) = object_of(&required(vm, controller, "Pawn", WHAT)?, WHAT)? else {
+        return Ok(Value::Object(None));
+    };
+    let unloaded = |o| ow_world::touch_trace::is_unloaded(vm, o) || vm.defs.is_failed(&vm.space, o);
+    if unloaded(pawn) {
+        return Err(NotYet::not_read(INVENTORY_MANAGER_UNLOADED, RECORD_HELPERS).into());
+    }
+    let class = vm.space.heap.get(pawn)?.class;
+    let native = ow_world::world::render_hooks::first_native(vm, class);
+    if !native.as_deref().is_some_and(|n| ON_FOOT_PAWNS.iter().any(|p| n.eq_ignore_ascii_case(p))) {
+        let named = native.unwrap_or_else(|| ow_attr::eval::class_path(&vm.space, pawn));
+        return Err(NotYet::not_read(
+            format!(
+                "{INVENTORY_MANAGER_OTHER} {named} (its vehicle/base virtual, and so whether its Driver answers, is not \
+                 read)"
+            ),
+            RECORD_HELPERS,
+        )
+        .into());
+    }
+    let Some(manager) = object_of(&required(vm, pawn, "InvManager", WHAT)?, WHAT)? else {
+        return Ok(Value::Object(None));
+    };
+    if unloaded(manager) {
+        return Err(NotYet::not_read(INVENTORY_MANAGER_UNLOADED, RECORD_HELPERS).into());
+    }
+    let manager_class = vm.space.heap.get(manager)?.class;
+    let is_manager =
+        vm.space.classes.by_path(INVENTORY_MANAGER).is_some_and(|m| vm.space.classes.is_child_of(manager_class, m));
+    Ok(Value::Object(is_manager.then_some(manager)))
+}
+
 /// Binds the module's natives in `ParityMode::Off`; Reference binds nothing (module documentation).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 6] = [
+    let natives: [(&str, NativeFn); 7] = [
         (GET_INVENTORY_PAWN, Rc::new(get_inventory_pawn)),
+        (GET_PAWN_INVENTORY_MANAGER, Rc::new(get_pawn_inventory_manager)),
         (GET_PICKUPABLE_INVENTORY, Rc::new(get_pickupable_inventory)),
         (GET_PICKUPABLE_INVENTORY_DEFINITION, Rc::new(get_pickupable_inventory_definition)),
         (ADD_TO_NAVIGATION, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::None))),
