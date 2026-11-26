@@ -300,15 +300,10 @@ fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world
     Ok(world)
 }
 
-/// [`run_world`] with its errors typed, for the Off pickup gate's set-up only (reviews r1 and r2 of #476): the shared
-/// runner keeps its own diagnostics.
-fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, VmError> {
-    place_world_info_t(bare_world_t(cooked, mode, false, |_| Ok(()))?)
-}
-
-/// [`run_world_t`]'s world before its `WorldInfo` is placed, with no object made yet: `before` runs on the VM first,
-/// right after the core natives are registered (the card's class setup, review r2 of #521, item 5). `equip` adds
-/// `ow_skills::action_skill::Pack` in Off, as [`run_world_typed`] does: link 8's [`equip_world`] only (#573).
+/// A world before its `WorldInfo` is placed, with no object made yet: `before` runs on the VM first, right after the
+/// core natives are registered (the card's class setup, review r2 of #521, item 5). `equip` adds
+/// `ow_skills::action_skill::Pack` in Off, as [`run_world_typed`] does: [`equip_world`]'s (link 8, and links 6 and 7
+/// through [`pickup_world`]; #573, lane IMPL-LINK67-PICKUP-GUN-INIT).
 fn bare_world_t(
     cooked: &Path,
     mode: ParityMode,
@@ -347,17 +342,6 @@ fn bare_world_t(
         ow_world::world::WorldError::Vm(v) => v,
         other => script(error_text(&other)),
     })
-}
-
-/// [`place_world_info`] with its errors typed (the pickup gate's set-up).
-fn place_world_info_t(mut world: ow_world::world::World) -> Result<ow_world::world::World, VmError> {
-    let info = make_t(&mut world.vm, "Engine.WorldInfo")?;
-    world
-        .actors()
-        .try_borrow_mut()
-        .map_err(|_| VmError::ServiceBorrowed("Actors"))?
-        .place_world_info(info)?;
-    Ok(world)
 }
 
 /// What one weapon's run saw.
@@ -618,11 +602,12 @@ fn object_path(vm: &Vm, o: ObjRef) -> String {
 /// configured `DefaultGlobalsDefinitionName`).
 pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 
-/// The run's world in Off ([`run_world_t`]) with the world's one globals object, for `--slice-gate`'s links 6 and 7 (lane IMPL-WILLOW-GLOBALS,
-/// decision 2026-11-19-94; NATIVE_WILLOW_GLOBALS.md section 6.1). It is world set-up, done before the run writes
-/// anything, and it keeps its errors typed (review r1 of #476):
-/// - a `WillowGlobals` from its class defaults, whose `TheGlobalsDefinition` is the installed [`GLOBALS_DEFINITION`],
-///   loaded here (the allowed preload), recorded as the world's globals (`WorldQuery::set_globals`);
+/// `--slice-gate`'s links 6 and 7's world: [`equip_world`] plus the pickup set-up (the hub's ruling,
+/// NATIVE_LINK67_PICKUP_GUN_INIT.md section 3; lane IMPL-LINK67-PICKUP-GUN-INIT). It is world set-up, done before the
+/// run writes anything, and it keeps its errors typed (review r1 of #476):
+/// - [`equip_world`]: the card's class set-up, the action-skill pack, the `WorldInfo`, and the world's one
+///   `WillowGlobals` holding the installed [`GLOBALS_DEFINITION`] (NATIVE_WILLOW_GLOBALS.md section 6.1). The pickup
+///   set-up checks the globals' declared schemas (lane IMPL-WILLOW-GLOBALS) and uses that definition;
 /// - the weapon class's default object, loaded here, so the preflight reads it without a load;
 /// - an empty component registry layer (`ow_inventory::anim_tree::ComponentRegistry`), so `SetAnimTreeTemplate`'s
 ///   registry walk finds nothing (the hub's ruling on NATIVE_SET_ANIM_TREE_TEMPLATE.md section 5, UNVERIFIED);
@@ -636,15 +621,21 @@ pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 pub(crate) fn pickup_world(
     cooked: &Path,
 ) -> Result<(ow_world::world::World, crate::cmd::slice_pickup::PickupSetup), VmError> {
-    let mut world = run_world_t(cooked, ParityMode::Off)?;
+    // The hub's ruling (NATIVE_LINK67_PICKUP_GUN_INIT.md section 3; lane IMPL-LINK67-PICKUP-GUN-INIT): link 8's world,
+    // with the card's class set-up, the action-skill pack and its globals (one object holding the installed
+    // definition), then the pickup's own set-up on top.
+    let mut world = equip_world(cooked)?;
     let vm = &mut world.vm;
     let defaults = vm.defs.class_default(&mut vm.space, crate::cmd::slice_pickup::WEAPON_CLASS);
     vm.log.extend(vm.defs.take_log());
     let weapon_defaults = defaults.map_err(VmError::from)?;
-    let globals = make_t(vm, "WillowGame.WillowGlobals")?;
-    let definition = preload_globals_definition(vm, globals, "the pickup world's set-up")?;
+    let globals = ow_inventory::globals::world_globals(vm)?;
+    ow_inventory::globals::globals_schemas(vm, globals, "the pickup world's set-up")?;
+    let definition = match ow_inventory::equip::read_prop(vm, globals, "TheGlobalsDefinition") {
+        Some(Value::Object(Some(d))) => d,
+        other => return Err(script(format!("the equip world's globals hold {other:?}, not a definition"))),
+    };
     let definition_class = vm.space.heap.get(definition)?.class;
-    world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
     particle_preload(&mut world.vm, definition)?;
@@ -748,7 +739,7 @@ pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, 
     run_world_typed(cooked, ParityMode::Off, false)
 }
 
-/// The run's world in Off ([`run_world_t`]) with the world's one globals object, for `--slice-gate`'s link 8 (lane IMPL-CACHE-WEAPON-CARD-BODY,
+/// The run's world in Off with the world's one globals object, for `--slice-gate`'s link 8 (lane IMPL-CACHE-WEAPON-CARD-BODY,
 /// NATIVE_CACHE_WEAPON_CARD_BODY.md section 4; NATIVE_WILLOW_GLOBALS.md section 6.1). World set-up, before the run
 /// writes anything, its errors typed: a `WillowGlobals` from its class defaults whose `TheGlobalsDefinition` is the
 /// installed [`GLOBALS_DEFINITION`], loaded here (the allowed preload), recorded as the world's globals. Unlike
@@ -795,6 +786,28 @@ fn equip_globals(vm: &mut Vm, globals: ObjRef) -> Result<(), VmError> {
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))
 }
 
+/// The gun's init before its drop, on links 6 and 7 (lane IMPL-LINK67-PICKUP-GUN-INIT, NATIVE_LINK67_PICKUP_GUN_INIT.md
+/// section 3), in link 8's order: its five harness preloads ([`preload_muzzle_flashes`], [`preload_gestalt_mesh`],
+/// [`preload_gestalt_skeletal_mesh`], [`preload_material_part_material`], [`preload_material_classes`]), the skeletal
+/// mesh layer ([`install_mesh_layer`], once per world), the threshold preload ([`preload_threshold_attributes`]), then
+/// the installed `WillowWeapon.InitializeInternal(false)` (the `init` phase). Each preload is an UNVERIFIED stand-in
+/// and logs its harness lines, as link 8's do. It runs inside `make`'s mark, after the weapon exists, so a refusal
+/// here is marked "stopped after partial writes" by the caller (link 8's threshold preload runs after its mark: the
+/// prefix differs there, as the note says).
+pub(crate) fn pickup_gun_init(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    preload_muzzle_flashes(vm, weapon)?;
+    preload_gestalt_mesh(vm, weapon)?;
+    preload_gestalt_skeletal_mesh(vm, weapon)?;
+    preload_material_part_material(vm, weapon)?;
+    preload_material_classes(vm, weapon)?;
+    install_mesh_layer(vm, weapon)?;
+    preload_threshold_attributes(vm, weapon)?;
+    match run_phase_typed(vm, "init", weapon) {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as
 /// [`prepare_line_typed`].
 pub(crate) fn prepare_unowned_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
@@ -802,7 +815,9 @@ pub(crate) fn prepare_unowned_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -
     weapon_of(vm, &r, wrote, WeaponRoute::PickupDecoy)
 }
 
-/// Which run a weapon is made for (review r1 of #577): the manufacturer inputs are link 8's and `--equip-run`'s only.
+/// Which run a weapon is made for (review r1 of #577). The manufacturer inputs are set on every route but none: links 6
+/// and 7's guns get them as link 8's does (lane IMPL-LINK67-PICKUP-GUN-INIT, NATIVE_LINK67_PICKUP_GUN_INIT.md section
+/// 3), since their init reads the same definition data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WeaponRoute {
     /// `--equip-run`.
@@ -818,7 +833,7 @@ pub(crate) enum WeaponRoute {
 impl WeaponRoute {
     /// Whether the Off harness sets the definition data's manufacturer inputs ([`manufacturer_inputs`]).
     pub(crate) fn manufacturer_inputs(self) -> bool {
-        matches!(self, WeaponRoute::EquipRun | WeaponRoute::Link8)
+        matches!(self, WeaponRoute::EquipRun | WeaponRoute::Link8 | WeaponRoute::Pickup | WeaponRoute::PickupDecoy)
     }
 }
 
@@ -841,7 +856,7 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool, route: WeaponRoute) -
 /// ([`preload_muzzle_flashes`]), the gestalt definition ([`preload_gestalt_mesh`]), its skeletal mesh
 /// ([`preload_gestalt_skeletal_mesh`]) and the Material part's material ([`preload_material_part_material`]). The
 /// equip run's own (`--equip-run`; review r1 of #573, item 3); link 8's driver in the slice gate calls the same four
-/// itself. The pickup links prepare their weapons with [`prepare`] alone.
+/// itself. The pickup links prepare their weapons with [`prepare`], then [`pickup_gun_init`] in `make`.
 fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     let weapon = prepare(vm, r, &mut false, WeaponRoute::EquipRun)?;
     preload_muzzle_flashes(vm, weapon)?;
@@ -1431,14 +1446,15 @@ mod material_tests;
 mod tests {
     use super::*;
 
-    /// Review r1 of #577: the manufacturer inputs are link 8's and `--equip-run`'s only; the pickup links' weapons (link
-    /// 6's and 7's held weapon, link 7's decoy) keep their definition data as it was.
+    /// Every route sets the manufacturer inputs (lane IMPL-LINK67-PICKUP-GUN-INIT, NATIVE_LINK67_PICKUP_GUN_INIT.md
+    /// section 3; before it, review r1 of #577 kept them to link 8 and `--equip-run`): the pickup links' held weapon and
+    /// link 7's decoy run the same init as link 8's gun.
     #[test]
-    fn only_link_8_and_the_equip_run_set_the_manufacturer_inputs() {
+    fn every_route_sets_the_manufacturer_inputs() {
         assert!(WeaponRoute::EquipRun.manufacturer_inputs());
         assert!(WeaponRoute::Link8.manufacturer_inputs());
-        assert!(!WeaponRoute::Pickup.manufacturer_inputs());
-        assert!(!WeaponRoute::PickupDecoy.manufacturer_inputs());
+        assert!(WeaponRoute::Pickup.manufacturer_inputs());
+        assert!(WeaponRoute::PickupDecoy.manufacturer_inputs());
     }
 
     /// Invented packages for the weapon preparation paths (AGENTS.md rule 9): `WillowGame.upk` declares the weapon
@@ -1535,19 +1551,19 @@ mod tests {
         (maker, index)
     }
 
-    /// Review r2 of #577: the real preparation paths on invented data. The pickup links' held weapon
-    /// (`prepare_line_typed`) and link 7's decoy (`prepare_unowned_typed`) keep `ManufacturerDefinition` None and
-    /// `ManufacturerGradeIndex` 0; link 8's path (`prepare_link8_typed`) in Off sets them (the balance's manufacturer, the
-    /// level), so the fixture can see the writes. The held weapon's and link 8's paths go on to the owners' accuracy
-    /// pool, which the toy data does not hold, so they stop there, after the weapon's definition data is written.
+    /// The real preparation paths on invented data (review r2 of #577; lane IMPL-LINK67-PICKUP-GUN-INIT). In Off every
+    /// path sets `ManufacturerDefinition` (the balance's manufacturer) and `ManufacturerGradeIndex` (the level): link
+    /// 7's decoy (`prepare_unowned_typed`), the pickup links' held weapon (`prepare_line_typed`) and link 8's
+    /// (`prepare_link8_typed`). The held weapon's and link 8's paths go on to the owners' accuracy pool, which the toy
+    /// data does not hold, so they stop there, after the weapon's definition data is written. Reference sets none.
     #[test]
-    fn the_pickup_paths_keep_the_manufacturer_fields_and_link_8_sets_them() {
+    fn every_path_sets_the_manufacturer_fields_in_off() {
         let (mut vm, dir) = toy_gun_vm(ParityMode::Off);
         prepare_unowned_typed(&mut vm, TOY_LINE, &mut false).expect("the decoy needs no owner");
-        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "link 7's decoy");
+        assert_eq!(manufacturer_fields(&mut vm), (true, 7), "link 7's decoy");
         let held = prepare_line_typed(&mut vm, TOY_LINE, &mut false);
         assert!(held.is_err(), "the toy data holds no accuracy pool");
-        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "the pickup links' held weapon");
+        assert_eq!(manufacturer_fields(&mut vm), (true, 7), "the pickup links' held weapon");
         let _ = prepare_link8_typed(&mut vm, TOY_LINE, &mut false);
         assert_eq!(manufacturer_fields(&mut vm), (true, 7), "link 8 sets both in Off");
         drop(vm);
