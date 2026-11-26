@@ -1,6 +1,6 @@
 # Links 3 and 4 after the mind: the base search, SetPhysics on the player, IsFriendlyFire, InGodMode and the damage path (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK34-AFTER-MIND (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK34-AFTER-MIND (decision 2026-11-26-51), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/l34/`. This note is
 in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
