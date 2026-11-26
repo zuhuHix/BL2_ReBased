@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, on fix/rust-link67-pickup-gun-init from main 457c46e4):**
+AI-assisted (Claude Code, Opus 5.5). Links 6 and 7's world is `equip_world` plus the pickup set-up; `card::preflight`
+before `make`; the pickup routes get the manufacturer inputs; each gun runs link 8's preloads, the mesh layer, the
+threshold preload and `InitializeInternal(false)` before its drop (NATIVE_LINK67_PICKUP_GUN_INIT.md).
+`cargo test --workspace -j 8 --no-fail-fast` 3,815 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock), base 457c46e4 and this change: 6 ok / 8
+NotYet, 47.0% on both. Links 6 and 7 move in `touch` from the bounds' template `NotRead` to "Actor.GetBoundingCylinder:
+the component's world transform" (`NotRead`, the gun's `Scale` 0.92); link 8's row is unchanged. UNVERIFIED in game.
+Decision 2026-11-26-NNN.
+
 **ANALYST-MAYA-PAWN-SPAWN-SOURCE (2026-11-26, pc-hummer, docs only, on docs/native-maya-pawn-spawn-source from main
 457c46e4):** AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA_PAWN_SPAWN_SOURCE.md reads how the game spawns Maya's
 pawn: `SpawnDefaultPawnFor` spawns it with the class's pawn archetype as the template. The port's bridge makes it from
