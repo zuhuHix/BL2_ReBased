@@ -67,6 +67,11 @@ reminder (290 characters for `src/package.cpp`, 402 before). New `tests/sensitiv
 ctest `py-sensitive_guard` 1 of 1 passed (`ctest -N` in a fresh configure on this machine lists 167 entries, this one
 among them). The full ctest, `verify_packages` and the cargo build and tests were not run: no C++, Rust or reader file
 changed. The standing ctest figure of 173 should therefore read 174 on the next full run; that is UNVERIFIED.
+Review of #819: the path is read in one spelling on every platform (the long-path prefix off, the separators turned,
+then `..` resolved, then made relative to the root), only the root `CMakeLists.txt`, `Cargo.toml` and
+`rust-toolchain.toml` count (so `tests/CMakeLists.txt` no longer gets the reminder), and input the hook cannot read
+gets no decision and exit 0. `tests/sensitive_guard_test.py` 10 tests OK, as ctest `py-sensitive_guard` 1 of 1; four of
+the ten fail on the hook as it stood before this round.
 
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
