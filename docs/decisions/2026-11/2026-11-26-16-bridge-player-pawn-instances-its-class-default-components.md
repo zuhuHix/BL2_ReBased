@@ -25,6 +25,8 @@ existing instancing rule, and loading the class default's sub-objects is that ru
 - each copy whose class declares `Owner` gets the pawn there, as the dummy's copies do.
 
 A refusal after a write is marked "stopped after partial writes" by #518's counters. Reference is unchanged.
+The spawn's `load_own_definitions` step (the actor's own definition references loaded before it is made) is not done
+here: the bridge pawn is not spawned, and its definitions load where the script reads them (review of #757, LOW 4).
 `player_pawn_tail.rs`' not-loaded refusal now names its entry (`not_loaded`), as `tree_ticks` names its object. The
 pawn's origin stays the class defaults: spawning it from Maya's archetype (`Pawn_Siren`) instead is the hub's call
 (decision 2026-11-16-54).

@@ -2253,3 +2253,37 @@ fn the_player_pawn_gets_its_own_copy_of_the_class_default_s_components() {
     let path = vm.defs.handle_path(shared).unwrap_or_default();
     assert!(path.ends_with("Default__WillowPlayerPawn.ToyPawnComp0"), "Reference shares it: {path}");
 }
+
+/// A plan refusal (review of #757, LOW 3): a sub-object of the class default that is not a component, in its
+/// `Components`, is the instancing plan's `NotRead` before the pawn is made. No pawn object is made and none is cached,
+/// so the next call plans again and refuses the same way.
+#[test]
+fn a_plan_refusal_makes_and_caches_no_player_pawn() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let vm = env.vm();
+    let default = vm.defs.class_default(&mut vm.space, crate::bridge::PLAYER_PAWN_CLASS).unwrap();
+    let stray_class = vm.find_class("WillowGame.MissionDefinition").unwrap();
+    let stray = vm.space.alloc(stray_class, "Stray", Some(default), ow_object::heap::Origin::Runtime).unwrap();
+    let mut list = get(&vm.space, default, "Components").unwrap();
+    list.array_mut().unwrap().push(Value::Object(Some(stray)));
+    set(&mut vm.space, default, "Components", list).unwrap();
+    let pawn_class = vm.find_class(crate::bridge::PLAYER_PAWN_CLASS).unwrap();
+    let pawns = |vm: &Vm| {
+        vm.space.heap.handles().into_iter().filter(|&o| {
+            vm.space.heap.get(o).is_ok_and(|x| x.class == pawn_class && x.origin == ow_object::heap::Origin::Runtime)
+        }).count()
+    };
+    let before = pawns(vm);
+    for _ in 0..2 {
+        match s.player_pawn(vm) {
+            Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+                assert_eq!(n.missing, ow_core::Missing::NotRead);
+                assert!(n.what.contains("a sub-object of the template that is not a component"), "{}", n.what);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(s.inner.state.borrow().player_pawn, None, "no pawn cached");
+        assert_eq!(pawns(vm), before, "no pawn made");
+    }
+}

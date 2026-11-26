@@ -442,9 +442,6 @@ fn find_class(vm: &mut Vm, path: &str) -> Result<ow_object::ids::ClassId, Missio
     })
 }
 
-/// A new object of `class_path` starting from its class default object's values, as the C++ `Runtime::instantiate`
-/// copies `defaults->props` (lane W6-COMBAT-RUN2, decision 2026-11-16-54: the controller's damage modifiers, the
-/// pawn's and the replication info's defaults were zero before).
 /// The player's pawn class (decision 2026-11-16-54: the bridge's player from class defaults, no map spawn).
 pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
 
@@ -473,12 +470,31 @@ fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, 
         let plan = ow_world::actors::plan_components(vm, default)?;
         let attach = ow_world::actors::component_attach::plan(vm, default, &plan)?;
         let pawn = ow_vm::interp::instantiate_from_defaults(vm, class)?;
-        let pairs = ow_world::actors::apply_plan(vm, &plan, pawn)?;
-        for &(_, copy) in &pairs {
-            let c = vm.space.heap.get(copy)?.class;
-            if let Some(owner) = vm.space.prop(c, "Owner") {
-                vm.space.write(copy, PropAddr::scalar(owner), Value::Object(Some(pawn)))?;
+        // A failure while making the copies or writing their `Owner` frees the pawn (and the copies `apply_plan`
+        // returned), as the spawn frees its actor (review of #757, LOW 2); `apply_plan` frees the copies it made
+        // before it fails. The pawn is not cached, so a later call makes it again.
+        let pairs = match ow_world::actors::apply_plan(vm, &plan, pawn) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                let _ = vm.space.free(pawn);
+                return Err(e);
             }
+        };
+        let owners = (|| -> Result<(), VmError> {
+            for &(_, copy) in &pairs {
+                let c = vm.space.heap.get(copy)?.class;
+                if let Some(owner) = vm.space.prop(c, "Owner") {
+                    vm.space.write(copy, PropAddr::scalar(owner), Value::Object(Some(pawn)))?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = owners {
+            for &(_, copy) in &pairs {
+                let _ = vm.space.free(copy);
+            }
+            let _ = vm.space.free(pawn);
+            return Err(e);
         }
         ow_world::actors::component_attach::apply(vm, pawn, &attach, &pairs)?;
         Ok(pawn)
@@ -486,6 +502,9 @@ fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, 
     Ok(made.map_err(|e| ow_world::pools::after_counted_writes(vm, before, e))?)
 }
 
+/// A new object of `class_path` starting from its class default object's values, as the C++ `Runtime::instantiate`
+/// copies `defaults->props` (lane W6-COMBAT-RUN2, decision 2026-11-16-54: the controller's damage modifiers, the
+/// pawn's and the replication info's defaults were zero before).
 fn new_object(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
     let c = vm.find_class(class_path)?;
     Ok(ow_vm::interp::instantiate_from_defaults(vm, c)?)
