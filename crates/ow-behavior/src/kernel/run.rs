@@ -233,6 +233,36 @@ fn prepare(vm: &mut Vm, behavior: ObjRef) -> Result<Prepared, VmError> {
             format!("{} has no ApplyBehavior", ow_attr::eval::class_path(&vm.space, behavior)),
         )
     })?;
+    prepared(vm, behavior, f)
+}
+
+/// [`prepare`] read-only, for the counted walk's preflight (review r2 of #808, item 2): the method found in loaded code
+/// only; a class whose code is not loaded is `NotYet { NotRead }` (a load is a write), with nothing loaded.
+fn prepare_read_only(vm: &Vm, behavior: ObjRef) -> Result<Prepared, VmError> {
+    let (class, state) = {
+        let o = vm.space.heap.get(behavior)?;
+        (o.class, o.state)
+    };
+    let f = match vm.find_loaded_method(class, "ApplyBehavior", state) {
+        None => {
+            return Err(NotYet::not_read(
+                format!(
+                    "BehaviorBase.RunBehaviors: the code of ApplyBehavior on {} is not loaded (a load is a write)",
+                    ow_attr::eval::class_path(&vm.space, behavior)
+                ),
+                RECORD,
+            )
+            .into());
+        }
+        Some(f) => f.ok_or_else(|| {
+            script(RUN_BEHAVIORS, format!("{} has no ApplyBehavior", ow_attr::eval::class_path(&vm.space, behavior)))
+        })?,
+    };
+    prepared(vm, behavior, f)
+}
+
+/// The checks of `f`'s declaration shared by [`prepare`] and [`prepare_read_only`].
+fn prepared(vm: &Vm, _behavior: ObjRef, f: FuncId) -> Result<Prepared, VmError> {
     let params = vm
         .function(f)
         .map(|d| d.params.clone())
@@ -247,6 +277,22 @@ fn prepare(vm: &mut Vm, behavior: ObjRef) -> Result<Prepared, VmError> {
         return Err(script(RUN_BEHAVIORS, "ApplyBehavior's record parameter is not a struct"));
     };
     Ok(Prepared { f, params })
+}
+
+/// `e` without the partial-writes mark at its start (the counted walk's policy when nothing was written).
+fn unmark(e: VmError) -> VmError {
+    let strip = |text: &str| text.strip_prefix(ow_core::notyet::PARTIAL_WRITES_PREFIX).map(str::to_string);
+    match e {
+        VmError::NotYet(n) => match strip(&n.what) {
+            Some(what) => NotYet::new(what, n.missing, n.record).into(),
+            None => VmError::NotYet(n),
+        },
+        VmError::Script { function, message } => {
+            let message = strip(&message).unwrap_or(message);
+            VmError::Script { function, message }
+        }
+        other => other,
+    }
 }
 
 /// A failure after a walk dispatched its first behavior, marked [`PARTIAL_WRITES`] (once, however deep the walks
@@ -292,9 +338,12 @@ impl Walk {
     /// write-aware one only when a counted write happened since the walk's start.
     fn fail(&self, vm: &Vm, e: VmError) -> VmError {
         match self.counted {
-            Some(start) if counters(vm) == start => e,
-            _ if self.begun => partial(e),
-            _ => e,
+            // Recomputed from the real counters (review r2 of #808, item 3): with none moved, a prefix a nested walk
+            // added is removed.
+            Some(start) if counters(vm) == start => unmark(e),
+            Some(_) => partial(e),
+            None if self.begun => partial(e),
+            None => e,
         }
     }
 
@@ -368,7 +417,8 @@ impl Walk {
     /// resolved and checked, and the record is made. A wait request itself is seen only after a behavior ran.
     fn preflight(&mut self, vm: &mut Vm, behaviors: &[ObjRef]) -> Result<(), VmError> {
         for (i, &b) in behaviors.iter().enumerate() {
-            let p = prepare(vm, b)?;
+            // The counted walk's plan loads nothing (review r2 of #808, item 2).
+            let p = if self.counted.is_some() { prepare_read_only(vm, b)? } else { prepare(vm, b)? };
             if i == 0 && self.record.is_none() {
                 self.start(vm, &p)?;
             }

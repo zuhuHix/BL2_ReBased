@@ -728,6 +728,20 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
         // The hub's ruling on review of #801 (lane IMPL-COMBAT-MUSIC-AND-AFTER): the combat music threat model past
         // its gates is a logged no-op (UNVERIFIED stand-in; it logs its own set-up line).
         ow_combat::combat_music::enable_threat_model_no_op(&mut world.vm)?;
+        // The manager's inputs (review r2 of #808, item 1): the default route leaves the globals' TheGlobalsDefinition
+        // unset (the mission bridge caches its own), so it is set as the Fire driver sets it; then the definition and
+        // its CombatMusicProperties are loaded when they are handles. Each a logged, UNVERIFIED harness input.
+        let globals = world.query().try_borrow().map_err(|_| ow_vm::error::VmError::ServiceBorrowed("WorldQuery"))?.globals();
+        if let Some(globals) = globals
+            && matches!(ow_inventory::equip::read_prop(&world.vm, globals, "TheGlobalsDefinition"), Some(ow_object::value::Value::Object(None)))
+        {
+            crate::cmd::inventory::equip_run::preload_globals_definition(&mut world.vm, globals, "the combat world's set-up")?;
+            world.vm.log.push(format!(
+                "harness input: preload {} into the globals' TheGlobalsDefinition (UNVERIFIED stand-in for its first load; no challenge numbering)",
+                crate::cmd::inventory::equip_run::GLOBALS_DEFINITION
+            ));
+        }
+        ow_combat::combat_music::preload_manager_inputs(&mut world.vm)?;
         let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
         Run::with_bridge(world, Some(bridge))
     };
