@@ -467,7 +467,9 @@ impl<'a> NativeCall<'a> {
     /// The object property an out argument from script aliases: `(owner, element)` when argument `i` names an
     /// instance variable (an object's property), `None` for a local, a temporary, a call from the host or an index
     /// past the parameters. Read only (lane MAYA9-SKIPPED-FLAG-LAYERABSENT: a native asks the store whether that
-    /// property was decoded).
+    /// property was decoded). **Also `None` for a place inside a property** (a struct field or an array element of
+    /// it, the interpreter's `In(Prop, steps)`): only an argument that names the whole property is answered (review of
+    /// #790), so a caller asking about a store mark sees no mark for such an argument.
     pub fn arg_property(&self, i: usize) -> Option<(ObjRef, ow_object::ids::PropAddr)> {
         match self.args.get(i)?.alias.as_ref()? {
             crate::interp::Alias(crate::interp::Place::Prop(owner, at)) => Some((*owner, *at)),
