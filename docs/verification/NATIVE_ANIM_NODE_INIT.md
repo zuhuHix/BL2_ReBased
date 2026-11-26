@@ -136,6 +136,22 @@ not bind sequences to the mesh. Where that happens later (by fit the component's
 step 5) was not read. On Maya's 31 sequence nodes `AnimSeq` and `ActiveCameraAnimInstance` are None and
 `bIsIssuingNotifies` is clear. So only the plain writes above happen.
 
+*Correction 2026-11-26 (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 3, #747; lane ANIM-NODE-INIT-D-CORRECTIONS,
+decision 2026-11-26-NNN). Two points in step 2 above were wrong:*
+- *the "unless" guard needs both conditions: the reset is skipped only when `bIsIssuingNotifies` is set **and**
+  `AnimSeqName` is not None. A node issuing notifies with no name is reset;*
+- *for `WillowAnimNodeSequenceAdditiveBlend`, the "set animation" is the additive class's override, through the class
+  table. After the base step, and whatever the guard:*
+  - *with `bAutoGenerateAdditiveSeqName` set, `AddAnimSeqName` := `Add_None`, a name intern;*
+  - *then `AddAnimSeqName` := that name (or the node's own value), `AddAnimSeq` := None and `AddAnimLinkupIndex` :=
+    -1;*
+  - *then, with a non-None name, a `SkeletalMesh` and a non-empty `AnimSets` on the component, the component's
+    sequence lookup.*
+
+  *The port's kind D follows these from this date. A lookup match, and the auto-name while issuing notifies under a
+  name, are refused (that note's section 5 texts). The intern happens only at the write: the preflight matches by
+  text.*
+
 ### E. `AnimTree` (and `WillowAnimTree`)
 
 1. B.
@@ -218,9 +234,9 @@ implementations). A class not in the table refuses `NotYet { NotRead }`, "the pe
 **Preflight refusals** (checked over every node in tick order, including the children that H initialises again):
 1. A node with `bCallScriptEventOnInit` set: `NotYet { NotRead }`, "the node's OnInit script event (the event's name
    was not read)".
-2. D with `AnimSeq` set before the init and `bIsIssuingNotifies` clear: `NotYet { NotRead }`, "AnimNodeSequence: the
-   steps after its sequence changes". D with `ActiveCameraAnimInstance` set: `NotYet { NotRead }`, "AnimNodeSequence: stopping its camera
-   animation".
+2. D with `AnimSeq` set before the init where the reset runs (`bIsIssuingNotifies` clear, or `AnimSeqName` None;
+   corrected 2026-11-26, see D): `NotYet { NotRead }`, "AnimNodeSequence: the steps after its sequence changes". D
+   with `ActiveCameraAnimInstance` set: `NotYet { NotRead }`, "AnimNodeSequence: stopping its camera animation".
 3. C or H whose non-additive weights sum to at most 1e-5: `NotYet { NotRead }`, "<class>: set active child during
    initialisation".
 4. E (the root), hub ruling on #566: the flag has a fit (section "How the fields were tied to names") and no script

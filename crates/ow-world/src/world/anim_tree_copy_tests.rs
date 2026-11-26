@@ -120,14 +120,25 @@ impl Fx {
             ("AdditiveWeightScale", PropKind::Float),
         ]);
         let blend = class(&mut vm, BLEND, node, &[("Children", arr(PropKind::Struct(child)))]);
-        class(&mut vm, SEQUENCE, node, &[
+        let sequence = class(&mut vm, SEQUENCE, node, &[
             ("AnimSeqName", PropKind::Name),
             ("AnimSeq", o.clone()),
             ("AnimLinkupIndex", PropKind::Int),
             ("CachedNumDesiredBones", PropKind::Int),
             ("bIsIssuingNotifies", PropKind::Bool),
             ("ActiveCameraAnimInstance", o.clone()),
+            // The additive override's lookup order (lane ANIM-NODE-INIT-D-CORRECTIONS).
+            ("bReverseAnimSeqSearchOrder", PropKind::Bool),
         ]);
+        // The additive class and the lookup's anim sets (lane ANIM-NODE-INIT-D-CORRECTIONS).
+        class(&mut vm, ADDITIVE_SEQUENCE, sequence, &[
+            ("bAutoGenerateAdditiveSeqName", PropKind::Bool),
+            ("AddAnimSeqName", PropKind::Name),
+            ("AddAnimSeq", o.clone()),
+            ("AddAnimLinkupIndex", PropKind::Int),
+        ]);
+        class(&mut vm, "Engine.AnimSequence", object, &[("SequenceName", PropKind::Name)]);
+        class(&mut vm, "Engine.AnimSet", object, &[("Sequences", arr(o.clone()))]);
         class(&mut vm, "Test.OtherBlend", blend, &[]);
         class(&mut vm, "Engine.AnimNodeScaleRateBySpeed", blend, &[]);
         let weights = [("TargetWeight", arr(PropKind::Float)), ("ActiveChildIndex", PropKind::Int)];
@@ -214,6 +225,7 @@ impl Fx {
             // The initialisation's own gate (review r1 of #631, item 1).
             ("ParentAnimComponent", o.clone()),
             ("SkeletalMesh", if shape == Shape::IntMesh { PropKind::Int } else { o.clone() }),
+            ("AnimSets", arr(o.clone())),
             ("Owner", o.clone()),
             // The component pass and the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS).
             ("MorphSets", arr(o.clone())),
@@ -828,7 +840,7 @@ impl Drop for DirGuard {
 // ---- The per-node initialisation (NATIVE_ANIM_NODE_INIT.md section 2; lane IMPL-ANIM-NODE-INIT) -------------------
 
 use crate::world::anim_node_init::{
-    CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_INTERFACE_NO_KEY, OWNER_INTERFACE_NOT_LOADED, OWNER_RECORD,
+    ADDITIVE_AUTO_NAME_ISSUING, ADDITIVE_LINKUP, CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_INTERFACE_NO_KEY, OWNER_INTERFACE_NOT_LOADED, OWNER_RECORD,
     RECORD as INIT_RECORD, SEQUENCE_CHANGE, SPECIAL_MOVE_INTERFACE, answer_owner_for_tests, owner_not_decoded,
     owner_not_resolved, owner_target_missing, set_active_child, unknown_class,
 };
@@ -949,12 +961,14 @@ fn d_keeps_its_name_and_unbinds_its_sequence() {
     let c = copy_of(&x, comp, n);
     assert_eq!(x.get(c, "AnimSeqName"), walk);
     assert_eq!((x.get(c, "AnimLinkupIndex"), x.get(c, "CachedNumDesiredBones")), (Value::Int(-1), Value::Int(0)));
-    // Issuing notifies: the set-anim does nothing (a set sequence is kept, the linkup index too).
+    // Issuing notifies under a name: the set-anim does nothing (a set sequence is kept, the linkup index too).
     let mut x = Fx::new();
+    let walk = Value::Name(x.vm.space.names.intern("Walk"));
     let n = x.obj(SEQUENCE);
     let seq = x.obj(NODE);
     let (t, comp) = with_node(&mut x, n);
     x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    x.set(n, "AnimSeqName", walk);
     x.set(n, "AnimSeq", Value::Object(Some(seq)));
     x.set(n, "AnimLinkupIndex", Value::Int(4));
     instance(&mut x.vm, comp, t.root).unwrap();
@@ -967,6 +981,157 @@ fn d_keeps_its_name_and_unbinds_its_sequence() {
         let (t, comp) = with_node(&mut x, n);
         x.set(n, f, Value::Object(Some(other)));
         init_refused(refused_clean(&mut x, comp, t.root), what);
+    }
+}
+
+/// The additive class (lane ANIM-NODE-INIT-D-CORRECTIONS).
+const ADDITIVE_SEQUENCE: &str = "WillowGame.WillowAnimNodeSequenceAdditiveBlend";
+
+/// A toy anim set holding sequences with these names.
+fn anim_set(x: &mut Fx, names: &[&str]) -> ObjRef {
+    let set = x.obj("Engine.AnimSet");
+    let mut list = Vec::new();
+    for n in names {
+        let q = x.obj("Engine.AnimSequence");
+        let id = x.vm.space.names.intern(n);
+        x.set(q, "SequenceName", Value::Name(id));
+        list.push(Some(q));
+    }
+    x.set(set, "Sequences", Value::array(list.into_iter().map(Value::Object).collect()));
+    set
+}
+
+/// D's correction (b), the notifies guard (#747): issuing notifies with `AnimSeqName` None still resets (the linkup
+/// index -1); with a set sequence that is the sequence-change refusal, not a skip.
+#[test]
+fn d_issuing_notifies_with_no_name_still_resets() {
+    let mut x = Fx::new();
+    let n = x.obj(SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    x.set(n, "AnimLinkupIndex", Value::Int(4));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!((x.get(c, "AnimLinkupIndex"), x.get(c, "AnimSeq")), (Value::Int(-1), Value::Object(None)));
+    let mut x = Fx::new();
+    let n = x.obj(SEQUENCE);
+    let seq = x.obj(NODE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    x.set(n, "AnimSeq", Value::Object(Some(seq)));
+    init_refused(refused_clean(&mut x, comp, t.root), SEQUENCE_CHANGE);
+}
+
+/// D's correction (a), the additive override (#747): with the auto-name flag, `AddAnimSeqName` := `Add_None`, interned
+/// at the write only; with it clear, the node's own name is kept. Either way `AddAnimSeq` None and the linkup -1.
+#[test]
+fn d_additive_override_runs_at_init() {
+    let mut x = Fx::new();
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    let stale = x.obj(NODE);
+    x.set(n, "bAutoGenerateAdditiveSeqName", Value::Bool(true));
+    x.set(n, "AddAnimSeq", Value::Object(Some(stale)));
+    x.set(n, "AddAnimLinkupIndex", Value::Int(3));
+    assert!(x.vm.space.names.find("Add_None").is_none(), "the fixture's table lacks the auto-name");
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    let add_none = x.vm.space.names.find("Add_None").expect("interned at the write");
+    assert_eq!(x.get(c, "AddAnimSeqName"), Value::Name(add_none));
+    assert_eq!((x.get(c, "AddAnimSeq"), x.get(c, "AddAnimLinkupIndex")), (Value::Object(None), Value::Int(-1)));
+    // Flag clear: the re-set with the node's own name, and the lookup finds nothing on a set without it.
+    let mut x = Fx::new();
+    let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "AddAnimSeqName", idle.clone());
+    x.set(n, "AddAnimLinkupIndex", Value::Int(3));
+    let mesh = x.obj("Engine.SkeletalMesh");
+    let set = anim_set(&mut x, &["Walk"]);
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(comp, "AnimSets", Fx::objects(&[set]));
+    // A mesh runs the component's mesh steps too: a toy skeleton for them (the per-bone tests' helper).
+    skeleton_for_tests(Some(five()));
+    let done = instance(&mut x.vm, comp, t.root);
+    skeleton_for_tests(None);
+    done.unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!((x.get(c, "AddAnimSeqName"), x.get(c, "AddAnimLinkupIndex")), (idle, Value::Int(-1)));
+}
+
+/// The additive override's refusals: a lookup match (the link-up is not read), case-insensitive, with nothing written
+/// or interned; the auto-name while issuing notifies under a name.
+#[test]
+fn d_additive_override_refusals() {
+    let mut x = Fx::new();
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+    x.set(n, "AddAnimSeqName", idle);
+    let mesh = x.obj("Engine.SkeletalMesh");
+    let set = anim_set(&mut x, &["add_idle"]);
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(comp, "AnimSets", Fx::objects(&[set]));
+    init_refused(refused_clean(&mut x, comp, t.root), ADDITIVE_LINKUP);
+    // The same set with no mesh: no lookup.
+    let mut x = Fx::new();
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+    x.set(n, "AddAnimSeqName", idle);
+    let set = anim_set(&mut x, &["ADD_Idle"]);
+    x.set(comp, "AnimSets", Fx::objects(&[set]));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    // The auto-name while issuing notifies under a name.
+    let mut x = Fx::new();
+    let walk = Value::Name(x.vm.space.names.intern("Walk"));
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bAutoGenerateAdditiveSeqName", Value::Bool(true));
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    x.set(n, "AnimSeqName", walk);
+    init_refused(refused_clean(&mut x, comp, t.root), ADDITIVE_AUTO_NAME_ISSUING);
+}
+
+/// Maya's case (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 5, by toy values): one auto-name additive node whose tag
+/// already holds `Add_None`, and two flag-clear ones naming `ADD_Idle`, over a mesh whose one set holds neither name:
+/// every additive node gets the re-set, the auto-name node `Add_None`, no sequence bound.
+#[test]
+fn d_mayas_three_additive_nodes() {
+    let mut x = Fx::new();
+    let add_none = Value::Name(x.vm.space.names.intern("Add_None"));
+    let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+    let t = diamond(&mut x);
+    let nodes: Vec<ObjRef> = (0..3).map(|_| x.obj(ADDITIVE_SEQUENCE)).collect();
+    let mut kids: Vec<Option<ObjRef>> = vec![Some(t.d)];
+    kids.extend(nodes.iter().map(|&n| Some(n)));
+    x.children(t.c, &kids);
+    for &n in &nodes {
+        x.parents(n, &[t.c]);
+        x.set(n, "AddAnimLinkupIndex", Value::Int(2));
+    }
+    x.set(nodes[0], "bAutoGenerateAdditiveSeqName", Value::Bool(true));
+    x.set(nodes[0], "AddAnimSeqName", add_none.clone());
+    for &n in &nodes[1..] {
+        x.set(n, "AddAnimSeqName", idle.clone());
+    }
+    let comp = x.component();
+    let mesh = x.obj("Engine.SkeletalMesh");
+    let set = anim_set(&mut x, &["Idle", "Run"]);
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(comp, "AnimSets", Fx::objects(&[set]));
+    let names_before = x.vm.space.names.len();
+    skeleton_for_tests(Some(five()));
+    let done = instance(&mut x.vm, comp, t.root);
+    skeleton_for_tests(None);
+    done.unwrap();
+    assert_eq!(x.vm.space.names.len(), names_before, "Add_None was already in the table: the intern is a find");
+    for (i, &n) in nodes.iter().enumerate() {
+        let c = copy_of(&x, comp, n);
+        let want = if i == 0 { add_none.clone() } else { idle.clone() };
+        assert_eq!(x.get(c, "AddAnimSeqName"), want, "node {i}");
+        assert_eq!((x.get(c, "AddAnimSeq"), x.get(c, "AddAnimLinkupIndex")), (Value::Object(None), Value::Int(-1)));
+        assert_eq!(x.get(c, "AnimLinkupIndex"), Value::Int(-1));
     }
 }
 

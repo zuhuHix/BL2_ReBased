@@ -14,8 +14,9 @@
 //! **The preflight** ([`plan`]) reads only, writes, loads and draws nothing. Over every node in tick order (the
 //! children H initialises again are among them), the note's refusals 1 to 7 with its texts:
 //! 1. `bCallScriptEventOnInit` set: [`ON_INIT`];
-//! 2. D: `AnimSeq` set with `bIsIssuingNotifies` clear: [`SEQUENCE_CHANGE`]; `ActiveCameraAnimInstance` set:
-//!    [`CAMERA`];
+//! 2. D: `AnimSeq` set where the reset runs (see below): [`SEQUENCE_CHANGE`]; `ActiveCameraAnimInstance` set:
+//!    [`CAMERA`]. For `WillowAnimNodeSequenceAdditiveBlend`, the override's refusals too: [`ADDITIVE_AUTO_NAME_ISSUING`]
+//!    and the additive lookup's ([`ADDITIVE_LINKUP`], [`ADDITIVE_NOT_LOADED`]);
 //! 3. C, or H's slot part, whose non-additive child weights sum to at most 1e-5 (H after its step 4):
 //!    [`set_active_child`];
 //! 4. E: the component's class must declare `bUpdateComposeSkeletonPasses` as a bool (`VmError::Script` otherwise);
@@ -29,6 +30,18 @@
 //!    each other case is its own refusal. No owner leaves `SMI` as it is.
 //!
 //! Every declared field an implementation reads or writes is checked there too (a missing one is a `VmError::Script`).
+//!
+//! **D's corrections** (lane ANIM-NODE-INIT-D-CORRECTIONS, from NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 3,
+//! #747, the hub's ruling; NATIVE_ANIM_NODE_INIT.md section 2 D's correction of 2026-11-26). **UNVERIFIED.**
+//! - **The notifies guard:** the "set animation" with None skips its reset only when `bIsIssuingNotifies` is set
+//!   **and** `AnimSeqName` is not None ([`resets`]). A node issuing notifies with no name is reset.
+//! - **The additive override:** on `WillowAnimNodeSequenceAdditiveBlend`, after the base step, whatever the guard: with
+//!   `bAutoGenerateAdditiveSeqName` set, `AddAnimSeqName` := `Add_None` (the text "Add_" and the asked name None, a
+//!   name intern, made only at the write; the preflight matches by text). Then the re-set: `AddAnimSeqName` := that
+//!   name (or the node's own), `AddAnimSeq` := None, `AddAnimLinkupIndex` := -1. When the name is not None and the
+//!   component has a `SkeletalMesh` and a non-empty `AnimSets`, the component's sequence lookup ([`additive_lookup`]),
+//!   read only: a match is [`ADDITIVE_LINKUP`] (the link-up is not read). With the auto-name flag set while the base
+//!   step is skipped (issuing under a name), [`ADDITIVE_AUTO_NAME_ISSUING`], as the tree-tick note refuses it.
 //!
 //! **The writes** ([`write_head`], [`write_tail`]) replay the planned [`Step`]s, iteratively: per node in tick order,
 //! the copy's two writes (`SkelComponent`, `NodeTickTag`), then the note's section 2 steps for that node's
@@ -54,6 +67,15 @@ const UNIT: &str = "the per-node initialisation";
 pub const ON_INIT: &str = "the node's OnInit script event (the event's name was not read)";
 pub const SEQUENCE_CHANGE: &str = "AnimNodeSequence: the steps after its sequence changes";
 pub const CAMERA: &str = "AnimNodeSequence: stopping its camera animation";
+/// The additive override's refusals (D's corrections, NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 5).
+pub const ADDITIVE_LINKUP: &str = "WillowAnimNodeSequenceAdditiveBlend: an additive sequence's mesh link-up";
+pub const ADDITIVE_AUTO_NAME_ISSUING: &str =
+    "WillowAnimNodeSequenceAdditiveBlend: the additive auto-name while issuing notifies";
+pub const ADDITIVE_NOT_LOADED: &str =
+    "WillowAnimNodeSequenceAdditiveBlend: an anim set or sequence not loaded at initialisation (a load is a write)";
+/// The additive class, and the name its auto-name builds from the asked name None.
+const ADDITIVE: &str = "WillowGame.WillowAnimNodeSequenceAdditiveBlend";
+const AUTO_NAME: &str = "Add_None";
 pub const ENTRY_WEIGHTS: &str = "AnimNodeSpecialMoveBlend: the per-bone weight build of an entry";
 /// The interface H's owner test names.
 pub const SPECIAL_MOVE_INTERFACE: &str = "GearboxFramework.SpecialMoveInterface";
@@ -295,6 +317,79 @@ pub(crate) fn answer_owner_for_tests(answer: Option<bool>) {
 }
 
 /// The component's class declares `name` as a bool (refusal 4's check).
+/// Whether D's "set animation" with None runs its reset on `node`: unless `bIsIssuingNotifies` is set and
+/// `AnimSeqName` is not None (D's corrections).
+fn resets(vm: &Vm, node: ObjRef) -> Result<bool, VmError> {
+    let issuing = truth(&read(vm, node, "bIsIssuingNotifies")?);
+    let named = match read(vm, node, "AnimSeqName")? {
+        Value::Name(n) => n != ow_object::ids::NameId::NONE,
+        other => return Err(script(format!("AnimSeqName holds {}, not a name", other.kind_name()))),
+    };
+    Ok(!(issuing && named))
+}
+
+/// Whether `o` is resident: neither a handle the store has not loaded (or failed) nor a slotless stand-in.
+fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    let x = vm.space.heap.get(o)?;
+    let slotless = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
+}
+
+/// The text of the name the additive override looks up on `node`, or `None` for no lookup (the name None).
+fn additive_name(vm: &Vm, node: ObjRef) -> Result<Option<String>, VmError> {
+    if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) {
+        return Ok(Some(AUTO_NAME.to_string()));
+    }
+    match read(vm, node, "AddAnimSeqName")? {
+        Value::Name(n) if n == ow_object::ids::NameId::NONE => Ok(None),
+        Value::Name(n) => Ok(Some(vm.space.names.text(n).into_owned())),
+        other => Err(script(format!("AddAnimSeqName holds {}, not a name", other.kind_name()))),
+    }
+}
+
+/// [`ADDITIVE_NOT_LOADED`] naming the object (its store path, nothing loaded).
+pub fn not_loaded(vm: &Vm, o: ObjRef) -> String {
+    format!("{ADDITIVE_NOT_LOADED}: {}", super::pawn_meshes::handle_path(vm, o))
+}
+
+/// The component's sequence lookup for the additive override (D's corrections), read only: with a `SkeletalMesh` and
+/// a non-empty `AnimSets`, each set in reverse order (in order with the node's `bReverseAnimSeqSearchOrder`), None
+/// entries skipped, each set and each of its `Sequences` resident, matched by `SequenceName` text case-insensitively.
+/// A match is [`ADDITIVE_LINKUP`]; no match answers nothing. The set's native name map is replaced by this walk
+/// (UNVERIFIED, as the tree-tick note labels it).
+fn additive_lookup(vm: &Vm, component: ObjRef, node: ObjRef, target: &str) -> Result<(), VmError> {
+    if object_of(&read(vm, component, "SkeletalMesh")?).is_none() {
+        return Ok(());
+    }
+    let mut sets = elements(&read(vm, component, "AnimSets")?, "AnimSets")?;
+    if sets.is_empty() {
+        return Ok(());
+    }
+    if !truth(&read(vm, node, "bReverseAnimSeqSearchOrder")?) {
+        sets.reverse();
+    }
+    for s in sets {
+        let Some(set) = object_of(&s) else { continue };
+        if !resident(vm, set)? {
+            return Err(not_read(not_loaded(vm, set)));
+        }
+        for q in elements(&read(vm, set, "Sequences")?, "Sequences")? {
+            let Some(seq) = object_of(&q) else { continue };
+            if !resident(vm, seq)? {
+                return Err(not_read(not_loaded(vm, seq)));
+            }
+            match read(vm, seq, "SequenceName")? {
+                Value::Name(n) if vm.space.names.text(n).eq_ignore_ascii_case(target) => {
+                    return Err(not_read(ADDITIVE_LINKUP));
+                }
+                Value::Name(_) => {}
+                other => return Err(script(format!("SequenceName holds {}, not a name", other.kind_name()))),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn declares_bool(vm: &Vm, class: ClassId, name: &str) -> bool {
     vm.space.prop(class, name).and_then(|p| vm.space.classes.decl(p)).is_some_and(|d| matches!(d.kind, PropKind::Bool))
 }
@@ -333,9 +428,20 @@ fn check_node(vm: &Vm, component: ObjRef, node: ObjRef, owner: Option<ObjRef>) -
                 read(vm, node, name)?;
             }
             let seq = object_of(&read(vm, node, "AnimSeq")?);
-            let issuing = truth(&read(vm, node, "bIsIssuingNotifies")?);
-            if seq.is_some() && !issuing {
+            let resets = resets(vm, node)?;
+            if seq.is_some() && resets {
                 return Err(not_read(SEQUENCE_CHANGE));
+            }
+            if path == ADDITIVE {
+                for name in ["AddAnimSeq", "AddAnimLinkupIndex"] {
+                    read(vm, node, name)?;
+                }
+                if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) && !resets {
+                    return Err(not_read(ADDITIVE_AUTO_NAME_ISSUING));
+                }
+                if let Some(target) = additive_name(vm, node)? {
+                    additive_lookup(vm, component, node, &target)?;
+                }
             }
             if object_of(&read(vm, node, "ActiveCameraAnimInstance")?).is_some() {
                 return Err(not_read(CAMERA));
@@ -575,10 +681,24 @@ pub fn write_head(vm: &mut Vm, component: ObjRef, node: ObjRef, build: Option<&B
         }
         Kind::D => {
             let kept = read(vm, node, "AnimSeqName")?;
-            if !truth(&read(vm, node, "bIsIssuingNotifies")?) {
+            if resets(vm, node)? {
                 write(vm, node, "AnimSeqName", Value::Name(ow_object::ids::NameId::NONE))?;
                 write(vm, node, "AnimSeq", Value::Object(None))?;
                 write_int(vm, node, "AnimLinkupIndex", -1)?;
+            }
+            // The additive override (D's corrections): the auto-name (interned only here), then the re-set. The
+            // preflight refused a lookup match, so `AddAnimSeq` is None.
+            if class_path(vm, class_of(vm, node)?) == ADDITIVE {
+                let name = if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) {
+                    let n = Value::Name(vm.space.names.intern(AUTO_NAME));
+                    write(vm, node, "AddAnimSeqName", n.clone())?;
+                    n
+                } else {
+                    read(vm, node, "AddAnimSeqName")?
+                };
+                write(vm, node, "AddAnimSeqName", name)?;
+                write(vm, node, "AddAnimSeq", Value::Object(None))?;
+                write_int(vm, node, "AddAnimLinkupIndex", -1)?;
             }
             write_int(vm, node, "CachedNumDesiredBones", 0)?;
             write(vm, node, "AnimSeqName", kept)?;
