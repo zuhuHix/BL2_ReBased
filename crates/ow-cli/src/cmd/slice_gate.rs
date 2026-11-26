@@ -1316,6 +1316,11 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     if world.vm.log.iter().any(|l| l == crate::cmd::inventory::equip_run::GAME_INFO_INPUT) {
         r.harness.push(crate::cmd::inventory::equip_run::GAME_INFO_INPUT.to_string());
     }
+    // Link 6's take (lane IMPL-UPDATEAMMOCOUNTS, the hub's two rulings): the ammo-definition preload's lines and the
+    // at-rest ruling's set-up line, when the set-up logged them.
+    let at_rest = crate::cmd::inventory::equip_run::AT_REST_INPUT;
+    let ammo = |l: &String| l.starts_with("harness input: set-up preload: ") && l.ends_with(crate::cmd::inventory::equip_run::AMMO_PRELOAD_TAIL);
+    r.harness.extend(world.vm.log.iter().filter(|l| ammo(l) || *l == at_rest).cloned());
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The card's preflight before the weapon is made, as link 8's driver runs it (NATIVE_LINK67_PICKUP_GUN_INIT.md
@@ -1340,7 +1345,11 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     };
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());
-        if let Some(e) = crate::cmd::slice_pickup::step(vm, step, &p)
+        // A step's own harness inputs (GetSaveRotation's at-rest line, lane IMPL-UPDATEAMMOCOUNTS), kept on a stop too.
+        let log_before = vm.log.len();
+        let out = crate::cmd::slice_pickup::step(vm, step, &p);
+        r.harness.extend(vm.log[log_before.min(vm.log.len())..].iter().filter(|l| l.starts_with("harness input:")).cloned());
+        if let Some(e) = out
             && step_error_typed(&mut r, step, &e, grading)
         {
             break;

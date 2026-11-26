@@ -374,7 +374,7 @@ fn build_with(
 }
 
 /// The log line of [`level_world_info`].
-pub const WORLD_INFO_INPUT: &str = "harness input: the pickup world's controller and pawn take the level's WorldInfo      (the pickup's; an UNVERIFIED stand-in: in the game every spawned actor has its level's WorldInfo,      NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 4.1)";
+pub const WORLD_INFO_INPUT: &str = "harness input: the pickup world's controller and pawn take the level's WorldInfo (the pickup's; an UNVERIFIED stand-in: in the game every spawned actor has its level's WorldInfo, NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 4.1)";
 
 /// NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 4.1 (lane IMPL-UPDATEAMMOCOUNTS): the pickup world's controller and
 /// pawn had no `WorldInfo`, so `PickupPickupable`'s `WorldInfo.Game.PickupQuery` on the controller read through None.
