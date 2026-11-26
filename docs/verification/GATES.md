@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**PRELOAD-MAYA-ANIMSETS (2026-11-26, pc-hummer, on fix/preload-maya-animsets, stacked on #751 405315a9):**
+AI-assisted (Claude Code, Opus 5.5). The `maya` step preloads exactly the anim sets her archetype's `Mesh` component
+lists in `AnimSets` (`Anim_Siren.Base_Siren`) and their sequences, each a logged harness input; plus #751's review
+LOWs. `cargo test --workspace -j 8 --no-fail-fast` 3,793 passed / 0 failed / 59 ignored; `crate_edges_test.py`
+OK. Installed Off strict `--slice-gate` (release build,
+under the machine lock) on a local merge of #751 + #752 + this: 6 ok / 8 NotYet, 42.9%. Links 1, 3, 4, 5, 13 and 14
+move from #752's init refusal on `Anim_Siren.Base_Siren` to `UpdateAnimations`' not-loaded refusal on
+`Anim_Siren.Unarmed_Siren`, which `UpdateAnimSets` appends from the body class's weapon holds (a further preload is
+the hub's call). UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **ANALYST-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, docs only, on docs/native-link67-pickup-gun-init from main
 8fa9839d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_PICKUP_GUN_INIT.md reads the pickup gun's init in the
 game. `InitializeInternal` reaches `InitMeshes`, which sets the shared gestalt mesh on both meshes, long before the
