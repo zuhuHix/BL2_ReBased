@@ -12,7 +12,7 @@ trace flags' `NotRead` for any other component. `cargo test --workspace -j 8 --n
 this head: **8 ok / 14, X = 8.5/14 = 60.7%**, main's score with #800. Links 3, 4, 5, 13 and 14 get past the floor trace (the spawns at 1000 and 2000, the
 stand-in logged) and stop at the spawn's `AttributeInitializationDefinition.SetBaseValue` ("a definition it names is
 not loaded"); link 7 at the pickup targeting's HUD pass. Before the rebase onto main (base 7b9daea9 against c5734abe):
-7 ok both, the same rows but link 6, which #800 passes. UNVERIFIED in game. Decision 2026-11-26-NNN.
+7 ok both, the same rows but link 6, which #800 passes. UNVERIFIED in game. Decision 2026-11-26-64.
 
 **IMPL-BOUNDING-CYLINDER-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-bounding-cylinder, stacked on fix/rust-links-13-14
 e00e3de):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BOUNDING_CYLINDER_AND_AFTER.md (#799 at its r1 fix fc8d2c42) in
