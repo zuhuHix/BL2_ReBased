@@ -60,7 +60,8 @@ These two happen **before** the gates below. So even a request that then changes
 **Effects that depend on the transition:**
 - *into `PHYS_Walking` from any other mode* (`Pawn`): `bForceFloorCheck` is set, before the mode is written;
 - *into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider`* (`Actor`): with no new floor, which is always
-  the case from script, an actor virtual is called. It was not identified, and is presumably the base search;
+  the case from script, an actor virtual is called. It was not identified, and is presumably the base search (now
+  read: the base search, a downward floor trace of 8 units, NATIVE_LINK34_AFTER_MIND.md section 2);
 - *into any other mode except `PHYS_Interpolating`, while a `Base` is set* (`Actor`): the base is cleared (set to None,
   with the floor normal up, notifying the actor). This is by fit to the base setter's argument shape;
 - *into `PHYS_None` or `PHYS_Rotating`* (`Actor`): `Velocity` and `Acceleration` are zeroed;
@@ -111,7 +112,9 @@ writes `Physics`. The table row is corrected to say so and to point here.
 - `WillowGame.WillowPawn`: `WillowPawn`, `Pawn` and `Actor`;
 - `GearboxFramework.GearboxPawn` and `Engine.Pawn`: `Pawn` and `Actor`;
 - `Engine.Actor`: `Actor` only;
-- any other first native class (`WillowPlayerPawn` included, not read): a `NotYet` of kind `NotRead`,
+- `WillowGame.WillowPlayerPawn`: read since, it has `WillowPawn`'s three layers (NATIVE_LINK34_AFTER_MIND.md
+  section 3);
+- any other first native class: a `NotYet` of kind `NotRead`,
   "Actor.SetPhysics: the physics change of <class>".
 
 **Preflight, write-free and loaded-only.** Reads go by name lookup on resident objects. The mode is the argument's
