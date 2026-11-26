@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK1-RIGID-BODY-LAYER (2026-11-26, pc-hummer, docs only, on docs/native-link1-rigid-body-layer from main
+e9479199):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK1_RIGID_BODY_LAYER.md reads the component rigid-body set-up
+that `InitializeRBPhysics` calls. For Maya's attached components the game makes no body: the actor components' bodies are
+empty, the cylinder has no shape, and the skeletal meshes have the physics-asset instance flag clear. The only writes are
+`bSkelCompFixed` and an emptied cloth index array. So 2.A's `LayerAbsent` can be replaced by a rule needing no physics
+layer, with typed refusals for the body-making cases. Predicted next stop: the unbound `Engine.GetPhysXLevel`. No code
+changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **IMPL-PICKUPABLE-ISENABLED (2026-11-26, pc-hummer, on fix/rust-pickupable-isenabled, stacked on the scaled bounds @
 943f8f1a):** AI-assisted (Claude Code, Opus 5.5). `DroppedPickup`/`WillowPickup.Pickupable_IsEnabled()` bound in Off: a
 `WillowPickup`'s `bPickupable`, read by name (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5). `cargo test --workspace -j 8

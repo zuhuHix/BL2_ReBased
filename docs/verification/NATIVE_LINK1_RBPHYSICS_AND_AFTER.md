@@ -99,6 +99,11 @@ physics `LayerAbsent`**, with nothing written. 2.A is her stop.
 8. a template receiver (`Origin::Default`) with an entry whose `bAttached` is set: the physics `LayerAbsent`;
 9. an entry recorded under another owner: not attached, so refusal L's convention.
 
+*Read further 2026-11-26 in NATIVE_LINK1_RIGID_BODY_LAYER.md (decision 2026-11-26-NNN): the component set-up makes
+no body for Maya's attached components (no shape on the cylinder; the body mesh's physics-asset instance flag clear).
+Its only writes are `bSkelCompFixed` and an emptied `ClothMeshIndexData`, so the attached-entry `LayerAbsent` above is
+replaced by that rule for the classes it names.*
+
 ### 2.B `WillowPawn.InitializeBehaviorProviders()` (outline; not this note's answer)
 
 **What it does, in outline** (`WillowPawn`'s own body, which `WillowPlayerPawn` keeps):
