@@ -1204,7 +1204,7 @@ fn template_preflight(vm: &Vm, class: ClassId, template: ObjRef) -> Result<ObjRe
 }
 
 /// The class flags' rule on the new object's would-be values `slots` (NATIVE_NEW_COMPONENT_INSTANCING.md section 3,
-/// decision 2026-11-26-NNN), read only, before anything is made. **UNVERIFIED in the running game.**
+/// decision 2026-11-26-14), read only, before anything is made. **UNVERIFIED in the running game.**
 /// - **bit 23** ("has components", by fit): every field of the class and its super classes (super class first, then
 ///   declaration order, array elements in order, struct members recursively) whose kind is an object reference, a
 ///   dynamic array of them or a struct holding them. A None value (an empty array) needs nothing, so its declared class
@@ -1313,7 +1313,7 @@ fn would_be_slots(vm: &Vm, class: ClassId, template: ObjRef, default: ObjRef) ->
     Ok(slots)
 }
 
-/// Option B's copy (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, decision 2026-11-26-NNN), after
+/// Option B's copy (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, decision 2026-11-26-14), after
 /// [`template_preflight`] and [`flags_preflight`] passed on [`would_be_slots`]' `slots`. **UNVERIFIED in the running
 /// game.** The writes: the object with the VM's generated name (the name intern and the object are the first writes),
 /// its slots, its heap archetype := the template, and the outer when one was given. The instancing pass writes nothing
