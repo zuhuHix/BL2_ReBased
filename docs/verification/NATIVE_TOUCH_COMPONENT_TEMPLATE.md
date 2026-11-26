@@ -157,6 +157,10 @@ These are two VM changes, both **the hub's call**:
 
 1. **With option B as proposed,** `new` itself stops first, at the component-instancing `NotRead` (3.3), because
    `SkeletalMeshComponent` has class flag bit 23. That is the next stop on links 6 and 7 until the step is read.
+
+   *Read 2026-11-26 in NATIVE_NEW_COMPONENT_INSTANCING.md (decision 2026-11-26-NNN): the step does nothing when every
+   component field's would-be value is None, which is links 6 and 7's case. So the blanket refusal narrows to a
+   non-None component value, and `new` passes there.*
 2. **Once that step answers,** the copied template has no mesh (the fixture skips the gun's init), so `skeletal_box`
    meets source e again: the same `TEMPLATE` `NotRead`.
    - **Whether to keep refusing a component whose template has no mesh is the hub's call. The hub keeps it refused.**

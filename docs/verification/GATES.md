@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-NEW-COMPONENT-INSTANCING (2026-11-26, pc-hummer, docs only, on docs/native-new-component-instancing from
+main 1709b8a8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_NEW_COMPONENT_INSTANCING.md reads the component-instancing
+pass that script `new` runs for a class with class-flag bit 23. A None component field is left alone; a component
+owned by the template is re-made with the source as its template. Nothing is loaded. A census of 857 component
+fields gives the port a stand-in for the declared kind. For links 6 and 7 every component field is None, so the
+pass does nothing, and #743's blanket refusal narrows to a non-None value. Bit 10's configuration read is nothing
+without the bit. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED
+in game.
+
 **PLACEHOLDER-SHADOWS (2026-11-26, pc-hummer, on fix/placeholder-shadows from main 64f070fa):** AI-assisted (Claude
 Code, Opus 5.5). ow-vm records each native key's registering file and, under an opt-in audit, every keep-existing check
 from another file (a silent shadow). The ignored installed census over the five slice worlds found four keys: two
