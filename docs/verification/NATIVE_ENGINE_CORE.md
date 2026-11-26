@@ -368,7 +368,8 @@ Requires `BaseClass`: with None it yields nothing. Walks this actor's `AllCompon
 the class filter. The index advances past each yielded component, so a component removed during the body shifts the scan.
 
 ### WorldInfo.AllControllers / AllPawns
-Registered natives of `WorldInfo`; not read (see Not read yet).
+Registered natives of `WorldInfo`. `AllControllers` was read later, in NATIVE_LINK6_AFTER_TAKE.md section 4.1;
+`AllPawns` is not read (see Not read yet).
 
 ## Lookups
 

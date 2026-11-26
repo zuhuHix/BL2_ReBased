@@ -232,6 +232,10 @@ Only what cannot be known before the run's first write is checked here.
       and the helper were not read;
    3. removes every entry equal to `P` from `PickupList`, keeping the others in order.
 
+   The dispatch was read further in NATIVE_LINK6_AFTER_TAKE.md section 2 (2026-11-26). The events go to the
+   pickup's `Base` as a behavior consumer, the list is the base's `Attached`, and the helper is a `WillowPickup` class
+   test. That note's Off answer replaces the one below.
+
    **Off answer:** the event dispatch is not ported, so the native answers *not read*, "the pickup events of
    RemovePickup". It does so **before any dispatch and before any change to `PickupList`**, so the list still holds the
    pickup. On the destroy path that comes after the first write, so it carries the prefix. A dropped pickup in the

@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK6-REMOVEPICKUP-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-link6-after-take from main
+54c9cf0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK6_AFTER_TAKE.md reads `RemovePickup` (the events go to the
+pickup's `Base` as a behavior consumer, none on the slice; then the `PickupList` removal) and `WorldInfo.AllControllers`.
+It also reads the rest of `PickupPickupable`. A local probe (an installed Off strict `--slice-gate` on main 54c9cf0 with
+#795's stops and these two answered by their rules, under the machine lock, reverted and not committed) has **link 6
+pass**: 8 ok / 14, X = 8.500/14 = 60.7%, against 7 ok, 58.3% on main. No code changed, so no measured number moved.
+
 **ANALYST-ACTOR-SETBASE (2026-11-26, pc-hummer, docs only, on docs/native-actor-setbase, rebased onto main 54c9cf0):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_ACTOR_SETBASE.md resolves and reads `Actor.SetBase`'s implementation (the
 same one in every class table of the slice's chain). On the slice, `SetBase(None)` reaches a weapon with no base, so
