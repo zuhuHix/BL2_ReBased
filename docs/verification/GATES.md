@@ -4,15 +4,17 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **IMPL-LINKS-13-14-CLASS-INPUTS (2026-11-26, pc-hummer, on fix/rust-links-13-14, stacked on fix/rust-link34-after-mind
 f2748772, itself on #792's head 464346d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_13_14.md (#796 at its r1
-fix 2bedfd46) in Off: the class-level part of `RecalculateAttributeInitializedState`, the hub's two class inputs (the
-adopt's `CharacterClass`, the player set-up's `Pawn`), `AdjustDamage`'s tag-list reset and the five reads. `cargo test
---workspace -j 8 --no-fail-fast` 4,005 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
-`--slice-gate` (release build, under the machine lock): the base f2748772 has 7 ok / 14, X 58.3%; this change has
-**6 ok / 14, X = 7.167/14 = 51.2%**. Link 1 goes from ok to `Actor.SetCollisionSize`'s `NotRead`, and links 3, 4, 5,
-13 and 14 stop there too instead of at the base search's floor trace. The cause is the ruled `Pawn`:
-`WillowPlayerController.ApplyCharacterClassDefaults` then runs `WillowPlayerPawn.SetUpTradeInteraction`, which spawns
-a `PawnInteractionProxy` whose `Initialize` calls `SetCollisionSize`, `SetHardAttach` and `SetBase`. A local probe
-with those three as no-ops (reverted) returns every row to the base's. UNVERIFIED in game. Decision 2026-11-26-NNN.
+fix 2bedfd46) in Off:
+- the class-level part of `RecalculateAttributeInitializedState`;
+- the AI adopt's `CharacterClass`;
+- `AdjustDamage`'s tag-list reset;
+- the five reads.
+
+The player set-up's `Pawn` is deferred behind an Off harness setting, off by default (hub ruling; queue 0aq).
+`cargo test --workspace -j 8 --no-fail-fast` 4,006 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed
+Off strict `--slice-gate` (release build, under the machine lock): **7 ok / 14, X = 8.167/14 = 58.3%, every row as on the
+base f2748772.** The first version, which set the `Pawn`, scored 6 ok, because link 1 reached the trade proxy's
+`SetCollisionSize`. UNVERIFIED in game. Decision 2026-11-26-NNN.
 
 **ANALYST-PAWN-INTERACTION-PROXY (2026-11-26, pc-hummer, docs only, on docs/native-pawn-interaction-proxy, probed on main
 03a8a09d, rebased onto eef4f83):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PAWN_INTERACTION_PROXY.md reads the
