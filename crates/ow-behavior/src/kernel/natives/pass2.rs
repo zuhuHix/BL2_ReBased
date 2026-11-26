@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-NNN). Pass 2 of `IntializeBehaviorProviderForConsumer`
+//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-33). Pass 2 of `IntializeBehaviorProviderForConsumer`
 //! in `ParityMode::Off`: a sequence with a `CustomEnableCondition` is linked, registered and reacted to at once.
 //! AI-assisted (Claude Code).
 //!

@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-NNN). The one `BehaviorSequenceEnableByMission` verdict
+//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-33). The one `BehaviorSequenceEnableByMission` verdict
 //! (docs/verification/NATIVE_BEHAVIOR_KERNEL_PASS2.md section 2.4, the hub's rulings 1 and 3 on review of #771), and
 //! the bridge's answers to the behavior kernel's pass 2 (`ow_vm::mission_conditions`). AI-assisted (Claude Code).
 //!

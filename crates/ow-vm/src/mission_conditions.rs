@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-NNN). The mission-condition service the behavior
+//! Owner: lane IMPL-BEHAVIOR-KERNEL-PASS2 (decision 2026-11-26-33). The mission-condition service the behavior
 //! kernel's pass 2 reads (docs/verification/NATIVE_BEHAVIOR_KERNEL_PASS2.md sections 3 and 4, the hub's ruling 1 on
 //! review of #771). AI-assisted (Claude Code).
 //!
