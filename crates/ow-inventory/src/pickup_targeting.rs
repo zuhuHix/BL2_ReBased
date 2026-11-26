@@ -142,14 +142,15 @@ pub trait Host {
     fn bounds_height(&mut self, vm: &Vm, pickup: ObjRef) -> Result<f32, VmError>;
     /// The first actor the world line check from `from` to `to` hits, None when it hits nothing.
     fn line_blocker(&mut self, vm: &Vm, from: [f32; 3], to: [f32; 3]) -> Result<Option<ObjRef>, VmError>;
-    /// [`Host::line_blocker`] for the line check of section 5, told the owner's `pawn` and the `target` pickup (a
-    /// host that must ignore them; lane IMPL-LINK7-HUD-TARGETING). By default the plain line check.
+    /// [`Host::line_blocker`] for the line check of section 5, told the check's `source` actor (the HUD, the pass's
+    /// receiver) and the `target` pickup (lanes IMPL-LINK7-HUD-TARGETING and IMPL-LINK7-LINE-CHECK,
+    /// NATIVE_LINK7_LINE_CHECK.md section 2). By default the plain line check.
     fn line_blocker_for(
         &mut self,
         vm: &Vm,
         from: [f32; 3],
         to: [f32; 3],
-        _pawn: ObjRef,
+        _source: ObjRef,
         _target: ObjRef,
     ) -> Result<Option<ObjRef>, VmError> {
         self.line_blocker(vm, from, to)
@@ -743,7 +744,7 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
         }
     }
     let winner = match best.1 {
-        Some(w) => checked_winner(vm, pawn, w, v, range, host)?,
+        Some(w) => checked_winner(vm, h.hud, pawn, w, v, range, host)?,
         None => None,
     };
     let (tail, outcome) = match winner {
@@ -834,6 +835,7 @@ fn handler(vm: &mut Vm, recipient: Option<ObjRef>, name: &str, pickup: Option<Ob
 /// Section 5: the winner after the pawn test and the line check, None when either refuses it.
 fn checked_winner(
     vm: &mut Vm,
+    hud: ObjRef,
     pawn: ObjRef,
     w: ObjRef,
     v: V3,
@@ -848,8 +850,10 @@ fn checked_winner(
     }
     let to_w = sub(location(vm, w)?, v);
     if length(horizontal(to_w)) > range * 0.25 {
-        let from = sub(add(v, to_w), scale(unit_or_as_is(to_w), 25.0));
-        if let Some(hit) = host.line_blocker_for(vm, from, v, pawn, w)?
+        // From the view point to 25 short of W, with the HUD as the source (NATIVE_LINK7_LINE_CHECK.md section 2, which
+        // corrects the direction of NATIVE_PICKUP_TARGETING.md section 5, step 3).
+        let short = sub(add(v, to_w), scale(unit_or_as_is(to_w), 25.0));
+        if let Some(hit) = host.line_blocker_for(vm, v, short, hud, w)?
             && hit != w
             && Some(hit) != object_field(vm, w, "Base")?
         {

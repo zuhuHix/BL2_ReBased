@@ -18,13 +18,22 @@
 //! 3. **The view** ([`HarnessHost`], ruling 3, section 5): the owner's pawn's eye point (`Location` + (0, 0,
 //!    `BaseEyeHeight`)) with the controller's `Rotation`, by fit the first-person view. Off, the camera's `LayerAbsent`
 //!    stands (`crate::pickup_targeting::Headless`).
-//! 4. **The line check** ([`HarnessHost`], ruling 4, as the hub refined it on review r1 of #806; its own setting,
-//!    `pickup_targeting::NoLevelLineCheck`): under the world's `NoLevel` collision service (no level geometry) it
-//!    hits nothing, passing over the owner's pawn, the target pickup and the target's `Base`. Any other live actor
-//!    holding collision (a `CollisionComponent` set) is [`LINE_ACTOR`] `NotRead`, unless geometry clears it: the
-//!    segment's own box is disjoint from the actor's bounds box by the bounding-cylinder rule (the bounds step; #807's
-//!    vertical-line test does not fit a slanted line). A world with geometry is [`LINE_GEOMETRY`] `NotRead`; one with
-//!    no collision service keeps the headless `LayerAbsent`.
+//! 4. **The line check** ([`HarnessHost`]; NATIVE_LINK7_LINE_CHECK.md section 5, the hub's ruling (decision
+//!    2026-11-26-71) that replaces ruling 4's three-actor list; lane IMPL-LINK7-LINE-CHECK; its own setting,
+//!    `pickup_targeting::NoLevelLineCheck`): under the world's `NoLevel` collision service (no level geometry) the
+//!    game's rule. A point line from the view point to 25 units short of the target, with the HUD as the source, walks
+//!    every live actor's primitives (`CollisionComponent`, then `Components`; each one's owner resolved) through
+//!    `ow_world::trace_filter`'s point-line filter, the touch trace's (`Query::PointLine`; the complex-collision bit
+//!    only reaches the primitive's own test). In the walkers' order a primitive is passed over by rule, reading no
+//!    bounds: terrain first, then the skip flag, `BlockZeroExtent`, `CollideActors`, the source's `Owner` chains both
+//!    ways, the owner's `bCollideActors`, and the owner's filter row (no bits 1, 8, 16, 32 or 64, so every pawn, every
+//!    `Actor`-row owner without `bWorldGeometry`, pickups included, and every plain volume is passed over; the three
+//!    Willow pawn classes keep the `Pawn` row, NATIVE_FLOOR_TRACE_FLAGS.md section 3). A candidate left is the target
+//!    or its `Base` (kept), or is passed over when its bounds box (the bounding-cylinder rule) is disjoint from the
+//!    line's box, with finite, ordered, non-negative values only; anything else is `NotRead`, naming the first unread
+//!    rule on its path ([`LINE_ACTOR`]). Malformed endpoints or bounds are [`LINE_MALFORMED`]; an object the store has
+//!    not loaded that decides a candidate is [`LINE_UNLOADED`]. Reads only, resident objects only. A world with geometry
+//!    is [`LINE_GEOMETRY`] `NotRead`; with the setting off or no collision service, the headless `LayerAbsent`.
 //!
 //! **The settings.** Rulings 2 and 3 are one Off-only harness setting, [`HudTargetingHarness`] (a VM service; the
 //! pickup world's set-up turns it on, logging [`SETTING_INPUT`], and makes the harness HUD there, ruling 1). Without
@@ -53,6 +62,14 @@ pub const BEGUN_PLAY: &str = "the harness HUD: the world has begun play (the spa
 pub const HUD_DEFINITION: &str = "the harness HUD: the globals definition's HUDDefinition, not loaded (a load is a write)";
 pub const LINE_GEOMETRY: &str = "the pickup targeting's line check against level geometry (not read)";
 pub const LINE_ACTOR: &str = "the pickup targeting's line check: another actor's collision";
+/// The line check's endpoints, or a candidate's bounds, not finite, ordered and non-negative (NATIVE_LINK7_LINE_CHECK.md
+/// section 5, step 4).
+pub const LINE_MALFORMED: &str = "the pickup targeting's line check: a malformed segment or bounds";
+/// An object the store has not loaded that decides a candidate of the line check.
+pub const LINE_UNLOADED: &str = "the pickup targeting's line check: an object the store has not loaded (a load is a write)";
+/// The pawn classes whose trace filter keeps the `Pawn` row for this query (NATIVE_FLOOR_TRACE_FLAGS.md section 3: the
+/// `WillowPawn` step only rejects, then the `Pawn` row, which needs bit 1 or bit 16 with `bStationary`).
+pub const WILLOW_PAWN_ROWS: [&str; 3] = ["WillowGame.WillowPawn", "WillowGame.WillowAIPawn", "WillowGame.WillowPlayerPawn"];
 pub const HUD_INPUT: &str = "harness input: the player's HUD made with its data steps only (PlayerOwner, WPlayerOwner, \
      HUDDef; no movie natives), the hub's ruling 1 on #806 (UNVERIFIED)";
 pub const REGISTER_INPUT: &str = "harness input: the dropped pickup registered with WillowGlobals.AddPickup (its \
@@ -293,7 +310,7 @@ impl Host for HarnessHost {
         vm: &Vm,
         from: [f32; 3],
         to: [f32; 3],
-        pawn: ObjRef,
+        source: ObjRef,
         target: ObjRef,
     ) -> Result<Option<ObjRef>, VmError> {
         if !self.no_level_line || vm.parity != ParityMode::Off {
@@ -302,28 +319,7 @@ impl Host for HarnessHost {
         match ow_world::placement::collision_model(vm)? {
             None => Headless.line_blocker(vm, from, to),
             Some(m) if m.holds_no_geometry() => {
-                let base = object(vm, target, "Base")?;
-                let actors = ow_world::actors::actors_of(vm)?;
-                let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
-                for other in list {
-                    if other == pawn || other == target || Some(other) == base {
-                        continue;
-                    }
-                    if ow_world::actors::is_destroyed(&vm.space, other)? {
-                        continue;
-                    }
-                    let class = vm.space.heap.get(other)?.class;
-                    let Some(p) = vm.space.prop(class, "CollisionComponent") else { continue };
-                    let Value::Object(Some(component)) = *vm.space.read(other, PropAddr::scalar(p))? else { continue };
-                    if let Some(why) = not_cleared(vm, other, from, to)? {
-                        let who = format!(
-                            "{LINE_ACTOR}: a {} with a {} ({why})",
-                            ow_attr::eval::class_path(&vm.space, other),
-                            ow_attr::eval::class_path(&vm.space, component)
-                        );
-                        return Err(NotYet::not_read(who, RECORD).into());
-                    }
-                }
+                line_walk(vm, from, to, source, target)?;
                 self.note(LINE_INPUT);
                 Ok(None)
             }
@@ -332,26 +328,118 @@ impl Host for HarnessHost {
     }
 }
 
-/// Why geometry does not clear `other` for the segment `from`-`to`, or `None` when it does (module documentation,
-/// ruling 4 as refined on review r1 of #806): cleared when the segment's own box (its two ends) is disjoint from
-/// `other`'s bounds box, `Location` ± (radius, radius, half height) by the bounding-cylinder rule. A refusal of that
-/// rule clears nothing; touching boxes are not disjoint. Reads only.
-fn not_cleared(vm: &Vm, other: ObjRef, from: [f32; 3], to: [f32; 3]) -> Result<Option<String>, VmError> {
-    let (radius, half) = match ow_world::world::bounding_cylinder::answer(vm, other) {
-        Ok(b) => b,
-        Err(VmError::NotYet(n)) => return Ok(Some(format!("its bounds are not answered: {}", n.what))),
-        Err(e) => return Err(e),
-    };
-    if !(radius.is_finite() && half.is_finite() && radius >= 0.0 && half >= 0.0) {
-        return Ok(Some(format!("its bounds are radius {radius}, half height {half}")));
+/// The record of the line check's rule.
+pub const RECORD_LINE: &str = "NATIVE_LINK7_LINE_CHECK.md";
+
+/// The actor part of the line check (module documentation, item 4): Ok when nothing it could hit is left but the
+/// target and its `Base`. Reads only.
+fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjRef) -> Result<(), VmError> {
+    use ow_world::trace_filter::{self as tf, Candidate, PartClass, Query, Unread};
+    let space = &vm.space;
+    if !from.iter().chain(to.iter()).all(|v| v.is_finite()) {
+        return Err(NotYet::not_read(LINE_MALFORMED, RECORD_LINE).into());
     }
-    let at = vector(vm, other, "Location")?;
-    let extent = [radius, radius, half];
-    let disjoint = (0..3).any(|i| {
-        let (lo, hi) = (from[i].min(to[i]), from[i].max(to[i]));
-        hi < at[i] - extent[i] || lo > at[i] + extent[i]
-    });
-    Ok((!disjoint).then(|| format!("its bounds box, {at:?} ± ({radius}, {radius}, {half}), meets the line's box {from:?} to {to:?}")))
+    let unloaded_named = |what: String| -> VmError {
+        NotYet::not_read(format!("{LINE_UNLOADED}: {what}"), RECORD_LINE).into()
+    };
+    if !resident(vm, target) {
+        return Err(unloaded_named(ow_attr::eval::class_path(space, target)));
+    }
+    let base = object(vm, target, "Base")?;
+    let unloaded = |o: ObjRef| vm.defs.is_unloaded(space, o);
+    let s = tf::Source {
+        actor: source,
+        unloaded: &unloaded,
+        admission_established: vm.service::<ow_world::touch_trace::AdmissionStandIn>().is_some(),
+    };
+    let primitive = space.classes.by_path("Engine.PrimitiveComponent");
+    let actors = ow_world::actors::actors_of(vm)?;
+    let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
+    for walked in list {
+        if !resident(vm, walked) {
+            return Err(unloaded_named(format!("a live actor {}", ow_attr::eval::class_path(space, walked))));
+        }
+        if ow_world::actors::is_destroyed(space, walked)? {
+            continue;
+        }
+        let class = space.heap.get(walked)?.class;
+        let mut parts: Vec<ObjRef> = Vec::new();
+        if space.prop(class, "CollisionComponent").is_some() {
+            parts.extend(object(vm, walked, "CollisionComponent")?);
+        }
+        if space.prop(class, "Components").is_some() {
+            let (list, _) = read(vm, walked, "Components")?;
+            let Some(items) = list.elements() else { return Err(bad("Components is not an array")) };
+            for item in items {
+                match item {
+                    Value::Object(Some(c)) if !parts.contains(c) => parts.push(*c),
+                    Value::Object(_) => {}
+                    other => return Err(bad(format!("a Components entry is {}", other.kind_name()))),
+                }
+            }
+        }
+        for part in parts {
+            let who = || {
+                format!(
+                    "a {} with a {}",
+                    ow_attr::eval::class_path(space, walked),
+                    ow_attr::eval::class_path(space, part)
+                )
+            };
+            if !resident(vm, part) {
+                return Err(unloaded_named(who()));
+            }
+            match tf::part_class(space, space.heap.get(part)?.class, primitive) {
+                PartClass::Primitive => {}
+                PartClass::Other => continue,
+                PartClass::Uncertain(path) => {
+                    if walked == source {
+                        continue;
+                    }
+                    return Err(NotYet::not_read(
+                        format!("{LINE_ACTOR}: {} {path} ({})", tf::STAND_IN_PART, who()),
+                        RECORD_LINE,
+                    )
+                    .into());
+                }
+            }
+            // Steps 3 and 6's rule: the touch trace's point-line filter with the HUD as the source.
+            let rule = match tf::tested_from(space, part, walked, Query::PointLine, Some(&s))? {
+                Candidate::NotTested => continue,
+                Candidate::Unsupported(rule) => rule,
+            };
+            let owner = tf::owner_of(space, part, walked)?;
+            // The three Willow pawn classes keep the Pawn row for this query: not tested (no bit 1 or 16).
+            if matches!(rule, Unread::OwnerClass(_)) {
+                let owner_class = space.heap.get(owner)?.class;
+                if WILLOW_PAWN_ROWS.iter().any(|p| space.classes.by_path(p) == Some(owner_class)) {
+                    continue;
+                }
+            }
+            // Step 5: a hit on the target or its Base keeps the target.
+            if owner == target || Some(owner) == base {
+                continue;
+            }
+            // Step 4: bounds disjoint from the line's box, well-formed values only.
+            if !resident(vm, owner) {
+                return Err(unloaded_named(who()));
+            }
+            let (centre, extent) = ow_world::world::bounding_cylinder::entry_box(vm, owner, part)?;
+            if !(centre.iter().chain(extent.iter()).all(|v| v.is_finite()) && extent.iter().all(|v| *v >= 0.0)) {
+                return Err(NotYet::not_read(format!("{LINE_MALFORMED} ({})", who()), RECORD_LINE).into());
+            }
+            let disjoint = (0..3).any(|i| {
+                let (lo, hi) = (from[i].min(to[i]), from[i].max(to[i]));
+                hi < centre[i] - extent[i] || lo > centre[i] + extent[i]
+            });
+            if disjoint {
+                continue;
+            }
+            // Step 6: the first unread rule on its path.
+            return Err(NotYet::not_read(format!("{LINE_ACTOR}: {} ({})", rule.rule(), who()), rule.record()).into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
