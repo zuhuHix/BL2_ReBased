@@ -159,12 +159,20 @@ fn engine() -> Vec<u8> {
     // The floor trace's start and the cylinder the geometric test reads (lane IMPL-COMBAT-WORLD-COLLISION): the actor's
     // Location, and a CylinderComponent with the fields the bounding-cylinder rule's cylinder case reads.
     t.prop("Struct", actor, "Location", 0, vector);
-    let cylinder = t.class("CylinderComponent", object);
-    t.prop("Object", cylinder, "Owner", 0, actor);
-    t.prop("Struct", cylinder, "Translation", 0, vector);
+    // The floor trace's walk (NATIVE_FLOOR_TRACE_FLAGS.md, lane IMPL-FLOOR-TRACE-RULINGS): the actor's Owner and
+    // bCollideActors, and a primitive base with the flags the walk reads, below which the cylinder sits.
+    t.prop("Object", actor, "Owner", 0, actor);
+    t.prop("Bool", actor, "bCollideActors", 0, 0);
+    let primitive = t.class("PrimitiveComponent", object);
+    t.prop("Object", primitive, "Owner", 0, actor);
+    t.prop("Struct", primitive, "Translation", 0, vector);
     for f in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
-        t.prop("Bool", cylinder, f, 0, 0);
+        t.prop("Bool", primitive, f, 0, 0);
     }
+    for f in ["CollideActors", "BlockNonZeroExtent", "BulletListener"] {
+        t.prop("Bool", primitive, f, 0, 0);
+    }
+    let cylinder = t.class("CylinderComponent", primitive);
     for f in ["CollisionRadius", "CollisionHeight"] {
         t.prop("Float", cylinder, f, 0, 0);
     }
@@ -807,7 +815,8 @@ fn the_base_search() {
     };
     x.set(pawn, "Velocity", moving.clone());
     x.set(pawn, "Acceleration", moving);
-    // The actor's own CollisionComponent is skipped (R2, UNVERIFIED), even when it is placed in the world.
+    // The actor's own CollisionComponent is skipped (R2; read in NATIVE_FLOOR_TRACE_FLAGS.md section 4, UNVERIFIED
+    // in game), even when it is placed in the world.
     let own = x.obj("Engine.Actor");
     x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
     let actors = crate::actors::actors_of(x.vm()).unwrap();
@@ -821,15 +830,17 @@ fn the_base_search() {
         assert!(zero.as_struct().unwrap().fields.iter().all(|f| *f == Value::Float(0.0)), "{f}: {zero:?}");
     }
     assert!(x.vm().log.iter().any(|l| l == BASE_STAND_IN), "logged");
-    // Another placed actor with a CollisionComponent (review of #798, finding 4): the trace flags' NotRead, nothing
-    // written.
+    // Another placed actor with a colliding cylinder on the source's swept box (review of #798, finding 4; now
+    // NATIVE_FLOOR_TRACE_FLAGS.md section 6.1): the candidate's NotRead, nothing written.
     let other = x.obj("Engine.ToyPlainPawn");
-    let component = x.obj("Engine.Actor");
+    let component = cylinder(&mut x, other, 10.0, 40.0);
     x.set(other, "CollisionComponent", Value::Object(Some(component)));
     actors.borrow_mut().place(other).unwrap();
     let pawn2 = x.obj("Engine.ToyPlainPawn");
+    let own2 = cylinder(&mut x, pawn2, 30.0, 40.0);
+    x.set(pawn2, "CollisionComponent", Value::Object(Some(own2)));
     x.set(pawn2, "Physics", Value::Byte(2));
-    assert_eq!(not_yet(x.same(pawn2, 0)), (Missing::NotRead, BASE_TRACE_FLAGS.to_string()));
+    assert_eq!(not_yet(x.same(pawn2, 0)), (Missing::NotRead, BASE_CANDIDATE.to_string()));
     x.set(other, "CollisionComponent", Value::Object(None));
     x.set(pawn, "CollisionComponent", Value::Object(None));
     // Into PHYS_Walking: bForceFloorCheck set, the vectors kept.
@@ -858,71 +869,223 @@ fn vec3(x: &mut Fx, template: &Value, v: [f32; 3]) -> Value {
     out
 }
 
-/// The hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION: another actor's collision is cleared by geometry alone. With
-/// `NoLevel` and the setting on, a placed actor whose cylinder (radius 42, half-height 80) the 8-unit line from the
-/// subject's `Location` runs wholly outside of gives the stand-in; one the line touches or enters, a non-cylinder
-/// component, a cylinder the bounding-cylinder rule does not answer, or the subject's own translated collision
-/// component keeps the trace flags' `NotRead`, with nothing written. Invented positions throughout.
-#[test]
-fn the_base_search_clears_another_actor_s_cylinder_by_geometry() {
+/// A world for the floor trace's walk (NATIVE_FLOOR_TRACE_FLAGS.md section 6.1): `NoLevel`, the setting on, a first
+/// actor with no collision, and a source pawn at the origin with a cylinder of radius 30 and half-height 40.
+fn floor_world() -> (Fx, ObjRef, Value) {
     let mut x = fx();
     crate::placement::install_collision(x.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
     enable_no_level_base_search(x.vm()).unwrap();
     let actors = crate::actors::actors_of(x.vm()).unwrap();
     let info = x.obj("Engine.Actor");
     actors.borrow_mut().place_world_info(info).unwrap();
-    let other = x.obj("Engine.ToyPlainPawn");
-    let cylinder = x.obj("Engine.CylinderComponent");
-    x.set(cylinder, "Owner", Value::Object(Some(other)));
-    x.set(cylinder, "CollisionRadius", Value::Float(42.0));
-    x.set(cylinder, "CollisionHeight", Value::Float(80.0));
-    x.set(other, "CollisionComponent", Value::Object(Some(cylinder)));
-    actors.borrow_mut().place(other).unwrap();
-    let template = x.get(other, "Location");
-    let refused = (Missing::NotRead, BASE_TRACE_FLAGS.to_string());
-    // The subject at the origin; the other actor's centre at `at`.
-    let case = |x: &mut Fx, at: [f32; 3]| -> Result<Value, VmError> {
-        let at = vec3(x, &template, at);
-        x.set(other, "Location", at);
-        let pawn = x.obj("Engine.ToyPlainPawn");
-        x.set(pawn, "Physics", Value::Byte(2));
-        x.same(pawn, 0)
+    let source = x.obj("Engine.ToyPlainPawn");
+    let template = x.get(source, "Location");
+    let own = cylinder(&mut x, source, 30.0, 40.0);
+    x.set(source, "CollisionComponent", Value::Object(Some(own)));
+    actors.borrow_mut().place(source).unwrap();
+    (x, source, template)
+}
+
+/// A colliding cylinder of `owner` (radius `r`, half-height `h`), the owner's `bCollideActors` set.
+fn cylinder(x: &mut Fx, owner: ObjRef, r: f32, h: f32) -> ObjRef {
+    let c = x.obj("Engine.CylinderComponent");
+    x.set(c, "Owner", Value::Object(Some(owner)));
+    x.set(c, "CollisionRadius", Value::Float(r));
+    x.set(c, "CollisionHeight", Value::Float(h));
+    for f in ["CollideActors", "BlockNonZeroExtent"] {
+        x.set(c, f, Value::Bool(true));
+    }
+    x.set(owner, "bCollideActors", Value::Bool(true));
+    c
+}
+
+/// Another placed pawn at `at` with a colliding cylinder of radius 10 and half-height 40.
+fn other(x: &mut Fx, template: &Value, at: [f32; 3]) -> (ObjRef, ObjRef) {
+    let o = x.obj("Engine.ToyPlainPawn");
+    let v = vec3(x, template, at);
+    x.set(o, "Location", v);
+    let c = cylinder(x, o, 10.0, 40.0);
+    x.set(o, "CollisionComponent", Value::Object(Some(c)));
+    crate::actors::actors_of(x.vm()).unwrap().borrow_mut().place(o).unwrap();
+    (o, c)
+}
+
+/// `SetPhysics(PHYS_None)` on `source` from `PHYS_Falling`: the stand-in's success, or the refusal with nothing changed.
+fn floor(x: &mut Fx, source: ObjRef) -> Result<(), (Missing, String)> {
+    x.set(source, "Physics", Value::Byte(2));
+    match x.same_or_ok(source) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(not_yet(Err(e))),
+    }
+}
+
+impl Fx {
+    /// [`Fx::physics`] into `PHYS_None`, asserting nothing changed when it refuses.
+    fn same_or_ok(&mut self, o: ObjRef) -> Result<(), VmError> {
+        let before = (self.state(), self.calls());
+        match self.physics(o, 0) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                assert_eq!((self.state(), self.calls()), before, "nothing changed: {e:?}");
+                Err(e)
+            }
+        }
+    }
+}
+
+fn candidate() -> (Missing, String) {
+    (Missing::NotRead, BASE_CANDIDATE.to_string())
+}
+
+/// NATIVE_FLOOR_TRACE_FLAGS.md section 8, rows 1 and 3 (the hub's ruling 2 on #809): the source's swept box (30, 30,
+/// 40) from the origin down by 8, against another pawn's box (10, 10, 40), per axis, touching counted as meeting.
+/// Invented positions throughout.
+#[test]
+fn the_floor_trace_sweeps_the_source_s_cylinder_box() {
+    // The source's own cylinder alone: passed over, no floor, the stand-in line.
+    let (mut x, source, _) = floor_world();
+    floor(&mut x, source).unwrap();
+    assert!(x.vm().log.iter().any(|l| l == BASE_STAND_IN));
+    // Meets: 35 units off on X (35 < 10 + 30, where the old line test cleared it), touching at 40, at the origin,
+    // the box's bottom end touching the candidate's top (-8 - 40 = -88 + 40), its top touching the candidate's bottom.
+    for at in [[35.0, 0.0, 0.0], [40.0, 0.0, 0.0], [0.0, 40.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, -88.0], [0.0, 0.0, 80.0]] {
+        let (mut x, source, template) = floor_world();
+        other(&mut x, &template, at);
+        assert_eq!(floor(&mut x, source), Err(candidate()), "{at:?}");
+    }
+    // Disjoint: 45 off on X or Y, wholly below, wholly above, far away.
+    for at in [[45.0, 0.0, 0.0], [0.0, -45.0, 0.0], [0.0, 0.0, -89.0], [0.0, 0.0, 81.0], [1000.0, 0.0, 0.0]] {
+        let (mut x, source, template) = floor_world();
+        other(&mut x, &template, at);
+        floor(&mut x, source).unwrap_or_else(|e| panic!("{at:?}: {e:?}"));
+    }
+}
+
+/// Section 8, row 1 and the review r1 of #809 cases: the extent is the source's cylinder; a non-cylinder source with a
+/// candidate to test is the extent's `NotRead` (with none, the stand-in passes); a malformed extent or bounds is the
+/// swept box's `NotRead`; a candidate whose bounds the bounding-cylinder rule does not answer is that rule's `NotRead`.
+#[test]
+fn the_swept_box_needs_a_well_formed_cylinder_extent() {
+    let swept = (Missing::NotRead, BASE_SWEPT_BOX.to_string());
+    let (mut x, source, template) = floor_world();
+    let plain = x.obj("Engine.PrimitiveComponent");
+    x.set(source, "CollisionComponent", Value::Object(Some(plain)));
+    floor(&mut x, source).unwrap();
+    other(&mut x, &template, [0.0, 0.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_EXTENT.to_string())));
+    x.set(source, "CollisionComponent", Value::Object(None));
+    assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_EXTENT.to_string())), "no CollisionComponent");
+    // A source radius of -5 against a radius of 10 at an X gap of 8 (8 > 10 - 5 would wrongly clear it).
+    let (mut x, source, template) = floor_world();
+    let own = match x.get(source, "CollisionComponent") {
+        Value::Object(Some(c)) => c,
+        other => panic!("{other:?}"),
     };
-    // [0, 0, -88]: the cylinder's top exactly at the line's bottom end, -8 (review of #807, LOW 1).
-    for at in [[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [42.0, 0.0, 0.0], [0.0, 0.0, -85.0], [0.0, 0.0, -88.0], [0.0, 0.0, 80.0]] {
-        assert_eq!(not_yet(case(&mut x, at)), refused, "touched or entered at {at:?}");
+    x.set(own, "CollisionRadius", Value::Float(-5.0));
+    other(&mut x, &template, [8.0, 0.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err(swept.clone()), "a negative source radius");
+    // A NaN or an infinite Location.
+    for bad in [f32::NAN, f32::INFINITY] {
+        let (mut x, source, template) = floor_world();
+        other(&mut x, &template, [1000.0, 0.0, 0.0]);
+        let v = vec3(&mut x, &template, [bad, 0.0, 0.0]);
+        x.set(source, "Location", v);
+        assert_eq!(floor(&mut x, source), Err(swept.clone()), "{bad}");
     }
-    for at in [[43.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 43.0, 0.0], [0.0, 0.0, -100.0], [0.0, 0.0, 81.0]] {
-        let v = vec3(&mut x, &template, at);
-        x.set(other, "Location", v);
-        let pawn = x.obj("Engine.ToyPlainPawn");
-        x.set(pawn, "Physics", Value::Byte(2));
-        x.physics(pawn, 0).unwrap_or_else(|e| panic!("clear at {at:?}: {e:?}"));
-        assert_eq!(x.get(pawn, "Physics"), Value::Byte(0), "{at:?}");
+    // A negative candidate height, far away: malformed, not cleared.
+    let (mut x, source, template) = floor_world();
+    let (_, c) = other(&mut x, &template, [1000.0, 0.0, 0.0]);
+    x.set(c, "CollisionHeight", Value::Float(-1.0));
+    assert_eq!(floor(&mut x, source), Err(swept.clone()), "a negative candidate height");
+    // A candidate whose bounds the rule does not answer (an Absolute flag): the rule's own NotRead.
+    let (mut x, source, template) = floor_world();
+    let (_, c) = other(&mut x, &template, [1000.0, 0.0, 0.0]);
+    x.set(c, "AbsoluteTranslation", Value::Bool(true));
+    let refused = floor(&mut x, source).unwrap_err();
+    assert_eq!(refused, (Missing::NotRead, crate::world::bounding_cylinder::WORLD_TRANSFORM.to_string()));
+}
+
+/// Section 8, rows 2 and 8 (the hub's ruling 1 on #809): the source's own primitives, its `Owner` chain and the actors
+/// whose `Owner` chain holds it are passed over, two links deep; a cycle ends the walk; an actor that is only the
+/// source's `Base` is not passed over; an unloaded link that decides a candidate is `NotRead`, nothing loaded.
+#[test]
+fn the_owner_chains_are_passed_over_both_ways() {
+    // The source's Owner, holding a cylinder at the same place.
+    let (mut x, source, template) = floor_world();
+    let (o, _) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    x.set(source, "Owner", Value::Object(Some(o)));
+    floor(&mut x, source).unwrap();
+    // An actor whose Owner is the source.
+    let (mut x, source, template) = floor_world();
+    let (o, _) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    x.set(o, "Owner", Value::Object(Some(source)));
+    floor(&mut x, source).unwrap();
+    // Two links up: the source's Owner's Owner; two links down: an actor whose Owner's Owner is the source.
+    let (mut x, source, template) = floor_world();
+    let (up, _) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    let middle = x.obj("Engine.Actor");
+    x.set(source, "Owner", Value::Object(Some(middle)));
+    x.set(middle, "Owner", Value::Object(Some(up)));
+    let (down, _) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    let middle2 = x.obj("Engine.Actor");
+    x.set(down, "Owner", Value::Object(Some(middle2)));
+    x.set(middle2, "Owner", Value::Object(Some(source)));
+    floor(&mut x, source).unwrap();
+    // A cycle in the source's chain ends the walk; an unrelated candidate is still the NotRead.
+    let (mut x, source, template) = floor_world();
+    let a = x.obj("Engine.Actor");
+    x.set(source, "Owner", Value::Object(Some(a)));
+    x.set(a, "Owner", Value::Object(Some(source)));
+    other(&mut x, &template, [0.0, 0.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err(candidate()), "the walk ended");
+    // Only the source's Base: not passed over (the chain is Owner, not Base).
+    let (mut x, source, template) = floor_world();
+    let (b, _) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    x.put(source, "Base", Value::Object(Some(b)));
+    assert_eq!(floor(&mut x, source), Err(candidate()));
+    // An unloaded link that decides the candidate: the NotRead, the link still unloaded.
+    let (mut x, source, template) = floor_world();
+    let lazy = x.held("Thing");
+    x.set(source, "Owner", Value::Object(Some(lazy)));
+    other(&mut x, &template, [0.0, 0.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_OWNER_LINK.to_string())));
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, lazy), "nothing loaded");
+    // With the candidate far away the chain is never needed.
+    let (mut x, source, template) = floor_world();
+    let lazy = x.held("Thing");
+    x.set(source, "Owner", Value::Object(Some(lazy)));
+    other(&mut x, &template, [1000.0, 0.0, 0.0]);
+    floor(&mut x, source).unwrap();
+}
+
+/// Section 8, row 4: a candidate is passed over by its read flags, without its bounds read: `CollideActors` clear,
+/// the owner's `bCollideActors` clear, `BlockNonZeroExtent` clear, or the skip flag set (each with an Absolute flag,
+/// so reaching the bounds would refuse).
+#[test]
+fn the_read_flags_pass_a_candidate_over_before_its_bounds() {
+    for (field, on_owner, value) in [
+        ("CollideActors", false, false),
+        ("bCollideActors", true, false),
+        ("BlockNonZeroExtent", false, false),
+        ("BulletListener", false, true),
+    ] {
+        let (mut x, source, template) = floor_world();
+        let (o, c) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+        x.set(c, "AbsoluteTranslation", Value::Bool(true));
+        x.set(if on_owner { o } else { c }, field, Value::Bool(value));
+        floor(&mut x, source).unwrap_or_else(|e| panic!("{field}: {e:?}"));
     }
-    // Far away, but a cylinder the bounding-cylinder rule does not answer (an Absolute flag): the NotRead.
-    let v = vec3(&mut x, &template, [1000.0, 0.0, 0.0]);
-    x.set(other, "Location", v);
-    x.set(cylinder, "AbsoluteTranslation", Value::Bool(true));
+}
+
+/// Section 8, row 5 (review r1 of #809): a service holding geometry keeps the trace flags' `NotRead` with the
+/// setting on, decided before the walk, nothing written.
+#[test]
+fn a_service_with_geometry_keeps_the_trace_flags_not_read() {
+    let mut x = fx();
+    crate::placement::install_collision(x.vm(), Rc::new(WithGeometry)).unwrap();
+    enable_no_level_base_search(x.vm()).unwrap();
     let pawn = x.obj("Engine.ToyPlainPawn");
-    x.set(pawn, "Physics", Value::Byte(2));
-    assert_eq!(not_yet(x.same(pawn, 0)), refused, "Absolute flag");
-    x.set(cylinder, "AbsoluteTranslation", Value::Bool(false));
-    // Far away, but the subject's own collision component holds a translation (the start offset is fitted).
-    let own = x.obj("Engine.CylinderComponent");
-    let v = vec3(&mut x, &template, [0.0, 0.0, 5.0]);
-    x.set(own, "Translation", v);
-    let pawn = x.obj("Engine.ToyPlainPawn");
-    x.set(own, "Owner", Value::Object(Some(pawn)));
-    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
-    x.set(pawn, "Physics", Value::Byte(2));
-    assert_eq!(not_yet(x.same(pawn, 0)), refused, "own translation");
-    // Far away, but not a cylinder: the NotRead (the trace's flags decide it).
-    let plain = x.obj("Engine.Actor");
-    x.set(other, "CollisionComponent", Value::Object(Some(plain)));
-    let pawn = x.obj("Engine.ToyPlainPawn");
-    x.set(pawn, "Physics", Value::Byte(2));
-    assert_eq!(not_yet(x.same(pawn, 0)), refused, "not a cylinder");
+    assert_eq!(floor(&mut x, pawn), Err((Missing::NotRead, BASE_TRACE_FLAGS.to_string())));
 }
 
 /// The base search's harness setting is Off only, and turned on once (review of #798, R1).

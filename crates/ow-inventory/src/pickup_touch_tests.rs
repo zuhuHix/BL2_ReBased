@@ -21,7 +21,7 @@ use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{StubPolicy, Vm};
 use ow_vm::error::VmError;
 use ow_world::placement::{Mode, SpawnCollision, Sweep, Test, install_collision};
-use ow_world::trace_filter::{BASE_CHAIN_LINK, HASH_ADMISSION, PRIMITIVE_LINE_TEST, SOURCE_VOLUME_TEST};
+use ow_world::trace_filter::{HASH_ADMISSION, OWNER_CHAIN_LINK, PRIMITIVE_LINE_TEST, SOURCE_VOLUME_TEST};
 use ow_world::touch_trace::{AdmissionStandIn, LEVEL_PART, TOUCH_TRACE, ZERO_LENGTH};
 
 use super::*;
@@ -51,6 +51,9 @@ fn engine() -> Vec<u8> {
         t.prop("Bool", actor, b, 0, 0);
     }
     t.prop("Object", actor, "Base", 0, actor);
+    // The Owner chains the touch's source exclusion walks (NATIVE_FLOOR_TRACE_FLAGS.md section 4; lane
+    // IMPL-FLOOR-TRACE-RULINGS).
+    t.prop("Object", actor, "Owner", 0, actor);
     t.prop("Object", actor, "CollisionComponent", 0, object);
     // Declared so the invented struct's layout is registered with the class.
     t.prop("Struct", actor, "ToyNotVectorField", 0, not_vector);
@@ -373,10 +376,11 @@ fn a_clear_level_with_no_primitive_is_clear() {
     assert_eq!(x.call().unwrap(), Value::Bool(true));
 }
 
-/// Test 8: the toucher pawn's primitive, the pickup's own and that of an actor in the pickup's `Base` chain (an
-/// invented class with no row, so it would refuse if tested) are not tested.
+/// Test 8: the toucher pawn's primitive, the pickup's own, that of an actor in the pickup's `Owner` chain and that of
+/// an actor the pickup owns (invented classes with no row, so they would refuse if tested) are not tested (the hub's
+/// ruling 3 on #809, NATIVE_FLOOR_TRACE_FLAGS.md section 8, row 7).
 #[test]
-fn the_toucher_the_pickup_and_its_base_chain_never_block() {
+fn the_toucher_the_pickup_and_its_owner_chains_never_block() {
     let mut x = fx(Some(Sweep::Clear));
     x.blocker("Engine.Pawn");
     let own = make(&mut x.vm, "Engine.PrimitiveComponent");
@@ -386,11 +390,23 @@ fn the_toucher_the_pickup_and_its_base_chain_never_block() {
     let p = x.pickup;
     x.set(p, "bCollideActors", Value::Bool(true));
     x.set(p, "CollisionComponent", Value::Object(Some(own)));
-    let (base, _) = x.blocker("WillowGame.ToyGameActor");
-    let (base_of_base, _) = x.blocker("WillowGame.ToyGameActor");
-    x.set(p, "Base", Value::Object(Some(base)));
-    x.set(base, "Base", Value::Object(Some(base_of_base)));
+    let (up, _) = x.blocker("WillowGame.ToyGameActor");
+    let (up_of_up, _) = x.blocker("WillowGame.ToyGameActor");
+    x.set(p, "Owner", Value::Object(Some(up)));
+    x.set(up, "Owner", Value::Object(Some(up_of_up)));
+    let (owned, _) = x.blocker("WillowGame.ToyGameActor");
+    x.set(owned, "Owner", Value::Object(Some(p)));
     assert_eq!(x.call().unwrap(), Value::Bool(true));
+}
+
+/// Section 8, row 7: the pickup's `Base` alone is no longer passed over (the chain is `Owner`, not `Base`).
+#[test]
+fn the_pickup_s_base_alone_is_tested() {
+    let mut x = fx(Some(Sweep::Clear));
+    let (base, _) = x.blocker("WillowGame.ToyGameActor");
+    let p = x.pickup;
+    x.set(p, "Base", Value::Object(Some(base)));
+    assert!(not_read(x.call()).contains("the trace filter of WillowGame.ToyGameActor"));
 }
 
 /// Test 9: a non-world-geometry `Actor`'s primitive and a `Volume` without `bWorldGeometry` are not tested (bits 16
@@ -433,29 +449,29 @@ fn with_admission_established_the_primitives_line_test_is_named() {
     assert!(what.contains(PRIMITIVE_LINE_TEST) && !what.contains(HASH_ADMISSION), "{what}");
 }
 
-/// Test 10b: a `Base` the store has not loaded, needed to decide a candidate, is `NotRead` and stays unloaded; a
-/// `Base` cycle ends the walk, with no candidate (true) and with one outside the chain (its own refusal).
+/// Test 10b: an `Owner` the store has not loaded, needed to decide a candidate, is `NotRead` and stays unloaded; an
+/// `Owner` cycle ends the walk, with no candidate (true) and with one outside the chain (its own refusal).
 #[test]
-fn the_base_chain_is_read_load_free_and_bounded() {
+fn the_owner_chain_is_read_load_free_and_bounded() {
     let mut x = fx(Some(Sweep::Clear));
     let lazy = x.lazy("Actor");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(lazy)));
+    x.set(p, "Owner", Value::Object(Some(lazy)));
     x.blocker("WillowGame.ToyGameActor");
-    assert!(not_read(x.call()).contains(BASE_CHAIN_LINK));
+    assert!(not_read(x.call()).contains(OWNER_CHAIN_LINK));
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
     // With no candidate the chain is never needed.
     let mut x = fx(Some(Sweep::Clear));
     let lazy = x.lazy("Actor");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(lazy)));
+    x.set(p, "Owner", Value::Object(Some(lazy)));
     assert_eq!(x.call().unwrap(), Value::Bool(true));
-    // A cycle: the pickup on A, A on the pickup.
+    // A cycle: the pickup owned by A, A owned by the pickup.
     let mut x = fx(Some(Sweep::Clear));
     let a = make(&mut x.vm, "Engine.Actor");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(a)));
-    x.set(a, "Base", Value::Object(Some(p)));
+    x.set(p, "Owner", Value::Object(Some(a)));
+    x.set(a, "Owner", Value::Object(Some(p)));
     assert_eq!(x.call().unwrap(), Value::Bool(true));
     x.blocker("WillowGame.ToyGameActor");
     assert!(not_read(x.call()).contains("the trace filter of WillowGame.ToyGameActor"), "the walk ended, then the row");
@@ -488,23 +504,25 @@ fn reference_binds_nothing() {
     assert!(!x.vm.has_native(TOUCH_PICKUP_TRACE));
 }
 
-/// Review r1 of #638, item 1: the `Base` chain is decided before the owner's flags are read, and an unloaded link
-/// refuses only a primitive the read filters leave as a possible blocker.
+/// Review r1 of #638, item 1 (with the `Owner` chains since the hub's ruling 3 on #809): the chains are decided before
+/// the owner's flags are read, and an unloaded link refuses only a primitive the read filters leave as a possible
+/// blocker.
 #[test]
-fn an_unloaded_base_link_refuses_only_a_possible_blocker() {
+fn an_unloaded_owner_link_refuses_only_a_possible_blocker() {
     // Only a pawn's primitive: the Pawn row rejects it, so the undecided chain does not refuse.
     let mut x = fx(Some(Sweep::Clear));
     let lazy = x.lazy("Actor");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(lazy)));
+    x.set(p, "Owner", Value::Object(Some(lazy)));
     x.blocker("Engine.Pawn");
     assert_eq!(x.call().unwrap(), Value::Bool(true));
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
-    // A primitive whose own Owner is the unloaded Base: recognised as the chain's link before its flags are read.
+    // A primitive whose own Owner is the pickup's unloaded Owner: recognised as the chain's link before its flags are
+    // read.
     let mut x = fx(Some(Sweep::Clear));
     let lazy = x.lazy("Actor");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(lazy)));
+    x.set(p, "Owner", Value::Object(Some(lazy)));
     let (walked, _) = x.blocker("WillowGame.ToyGameActor");
     let owned = make(&mut x.vm, "Engine.ToyOwnedPrimitive");
     for f in ["BlockZeroExtent", "CollideActors"] {
@@ -515,12 +533,12 @@ fn an_unloaded_base_link_refuses_only_a_possible_blocker() {
     assert_eq!(x.call().unwrap(), Value::Bool(true));
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the link is still unloaded");
     // Review r2 of #638, item 1: a primitive whose own CollideActors is clear is no candidate, even with an unloaded
-    // owner and the Base on a different unloaded handle; the call checks the counters and the name table.
+    // owner and the pickup's Owner on a different unloaded handle; the call checks the counters and the name table.
     let mut x = fx(Some(Sweep::Clear));
     let base = x.lazy("Actor");
     let owner = x.lazy("Pickup");
     let p = x.pickup;
-    x.set(p, "Base", Value::Object(Some(base)));
+    x.set(p, "Owner", Value::Object(Some(base)));
     let (walked, _) = x.blocker("WillowGame.ToyGameActor");
     let owned = make(&mut x.vm, "Engine.ToyOwnedPrimitive");
     x.set(owned, "BlockZeroExtent", Value::Bool(true));
@@ -534,7 +552,7 @@ fn an_unloaded_base_link_refuses_only_a_possible_blocker() {
     // The same primitive with CollideActors set is a possible blocker behind an undecided chain: it refuses.
     x.set(owned, "CollideActors", Value::Bool(true));
     let n = not_yet(x.call());
-    assert!(n.what.contains(ow_world::trace_filter::BASE_CHAIN_LINK), "{n}");
+    assert!(n.what.contains(OWNER_CHAIN_LINK), "{n}");
 }
 
 /// Review r1 of #638, item 2: an argument must be the declared `Vector` struct. Another struct named `Vector` is a

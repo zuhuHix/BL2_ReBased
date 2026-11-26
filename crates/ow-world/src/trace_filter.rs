@@ -42,12 +42,14 @@
 //! sections 2 and 4, UNVERIFIED): a point line through the world's single-line routine with the flags [`TOUCH_TRACE`]
 //! (plus [`ONE_RESULT`]) and a **source actor** ([`Source`]). Two steps differ from the spawn's queries:
 //! - **the source actor's exclusion**, after the primitive's own flags and before any flag of its owner is read: a
-//!   primitive whose owner is the source actor, or in its `Base` chain, is not tested. The chain is read only when a
-//!   candidate reaches this step, from resident objects through lookup-only names; the walk stops at None and at a
-//!   link already seen (a cycle); a class that declares no `Base` is a data error. A link the store has not loaded
-//!   leaves the exclusion undecided: the remaining read filters still run, and only a primitive they leave as a
-//!   possible blocker is [`Unread::BaseChainLink`] (review r1 of #638, item 1). An owner that is itself an unloaded
-//!   handle, with the chain undecided, is [`Unread::BaseChainLink`] too, since its flags cannot be read;
+//!   primitive whose owner is the source actor, is in the source's `Owner` chain, or holds the source in its own
+//!   `Owner` chain is not tested (`owner_chains`; NATIVE_FLOOR_TRACE_FLAGS.md section 4, the hub's ruling 3 on #809,
+//!   which replaces the `Base` chain of NATIVE_TOUCH_PICKUP_TRACE.md; UNVERIFIED in game). The chains are read only
+//!   when a candidate reaches this step, from resident objects through lookup-only names; each walk stops at None and
+//!   at a link already seen (a cycle); a class that declares no `Owner` is a data error. A link the store has not
+//!   loaded leaves the exclusion undecided: the remaining read filters still run, and only a primitive they leave as a
+//!   possible blocker is [`Unread::OwnerChainLink`] (review r1 of #638, item 1). An owner that is itself an unloaded
+//!   handle, with the chain undecided, is [`Unread::OwnerChainLink`] too, since its flags cannot be read;
 //! - **a `bPawnsOnly` volume** is [`Unread::SourceVolumeTest`] (the source actor's test, not read) instead of rejected.
 //!
 //! A primitive every read test accepts is still [`Unread::HashAdmission`]. Only when a test installs the hash stand-in
@@ -138,7 +140,7 @@ pub(crate) fn part_class(
 pub const RECORD_TOUCH: &str = "NATIVE_TOUCH_PICKUP_TRACE.md";
 /// The touch note's names for its unread rules.
 pub const SOURCE_VOLUME_TEST: &str = "the source actor's volume test";
-pub const BASE_CHAIN_LINK: &str = "a Base-chain link the store has not loaded";
+pub const OWNER_CHAIN_LINK: &str = "an Owner-chain link the store has not loaded";
 pub const PRIMITIVE_LINE_TEST: &str = "the primitive's line test";
 
 /// The flag set of every box test.
@@ -299,8 +301,8 @@ pub enum Unread {
     HashAdmission,
     /// A `bPawnsOnly` volume in a query with a source actor: the source actor's test.
     SourceVolumeTest,
-    /// A link of the source actor's `Base` chain the store has not loaded, needed to decide a candidate.
-    BaseChainLink,
+    /// A link of the source's or the owner's `Owner` chain the store has not loaded, needed to decide a candidate.
+    OwnerChainLink,
     /// A primitive every read test accepts, once the hash admits it (a test stand-in only): its own line test.
     PrimitiveLineTest,
 }
@@ -313,7 +315,7 @@ impl Unread {
             Unread::TerrainHandling => TERRAIN_HANDLING.to_string(),
             Unread::HashAdmission => HASH_ADMISSION.to_string(),
             Unread::SourceVolumeTest => SOURCE_VOLUME_TEST.to_string(),
-            Unread::BaseChainLink => BASE_CHAIN_LINK.to_string(),
+            Unread::OwnerChainLink => OWNER_CHAIN_LINK.to_string(),
             Unread::PrimitiveLineTest => PRIMITIVE_LINE_TEST.to_string(),
         }
     }
@@ -323,7 +325,7 @@ impl Unread {
         match self {
             Unread::OwnerClass(_) | Unread::TerrainHandling => "NATIVE_SPAWN_PLACEMENT.md",
             Unread::HashAdmission => RECORD_TRACE_FILTER,
-            Unread::SourceVolumeTest | Unread::BaseChainLink | Unread::PrimitiveLineTest => RECORD_TOUCH,
+            Unread::SourceVolumeTest | Unread::OwnerChainLink | Unread::PrimitiveLineTest => RECORD_TOUCH,
         }
     }
 }
@@ -354,40 +356,75 @@ pub fn owner_of(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef) -> Resul
 pub struct Source<'a> {
     /// The source actor (the pickup).
     pub actor: ObjRef,
-    /// Whether an object is a handle the store has not loaded (a link whose `Base` cannot be read).
+    /// Whether an object is a handle the store has not loaded (a link whose `Owner` cannot be read).
     pub unloaded: &'a dyn Fn(ObjRef) -> bool,
     /// A test stand-in for the hash step: when set, the hash's admission counts as established (UNVERIFIED).
     pub admission_established: bool,
 }
 
-/// Where `owner` stands against the source actor's chain.
-enum Chain {
+/// Where an owner stands against a source actor's `Owner` chains ([`owner_chains`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Chain {
+    /// The owner is the source, or one of the source's owners, or the source is one of the owner's owners.
     Excluded,
+    /// None of these.
     Outside,
+    /// Undecided: a link the store has not loaded ends a walk before it decides.
     Unloaded,
 }
 
-/// Whether `owner` is the source actor or in its `Base` chain (module documentation). Reads resident objects only,
-/// through lookup-only names; bounded by the links seen.
-fn chain_of(space: &ObjectSpace, s: &Source<'_>, owner: ObjRef) -> Result<Chain, VmError> {
-    if owner == s.actor {
+/// Where `owner` stands against `source` (NATIVE_FLOOR_TRACE_FLAGS.md section 4; the hub's rulings 1 and 3 on #809;
+/// UNVERIFIED in game): the source itself, an actor in the source's `Owner` chain, or an actor whose `Owner` chain
+/// holds the source is [`Chain::Excluded`]. Both walks read resident objects only, through lookup-only names; each
+/// stops at None and at a link already seen; a link the store has not loaded (`unloaded`) ends that walk undecided.
+/// One walk that excludes decides, whatever the other; otherwise an undecided walk leaves [`Chain::Unloaded`]. A class
+/// on a walk that declares no `Owner` is a `VmError::Script`.
+pub(crate) fn owner_chains(
+    space: &ObjectSpace,
+    source: ObjRef,
+    owner: ObjRef,
+    unloaded: &dyn Fn(ObjRef) -> bool,
+) -> Result<Chain, VmError> {
+    if owner == source {
         return Ok(Chain::Excluded);
     }
-    let mut seen = vec![s.actor];
-    let mut at = s.actor;
+    let up = owner_walk(space, source, owner, unloaded)?;
+    if up == Chain::Excluded {
+        return Ok(up);
+    }
+    let down = owner_walk(space, owner, source, unloaded)?;
+    Ok(match (up, down) {
+        (_, Chain::Excluded) => Chain::Excluded,
+        (Chain::Unloaded, _) | (_, Chain::Unloaded) => Chain::Unloaded,
+        _ => Chain::Outside,
+    })
+}
+
+/// One `Owner` walk from `from` (not included) looking for `target` ([`owner_chains`]).
+fn owner_walk(
+    space: &ObjectSpace,
+    from: ObjRef,
+    target: ObjRef,
+    unloaded: &dyn Fn(ObjRef) -> bool,
+) -> Result<Chain, VmError> {
+    if unloaded(from) {
+        return Ok(Chain::Unloaded);
+    }
+    let mut seen = vec![from];
+    let mut at = from;
     loop {
         let class = space.heap.get(at)?.class;
-        if space.prop(class, "Base").is_none() {
+        if space.prop(class, "Owner").is_none() {
             return Err(VmError::Script {
-                function: "the touch trace's Base chain".to_string(),
-                message: format!("{} declares no Base", ow_attr::eval::class_path(space, at)),
+                function: "the trace's Owner chain".to_string(),
+                message: format!("{} declares no Owner", ow_attr::eval::class_path(space, at)),
             });
         }
-        match object(space, at, "Base")? {
+        match object(space, at, "Owner")? {
             None => return Ok(Chain::Outside),
             Some(next) if seen.contains(&next) => return Ok(Chain::Outside),
-            Some(next) if next == owner => return Ok(Chain::Excluded),
-            Some(next) if (s.unloaded)(next) => return Ok(Chain::Unloaded),
+            Some(next) if next == target => return Ok(Chain::Excluded),
+            Some(next) if unloaded(next) => return Ok(Chain::Unloaded),
             Some(next) => {
                 seen.push(next);
                 at = next;
@@ -439,7 +476,7 @@ pub fn tested_from(
     if !flag(space, primitive, query.blocking_flag())? {
         return Ok(Candidate::NotTested);
     }
-    // The primitive's own half of the per-component test (note section 2) comes before the Base walk: a primitive
+    // The primitive's own half of the per-component test (note section 2) comes before the Owner walks: a primitive
     // that collides with no actor is never a candidate, so no link of the chain can refuse it (review r2 of #638,
     // item 1).
     if !flag(space, primitive, "CollideActors")? {
@@ -448,16 +485,16 @@ pub fn tested_from(
     // The source actor's exclusion (module documentation), before any flag of the owner is read. An undecided chain
     // (an unloaded link) is kept pending: the read filters below still reject what they can.
     let undecided = match source {
-        Some(s) => match chain_of(space, s, owner)? {
+        Some(s) => match owner_chains(space, s.actor, owner, s.unloaded)? {
             Chain::Excluded => return Ok(Candidate::NotTested),
-            Chain::Unloaded if (s.unloaded)(owner) => return Ok(Candidate::Unsupported(Unread::BaseChainLink)),
+            Chain::Unloaded if (s.unloaded)(owner) => return Ok(Candidate::Unsupported(Unread::OwnerChainLink)),
             Chain::Unloaded => true,
             Chain::Outside => false,
         },
         None => false,
     };
-    let unsupported = |rule: Unread| Candidate::Unsupported(if undecided { Unread::BaseChainLink } else { rule });
-    // The owner's half of the per-component test (note section 2), after the source and Base identity checks.
+    let unsupported = |rule: Unread| Candidate::Unsupported(if undecided { Unread::OwnerChainLink } else { rule });
+    // The owner's half of the per-component test (note section 2), after the source and Owner-chain checks.
     if !flag(space, owner, "bCollideActors")? {
         return Ok(Candidate::NotTested);
     }

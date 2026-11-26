@@ -22,18 +22,31 @@
 //! 3. the transitions: into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider` (0, 1, 5, 8) runs the
 //!    **base search** (NATIVE_LINK34_AFTER_MIND.md section 2, lane IMPL-LINK34-AFTER-MIND): a floor trace 8 units down,
 //!    then the base setter when the floor differs from `Base`. No collision service is `LayerAbsent`
-//!    ([`BASE_TRACE`], [`BASE_TRACE_LAYER`]); a service with geometry, or a world where another live actor has a
-//!    `CollisionComponent`, is `NotRead` ([`BASE_TRACE_FLAGS`]: the trace's flags are not decoded). **The stand-in**
-//!    (the hub's ruling on #793, and on review of #798, R1): only with the Off-only harness setting
-//!    [`NoLevelBaseSearch`] on (the slice's worlds turn it on, as they do `PhysXLevel` and `AtRestBodyPose`;
-//!    [`enable_no_level_base_search`]), a service with no geometry ([`crate::placement::NoLevel`]) and no other actor
-//!    with collision the line could touch gives no floor. Another actor's collision is cleared only by geometry
-//!    (the hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION): a cylinder component the line runs wholly outside of,
-//!    whatever the trace's flags; any other component keeps the `NotRead` (`clear_of`); with `Base` None that changes nothing (logged as a harness input at the commit),
-//!    with a `Base` set it is `NotRead` ([`BASE_SETTER`]) until the base setter is read. Without the setting the
-//!    `NoLevel` case keeps [`BASE_TRACE_FLAGS`]' `NotRead`. The actor's own `CollisionComponent` is skipped (R2,
-//!    UNVERIFIED: the common convention that an engine trace ignores its source). All decided here, before the mode
-//!    write. Then into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
+//!    ([`BASE_TRACE`], [`BASE_TRACE_LAYER`]); a service with geometry, or `NoLevel` without the setting below, is
+//!    `NotRead` ([`BASE_TRACE_FLAGS`]), decided first. **The stand-in** (the hub's rulings on #793, on review of #798,
+//!    R1, and on #809; NATIVE_FLOOR_TRACE_FLAGS.md section 6.1, lane IMPL-FLOOR-TRACE-RULINGS; UNVERIFIED in game):
+//!    only with the Off-only harness setting [`NoLevelBaseSearch`] on ([`enable_no_level_base_search`]) and a service
+//!    with no geometry ([`crate::placement::NoLevel`]), the level part holds nothing to hit, and the actor part walks
+//!    every live actor's primitives in the placement walk's order (`CollisionComponent`, then `Components`), each
+//!    only rejecting, in the game walkers' order (the note's section 3):
+//!    - a primitive whose owner (`trace_filter::owner_of`) is the actor itself: passed over;
+//!    - the skip flag set, `BlockNonZeroExtent` clear, `CollideActors` clear, or the owner's `bCollideActors` clear:
+//!      passed over;
+//!    - the primitive's bounds (the bounding-cylinder rule's box) disjoint from the **swept box**: the actor's
+//!      collision cylinder (radius, radius, half-height) from `Location` plus its component's `Translation`, swept
+//!      down by 8 units, per axis, touching counted as meeting (the hub's ruling 2 on #809). The swept box is read
+//!      at the first candidate that reaches this test: a `CollisionComponent` that is not a cylinder is `NotRead`
+//!      ([`BASE_EXTENT`]); a start, extent or bounds that is not finite or not non-negative is `NotRead`
+//!      ([`BASE_SWEPT_BOX`]); bounds the rule does not answer keep its own `NotYet`;
+//!    - the owner in the actor's `Owner` chain, or the actor in the owner's (`trace_filter::owner_chains`, the hub's
+//!      ruling 1 on #809, read in the note's section 4, replacing #798's R2 "common convention"): passed over; a link
+//!      the store has not loaded that decides it is `NotRead` ([`BASE_OWNER_LINK`]);
+//!    - any primitive left is `NotRead` ([`BASE_CANDIDATE`]: the owner's filter and the primitive's own test are not
+//!      ported).
+//!
+//!    With no candidate left there is no floor: with `Base` None that changes nothing (logged as a harness input at
+//!    the commit, [`BASE_STAND_IN`]), with a `Base` set it is `NotRead` ([`BASE_SETTER`]). All decided here, before
+//!    the mode write. Then into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
 //!    ([`BASE_CLEAR`]); into or out of `PHYS_RigidBody` with a `CollisionComponent` set is `LayerAbsent`
 //!    ([`RIGID_BODY`], [`RIGID_LAYER`]);
 //! 4. every script event the commit will call is resolved now, as Off event dispatch resolves it (the active state,
@@ -84,8 +97,19 @@ pub const BASE_TRACE_FLAGS: &str = "Actor.SetPhysics: the base search's floor tr
 pub const BASE_SETTER: &str = "Actor.SetPhysics: the base search's base setter";
 /// The harness-input line of the stand-in.
 pub const BASE_STAND_IN: &str = "harness input: Actor.SetPhysics' base search found no floor (a world with no level \
-     geometry and no other actor's collision cylinder within the line's reach; UNVERIFIED stand-in, the hub's rulings \
-     on #793 and for lane IMPL-COMBAT-WORLD-COLLISION)";
+     geometry and no other actor's primitive the swept box meets; UNVERIFIED stand-in, the hub's rulings on #793, for \
+     lane IMPL-COMBAT-WORLD-COLLISION and on #809)";
+/// The swept box's extent when the actor's `CollisionComponent` is not a cylinder (NATIVE_FLOOR_TRACE_FLAGS.md section
+/// 6.1, item 2).
+pub const BASE_EXTENT: &str = "Actor.SetPhysics: the base search's extent (the bounding-cylinder fallback)";
+/// A swept box or a candidate's bounds that are not well formed (NATIVE_FLOOR_TRACE_FLAGS.md section 5).
+pub const BASE_SWEPT_BOX: &str = "Actor.SetPhysics: the base search's swept box (a malformed extent or bounds)";
+/// An `Owner`-chain link the store has not loaded that decides a candidate (the hub's ruling 1 on #809).
+pub const BASE_OWNER_LINK: &str =
+    "Actor.SetPhysics: the base search's floor trace (a source Owner-chain link the store has not loaded)";
+/// A candidate the game's walker would test (NATIVE_FLOOR_TRACE_FLAGS.md section 6.1, item 4).
+pub const BASE_CANDIDATE: &str = "Actor.SetPhysics: the base search's floor trace (a candidate the walker tests: the \
+     owner filter's blocked-by test and the primitive's swept-box test are not ported)";
 /// The set-up line of [`enable_no_level_base_search`].
 pub const BASE_STAND_IN_INPUT: &str = "harness input: the world turns on SetPhysics' no-floor base search for a world \
      with no level geometry (the hub's ruling on review of #798, R1; UNVERIFIED)";
@@ -381,91 +405,165 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     Ok(Some(Plan { actor, mode, volume, events, stand_in: base_search, force_floor, zero }))
 }
 
-/// The base search's preflight (module documentation, step 3). Reads only.
+/// The base search's preflight (module documentation, step 3; NATIVE_FLOOR_TRACE_FLAGS.md section 6.1). Reads only.
 fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
+    // 1. No collision service.
     let Some(model) = crate::placement::collision_model(vm)? else {
         return Err(NotYet::layer_absent(BASE_TRACE, BASE_TRACE_LAYER, RECORD).into());
     };
-    // The stand-in only under its harness setting (the hub's ruling on review of #798, R1).
+    // 3. The level part: the stand-in only under its harness setting and only for a service that holds no geometry
+    // (the hub's ruling on review of #798, R1; the guard kept by review r1 of #809). Decided first.
     if !model.holds_no_geometry() || vm.service::<NoLevelBaseSearch>().is_none() {
         return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
     }
+    // 4. The actor part, over every live actor's primitives in the placement walk's order.
+    let space = &vm.space;
+    let primitive = space.classes.by_path("Engine.PrimitiveComponent");
+    let unloaded = |o: ObjRef| vm.defs.is_unloaded(space, o);
     let actors = crate::actors::actors_of(vm)?;
     let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
-    // The actor's own collision is skipped: UNVERIFIED, the common convention that an engine trace ignores its source
-    // (the hub's ruling on review of #798, R2).
-    for other in list.into_iter().filter(|o| *o != actor) {
-        let Ok(x) = vm.space.heap.get(other) else { continue };
-        if let Some(p) = vm.space.prop(x.class, "CollisionComponent")
-            && let Value::Object(Some(component)) = *vm.space.read(other, PropAddr::scalar(p))?
-            && !clear_of(vm, actor, other, component)?
-        {
-            return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
+    // 2. The swept box, read when the first candidate reaches the bounds test.
+    let mut swept: Option<Swept> = None;
+    for walked in list {
+        if crate::actors::is_destroyed(space, walked)? {
+            continue;
+        }
+        resident(vm, walked)?;
+        let class = space.heap.get(walked)?.class;
+        let mut parts: Vec<ObjRef> = Vec::new();
+        if space.prop(class, "CollisionComponent").is_some() {
+            parts.extend(object(vm, walked, "CollisionComponent")?);
+        }
+        if space.prop(class, "Components").is_some() {
+            for c in crate::actors::objects(space, walked, "Components")?.into_iter().flatten() {
+                if !parts.contains(&c) {
+                    parts.push(c);
+                }
+            }
+        }
+        for part in parts {
+            resident(vm, part)?;
+            match crate::trace_filter::part_class(space, space.heap.get(part)?.class, primitive) {
+                crate::trace_filter::PartClass::Primitive => {}
+                crate::trace_filter::PartClass::Other => continue,
+                crate::trace_filter::PartClass::Uncertain(path) => {
+                    if walked == actor {
+                        continue;
+                    }
+                    return Err(NotYet::not_read(
+                        format!("{BASE_TRACE}: {} {path}", crate::trace_filter::STAND_IN_PART),
+                        RECORD_FLOOR,
+                    )
+                    .into());
+                }
+            }
+            // In the walkers' order (NATIVE_FLOOR_TRACE_FLAGS.md section 3): the owner, the skip flag, the extent
+            // flag, the per-component test, the bounds, the Owner chains; only rejecting.
+            let owner = crate::trace_filter::owner_of(space, part, walked)?;
+            if owner == actor {
+                continue;
+            }
+            if crate::actors::flag(space, part, crate::trace_filter::SKIP_FLAG_FIELD)? {
+                continue;
+            }
+            if !crate::actors::flag(space, part, "BlockNonZeroExtent")? {
+                continue;
+            }
+            if !crate::actors::flag(space, part, "CollideActors")? {
+                continue;
+            }
+            resident(vm, owner)?;
+            if !crate::actors::flag(space, owner, "bCollideActors")? {
+                continue;
+            }
+            let s = match swept {
+                Some(s) => s,
+                None => *swept.insert(swept_box(vm, actor)?),
+            };
+            let (centre, extent) = crate::world::bounding_cylinder::entry_box(vm, owner, part)?;
+            if !(centre.iter().chain(extent.iter()).all(|v| v.is_finite()) && extent.iter().all(|v| *v >= 0.0)) {
+                return Err(NotYet::not_read(BASE_SWEPT_BOX, RECORD_FLOOR).into());
+            }
+            if s.disjoint(centre, extent) {
+                continue;
+            }
+            match crate::trace_filter::owner_chains(space, actor, owner, &unloaded)? {
+                crate::trace_filter::Chain::Excluded => continue,
+                crate::trace_filter::Chain::Unloaded => {
+                    return Err(NotYet::not_read(BASE_OWNER_LINK, RECORD_FLOOR).into());
+                }
+                crate::trace_filter::Chain::Outside => {}
+            }
+            return Err(NotYet::not_read(BASE_CANDIDATE, RECORD_FLOOR).into());
         }
     }
+    // 5. No candidate left and the level clear: no floor.
     if object(vm, actor, "Base")?.is_some() {
         return Err(NotYet::not_read(BASE_SETTER, RECORD).into());
     }
     Ok(())
 }
 
-/// The floor trace's length (NATIVE_LINK34_AFTER_MIND.md section 2): a line straight down by 8 units.
+/// The floor trace's length (NATIVE_LINK34_AFTER_MIND.md section 2): 8 units straight down.
 pub const FLOOR_TRACE_LENGTH: f32 = 8.0;
+/// The record of the floor trace's flags, candidates and swept box.
+pub const RECORD_FLOOR: &str = "docs/verification/NATIVE_FLOOR_TRACE_FLAGS.md";
 
-/// Whether the floor trace from `actor` misses `other`'s collision `component` by geometry alone, whatever the
-/// trace's flags. **UNVERIFIED**: the lane's own extension, accepted by the hub for lane IMPL-COMBAT-WORLD-COLLISION and
-/// to be checked against the trace's flags once they are read (queue 0ar). It is needed because #798's R2 check
-/// refused for any other actor holding collision wherever it stood, so separate spawn positions alone could not clear
-/// the trace. Decided
-/// only for an exact `Engine.CylinderComponent` whose box the bounding-cylinder rule answers
-/// ([`crate::world::bounding_cylinder::entry_box`]: radius R, half-height H, centred on the owner's `Location` plus an
-/// accepted `Translation`), with the actor's `Location` read and its own collision component holding no translation
-/// (the note fits the trace's start offset to it). The line from `Location` down by [`FLOOR_TRACE_LENGTH`] misses
-/// when it runs more than R from the axis, or wholly above or below the cylinder; touching counts as a hit. `false`
-/// in every other case, so the caller keeps the trace flags' `NotRead`. Reads only.
-fn clear_of(vm: &Vm, actor: ObjRef, other: ObjRef, component: ObjRef) -> Result<bool, VmError> {
-    let space = &vm.space;
-    resident(vm, component)?;
-    if space.classes.by_path("Engine.CylinderComponent") != Some(space.heap.get(component)?.class) {
-        return Ok(false);
-    }
-    let (centre, extent) = match crate::world::bounding_cylinder::entry_box(vm, other, component) {
-        Ok(b) => b,
-        Err(VmError::NotYet(_)) => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    let Some(start) = trace_start(vm, actor)? else { return Ok(false) };
-    let (radius, half) = (f64::from(extent[0]), f64::from(extent[2]));
-    if !(radius.is_finite() && half.is_finite() && radius >= 0.0 && half >= 0.0) {
-        return Ok(false);
-    }
-    let (dx, dy) = (f64::from(start[0]) - f64::from(centre[0]), f64::from(start[1]) - f64::from(centre[1]));
-    let (top, bottom) = (f64::from(start[2]), f64::from(start[2]) - f64::from(FLOOR_TRACE_LENGTH));
-    let apart = dx * dx + dy * dy > radius * radius;
-    let above = bottom > f64::from(centre[2]) + half;
-    let below = top < f64::from(centre[2]) - half;
-    Ok(apart || above || below)
+/// The floor trace's swept box (NATIVE_FLOOR_TRACE_FLAGS.md section 2): from `start` down by [`FLOOR_TRACE_LENGTH`],
+/// with the half-extent (`radius`, `radius`, `half_height`) of the actor's collision cylinder.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Swept {
+    start: [f32; 3],
+    radius: f32,
+    half_height: f32,
 }
 
-/// The floor trace's start for [`clear_of`]: `actor`'s `Location`, when the class declares it and the actor's own
-/// collision component holds a zero `Translation` (or declares none); `None` otherwise. Reads only.
-fn trace_start(vm: &Vm, actor: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
-    let space = &vm.space;
-    let read = |o: ObjRef, name: &str| -> Result<Option<[f32; 3]>, VmError> {
-        if space.prop(space.heap.get(o)?.class, name).is_none() {
-            return Ok(None);
-        }
-        let v = crate::actors::field(space, o, name)?;
-        crate::world::bounding_cylinder::vector(space, o, &v, name).map(Some)
-    };
-    let Some(location) = read(actor, "Location")? else { return Ok(None) };
-    if let Some(own) = object(vm, actor, "CollisionComponent")? {
-        resident(vm, own)?;
-        if read(own, "Translation")?.is_some_and(|t| t != [0.0; 3]) {
-            return Ok(None);
-        }
+impl Swept {
+    /// Whether a box centred on `centre` with half-extent `extent` misses the swept box (NATIVE_FLOOR_TRACE_FLAGS.md
+    /// section 5, the hub's ruling 2 on #809): apart on X or Y by more than the two half-widths, or wholly above or
+    /// below it. Touching counts as meeting. Both boxes are well formed by now.
+    fn disjoint(&self, centre: [f32; 3], extent: [f32; 3]) -> bool {
+        let (s, c, e) = (self.start.map(f64::from), centre.map(f64::from), extent.map(f64::from));
+        let (rs, hs) = (f64::from(self.radius), f64::from(self.half_height));
+        (s[0] - c[0]).abs() > e[0] + rs
+            || (s[1] - c[1]).abs() > e[1] + rs
+            || s[2] - f64::from(FLOOR_TRACE_LENGTH) - hs > c[2] + e[2]
+            || s[2] + hs < c[2] - e[2]
     }
-    Ok(Some(location))
+}
+
+/// The actor's swept box (NATIVE_FLOOR_TRACE_FLAGS.md section 6.1, item 2): its `CollisionComponent` a
+/// `CylinderComponent` (or a class below it), else [`BASE_EXTENT`]; the start its `Location` plus that component's
+/// `Translation` (the note's fit). `CollisionComponent`, `CollisionRadius`, `CollisionHeight`, `Location` and
+/// `Translation` declared with their kinds, else `VmError::Script`. A start, radius or half-height that is not finite,
+/// or a negative radius or half-height, is [`BASE_SWEPT_BOX`]. Reads only.
+fn swept_box(vm: &Vm, actor: ObjRef) -> Result<Swept, VmError> {
+    let space = &vm.space;
+    let Some(component) = object(vm, actor, "CollisionComponent")? else {
+        return Err(NotYet::not_read(BASE_EXTENT, RECORD_FLOOR).into());
+    };
+    resident(vm, component)?;
+    let class = space.heap.get(component)?.class;
+    let cylinder = space.classes.by_path("Engine.CylinderComponent").is_some_and(|c| space.classes.is_child_of(class, c));
+    if !cylinder {
+        return Err(NotYet::not_read(BASE_EXTENT, RECORD_FLOOR).into());
+    }
+    let vector = |o: ObjRef, name: &str| -> Result<[f32; 3], VmError> {
+        let v = crate::actors::field(space, o, name)?;
+        crate::world::bounding_cylinder::vector(space, o, &v, name)
+    };
+    let location = vector(actor, "Location")?;
+    let translation = vector(component, "Translation")?;
+    let radius = crate::actors::float(space, component, "CollisionRadius")?;
+    let half_height = crate::actors::float(space, component, "CollisionHeight")?;
+    let start = [0, 1, 2].map(|k| location[k] + translation[k]);
+    if !(start.iter().all(|v| v.is_finite()) && radius.is_finite() && half_height.is_finite())
+        || radius < 0.0
+        || half_height < 0.0
+    {
+        return Err(NotYet::not_read(BASE_SWEPT_BOX, RECORD_FLOOR).into());
+    }
+    Ok(Swept { start, radius, half_height })
 }
 
 /// `v`, a vector struct, with every float field 0.
