@@ -198,7 +198,9 @@ An observed empty touched slot is not one of these: the key takes nothing.
 `WillowPickup.Destroyed`:
 - tells its item that the pickup is gone;
 - removes it from the globals' pickup list. That removal fires the `OnPickupDetached` global event, and
-  `OnAllPickupsDetached` when no other pickup of the same holder is left (read with medium confidence);
+  `OnAllPickupsDetached` when no other pickup of the same holder is left (read with medium confidence). Read further
+  in NATIVE_LINK6_AFTER_TAKE.md section 2 (2026-11-26): the events are not global. They go to the pickup's `Base` as
+  a behavior consumer, the holder's list is the base's `Attached`, and with no `Base` nothing is raised;
 - runs the base `DroppedPickup.Destroyed`;
 - removes it from each local player's HUD post-render list and from the population master.
 - The headless answers for this path (the population master's fixture value, a non-None master, and when
@@ -218,7 +220,7 @@ An observed empty touched slot is not one of these: the key takes nothing.
 | Native | Rule | Confidence |
 |---|---|---|
 | `WillowPlayerController.GetInventoryPawn` | the controller's pawn; when that pawn answers as a vehicle, the vehicle's `Driver` instead. This is the pawn that will own the item, and it does not conflict with `AddInventory`'s own "not a vehicle" readiness test (NATIVE_INVENTORY_EQUIP.md) | medium |
-| `WillowGlobals.RemovePickup(Pickup)` | removes the pickup from the globals' list, firing the two global events of section 6 | medium |
+| `WillowGlobals.RemovePickup(Pickup)` | removes the pickup from the globals' list, firing the two events of section 6 (not global: they go to the pickup's `Base` as a behavior consumer, NATIVE_LINK6_AFTER_TAKE.md section 2) | medium |
 | `DroppedPickup.AddToNavigation` | does nothing in this build | high |
 | the per-tick pickup targeting (the HUD's, no script name; it raises `SawPickupable` and `ClearSeenPickupable`) | NATIVE_PICKUP_TARGETING.md | high |
 

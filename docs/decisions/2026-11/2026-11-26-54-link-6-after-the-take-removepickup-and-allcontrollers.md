@@ -20,11 +20,16 @@ ignored `local/analysis/link6after/`. UNVERIFIED in the running game.
   #789.
 - **The probe** (main 54c9cf0; #795's stops and these two answered by their rules; reverted): **link 6 passes**, 8 ok
   / 14, X 60.7%, against 7 ok, 58.3% on main.
-- **For the hub:**
-  - the pickup world never calls `AddPickup` during `make` (an empty `PickupList`);
-  - whether to link its controller into `ControllerList`.
+- **The hub's ruling (2026-11-26):** two known gaps stay as they are, in Off only, with Reference unchanged:
+  - the pickup world never calls `AddPickup` during `make`, so `PickupList` is empty;
+  - its controller is missing from `ControllerList`.
 
   Neither changes link 6's result.
+- **Review r1 of #797:**
+  - the interface test interns no name and loads no class code: an absent name or class is a pre-write `NotRead`;
+  - the `AllControllers` guard is documented as stricter than the game;
+  - NATIVE_PICKUP.md's "global events" lines point here;
+  - the merged `RemovePickup` row keeps #795's 4.4 pointer.
 - **Paperwork:**
   - `NATIVE_INDEX.md`: both `RemovePickup` rows edited, and a new `AllControllers` row;
   - pointers in NATIVE_WILLOW_GLOBALS.md 6.3 and NATIVE_ENGINE_CORE.md;

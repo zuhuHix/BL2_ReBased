@@ -72,7 +72,10 @@ bindings and placeholders first.
 - with a `Base`:
   - a base the store has not loaded is `NotRead`;
   - whether the base's class provides `IBehaviorConsumer`, by the class table's interface list. That is the same
-    question the port's interface query answers, and it loads nothing;
+    question the port's interface query answers. It interns no name and loads no class code (review r1 of #797): the
+    interface class is looked up only by a name already in the name table and a class already in the class table
+    (`GearboxFramework.IBehaviorConsumer`). If either is absent, the answer is `NotRead` ("RemovePickup: the
+    behavior-consumer interface is not resolved"), decided before any write;
   - a base that provides it is `NotRead` ("RemovePickup: the base's behavior-consumer events"), decided before any
     write. The consumer's event call is not ported;
 - no `Base`, or a base without the interface: no event.
@@ -85,6 +88,9 @@ bindings and placeholders first.
 `AddPickup` call during `make`. NATIVE_WILLOW_GLOBALS.md section 1 says `WillowPickup.PostBeginPlay` adds the pickup.
 So the removal changes nothing here. Either the harness spawn skips that script, or it runs on another path. This was
 not followed; it is not a rule, and it does not change link 6's result.
+
+**The hub's ruling (2026-11-26):** both harness gaps stay known gaps, in Off only, and Reference is unchanged:
+the empty `PickupList` (section 2.1) and the controller missing from `ControllerList` (section 4.1). Neither is a harness input to add now.
 
 ## 3. The rest of `WillowPickup.Destroyed`
 
@@ -129,13 +135,17 @@ NATIVE_ENGINE_CORE.md listed this iterator as not read.
 - the VM's iterators take their list at the call, but the game reads the links live. So use the iterator guard that
   #789 added for `ComponentList`: keep a copy of the chain, and compare it after each body. A changed chain is
   `NotRead` ("AllControllers: the loop body changed ControllerList"), with the partial-writes prefix. Equal chains
-  give the game's answer.
+  give the game's answer. The guard is deliberately stricter than the game: it refuses any change to the chain, even
+  unlinking the current controller, which the game's read-ahead tolerates.
 
 **On the slice:** the pickup world's `ControllerList` is empty (the probe walked 0 entries), so the body never runs.
 In the game the player's controller is on the list; when and by what it joins is NATIVE_ACTOR_DESTROY_CONTROLLER.md's
 open question 3. Its `UnTouchedPickupable` would then find `CurrentTouchedPickupable` already None (step 1), so the
-result is the same. **For the hub:** whether to link the pickup world's controller into the list as a harness input,
-as #789 gave it the level's `WorldInfo`. It changes no state on this path.
+result is the same. The hub was asked whether to link the pickup world's controller into the list as a harness
+input, as #789 gave it the level's `WorldInfo`; it changes no state on this path.
+
+**The hub's ruling (2026-11-26):** both harness gaps stay known gaps, in Off only, and Reference is unchanged:
+the empty `PickupList` (section 2.1) and the controller missing from `ControllerList` (section 4.1). Neither is a harness input to add now.
 
 ## 5. Predicted stops
 
@@ -160,7 +170,9 @@ Link 7 is unchanged: the HUD `LayerAbsent` in `look`.
    - one write.
 2. `RemovePickup` with a `Base` that does not provide `IBehaviorConsumer`: the same removal, no event.
 3. `RemovePickup` with a `Base` that provides it: `NotRead`, raised before any write, so the list is unchanged.
-   The counters, `class_code_loads` and the name table are unchanged too.
+   The counters, `class_code_loads` and the name table are unchanged too. A world whose class table holds no
+   `GearboxFramework.IBehaviorConsumer`, or whose name table lacks its name, gives the unresolved-interface `NotRead`,
+   with no intern and no class-code load.
 4. `RemovePickup` refusals, each before any write:
    - a None pickup: `VmError::Script`;
    - a pickup or base the store has not loaded: `NotRead`;
@@ -187,9 +199,9 @@ Link 7 is unchanged: the HUD `LayerAbsent` in `look`.
    - the `OnPickupDetached` natives of `InteractiveObjectDefinition` and `AIClassDefinition`;
    - the pickup's native-only field passed as the second argument.
 3. **By fit:** the world info's list head as `ControllerList`.
-4. **For the hub:**
+4. **The hub's ruling (2026-11-26):** known gaps, Off only, Reference unchanged:
    - the empty `PickupList` in the pickup world (section 2.1);
-   - linking the pickup world's controller into `ControllerList` (section 4.1).
+   - the pickup world's controller missing from `ControllerList` (section 4.1).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
