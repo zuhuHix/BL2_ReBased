@@ -271,7 +271,8 @@ fn the_byte_limits_in_the_note_s_order() {
     let n = x.node(vec![a.clone(), c255], 2);
     x.by_index(n, 1).unwrap();
     assert_eq!(x.bytes(n, "AimCpntIndexLUT")[1], 254, "the last of 255 positions");
-    // Review of #745: the literal case, 257 bones with a 256-component profile, is the bone limit.
+    // Review of #745: the literal case, 257 bones with a 256-component profile, is refused past a byte. Both limits
+    // share one text, so this case does not show which one fired; the malformed-list case below proves the order.
     let e256 = x.profile("E", &names);
     let n = x.node(vec![a.clone(), e256], 0);
     match x.refusal(n, 1) {
