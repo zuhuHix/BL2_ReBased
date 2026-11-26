@@ -3,7 +3,7 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **IMPL-COMBAT-WORLD-COLLISION (2026-11-26, pc-hummer, on fix/rust-combat-world-collision, stacked on
-fix/rust-bounding-cylinder 47dc7bea, on main 92c87b4):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's
+fix/rust-bounding-cylinder 614a99a3 (#804 r1), on main 21a668a7):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's
 combat world without `--map` gets two settings, each logged as a set-up harness input: link 9's `NoLevel` collision
 service, and #798's base-search setting. Four harness strings that had lost a continuation backslash are single-spaced
 again. `cargo test --workspace -j 8 --no-fail-fast` 4,021 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.

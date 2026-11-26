@@ -1,8 +1,8 @@
 ## 2026-11-26: The combat world's NoLevel collision and base-search setting
 
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-COMBAT-WORLD-COLLISION, a harness lane on the hub's ruling. The branch is
-stacked on fix/rust-bounding-cylinder @ 47dc7bea, itself on main 92c87b4 through fix/rust-links-13-14. No native code
-was read, and no rule of the game changes. **Both settings are UNVERIFIED stand-ins.** Reference is unchanged.
+stacked on fix/rust-bounding-cylinder @ 614a99a3 (#804 r1), itself on main 21a668a7 through fix/rust-links-13-14. No
+native code was read, and no rule of the game changes. **Both settings are UNVERIFIED stand-ins.** Reference is unchanged.
 
 - **What was decided (Off only, the slice gate's combat set-up):**
   - the slice's combat world without `--map` installs link 9's `NoLevel` collision service, logged as a set-up harness
@@ -19,7 +19,7 @@ was read, and no rule of the game changes. **Both settings are UNVERIFIED stand-
   - two new `ow-cli` tests: the two settings in order with their lines, a second call refused, and Reference refused
     with nothing installed or logged; the set-up lines are single-spaced;
   - the installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 14, X = 8.167/14 = 58.3%,
-    the same score as the base 47dc7bea;
+    the same score as the base 614a99a3 (rerun after the rebase; first run on 47dc7bea, same rows);
   - links 3, 4, 5, 13 and 14 move from the floor trace's `LayerAbsent` ("the world has no collision service") to its
     `NotRead` ("its trace flags are not decoded"). Every other row's stop is unchanged.
 - **Why the links do not get past the floor trace (local probe, reverted):**
