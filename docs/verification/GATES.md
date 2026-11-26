@@ -34,7 +34,7 @@ linked objectives (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4); pass 2's not-load
 -p ow-cli -p ow-behavior` all pass; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under
 the machine lock), main and this change: 6 ok / 8 NotYet, 51.2% on both; 7 pass-2 objects preloaded. Links 1, 3, 4, 5,
 13 and 14 move from the unloaded condition's `NotRead` to `WillowPlayerPawn.SetDefaultStance` ("the class's own
-implementation is not resolved"); every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+implementation is not resolved"); every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-42.
 
 **IMPL-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, on fix/rust-behavior-kernel-pass2 from main c345fdb0):**
 AI-assisted (Claude Code, Opus 5.5). Off pass 2 of `IntializeBehaviorProviderForConsumer`
