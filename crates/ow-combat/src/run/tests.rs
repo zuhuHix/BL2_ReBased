@@ -967,9 +967,25 @@ fn a_victim_with_a_shield_pool_is_not_yet_in_off_mode_and_noted_in_reference_mod
     };
     match bare_hit(ParityMode::Off, "Pawn_Armored", None, shield) {
         Err(VmError::NotYet(n)) => {
-            assert_eq!(n.missing, ow_core::Missing::NotPorted);
-            assert!(n.to_string().contains("shield stage"), "{n}");
+            // Since lane IMPL-LINKS-3-4-TAIL the stage is ported in Off: this toy shield would reach 0, so the plan refuses
+            // with the shield-depleted handler's NotRead.
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(n.to_string().contains(crate::shield_stage::DEPLETED), "{n}");
         }
+        other => panic!("{other:?}"),
+    }
+    // A shield large enough not to deplete: the plan refuses at the recent-damage record (its tracker field is not
+    // named), the pool unchanged.
+    let big = |run: &mut Run, victim| {
+        shield(run, victim);
+        let vm = &mut run.world().vm;
+        let reference = crate::hit::access::get(vm, victim, "ShieldArmor").unwrap().unwrap();
+        let r = ow_world::pools::read_ref(&vm.space, &reference).unwrap();
+        let pool = ow_world::pools::resolve(&vm.space, r).unwrap().1.unwrap();
+        crate::hit::access::set(vm, pool, "CurrentValue", Value::Float(1000.0)).unwrap();
+    };
+    match bare_hit(ParityMode::Off, "Pawn_Armored", None, big) {
+        Err(VmError::NotYet(n)) => assert!(n.to_string().contains(crate::shield_stage::TRACKER), "{n}"),
         other => panic!("{other:?}"),
     }
     let r = bare_hit(ParityMode::Reference, "Pawn_Armored", None, shield).unwrap();

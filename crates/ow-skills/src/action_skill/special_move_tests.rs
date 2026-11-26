@@ -1063,7 +1063,7 @@ fn get_sm_node_compares_names_without_case() {
 
 /// Reviews r1 and r2 of #437: `ow-combat`'s hit pack binds its `Play` no-op and its `IsPlayingClass` and
 /// `IsPlayingAny` false in Reference only, so in Off this module's natives answer whichever pack registers first and
-/// `IsPlayingAny` stays unbound; in Reference the stand-ins answer and this module binds nothing.
+/// `IsPlayingAny` is the combat pack's section 4.2 read; in Reference the stand-ins answer and this module binds nothing.
 #[test]
 fn the_combat_stand_ins_never_shadow_off_in_either_order() {
     let combat = ow_combat::hit::Pack;
@@ -1077,9 +1077,10 @@ fn the_combat_stand_ins_never_shadow_off_in_either_order() {
         let toy = Value::Class(Some(x.vm().find_class("GearboxFramework.ToyMove").unwrap()));
         assert_eq!(x.call(PATHS[3], component, vec![toy]).unwrap(), Value::Bool(true), "order {i}: IsPlayingClass");
         assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(2.5), "order {i}: Play");
-        let f = x.vm().find_function("GearboxFramework.SpecialMoveComponent.IsPlayingAny").unwrap();
-        let key = x.vm().function(f).unwrap().native_key.clone().unwrap();
-        assert!(!x.vm().has_native(&key), "order {i}: IsPlayingAny is unbound in Off");
+        // Since lane IMPL-LINKS-3-4-TAIL the combat pack binds `IsPlayingAny` in Off by NATIVE_SET_DEFAULT_PHYSICS_AND_
+        // SPAWN_BALANCE.md section 4.2 (`CurrentSMData.SMD` set): the seeded move answers true in either order.
+        let any = x.call("GearboxFramework.SpecialMoveComponent.IsPlayingAny", component, vec![]).unwrap();
+        assert_eq!(any, Value::Bool(true), "order {i}: IsPlayingAny in Off");
         let mut x = fx_with(ParityMode::Reference, packs);
         let (_, component) = x.owner(AUTONOMOUS);
         let d = x.definition("GearboxFramework.ToyMove", true);

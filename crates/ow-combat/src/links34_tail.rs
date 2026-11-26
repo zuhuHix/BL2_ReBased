@@ -194,12 +194,10 @@ pub fn notify_killed_enemy(vm: &Vm, controller: ObjRef) -> Result<(), VmError> {
         ("CurrKillingSpree", "an int"),
     ] {
         let kind = vm.space.prop(class, name).and_then(|p| vm.space.classes.decl(p)).map(|d| d.kind.clone());
-        let fits = match (want, &kind) {
-            ("an object", Some(PropKind::Object { .. })) => true,
-            ("an array", Some(PropKind::Array(_))) => true,
-            ("an int", Some(PropKind::Int)) => true,
-            _ => false,
-        };
+        let fits = matches!(
+            (want, &kind),
+            ("an object", Some(PropKind::Object { .. })) | ("an array", Some(PropKind::Array(_))) | ("an int", Some(PropKind::Int))
+        );
         if !fits {
             return Err(bad(WHAT, format!("{name} is declared as {kind:?}, not {want}")));
         }

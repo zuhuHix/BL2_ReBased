@@ -293,8 +293,13 @@ fn is_friendly_fire_is_false_but_on_a_coop_game_info() {
     }
     let coop = x.make("WillowGame.WillowCoopGameInfo");
     assert_eq!(not_read(x.call("WillowGame.WillowCoopGameInfo.IsFriendlyFire", Some(coop), args())), COOP_FRIENDLY_FIRE);
-    // A mistyped argument (review of #798, finding 6): VmError::Script.
+    // An object whose class implements the declared interface (here the toy's interface type is the root class, so
+    // every object does) is accepted as the same value (NATIVE_LINKS_3_4_TAIL.md section 3, option (B)).
     let game = x.make("Engine.GameInfo");
+    let instigator = x.make("Engine.Pawn");
+    let as_object = vec![Value::Object(Some(victim)), Value::Object(Some(instigator))];
+    assert_eq!(x.call("Engine.GameInfo.IsFriendlyFire", Some(game), as_object).unwrap(), Value::Bool(false));
+    // A mistyped argument (review of #798, finding 6): VmError::Script.
     for bad in [vec![Value::Int(3), Value::Interface(None)], vec![Value::Object(Some(victim)), Value::Int(3)]] {
         match x.call("Engine.GameInfo.IsFriendlyFire", Some(game), bad) {
             Err(VmError::Script { .. }) => {}
