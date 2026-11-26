@@ -547,3 +547,28 @@ fn past_errors_grading_drops_the_stop_and_the_error_steps() {
     let k = share_row("pick_up_gun", Outcome::NotYet, &["make", "touch"], Some("key"));
     assert_eq!(step_counts(&k), (2, 3));
 }
+
+/// Lane GATE-SETUP-HARNESS-LINES: a world's set-up harness lines (and only those) are kept, in order, each marked as
+/// set-up, and a row that carries one shows it in its `harness` list.
+#[test]
+fn a_set_up_harness_line_reaches_the_row() {
+    let log: Vec<String> = vec![
+        "harness input: the engine object's PhysXLevel = 0 (an invented line)".into(),
+        "a note that is not a harness input".into(),
+        "harness input: no engine object; PhysXLevel not set".into(),
+    ];
+    let lines = setup_harness(&log);
+    assert_eq!(
+        lines,
+        [
+            "world set-up: harness input: the engine object's PhysXLevel = 0 (an invented line)",
+            "world set-up: harness input: no engine object; PhysXLevel not set",
+        ]
+    );
+    let mut row = share_row("spawn_maya", Outcome::NotYet, &["maya:8"], Some("maya:8"));
+    row.harness = lines.clone();
+    row.harness.push("harness input: a step's own line".into());
+    let json = row.json();
+    assert!(json.contains("\"harness\":[\"world set-up: harness input: the engine object's PhysXLevel = 0"), "{json}");
+    assert!(json.ends_with("\"harness input: a step's own line\"]}"), "{json}");
+}

@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**GATE-SETUP-HARNESS-LINES (2026-11-26, pc-hummer, on fix/gate-setup-harness-lines from main 08472592):** AI-assisted
+(Claude Code, Opus 5.5). The gate's combat rows carry the world set-up's harness lines, marked `world set-up: `;
+`set_physx_level` logs its no-engine case. `cargo test --workspace -j 8 --no-fail-fast` 3,861 passed / 0 failed / 59
+ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 6 ok,
+X 51.2%, every result unchanged. Link 1's row gains "world set-up: harness input: the engine object's PhysXLevel = 0
+…" and the empty scene layer's line. No real-game run.
+
 **ANALYST-UPDATEAMMOCOUNTS (2026-11-26, pc-hummer, docs only, on docs/native-updateammocounts from main 5dd2906b):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md reads `UpdateAmmoCounts`. It walks the
 globals definition's eight ammo kinds through the controller's pools (created if missing), compares each with its
