@@ -91,6 +91,10 @@ What can block it is the level, world geometry, movers and terrain: walls betwee
 
 ## 5. Proposed Off answer (for a separate implementer)
 
+**Hub ruling (decision 2026-11-26-71): yes.** This section's rule replaces ruling 4's
+three-actor list, under the same `NoLevelLineCheck` setting and only with a service that holds no geometry. Off only,
+logged, UNVERIFIED, Reference unchanged; a service holding geometry keeps the existing refusal.
+
 Replacing ruling 4's list (NATIVE_LINK7_HUD_TARGETING.md section 8) with the game's rule, under the same
 `pickup_targeting::NoLevelLineCheck` setting and only with a collision service that holds no geometry. A service
 holding geometry keeps the line check's existing refusal. Off only, logged, UNVERIFIED, Reference unchanged.
@@ -138,7 +142,8 @@ of NATIVE_LINK7_HUD_TARGETING.md section 6 got from its stand-in, now by the gam
 ## Open questions
 
 1. **UNVERIFIED:** every rule above.
-2. **For the hub:** replacing ruling 4's three-actor list with section 5's rule (under the same setting).
+2. **Ruled by the hub:** section 5's rule replaces ruling 4's three-actor list, under the same setting, only with a
+   service that holds no geometry (Off only, logged, UNVERIFIED, Reference unchanged).
 3. **Not read:** the skeletal mesh's and the cylinder's own line tests (section 4, outlined); the source's volume
    test; bit 134217728's game class (NATIVE_TOUCH_PICKUP_TRACE.md section 3).
 4. **By fit:** the skeletal mesh's choice between the physics asset and the per-polygon bones.

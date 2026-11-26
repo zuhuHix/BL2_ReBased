@@ -23,5 +23,7 @@ check changed.
     `DroppedPickup` keep `Actor`'s body, which needs bit 16 without `bWorldGeometry`;
   - only the level, world geometry, movers and terrain can block it; a skeletal mesh's own test is a physics-asset or
     per-polygon test, not a bounds test (outlined).
-- **Needs the hub:** whether ruling 4's three-actor list becomes the game's rule (note section 5).
+- **Hub ruling:** yes. Note section 5's rule replaces ruling 4's three-actor list, under the same `NoLevelLineCheck`
+  setting and only with a collision service that holds no geometry; a service holding geometry keeps the existing
+  refusal. Off only, logged, UNVERIFIED, Reference unchanged. Written into note section 5 and open question 2.
 - **Clean room:** a different lane implements this note.
