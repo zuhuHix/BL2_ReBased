@@ -1141,6 +1141,11 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         }
         Preflight::Run(drop) => drop,
     };
+    // The empty-`EndState` lift, logged on every lifted destroy (the preflight let it through).
+    if off && let Some(state) = vm.space.heap.get(actor)?.state {
+        let name = vm.space.names.text(state).into_owned();
+        vm.log.push(lifted_destroy_line(&name));
+    }
     set_field(&mut vm.space, actor, "bPendingDelete", Value::Bool(true))?;
     actors
         .try_borrow_mut()
@@ -1190,6 +1195,20 @@ pub fn after_writes(e: VmError) -> VmError {
         VmError::NotYet(n) => n.after_partial_writes().into(),
         other => other,
     }
+}
+
+/// Whether the `EndState` resolved for `class` in `state`, without a load, is a script function whose body is a bare
+/// return (the destroy's lift; module documentation).
+pub(crate) fn bare_end_state(vm: &Vm, class: ow_object::ids::ClassId, state: ow_object::ids::NameId) -> bool {
+    match vm.find_loaded_method(class, "EndState", Some(state)) {
+        Some(Some(f)) => vm.script_is_bare_return(f) == Some(true),
+        _ => false,
+    }
+}
+
+/// The line a lifted destroy logs (the hub's ruling).
+pub fn lifted_destroy_line(state: &str) -> String {
+    format!("hub ruling: destroy in state {state}, its EndState a bare return; EndState not sent (UNVERIFIED)")
 }
 
 /// What a destroy will do, decided before its first write ([`destroy_preflight`]).
@@ -1250,7 +1269,10 @@ pub(crate) fn destroy_preflight(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: Ob
         }
     }
     drop(a);
-    if x.state.is_some() {
+    // The empty-`EndState` lift (NATIVE_ACTOR_SETBASE.md section 4.3; the hub's ruling, UNVERIFIED), Off only: the
+    // `EndState` the lookup resolves for the actor's state, without a load, a script whose body is a bare return.
+    if off && let Some(state) = x.state && bare_end_state(vm, x.class, state) {
+    } else if x.state.is_some() {
         return Err(NotYet::layer_absent(
             "EndState when an actor in a state is destroyed",
             "ow-vm states (lane W5-STATES)",

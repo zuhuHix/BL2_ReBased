@@ -645,6 +645,9 @@ pub(crate) fn pickup_world(
     preload_ammo_definitions(&mut world.vm, definition)?;
     ow_inventory::pickup_take::enable_at_rest_body_pose(&mut world.vm)?;
     world.vm.log.push(AT_REST_INPUT.to_string());
+    // Link 6 after SetBase (lane IMPL-LINK6-AFTER-TAKE, the hub's ruling on NATIVE_ACTOR_SETBASE.md 4.2): the audio
+    // stand-in turned on (it logs its own harness line), UNVERIFIED.
+    ow_inventory::link6::enable_audio_stand_in(&mut world.vm)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
 }
 
