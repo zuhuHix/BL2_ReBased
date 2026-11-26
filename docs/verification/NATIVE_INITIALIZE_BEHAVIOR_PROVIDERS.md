@@ -1,6 +1,6 @@
 # The player pawn's InitializeBehaviorProviders, and the material natives after it (2026-11-25)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-INITIALIZE-BEHAVIOR-PROVIDERS (decision 2026-11-25-NNN), the analyst
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-INITIALIZE-BEHAVIOR-PROVIDERS (decision 2026-11-25-75), the analyst
 half of the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/ibp/`
 and `local/analysis/rbphys/`. This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or
 listing structure. **Every rule here is UNVERIFIED in the running game.**
