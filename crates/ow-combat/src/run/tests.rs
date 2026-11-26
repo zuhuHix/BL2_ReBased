@@ -2300,6 +2300,70 @@ fn the_ai_adopt_gives_the_mind_its_character_class_in_off_only() {
     assert!(!vm.log.iter().any(|l| l.contains("the AI adopt sets the mind's CharacterClass")));
 }
 
+/// The value and the base of the pawn's stack attribute `name` (review of #803, item 1).
+fn modifier(vm: &mut Vm, pawn: ow_object::ids::ObjRef, name: &str) -> (f64, f64) {
+    let value = crate::hit::access::get(vm, pawn, name).unwrap().expect(name);
+    let base = crate::hit::access::get(vm, pawn, &format!("{name}BaseValue")).unwrap().expect(name);
+    (crate::hit::access::number(&value), crate::hit::access::number(&base))
+}
+
+/// Review of #803, item 1: the adopt's `CharacterClass` write has its effect. The toy route's
+/// `ApplyCharacterClassDefaults` is cut to its health step and does not recalculate, so the class-level part the game's
+/// recalculation runs is called on its own (`levelup::run_class_part`) on the mind the Off spawn made: it applies and
+/// writes the AI pawn's modifiers from the toy class's 1 x 1 data (value and base 1, the toy default being 0). Without
+/// the write the mind has no `CharacterClass` and the part does not apply; Reference makes no write.
+#[test]
+fn the_ai_adopt_s_character_class_drives_the_class_level_part_in_off() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    assert_eq!(modifier(vm, enemy.pawn, "NormalImpactDamageModifier"), (0.0, 0.0), "the toy default");
+    assert!(ow_world::levelup::run_class_part(vm, enemy.mind).unwrap(), "the part applies");
+    for name in ["NormalImpactDamageModifier", "AmpStatusEffectDamageModifier"] {
+        assert_eq!(modifier(vm, enemy.pawn, name), (1.0, 1.0), "{name}");
+    }
+    let encumbrance = crate::hit::access::get(vm, enemy.pawn, "EncumbranceResistance").unwrap().unwrap();
+    assert_eq!(crate::hit::access::number(&encumbrance), 1.0);
+    // The same spawn with the mind's class cleared: the part does not apply and writes nothing.
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    set(vm, enemy.mind, "CharacterClass", Value::Object(None)).unwrap();
+    assert!(!ow_world::levelup::run_class_part(vm, enemy.mind).unwrap());
+    assert_eq!(modifier(vm, enemy.pawn, "NormalImpactDamageModifier"), (0.0, 0.0));
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    assert_eq!(object(vm, enemy.mind, "CharacterClass").unwrap(), None, "Reference: no class for the part");
+    assert!(matches!(ow_world::levelup::run_class_part(vm, enemy.mind), Err(VmError::Registration { .. })));
+    assert_eq!(modifier(vm, enemy.pawn, "NormalImpactDamageModifier"), (0.0, 0.0), "Reference: not written");
+}
+
+/// Review of #803, item 1: the player side's class-level part has its input only with the deferred setting. With
+/// `PlayerPawnDuringSetUp` on, the Off player set-up leaves the controller's `Pawn` set, so the class-level part (called
+/// on its own, as above) writes Maya's toy modifiers from the class's 1 x 1 data; off (the default), it does not apply
+/// and they stay 0.
+#[test]
+fn the_player_s_class_level_part_runs_only_with_the_deferred_setting() {
+    for on in [true, false] {
+        let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+        let vm = &mut run.world().vm;
+        // The toy player controller's class, as the game's has its character class when the set-up runs.
+        set(vm, fake.controller, "CharacterClass", Value::Object(fake.class)).unwrap();
+        if on {
+            crate::run::player::enable_player_pawn_during_set_up(vm).unwrap();
+        }
+        run.apply("maya:4");
+        assert_eq!(run.errors(), Vec::<String>::new(), "on: {on}");
+        let vm = &mut run.world().vm;
+        assert_eq!(ow_world::levelup::run_class_part(vm, fake.controller).unwrap(), on, "applies: {on}");
+        let want = if on { 1.0 } else { 0.0 };
+        for name in ["NormalImpactDamageModifier", "IncendiaryStatusEffectDamageModifier"] {
+            assert_eq!(modifier(vm, fake.pawn, name), (want, want), "{name}, on: {on}");
+        }
+    }
+}
+
 /// The deferred player side (the hub's ruling on IMPL-LINKS-13-14): off by default, the Off player set-up leaves the
 /// controller's `Pawn` as it was and logs nothing.
 #[test]
@@ -2334,7 +2398,13 @@ fn the_player_set_up_sets_the_controller_s_pawn_and_keeps_it() {
     let line = crate::run::player::player_pawn_line(vm, fake.pawn);
     assert_eq!(vm.log.iter().filter(|l| **l == line).count(), 1, "logged once: {:?}", vm.log);
     let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    // Review of #803, item 3: the setting added directly (not through the Off-only enable) writes no Pawn in Reference.
+    // Reference takes the C++ route and never reaches the Off set-up, so this holds with or without the set-up's own
+    // Off check, which is defence in depth.
+    run.world().vm.add_service(crate::run::player::PlayerPawnDuringSetUp).unwrap();
     run.apply("maya:4");
     let vm = &mut run.world().vm;
     assert_eq!(object(vm, fake.controller, "Pawn").unwrap(), None, "Reference: unchanged");
+    let line = crate::run::player::player_pawn_line(vm, fake.pawn);
+    assert!(!vm.log.contains(&line), "Reference: not logged");
 }

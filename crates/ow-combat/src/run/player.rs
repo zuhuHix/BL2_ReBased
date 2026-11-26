@@ -166,7 +166,12 @@ impl HealthPool {
         // possess leaves it in the game, the controller's `Pawn` is the player's pawn when `ApplyCharacterClassDefaults`
         // recalculates, and it stays set afterwards. Deferred (the hub's ruling on IMPL-LINKS-13-14): only with the
         // [`PlayerPawnDuringSetUp`] harness setting, which no set-up turns on yet.
-        if vm.service::<PlayerPawnDuringSetUp>().is_some() && object(vm, controller, "Pawn")? != Some(pawn) {
+        // Off only also here, so a setting added without `enable_player_pawn_during_set_up` (which refuses in
+        // Reference) cannot write `Pawn` in Reference (review of #803).
+        if vm.parity == ParityMode::Off
+            && vm.service::<PlayerPawnDuringSetUp>().is_some()
+            && object(vm, controller, "Pawn")? != Some(pawn)
+        {
             crate::hit::access::set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
             vm.log.push(player_pawn_line(vm, pawn));
         }
@@ -565,7 +570,8 @@ pub fn enable_player_pawn_during_set_up(vm: &mut Vm) -> Result<(), VmError> {
 /// The harness line of the player set-up's controller `Pawn` (the hub's ruling on #796).
 pub fn player_pawn_line(vm: &Vm, pawn: ObjRef) -> String {
     format!(
-        "harness input: the player set-up runs ApplyCharacterClassDefaults with the controller's Pawn set to {} {}, and          it stays set (hub ruling on #796; UNVERIFIED)",
+        "harness input: the player set-up runs ApplyCharacterClassDefaults with the controller's Pawn set to {} {}, and \
+         it stays set (hub ruling on #796; UNVERIFIED)",
         crate::hit::access::class_name(vm, pawn),
         vm.space.heap.get(pawn).map(|x| vm.space.names.text(x.name).into_owned()).unwrap_or_default()
     )

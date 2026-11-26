@@ -120,6 +120,22 @@ pub fn recalculate_attribute_initialized_state(
     }
 }
 
+/// Step 1 alone, the class-level part (module documentation): planned, then written, as
+/// [`recalculate_attribute_initialized_state`] does it; `false` when the part does not apply (no `Pawn`, no
+/// `CharacterClass`, or a vehicle pawn). Off only, else a registration refusal. For a harness or test that checks the
+/// part's inputs without the rest of the recalculation (review of #803, item 1).
+pub fn run_class_part(vm: &mut Vm, controller: ObjRef) -> Result<bool, VmError> {
+    if vm.parity != ParityMode::Off {
+        return Err(VmError::Registration {
+            key: "the class-level part".to_string(),
+            reason: "the class-level part alone is an Off entry; Reference skips step 1",
+        });
+    }
+    let Some(part) = plan_class_part(vm, controller)? else { return Ok(false) };
+    apply_mind_part(vm, controller, &part)?;
+    Ok(true)
+}
+
 /// #518's counters.
 fn marks(vm: &Vm) -> (u64, u64, u64) {
     (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
