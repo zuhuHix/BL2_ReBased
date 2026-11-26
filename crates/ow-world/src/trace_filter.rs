@@ -101,7 +101,7 @@ pub const STAND_IN_PART: &str = "a live actor component whose class runs through
 
 /// How a live part's class stands for a live collision walk (lane LIVE-COLLISION-STANDIN: the spawn's and the
 /// touch trace's `placement::actor_walk`, and `Actor.Trace`'s walk).
-pub(crate) enum PartClass {
+pub enum PartClass {
     /// The class is `Engine.PrimitiveComponent` or derives from it.
     Primitive,
     /// A chain of package classes that does not reach it: not a primitive, skipped.
@@ -115,7 +115,7 @@ pub(crate) enum PartClass {
 /// The one stand-in rule of the port's component walks: the live collision walks use it, and the bounding cylinder's
 /// and the spawn extent's `Components` walks reach it through `bounding_cylinder::primitive_class` (lane
 /// UNIFY-STANDIN-RULE).
-pub(crate) fn part_class(
+pub fn part_class(
     space: &ObjectSpace,
     class: ClassId,
     primitive: Option<ClassId>,

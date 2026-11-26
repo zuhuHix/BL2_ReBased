@@ -59,7 +59,7 @@ fn engine() -> Vec<u8> {
         t.prop("Int", rotator, f, 0, 0);
     }
     let actor = t.class("Actor", object);
-    for b in ["bStatic", "bNoDelete", "bDeleteMe", "bPendingDelete", "bCollideWorld", "bCollideWhenPlacing", "bCollideActors", "bNoEncroachCheck"] {
+    for b in ["bStatic", "bNoDelete", "bDeleteMe", "bPendingDelete", "bCollideWorld", "bCollideWhenPlacing", "bCollideActors", "bNoEncroachCheck", "bWorldGeometry"] {
         t.prop("Bool", actor, b, 0, 0);
     }
     for b in ["Role", "RemoteRole", "Physics"] {
@@ -80,7 +80,8 @@ fn engine() -> Vec<u8> {
     let primitive = t.class("PrimitiveComponent", object);
     t.prop("Object", primitive, "Owner", 0, actor);
     t.prop("Struct", primitive, "Translation", 0, vector);
-    for b in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+    // The walkers' flags (NATIVE_LINK7_LINE_CHECK.md section 3; lane IMPL-LINK7-LINE-CHECK).
+    for b in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale", "BulletListener", "BlockZeroExtent", "CollideActors"] {
         t.prop("Bool", primitive, b, 0, 0);
     }
     let cylinder = t.class("CylinderComponent", primitive);
@@ -89,6 +90,13 @@ fn engine() -> Vec<u8> {
     t.class("SkeletalMeshComponent", primitive);
     let pawn = t.class("Pawn", actor);
     t.prop("Float", pawn, "BaseEyeHeight", 0, 0);
+    for b in ["bIgnoreAllTraces", "bStationary"] {
+        t.prop("Bool", pawn, b, 0, 0);
+    }
+    t.class("StaticMeshActor", actor);
+    t.class("InterpActor", actor);
+    let volume = t.class("Volume", actor);
+    t.prop("Bool", volume, "bPawnsOnly", 0, 0);
     let controller = t.class("Controller", actor);
     t.prop("Object", controller, "Pawn", 0, pawn);
     let player = t.class("PlayerController", controller);
@@ -128,6 +136,11 @@ fn willow() -> Vec<u8> {
     t.prop("Object", willow_hud, "WPlayerOwner", 0, player);
     t.prop("Object", willow_hud, "HUDDef", 0, hud_definition);
     let pickup = t.class("WillowPickup", actor);
+    // A pickup subclass with no read filter row (an unread override), and the Willow pawn classes.
+    t.class("ToyPickupChild", pickup);
+    let engine_pawn = t.p.add_import("Core", "Class", engine, "Pawn");
+    let willow_pawn = t.class("WillowPawn", engine_pawn);
+    t.class("WillowPlayerPawn", willow_pawn);
     let definition = t.class("GlobalsDefinition", gearbox_definition);
     t.prop("Object", definition, "HUDDefinition", 0, hud_definition);
     let globals = t.class("WillowGlobals", object);
@@ -253,17 +266,27 @@ impl Fx {
         let vm = &self.w.vm;
         (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
     }
-    /// A placed actor whose collision is a cylinder of `radius` and half height `half` at `at`.
-    fn cylinder_actor(&mut self, at: [f32; 3], radius: f32, half: f32) -> ObjRef {
-        let a = self.obj("Engine.Actor");
+    /// #518's three counters and the class-code loads (lane IMPL-LINK7-LINE-CHECK).
+    fn marks(&self) -> (u64, u64, u64, u64) {
+        let (a, b, c) = self.counters();
+        (a, b, c, self.w.vm.class_code_loads())
+    }
+    /// A placed actor of `class` at `at` whose collision is a colliding, zero-extent-blocking cylinder of `radius` and
+    /// half height `half` (its owner's `bCollideActors` set).
+    fn colliding(&mut self, class: &str, at: [f32; 3], radius: f32, half: f32) -> (ObjRef, ObjRef) {
+        let a = self.obj(class);
         self.vector(a, "Location", at);
         let c = self.obj("Engine.CylinderComponent");
         self.set(c, "CollisionRadius", Value::Float(radius));
         self.set(c, "CollisionHeight", Value::Float(half));
         self.set(c, "Owner", Value::Object(Some(a)));
+        for f in ["BlockZeroExtent", "CollideActors"] {
+            self.set(c, f, Value::Bool(true));
+        }
+        self.set(a, "bCollideActors", Value::Bool(true));
         self.set(a, "CollisionComponent", Value::Object(Some(c)));
         self.w.actors().borrow_mut().place(a).unwrap();
-        a
+        (a, c)
     }
 }
 
@@ -366,64 +389,186 @@ fn the_view_is_the_pawn_s_eye_point_with_the_setting() {
     assert!(matches!(not_yet(host.view(&x.w.vm, controller)).0, Missing::LayerAbsent(_)));
 }
 
-// Test 4: the line check under NoLevel.
-#[test]
-fn the_line_check_under_no_level() {
+// Test 4: the line check under NoLevel (NATIVE_LINK7_LINE_CHECK.md section 5; lane IMPL-LINK7-LINE-CHECK). The
+// segment runs from the view point (0, 0, 75) to 25 short of the target; the HUD, owned by the controller, is the
+// source. Invented positions throughout.
+
+/// A world with the setting on, `NoLevel`, the harness HUD owned by the controller, and a target pickup; the host.
+fn line_world() -> (Fx, ObjRef, ObjRef, HarnessHost) {
     let mut x = fx();
-    let pawn = x.pawn;
+    crate::pickup_targeting::enable_no_level_line_check(x.vm()).unwrap();
+    ow_world::placement::install_collision(x.vm(), Rc::new(ow_world::placement::NoLevel)).unwrap();
+    let hud = x.obj("WillowGame.WillowHUD");
+    let controller = x.controller;
+    x.set(hud, "Owner", Value::Object(Some(controller)));
+    x.w.actors().borrow_mut().place(hud).unwrap();
     let target = x.obj("WillowGame.WillowPickup");
-    let (from, to) = ([125.0, 0.0, 0.0], [0.0, 0.0, 75.0]);
+    x.vector(target, "Location", [150.0, 0.0, 0.0]);
+    let host = HarnessHost::for_world(&x.w.vm);
+    (x, hud, target, host)
+}
+
+const FROM: [f32; 3] = [0.0, 0.0, 75.0];
+const TO: [f32; 3] = [125.0, 0.0, 10.0];
+
+fn line(x: &Fx, host: &mut HarnessHost, hud: ObjRef, target: ObjRef) -> Result<Option<ObjRef>, VmError> {
+    let before = x.marks();
+    let r = host.line_blocker_for(&x.w.vm, FROM, TO, hud, target);
+    assert_eq!(x.marks(), before, "reads only, no load, no class code");
+    r
+}
+
+#[test]
+fn the_line_check_s_settings_and_services() {
+    let mut x = fx();
+    let target = x.obj("WillowGame.WillowPickup");
+    let hud = x.obj("WillowGame.WillowHUD");
     // Off: the headless LayerAbsent.
     let mut off = HarnessHost::for_world(&x.w.vm);
-    assert!(matches!(not_yet(off.line_blocker_for(&x.w.vm, from, to, pawn, target)).0, Missing::LayerAbsent(_)));
+    assert!(matches!(not_yet(off.line_blocker_for(&x.w.vm, FROM, TO, hud, target)).0, Missing::LayerAbsent(_)));
     crate::pickup_targeting::enable_no_level_line_check(x.vm()).unwrap();
     assert!(x.w.vm.log.iter().any(|l| l == crate::pickup_targeting::NO_LEVEL_LINE_INPUT));
     assert!(matches!(crate::pickup_targeting::enable_no_level_line_check(x.vm()), Err(VmError::Registration { .. })), "twice");
     // On, no collision service: still the headless LayerAbsent.
     let mut host = HarnessHost::for_world(&x.w.vm);
-    assert!(matches!(not_yet(host.line_blocker_for(&x.w.vm, from, to, pawn, target)).0, Missing::LayerAbsent(_)));
-    ow_world::placement::install_collision(x.vm(), Rc::new(ow_world::placement::NoLevel)).unwrap();
-    // NoLevel, a cylinder 45 to the side (radius 20) and one well above: their bounds boxes are disjoint from the
-    // line's box, so cleared; no hit, one line.
-    x.cylinder_actor([60.0, 45.0, 0.0], 20.0, 30.0);
-    x.cylinder_actor([60.0, 0.0, 500.0], 20.0, 30.0);
-    // The target, its Base and the owner's pawn are ignored even on the line.
-    let base = x.cylinder_actor([125.0, 0.0, 0.0], 50.0, 50.0);
-    x.set(target, "Base", Value::Object(Some(base)));
-    // The owner's pawn, placed on the line with collision of its own.
-    let own = x.obj("Engine.CylinderComponent");
-    x.set(own, "CollisionRadius", Value::Float(50.0));
-    x.set(own, "CollisionHeight", Value::Float(50.0));
-    x.set(own, "Owner", Value::Object(Some(pawn)));
-    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
-    x.vector(pawn, "Location", [0.0, 0.0, 75.0]);
-    x.w.actors().borrow_mut().place(pawn).unwrap();
-    let mut host = HarnessHost::for_world(&x.w.vm);
-    assert_eq!(host.line_blocker_for(&x.w.vm, from, to, pawn, target).unwrap(), None);
+    assert!(matches!(not_yet(host.line_blocker_for(&x.w.vm, FROM, TO, hud, target)).0, Missing::LayerAbsent(_)));
+    // Section 6, test 8: a service holding geometry with the setting on is LINE_GEOMETRY's NotRead.
+    struct WithGeometry;
+    impl ow_world::placement::SpawnCollision for WithGeometry {
+        fn box_test(&self, _: [f32; 3], _: [f32; 3], _: ow_world::placement::Mode) -> Result<ow_world::placement::Test, VmError> {
+            Ok(ow_world::placement::Test::Clear)
+        }
+        fn box_sweep(&self, _: [f32; 3], _: [f32; 3], _: [f32; 3]) -> Result<ow_world::placement::Sweep, VmError> {
+            Ok(ow_world::placement::Sweep::Clear)
+        }
+        fn point_sweep(&self, _: [f32; 3], _: [f32; 3]) -> Result<ow_world::placement::Sweep, VmError> {
+            Ok(ow_world::placement::Sweep::Clear)
+        }
+    }
+    ow_world::placement::install_collision(x.vm(), Rc::new(WithGeometry)).unwrap();
+    assert_eq!(not_yet(host.line_blocker_for(&x.w.vm, FROM, TO, hud, target)), (Missing::NotRead, LINE_GEOMETRY.to_string()));
+}
+
+/// Section 6, tests 1 and 3: pickups and pawns on the line never block it, whatever their collision or bounds.
+#[test]
+fn pickups_and_pawns_never_block_the_line() {
+    let (mut x, hud, target, mut host) = line_world();
+    // The target on the line with collision of its own, and a decoy pickup (a cylinder, then a skeletal mesh).
+    let tc = x.obj("Engine.CylinderComponent");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(tc, f, Value::Bool(true));
+    }
+    x.set(tc, "Owner", Value::Object(Some(target)));
+    x.set(target, "CollisionComponent", Value::Object(Some(tc)));
+    x.set(target, "bCollideActors", Value::Bool(true));
+    x.w.actors().borrow_mut().place(target).unwrap();
+    x.colliding("WillowGame.WillowPickup", [60.0, 0.0, 40.0], 100.0, 40.0);
+    let (decoy2, _) = x.colliding("WillowGame.WillowPickup", [30.0, 0.0, 60.0], 100.0, 40.0);
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(mesh, f, Value::Bool(true));
+    }
+    x.set(mesh, "Owner", Value::Object(Some(decoy2)));
+    x.set(decoy2, "CollisionComponent", Value::Object(Some(mesh)));
+    // A pawn, a stationary pawn, and a WillowPlayerPawn, all on the line.
+    x.colliding("Engine.Pawn", [40.0, 0.0, 50.0], 50.0, 50.0);
+    let (still, _) = x.colliding("Engine.Pawn", [80.0, 0.0, 40.0], 50.0, 50.0);
+    x.set(still, "bStationary", Value::Bool(true));
+    x.colliding("WillowGame.WillowPlayerPawn", [100.0, 0.0, 20.0], 50.0, 50.0);
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
     assert_eq!(host.inputs, [LINE_INPUT]);
-    // A cylinder whose bounds box meets the line's box: NotRead.
-    let mut x2 = fx();
-    crate::pickup_targeting::enable_no_level_line_check(x2.vm()).unwrap();
-    ow_world::placement::install_collision(x2.vm(), Rc::new(ow_world::placement::NoLevel)).unwrap();
-    let (pawn2, target2) = (x2.pawn, x2.obj("WillowGame.WillowPickup"));
-    // (Its bounds by the rule: the toy actor's own body answers a point, on the line here.)
-    x2.cylinder_actor([60.0, 0.0, 30.0], 20.0, 30.0);
-    let mut host = HarnessHost::for_world(&x2.w.vm);
-    let (missing, what) = not_yet(host.line_blocker_for(&x2.w.vm, from, to, pawn2, target2));
-    assert_eq!(missing, Missing::NotRead);
-    assert!(what.starts_with(LINE_ACTOR), "{what}");
-    // Another actor holding collision whose bounds box meets the line's box (here on the line itself): NotRead.
-    let mut x3 = fx();
-    crate::pickup_targeting::enable_no_level_line_check(x3.vm()).unwrap();
-    ow_world::placement::install_collision(x3.vm(), Rc::new(ow_world::placement::NoLevel)).unwrap();
-    let (pawn3, target3) = (x3.pawn, x3.obj("WillowGame.WillowPickup"));
-    let far = x3.obj("Engine.Actor");
-    x3.vector(far, "Location", [60.0, 0.0, 30.0]);
-    let mesh = x3.obj("Engine.SkeletalMeshComponent");
-    x3.set(far, "CollisionComponent", Value::Object(Some(mesh)));
-    x3.w.actors().borrow_mut().place(far).unwrap();
-    let mut host = HarnessHost::for_world(&x3.w.vm);
-    assert!(not_yet(host.line_blocker_for(&x3.w.vm, from, to, pawn3, target3)).1.starts_with(LINE_ACTOR));
+}
+
+/// Section 6, tests 2, 4, 5 and 6, and (f): what can block is tested, unless the HUD's chain, the target's Base or the
+/// bounds pass it over.
+#[test]
+fn world_geometry_and_movers_are_tested() {
+    let refused = |r: Result<Option<ObjRef>, VmError>| -> String {
+        let (m, what) = not_yet(r);
+        assert_eq!(m, Missing::NotRead);
+        assert!(what.starts_with(LINE_ACTOR), "{what}");
+        what
+    };
+    // A pickup with bWorldGeometry set: tested, the hash admission next.
+    let (mut x, hud, target, mut host) = line_world();
+    let (p, _) = x.colliding("WillowGame.WillowPickup", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(p, "bWorldGeometry", Value::Bool(true));
+    assert!(refused(line(&x, &mut host, hud, target)).contains(ow_world::trace_filter::HASH_ADMISSION));
+    // A mover on the line: tested; with bounds disjoint from the line's box: passed over.
+    let (mut x, hud, target, mut host) = line_world();
+    x.colliding("Engine.InterpActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    refused(line(&x, &mut host, hud, target));
+    let (mut x, hud, target, mut host) = line_world();
+    x.colliding("Engine.InterpActor", [60.0, 200.0, 40.0], 20.0, 20.0);
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // A world-geometry StaticMeshActor that is the target's Base: kept; not the Base: tested.
+    let (mut x, hud, target, mut host) = line_world();
+    let (m, _) = x.colliding("Engine.StaticMeshActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(m, "bWorldGeometry", Value::Bool(true));
+    x.set(target, "Base", Value::Object(Some(m)));
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    x.set(target, "Base", Value::Object(None));
+    refused(line(&x, &mut host, hud, target));
+    // The HUD's own controller holding a cylinder on the line: the source's Owner chain.
+    let (mut x, hud, target, mut host) = line_world();
+    let controller = x.controller;
+    let c = x.obj("Engine.CylinderComponent");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(c, f, Value::Bool(true));
+    }
+    x.set(c, "Owner", Value::Object(Some(controller)));
+    x.set(controller, "CollisionComponent", Value::Object(Some(c)));
+    x.set(controller, "bWorldGeometry", Value::Bool(true));
+    x.w.actors().borrow_mut().place(controller).unwrap();
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // A bPawnsOnly volume: the source's volume test.
+    let (mut x, hud, target, mut host) = line_world();
+    let (v, _) = x.colliding("Engine.Volume", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(v, "bPawnsOnly", Value::Bool(true));
+    assert!(refused(line(&x, &mut host, hud, target)).contains(ow_world::trace_filter::SOURCE_VOLUME_TEST));
+    // (f) A pickup subclass with no read filter row: NotRead, not skipped.
+    let (mut x, hud, target, mut host) = line_world();
+    x.colliding("WillowGame.ToyPickupChild", [60.0, 0.0, 40.0], 20.0, 20.0);
+    assert!(refused(line(&x, &mut host, hud, target)).contains("the trace filter of WillowGame.ToyPickupChild"));
+}
+
+/// (a): a primitive held only in `Components` is walked too; (c) malformed values; (d) an unloaded part is named.
+#[test]
+fn components_malformed_values_and_unloaded_parts() {
+    // A world-geometry actor whose primitive is only in Components.
+    let (mut x, hud, target, mut host) = line_world();
+    let a = x.obj("Engine.Actor");
+    x.vector(a, "Location", [60.0, 0.0, 40.0]);
+    x.set(a, "bWorldGeometry", Value::Bool(true));
+    x.set(a, "bCollideActors", Value::Bool(true));
+    let c = x.obj("Engine.CylinderComponent");
+    x.set(c, "CollisionRadius", Value::Float(20.0));
+    x.set(c, "CollisionHeight", Value::Float(20.0));
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(c, f, Value::Bool(true));
+    }
+    x.set(c, "Owner", Value::Object(Some(a)));
+    x.set(a, "Components", Value::array(vec![Value::Object(Some(c))]));
+    x.w.actors().borrow_mut().place(a).unwrap();
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_ACTOR), "walked from Components");
+    // A negative candidate radius, far away: malformed, not cleared.
+    let (mut x, hud, target, mut host) = line_world();
+    let (m, c) = x.colliding("Engine.StaticMeshActor", [60.0, 900.0, 40.0], 20.0, 20.0);
+    x.set(m, "bWorldGeometry", Value::Bool(true));
+    x.set(c, "CollisionRadius", Value::Float(-5.0));
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_MALFORMED));
+    // A NaN endpoint.
+    let (x, hud, target, mut host) = line_world();
+    let r = host.line_blocker_for(&x.w.vm, [f32::NAN, 0.0, 75.0], TO, hud, target);
+    assert_eq!(not_yet(r), (Missing::NotRead, LINE_MALFORMED.to_string()));
+    // A live actor's part the store has not loaded: named, nothing loaded.
+    let (mut x, hud, target, mut host) = line_world();
+    let a = x.obj("Engine.Actor");
+    let class = x.w.vm.find_class("Engine.CylinderComponent").unwrap();
+    let lazy = x.w.vm.space.alloc_stand_in(class, "Lazy", Origin::Default { class }).unwrap();
+    x.set(a, "CollisionComponent", Value::Object(Some(lazy)));
+    x.w.actors().borrow_mut().place(a).unwrap();
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_UNLOADED));
 }
 
 // Test 7: Reference.
