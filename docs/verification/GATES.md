@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-PLAYER-PAWN-FLAG (2026-11-26, pc-hummer, on fix/rust-player-pawn-on, on main c1058de6):** AI-assisted (Claude
+Code, Opus 5.5). In Off, the slice's combat set-up turns on the player set-up's `Pawn` (logged), and #805's
+nothing-touched stand-in also applies to a collision service with no geometry (its own line). `cargo test --workspace -j
+8 --no-fail-fast` 4,051 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
+(release build, under the machine lock), base c1058de6 against this head: both **8 ok / 14, X = 8.5/14 = 60.7%**, every
+row the same. Links 1 and 6 pass, link 1 with the `Pawn` set. Links 3, 4, 5, 13 and 14 stop at the spawn's
+`SetBaseValue`. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-combat-music, moved onto main 74b06d8, which has
 #804):** AI-assisted (Claude Code, Opus 5.5). `ApplyGradeCustomizations`, `UpdatePlayThroughMaterial`,
 `GetCombatMusicManager`'s lazy creation and `PlayerDamagedByEnemy`'s gates, with the threat model's Off no-op stand-in
