@@ -19,11 +19,19 @@ check changed.
 - **Findings** (UNVERIFIED in game):
   - the check is a zero-extent line from the view point to 25 units short of the pickup, with flags 134357638 and the
     HUD as source;
-  - with those flags no pawn and no pickup is ever tested: the `Pawn` row needs bit 1, and `WillowPickup` and
-    `DroppedPickup` keep `Actor`'s body, which needs bit 16 without `bWorldGeometry`;
+  - with those flags no exact `Pawn`, `WillowPawn`, `WillowAIPawn` or `WillowPlayerPawn` and no exact `WillowPickup` or
+    `DroppedPickup` without `bWorldGeometry` is tested: the `Pawn` row needs bit 1, and the two pickups keep `Actor`'s
+    body, which needs bit 16 without `bWorldGeometry`. A pickup with `bWorldGeometry` is tested; a subclass whose
+    filter was not read is `NotRead`;
   - only the level, world geometry, movers and terrain can block it; a skeletal mesh's own test is a physics-asset or
     per-polygon test, not a bounds test (outlined).
 - **Hub ruling:** yes. Note section 5's rule replaces ruling 4's three-actor list, under the same `NoLevelLineCheck`
   setting and only with a collision service that holds no geometry; a service holding geometry keeps the existing
   refusal. Off only, logged, UNVERIFIED, Reference unchanged. Written into note section 5 and open question 2.
+- **Review r1 (#814):** the walk enumerates `CollisionComponent` and `Components`, each primitive's owner resolved;
+  the real HUD as source, the view point as start, the `Owner` chain both ways; only well-formed endpoints and bounds
+  clear; resident-only reads, named `NotRead`s, `VmError::Script` for declarations, the class-code load counter in the
+  tests; the refusal order (`TERRAIN_HANDLING`, the class's filter, the source's volume test, `HASH_ADMISSION`, so an
+  intersecting mover gets `HASH_ADMISSION`); the class claims limited to the bodies read; both geometry-service
+  outcomes named; the GATES row and the index updated.
 - **Clean room:** a different lane implements this note.

@@ -9,8 +9,10 @@ from the view to 25 units short of the pickup (correcting NATIVE_PICKUP_TARGETIN
 (movers, the BSP, world geometry, stop at the first hit, terrain, complex collision, the game bit; no pawns, volumes or
 other actors), the HUD as source. With those flags the owner filters never test a pawn or a pickup (`WillowPickup`
 keeps `Actor`'s body, `bWorldGeometry` false), so the decoy whose bounds meet the line is passed over by the game's
-rule. An Off answer replacing ruling 4's three-actor list is proposed for the hub. No probe; no code changed, so no
-measured number moved. UNVERIFIED in game.
+rule. The hub ruled (decision 2026-11-26-71) that section 5's rule replaces ruling 4's three-actor list under
+`NoLevelLineCheck`. Review r1 of #814: the candidates include `Components` with each owner resolved, the real HUD as
+source and the view point as start, well-formed bounds only, and the refusal order (an intersecting mover:
+`HASH_ADMISSION`). No probe; no code changed, so no measured number moved. UNVERIFIED in game.
 
 **IMPL-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, on fix/rust-link7-hud from main d118d2b, which has the note
 #806):** AI-assisted (Claude Code, Opus 5.5). The hub's four rulings on #806
