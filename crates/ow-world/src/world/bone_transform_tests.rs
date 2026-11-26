@@ -672,8 +672,9 @@ fn the_field_kinds() {
 }
 
 /// Tests 7 and 8: `ForceSkelUpdate`: unattached is nothing, attached is NotRead (`bAttached` of another kind: test
-/// 6). `UpdateAnimations`: no tree is nothing; a tree is NotPorted, the tag unwritten; `Animations` of another kind is
-/// a script error. An unloaded receiver of either is NotRead. No counter moves (`Fx::call`).
+/// 6). `UpdateAnimations`: no tree is nothing; a tree runs the per-node step (`super::tree_ticks`, its own tests), so a
+/// "tree" here that is a mesh declaring no `NodeInitTag` is that step's script error, the tag unwritten; `Animations`
+/// of another kind is a script error. An unloaded receiver of either is NotRead. No counter moves (`Fx::call`).
 #[test]
 fn the_two_natives() {
     let mut x = fx();
@@ -688,10 +689,8 @@ fn the_two_natives() {
         refusal(x.call(c, FORCE)),
         (Missing::NotRead, FORCE_ATTACHED.to_string())
     );
-    assert_eq!(
-        refusal(x.call(c, UPDATE)),
-        (Missing::NotPorted, TREE_TICKS.to_string())
-    );
+    let e = script(x.call(c, UPDATE));
+    assert!(e.contains("declares no NodeInitTag"), "{e}");
     assert_eq!(
         x.vm.space.heap.get(c).unwrap().slots,
         slots,

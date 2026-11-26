@@ -12,8 +12,10 @@
 //! 2. the field it reads declared with its kind, else `VmError::Script` naming it: `bAttached` a bool, `Animations` an
 //!    object;
 //! 3. `ForceSkelUpdate()`: `bAttached` clear is nothing; set is `NotYet { NotRead }`, [`FORCE_ATTACHED`];
-//!    `UpdateAnimations()`: `Animations` None is nothing; set is `NotYet { NotPorted }`, [`TREE_TICKS`]. The native's
-//!    tag write is part of the refused step, so nothing is written.
+//!    `UpdateAnimations()`: `Animations` None is nothing; set runs the per-node step of
+//!    NATIVE_UPDATEANIMATIONS_TREE_TICKS.md ([`super::tree_ticks`], lane IMPL-UPDATEANIMATIONS-TREE-TICKS): its
+//!    preflight first, then the tag and the sequence nodes' writes. It replaces the `NotYet { NotPorted }`
+//!    [`TREE_TICKS`], which no call raises any more (the constant stays for the records that name it).
 
 use std::rc::Rc;
 
@@ -29,7 +31,7 @@ use crate::world::skeletal::{self, Kind};
 pub const RECORD: &str = "docs/verification/NATIVE_BONE_TRANSFORM_LAYER.md";
 /// `ForceSkelUpdate`'s refusal on an attached component.
 pub const FORCE_ATTACHED: &str = "ForceSkelUpdate on an attached component (the tree tick, the LOD choice, the pose update and the transform update)";
-/// `UpdateAnimations`' refusal with a tree.
+/// `UpdateAnimations`' former refusal with a tree (replaced by `super::tree_ticks`).
 pub const TREE_TICKS: &str = "UpdateAnimations: the tree nodes' ticks";
 /// The natives' keys.
 pub const FORCE_SKEL_UPDATE: &str = "SkeletalMeshComponent.ForceSkelUpdate()";
@@ -70,9 +72,12 @@ fn force_skel_update(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 fn update_animations(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let o = receiver(c, "UpdateAnimations")?;
     if skeletal::read_kind(c.vm, o, "Animations", Kind::Object, "UpdateAnimations")?
-        != Value::Object(None)
+        == Value::Object(None)
     {
-        return Err(NotYet::not_ported(TREE_TICKS, RECORD).into());
+        return Ok(Value::None);
+    }
+    if let Some(plan) = super::tree_ticks::plan(c.vm, o)? {
+        super::tree_ticks::commit(c.vm, o, plan)?;
     }
     Ok(Value::None)
 }

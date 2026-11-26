@@ -649,6 +649,8 @@ pub mod skeletal;
 
 /// The bone-transform layer's gate and `ForceSkelUpdate` / `UpdateAnimations` (lane IMPL-BONE-TRANSFORM-LAYER).
 pub mod bone_transform;
+// UpdateAnimations' per-node step (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md; lane IMPL-UPDATEANIMATIONS-TREE-TICKS).
+pub mod tree_ticks;
 
 pub mod localize;
 
