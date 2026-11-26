@@ -39,6 +39,9 @@ can carry a mesh:
      on how the fixture makes the weapon.
 
    **Both are VM changes, so the hub's call.**
+
+   *Read 2026-11-26 in NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3 (decision 2026-11-26-NNN): the game's handler
+   reads five operands, and a census of the packages fits that count.*
 2. **The template has no mesh on links 6 and 7.** The pickup links prepare their gun with `equip_run::prepare` alone.
    They make the weapon, a pawn, a controller and a manager, and never run the weapon's `init`
    (`InitializeInternal`). So `InitMeshes` never sets `ThirdPersonMesh`'s skeletal mesh.

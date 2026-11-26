@@ -484,6 +484,9 @@ game's, so a later `GetTouchTraceLocation` would raise the trace by about 262144
   ignores it)". This needs the port to record a `new` component's template. If it cannot, the real fix is
   AttachMeshToPickup's template copy (NATIVE_ATTACH_MESH_TO_PICKUP.md open question 1), before this step matters.
 
+*Read 2026-11-26 in NATIVE_TOUCH_COMPONENT_TEMPLATE.md (decision 2026-11-26-NNN): the game's `new` takes the template
+as a fifth operand, copies its values (transient fields from the class default) and loads nothing.*
+
 ### 9.7 Tests for the implementer
 
 Synthetic, with `package()` / `tag()`, on a live, recorded, attached, colliding entry of exact class
