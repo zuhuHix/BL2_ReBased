@@ -1102,10 +1102,18 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
             }
         }
     }
-    // An actor attach publishes to the attach record after every write (lane BODYCOMP-ATTACH-PUBLISHES): the record
-    // must not be borrowed then, so it is checked here, before the first write.
-    if made.iter().any(|m| matches!(m, Made::Component { socket: None, .. })) {
+    // Every attached component, actor or socket, publishes to the attach record after every write (lanes
+    // BODYCOMP-ATTACH-PUBLISHES and SOCKETS-PUBLISH-AND-PHYSX-LEVEL): the record must not be borrowed then, so it is
+    // checked here, before the first write.
+    if made.iter().any(|m| matches!(m, Made::Component { .. })) {
         crate::actors::record_ready(vm)?;
+    }
+    // A socket-attached component takes its parent's `Owner` before it is published (`writes`), so its class must
+    // declare one; the record needs it for every component.
+    for m in &made {
+        if let Made::Component { class, .. } = m {
+            require_prop(vm, *class, "Owner")?;
+        }
     }
     Ok(Some(Plan { attachments, made, authority, entry_struct }))
 }
@@ -1141,7 +1149,8 @@ fn entry_from(vm: &Vm, plan: &Plan, data: &Value, copied: &[&str]) -> Result<Val
 fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan) -> Result<(), VmError> {
     let mut set = set;
     let mut made_objects: Vec<Option<ObjRef>> = Vec::with_capacity(plan.made.len());
-    let mut actor_attached = Vec::new();
+    // Each attached component, with the parent a socket attach used (its `Owner` is taken before the publish).
+    let mut recorded: Vec<(ObjRef, Option<ObjRef>)> = Vec::new();
     for (a, m) in plan.attachments.iter().zip(&plan.made) {
         made_objects.push(None);
         match m {
@@ -1185,10 +1194,11 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                             .flatten()
                             .ok_or_else(|| script("a socket attach's parent was not made".into()))?;
                         write_socket_attach(vm, parent, made, sa)?;
+                        recorded.push((made, Some(parent)));
                     }
                     None => {
                         attach_to_actor(vm, owner, made)?;
-                        actor_attached.push(made);
+                        recorded.push((made, None));
                     }
                 }
                 // The `Parent` link (section 8.1): after the attach, before the pawn's PostInitBodyComposition writes.
@@ -1235,10 +1245,21 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
         write_prop(vm, owner, "bNetDirty", Value::Bool(true))?;
         write_prop(vm, owner, "bForceNetUpdate", Value::Bool(true))?;
     }
-    // The attach record (the hub's ruling, lane BODYCOMP-ATTACH-PUBLISHES): each actor-attached component is published
-    // under the owner once every write succeeded, as the spawn's component update publishes its copies. In the game
-    // these components are attached. A world with no scene layer publishes nothing. UNVERIFIED.
-    for component in actor_attached {
+    // The attach record (the hub's rulings, lanes BODYCOMP-ATTACH-PUBLISHES and SOCKETS-PUBLISH-AND-PHYSX-LEVEL): each
+    // attached component, an actor attach's or a socket attach's, is published under the owner (the pawn, the actor
+    // that owns the composition) once every write succeeded, as the spawn's component update publishes its copies.
+    // In the game these components are attached and belong to the pawn. A world with no scene layer publishes nothing.
+    // UNVERIFIED.
+    //
+    // A socket-attached component first takes its parent's `Owner`: NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section
+    // 2.1, step 6, attaches it "with the parent's Owner", which sets its `Owner` field. The rest of that step (the
+    // bone-transform layer: the world placement and the scene) is not read and not done; this one field is the
+    // port's stand-in, so the record's owner test can hold (lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL). UNVERIFIED.
+    for (component, socket_parent) in recorded {
+        if let Some(parent) = socket_parent {
+            let parent_owner = read_prop(vm, parent, "Owner")?.and_then(|v| object_of(&v));
+            write_prop(vm, component, "Owner", Value::Object(parent_owner))?;
+        }
         crate::actors::publish_attach(vm, component, owner)?;
     }
     Ok(())
