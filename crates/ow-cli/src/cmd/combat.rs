@@ -141,6 +141,10 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     // no online subsystem; UNVERIFIED against a logged-in game. Off only, so a Reference run is unchanged.
     if mode == ParityMode::Off {
         ow_world::world::online::register_offline_engine(&mut world.vm)?;
+        // GetMaterial, SetParent, SetVectorParameterValue and GetInstancedMaterialInstanceConstant (#744), which
+        // maya:8's player part reaches; ow-world's placeholder for the last left (lane PLACEHOLDER-SHADOWS).
+        // Keep-existing, Off only.
+        ow_inventory::equip::material_instances::register(&mut world.vm)?;
     }
     Ok(world)
 }
@@ -915,6 +919,19 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
 
 pub mod map_route;
 pub mod owner_setup;
+
+/// A shadow the slice worlds have by design (lane PLACEHOLDER-SHADOWS): `ResolveContext` and `AddAttributeModifier` are
+/// one wrapper each (`ow_inventory::equip::natives`), which the equip pack binds VM-wide and the action skill pack
+/// binds through `ow_combat::hit::bind_fn`, keep-existing in either order. The pack that gives up the key would have
+/// bound the same function, so nothing is lost. Exactly those two keys, between exactly those two files.
+#[cfg(test)]
+pub(crate) fn shared_wrapper_shadow(s: &ow_vm::api::NativeShadow) -> bool {
+    use ow_inventory::equip::natives::{ADD_MODIFIER, RESOLVE_CONTEXT};
+    let file = |f: &str, tail: &str| f.replace('\\', "/").ends_with(tail);
+    (s.key == RESOLVE_CONTEXT || s.key == ADD_MODIFIER)
+        && file(s.bound_by, "ow-inventory/src/equip/natives.rs")
+        && file(s.checked_by, "ow-combat/src/hit.rs")
+}
 
 #[cfg(test)]
 mod tests;

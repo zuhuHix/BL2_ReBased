@@ -22,7 +22,7 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::ints;
-use ow_package::testkit::reflect::{toy_array_of, toy_struct};
+use ow_package::testkit::reflect::{ClassBodySpec, class_body, toy_array_of, toy_struct};
 use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
@@ -52,6 +52,12 @@ const VECTOR_PATH: &str = "Engine.MaterialInstance.SetVectorParameterValue";
 const MIC: &str = "Engine.MaterialInstanceConstant";
 
 fn engine() -> Vec<u8> {
+    engine_with(true)
+}
+
+/// [`engine`]; with `mic_native` false, `MaterialInstanceConstant` gets a real class body without the native flag, so
+/// its first native class is `MaterialInstance` (queue 0r's test).
+fn engine_with(mic_native: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let object = t.class("Object", 0);
     let color = toy_struct(&mut t, object, "LinearColor", None);
@@ -64,7 +70,20 @@ fn engine() -> Vec<u8> {
     }
     let interface = t.class("MaterialInterface", object);
     let instance = t.class("MaterialInstance", interface);
-    let mic = t.class("MaterialInstanceConstant", instance);
+    let mic = if mic_native {
+        t.class("MaterialInstanceConstant", instance)
+    } else {
+        let at = t.p.next_export();
+        let spec = ClassBodySpec { flags: 2, ..ClassBodySpec::new(instance, object, at + 1) };
+        let body = class_body(&mut t.p, &spec);
+        let mut export = ow_package::testkit::Export::new(0, "MaterialInstanceConstant", body);
+        export.super_ = instance;
+        t.p.add_export_with(export);
+        let mut payload = ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(at, "Default__MaterialInstanceConstant", payload);
+        at
+    };
     t.prop("Object", mic, "Parent", 0, interface);
     let entry = toy_struct(&mut t, mic, "VectorParameterValue", None);
     t.prop("Name", entry, "ParameterName", 0, 0);
@@ -148,9 +167,13 @@ impl Drop for Fx {
 /// A VM over the three packages in `mode`, every class loaded, both material modules registered. With `warm`, one
 /// `MaterialInstanceConstant` is made, so its default object is built (the creation branch's readiness).
 fn fx_with(mode: ParityMode, warm: bool) -> Fx {
+    fx_over(engine(), mode, warm)
+}
+
+fn fx_over(e: Vec<u8>, mode: ParityMode, warm: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-inventory-mic-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, g, w) = (engine(), gearbox(), willow());
+    let (g, w) = (gearbox(), willow());
     let files: Vec<(&str, &[u8])> = vec![("Engine.upk", &e), ("GearboxFramework.upk", &g), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
@@ -542,4 +565,13 @@ fn the_arms_two_instances() {
     x.call(SET_MATERIAL_PATH, arms, vec![Value::Int(0), Value::Object(Some(second))]).unwrap();
     assert_eq!(x.get(arms, "Materials"), Fx::list(&[Some(second)]));
     assert_eq!(x.get(second, "Parent"), Value::Object(Some(first)));
+}
+
+/// Queue 0r (review of #744): an instance class whose first native class is not `MaterialInstanceConstant` is
+/// `SetParent`'s receiver refusal, raised before the instance is made (no object, no write, no name interned).
+#[test]
+fn a_non_native_instance_class_is_refused_before_the_instance_is_made() {
+    let mut x = fx_over(engine_with(false), ParityMode::Off, true);
+    let c = x.component("Engine.SkeletalMeshComponent", &[], None);
+    refused(&mut x, |x| x.instanced(c, 0), &set_parent_for("Engine.MaterialInstance"));
 }

@@ -21,7 +21,6 @@ struct Fx {
     vm: Vm,
     rb: FuncId,
     linear: FuncId,
-    mic: FuncId,
     hook: FuncId,
     player: ClassId,
     component: ClassId,
@@ -54,7 +53,7 @@ fn fx_in(mode: ParityMode) -> Fx {
         decl(&mut vm, "CollideActors", PropKind::Bool),
     ];
     let component = vm.space.classes.define("Engine.PrimitiveComponent", Some(object), props).unwrap();
-    let mesh = vm.space.classes.define("Engine.MeshComponent", Some(component), vec![]).unwrap();
+    vm.space.classes.define("Engine.MeshComponent", Some(component), vec![]).unwrap();
     let bytes: Vec<_> = ["B", "G", "R", "A"].iter().map(|n| decl(&mut vm, n, PropKind::Byte { enum_: None })).collect();
     let color = vm.space.classes.define_struct("Core.Object.Color", None, bytes).unwrap();
     let floats: Vec<_> = ["R", "G", "B", "A"].iter().map(|n| decl(&mut vm, n, PropKind::Float)).collect();
@@ -68,14 +67,12 @@ fn fx_in(mode: ParityMode) -> Fx {
     let c = decl(&mut vm, "C", PropKind::Struct(color)).with_flags(PropertyDecl::PARAM);
     let ret = decl(&mut vm, "ReturnValue", PropKind::Struct(linear));
     let linear_fn = declare(&mut vm, "WillowGame.WillowPlayerPawn.GetLinearColor", GET_LINEAR_COLOR, player, vec![c], Some(ret));
-    let i = decl(&mut vm, "ElementIndex", PropKind::Int).with_flags(PropertyDecl::PARAM);
-    let mic = declare(&mut vm, "Engine.MeshComponent.GetInstancedMaterialInstanceConstant", GET_INSTANCED_MIC, mesh, vec![i], None);
     let hook = declare(&mut vm, "WillowGame.WillowPlayerPawn.OnNativeApplyBodyClassStartingValuesHook", APPLY_HOOK, player, vec![], None);
     crate::actors::add_empty_scene(&mut vm).unwrap();
     if mode != ParityMode::Reference {
         register(&mut vm).unwrap();
     }
-    Fx { vm, rb, linear: linear_fn, mic, hook, player, component, color }
+    Fx { vm, rb, linear: linear_fn, hook, player, component, color }
 }
 
 fn fx() -> Fx {
@@ -219,19 +216,6 @@ fn a_lazy_component_and_a_template_receiver() {
     assert_eq!(layer(x.rb(template).unwrap_err()), RIGID_BODY);
 }
 
-/// 2.E: `NotRead`, nothing written.
-#[test]
-fn the_instanced_material_is_not_read() {
-    let mut x = fx();
-    let c = x.component("Mesh", None, false);
-    let before = x.marks();
-    match x.vm.call(x.mic, Some(c), vec![Value::Int(0)]) {
-        Err(VmError::NotYet(n)) => assert_eq!(&*n.what, GET_MATERIAL),
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(x.marks(), before);
-}
-
 /// 2.D: (255, 0, 128, 255) and zeros; the f32 multiply, not the divide (byte 3's bits).
 #[test]
 fn get_linear_color_is_an_f32_multiply() {
@@ -272,7 +256,7 @@ fn the_hook_sets_immune_to_falling_damage_only() {
 /// and not `InitializeBehaviorProviders`, whose rule the kernel pack binds (#744's landing check).
 #[test]
 fn reference_binds_nothing() {
-    let keys = [INITIALIZE_RB_PHYSICS, GET_LINEAR_COLOR, GET_INSTANCED_MIC, APPLY_HOOK];
+    let keys = [INITIALIZE_RB_PHYSICS, GET_LINEAR_COLOR, APPLY_HOOK];
     let mut r = fx_in(ParityMode::Reference);
     ow_vm::api::NativePack::register(&crate::world::Pack, &mut r.vm).unwrap();
     for key in keys {
@@ -283,6 +267,7 @@ fn reference_binds_nothing() {
         assert!(x.vm.has_native(key), "{key}");
     }
     assert!(!x.vm.has_native("WillowPawn.InitializeBehaviorProviders()"), "the kernel pack's key");
+    assert!(!x.vm.has_native("MeshComponent.GetInstancedMaterialInstanceConstant(int)"), "the inventory pack's key");
 }
 
 /// Review of #742, item 1: on a live receiver only the attach record counts. An unrecorded entry whose `bAttached` is

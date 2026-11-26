@@ -33,7 +33,9 @@
 //! - **preflight:** [`get_material`]'s rule and refusals; a material that is a `MaterialInstanceConstant` (or a
 //!   subclass) whose `Outer` is the component is the answer, with nothing written. Otherwise the creation branch:
 //!   `Engine.MaterialInstanceConstant` ready with no load (`globals::ready_class`, and its default object built),
-//!   else [`instance_class_not_ready`] (`NotRead`); `SetParent`'s declarations on that class; then `SetMaterial`'s
+//!   else [`instance_class_not_ready`] (`NotRead`); that class's first native class `Engine.MaterialInstanceConstant`,
+//!   else `SetParent`'s receiver refusal ([`set_parent_for`]), so it comes before the write (queue 0r, review of #744);
+//!   `SetParent`'s declarations on that class; then `SetMaterial`'s
 //!   preflight for the index (its reattach refusals, `REATTACH_OWNER` and `REATTACH_SCENE`), before anything is made;
 //! - **commit:** one object of that class as the VM's script `new` makes it (the class default's values, the
 //!   component as `Outer`, the VM's generated name: the object and the name it interns count as writes; **its flags
@@ -400,6 +402,13 @@ fn plan_instanced(vm: &Vm, component: ObjRef, index: i32) -> Result<Result<Creat
         .ok()
         .filter(|&c| super::weapon_material::default_built(vm, c))
         .ok_or_else(|| VmError::from(NotYet::not_read(instance_class_not_ready(), RECORD)))?;
+    // SetParent's receiver check on the instance to be made, before it is made (queue 0r, review of #744): a class
+    // whose first native class is not `MaterialInstanceConstant` would be refused by SetParent after the write.
+    let native = first_native(vm, class);
+    if !is_one_of(native.as_deref(), &[MATERIAL_INSTANCE_CONSTANT]) {
+        let named = native.unwrap_or_else(|| class_path(vm, class));
+        return Err(NotYet::not_read(set_parent_for(&named), RECORD).into());
+    }
     parent_prop(vm, class, material)?;
     let set = plan_set_material(vm, component, index, Setting::NotMadeYet)?;
     Ok(Ok(Creation { class, set }))

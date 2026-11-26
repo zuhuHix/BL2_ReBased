@@ -57,7 +57,9 @@ pub const RECORD_DOWN: &str = "NATIVE_DOWN_TIMERS.md";
 pub const COLLISION_LAYER: &str = "the world's collision";
 
 /// The natives of section 3.2 whose class implementation is not resolved: `NotRead` at entry.
-pub const UNRESOLVED: [&str; 16] = [
+/// `WillowPlayerController.UpdateInputContext` left the list (lane PLACEHOLDER-SHADOWS): `ow_world::world::after_login`
+/// binds the native's own rule (its section 3.2), and in every world this entry was the binding given up.
+pub const UNRESOLVED: [&str; 15] = [
     "Engine.Controller.IsLocalController",
     "Engine.PlayerController.IsLocalController",
     "WillowGame.WillowPawn.GetParent",
@@ -71,7 +73,6 @@ pub const UNRESOLVED: [&str; 16] = [
     "Engine.Pawn.TermRagdoll",
     "WillowGame.WillowPlayerController.PlayCameraAnim",
     "WillowGame.WillowPlayerController.StopCameraAnim",
-    "WillowGame.WillowPlayerController.UpdateInputContext",
     "WillowGame.WillowPlayerPawn.MarkDLEsForUpdate",
     "WillowGame.WillowPawn.RefreshPawnGearLikenessComponents",
 ];

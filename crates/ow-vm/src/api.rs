@@ -513,6 +513,26 @@ pub trait NativePack {
 // The VM
 // ---------------------------------------------------------------------------------------------------------------
 
+thread_local! {
+    static AUDIT_NEW_VMS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Every [`Vm`] this thread makes from now on starts with the shadow audit on (`on`) or off
+/// ([`Vm::audit_native_shadows`]), so a world builder's registrations are audited without changing it. For tests and
+/// diagnostics (lane PLACEHOLDER-SHADOWS).
+pub fn audit_new_vms(on: bool) {
+    AUDIT_NEW_VMS.with(|flag| flag.set(on));
+}
+
+/// One shadow the audit met ([`Vm::audit_native_shadows`]): `key`, bound by a registration in `bound_by`, then
+/// checked with [`Vm::has_native`] from `checked_by` (where a second binding was given up).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeShadow {
+    pub key: String,
+    pub bound_by: &'static str,
+    pub checked_by: &'static str,
+}
+
 /// The script VM and everything a native needs (architecture 3.8, 3.9).
 pub struct Vm {
     pub space: ObjectSpace,
@@ -550,6 +570,11 @@ pub struct Vm {
     natives_at: DetMap<(String, String), NativeFn>,
     /// How many `natives_at` entries carry each key, so that [`Vm::has_native`] keeps answering for a key.
     natives_at_count: DetMap<String, usize>,
+    /// The source file of the call that first registered each key ([`Vm::register_native`] and the per-package
+    /// forms), for [`Vm::audit_native_shadows`].
+    native_sites: DetMap<String, &'static str>,
+    /// The shadow audit, off when `None` ([`Vm::audit_native_shadows`]).
+    shadow_audit: RefCell<Option<Vec<NativeShadow>>>,
     iterators: DetMap<String, IteratorFn>,
     notify: DetMap<ObjectPath, AttrNotifyFn>,
     /// Per-class `QueryInterface` answers ([`InterfaceRuleFn`]).
@@ -626,6 +651,8 @@ impl Vm {
             struct_none_kept: DetSet::new(),
             natives_at: DetMap::new(),
             natives_at_count: DetMap::new(),
+            native_sites: DetMap::new(),
+            shadow_audit: RefCell::new(AUDIT_NEW_VMS.with(|on| on.get()).then(Vec::new)),
             iterators: DetMap::new(),
             notify: DetMap::new(),
             interface_rules: DetMap::new(),
@@ -784,15 +811,40 @@ impl Vm {
     /// key, in any package, declared before or after, uses it unless [`Vm::register_native_for`] bound that
     /// function's own package. A key registered twice is refused (C++ "duplicate native registration"), and so is a
     /// key some package already bound with [`Vm::register_native_for`], as before that form existed.
+    #[track_caller]
     pub fn register_native(&mut self, key: &str, f: NativeFn) -> Result<(), VmError> {
-        if self.has_native(key) {
+        if self.contains_native(key) {
+            // Recorded under the audit, as a caller may swallow the refusal.
+            self.note_shadow(key, std::panic::Location::caller().file());
             return Err(VmError::Registration {
                 key: key.to_string(),
                 reason: "duplicate native registration",
             });
         }
         self.natives.insert(key.to_string(), f);
+        self.note_site(key);
         Ok(())
+    }
+
+    /// Records the caller of the registration that binds `key` first.
+    #[track_caller]
+    fn note_site(&mut self, key: &str) {
+        let file = std::panic::Location::caller().file();
+        self.native_sites.entry(key.to_string()).or_insert(file);
+    }
+
+    /// Turns on the shadow audit (lane PLACEHOLDER-SHADOWS): from now on, a [`Vm::has_native`] check of a key that a
+    /// registration in **another source file** already bound is recorded ([`Vm::native_shadows`]). Registration code
+    /// checks `has_native` to keep an existing binding, so a recorded check is a binding that one pack silently gave
+    /// up to another (a shadow), which a hard duplicate (refused by `register_native`) does not cover. For tests and
+    /// diagnostics; nothing else changes.
+    pub fn audit_native_shadows(&mut self) {
+        *self.shadow_audit.borrow_mut() = Some(Vec::new());
+    }
+
+    /// The shadows the audit recorded, in the order met, each once (empty when the audit is off).
+    pub fn native_shadows(&self) -> Vec<NativeShadow> {
+        self.shadow_audit.borrow().clone().unwrap_or_default()
     }
 
     /// In `ParityMode::Off` only, a script `None` given by value to a struct parameter of the native bound to `key`
@@ -816,6 +868,7 @@ impl Vm {
     /// leaves out the package, so two packages that declare `Class.Function` share it; this form binds one of them
     /// without binding the other. Refused: a function that is not native; a key already bound in `f`'s package, or
     /// bound VM-wide by [`Vm::register_native`] (C++ "duplicate native registration").
+    #[track_caller]
     pub fn register_native_for(&mut self, f: FuncId, imp: NativeFn) -> Result<(), VmError> {
         let Some(d) = self.function(f) else {
             return Err(VmError::Registration {
@@ -831,12 +884,14 @@ impl Vm {
         };
         let at = (package_key(d), key.clone());
         if self.natives.contains_key(&key) || self.natives_at.contains_key(&at) {
+            self.note_shadow(&key, std::panic::Location::caller().file());
             return Err(VmError::Registration {
                 key,
                 reason: "duplicate native registration",
             });
         }
         self.natives_at.insert(at, imp);
+        self.note_site(&key);
         *self.natives_at_count.entry(key).or_insert(0) += 1;
         Ok(())
     }
@@ -845,15 +900,18 @@ impl Vm {
     /// [`Vm::register_native_for`] binds), without a loaded function (lane IMPL-TREE-INIT-OWNER-EVENT, review r1 of
     /// #631, item 4): a binding of the same key in another package leaves this one unbound. Refused: the key already
     /// bound in `package`, or bound VM-wide.
+    #[track_caller]
     pub fn register_native_in(&mut self, package: &str, key: &str, imp: NativeFn) -> Result<(), VmError> {
         let at = (package.to_ascii_lowercase(), key.to_string());
         if self.natives.contains_key(key) || self.natives_at.contains_key(&at) {
+            self.note_shadow(key, std::panic::Location::caller().file());
             return Err(VmError::Registration {
                 key: key.to_string(),
                 reason: "duplicate native registration",
             });
         }
         self.natives_at.insert(at, imp);
+        self.note_site(key);
         *self.natives_at_count.entry(key.to_string()).or_insert(0) += 1;
         Ok(())
     }
@@ -873,8 +931,29 @@ impl Vm {
             .cloned()
     }
 
-    /// Whether a native implementation is registered for `key`, VM-wide or for some package.
+    /// Whether a native implementation is registered for `key`, VM-wide or for some package. Under the shadow audit,
+    /// a true answer to a caller in another source file than the key's registration is recorded
+    /// ([`Vm::audit_native_shadows`]).
+    #[track_caller]
     pub fn has_native(&self, key: &str) -> bool {
+        let found = self.contains_native(key);
+        if found {
+            self.note_shadow(key, std::panic::Location::caller().file());
+        }
+        found
+    }
+
+    /// Under the audit: `key` is bound, and `checked_by` met it; recorded when another file bound it.
+    fn note_shadow(&self, key: &str, checked_by: &'static str) {
+        if let Some(audit) = self.shadow_audit.borrow_mut().as_mut() {
+            let bound_by = self.native_sites.get(key).copied().unwrap_or("?");
+            if bound_by != checked_by && !audit.iter().any(|s| s.key == key && s.checked_by == checked_by) {
+                audit.push(NativeShadow { key: key.to_string(), bound_by, checked_by });
+            }
+        }
+    }
+
+    fn contains_native(&self, key: &str) -> bool {
         self.natives.contains_key(key) || self.natives_at_count.get(key).is_some_and(|&n| n > 0)
     }
 
@@ -888,8 +967,14 @@ impl Vm {
 
     /// Whether the native function `f` has an implementation: its package's binding of its key, or the VM-wide
     /// one. `false` for a script function.
+    /// Under the shadow audit, a true answer is recorded as [`Vm::has_native`]'s is.
+    #[track_caller]
     pub fn is_bound(&self, f: FuncId) -> bool {
-        self.native_of(f).is_some()
+        let bound = self.native_of(f).is_some();
+        if bound && let Some(key) = self.function(f).and_then(|d| d.native_key.as_deref()) {
+            self.note_shadow(key, std::panic::Location::caller().file());
+        }
+        bound
     }
 
     /// The implementation the call of native `f` runs: its package's binding of its key first, then the VM-wide
@@ -1699,3 +1784,5 @@ impl AttrWorld for Vm {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod shadow_tests;

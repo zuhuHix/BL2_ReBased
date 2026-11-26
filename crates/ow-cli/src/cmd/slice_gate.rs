@@ -1946,3 +1946,6 @@ mod driver_tests;
 #[cfg(test)]
 #[path = "slice_gate_preload_tests.rs"]
 mod preload_tests;
+#[cfg(test)]
+#[path = "slice_gate_shadow_tests.rs"]
+mod shadow_tests;
