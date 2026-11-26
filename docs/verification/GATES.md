@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-MAYA-PAWN-SPAWN-SOURCE (2026-11-26, pc-hummer, docs only, on docs/native-maya-pawn-spawn-source from main
+457c46e4):** AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA_PAWN_SPAWN_SOURCE.md reads how the game spawns Maya's
+pawn: `SpawnDefaultPawnFor` spawns it with the class's pawn archetype as the template. The port's bridge makes it from
+the class defaults. A local probe (not committed) showed today's link 1 stop meets an unloaded `Default__` subobject on
+that pawn. 19 properties differ, and the note marks which the links read. It recommends the bridge spawn from the
+archetype; that needs a hub ruling on the old-`Mesh` release, without which link 1's stop moves earlier. No code
+changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **BRIDGE-PAWN-ATTACH (2026-11-26, pc-hummer, on fix/bridge-pawn-attach, stacked on #757 over main 457c46e4):**
 AI-assisted (Claude Code, Opus 5.5). In Off the bridge's player pawn takes the spawn's component attach, so its
 component copies land in the attach record under the pawn. `cargo test --workspace -j 8 --no-fail-fast` 3,811 passed
