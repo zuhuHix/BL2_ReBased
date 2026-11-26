@@ -1026,7 +1026,7 @@ fn an_old_component_not_in_the_attach_record_is_replaced() {
 /// Review of #766, item 1 (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5, "or the port cannot tell"): the release
 /// keeps its `NotRead` where the port cannot tell the old component is unattached. With no scene layer there is no
 /// attach record; with one, an old component whose `Owner` names the pawn but that no record entry holds may have
-/// been attached by a path that does not publish (this build's own actor attach is one). Nothing is written.
+/// been attached by a path that does not publish. Nothing is written.
 #[test]
 fn the_release_is_refused_where_the_port_cannot_tell() {
     // No scene layer.
@@ -1053,6 +1053,87 @@ fn the_release_is_refused_where_the_port_cannot_tell() {
     let (missing, what) = refused(&mut e, p);
     assert_eq!((missing, what), (Missing::NotRead, releasing_old("Mesh")));
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(Some(old)), "untouched");
+}
+
+/// The hub's ruling (lane BODYCOMP-ATTACH-PUBLISHES): the body composition's actor attach publishes each component to
+/// the attach record under the pawn, after the writes, as the spawn's component update does.
+#[test]
+fn the_actor_attached_components_are_in_the_record_under_the_pawn() {
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
+    let a1 = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    run(&mut e, p).unwrap();
+    for name in ["Mesh", "CylinderComponent"] {
+        let Value::Object(Some(made)) = prop(&e.vm, p, name) else { panic!("no {name}") };
+        assert!(crate::actors::attached_to(&e.vm, made, p).unwrap(), "{name} is in the record under the pawn");
+    }
+    let layer = e.vm.service::<crate::actors::SceneLayer>().unwrap();
+    assert_eq!(layer.borrow().len(), 2, "the two made components, nothing else");
+}
+
+/// With the record published, a second `InitializePawnMeshes` finds the old `Mesh` (and `CylinderComponent`) recorded
+/// under the pawn: set and attached, so the release `NotRead` (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5 and
+/// section 7: "set and attached ... releasing the old Mesh/CylinderComponent"), before any write. A second build as it
+/// stands meets the call-wide rebuild refusal first (its entries are there); with the entries cleared, the release
+/// check is reached and refuses on the recorded component.
+#[test]
+fn a_second_build_refuses_on_the_old_recorded_mesh() {
+    for (parent, name) in [(MESH_ID, "Mesh"), (CYLINDER_ID, "CylinderComponent")] {
+        let mut e = env();
+        crate::actors::add_empty_scene(&mut e.vm).unwrap();
+        let template = if parent == MESH_ID {
+            make(&mut e.vm, e.skeletal, "Skel_Template")
+        } else {
+            make(&mut e.vm, e.cylinder, "Cyl_Template")
+        };
+        let a = attachment(&mut e, A { template: Some(template), parent, collision: 2, ..A::default() });
+        let p = pawn_with(&mut e, vec![a]);
+        run(&mut e, p).unwrap();
+        let Value::Object(Some(old)) = prop(&e.vm, p, name) else { panic!("no {name}") };
+        assert!(crate::actors::attached_to(&e.vm, old, p).unwrap(), "{name} recorded");
+        let before = Counters::read(&e.vm);
+        match run(&mut e, p) {
+            Err(VmError::NotYet(n)) => assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, REBUILD)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(Counters::read(&e.vm), before, "write-free");
+        let mut set = prop(&e.vm, p, "InstanceDataState");
+        set_field(&e.vm, &mut set, "Data", Value::array(Vec::new()), "set").unwrap();
+        put(&mut e.vm, p, "InstanceDataState", set);
+        let before = Counters::read(&e.vm);
+        match run(&mut e, p) {
+            Err(VmError::NotYet(n)) => {
+                assert_eq!((n.missing, n.what.to_string()), (Missing::NotRead, releasing_old(name)));
+                assert!(!ow_core::notyet::is_partial_writes(&n.what), "{}", n.what);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(Counters::read(&e.vm), before, "write-free");
+        assert_eq!(prop(&e.vm, p, name), Value::Object(Some(old)), "untouched");
+    }
+}
+
+/// The record is checked before the first write: a borrowed scene layer is refused by the preflight, with nothing
+/// written.
+#[test]
+fn a_borrowed_attach_record_refuses_before_any_write() {
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let layer = e.vm.service::<crate::actors::SceneLayer>().unwrap();
+    let guard = layer.borrow_mut();
+    let before = Counters::read(&e.vm);
+    let r = run(&mut e, p);
+    assert!(matches!(r, Err(VmError::ServiceBorrowed(_))), "{r:?}");
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    drop(guard);
+    assert!(entries(&e, p).is_empty());
 }
 
 /// Review r1 of #542, item 4: a second `CylinderComponent` attachment would release the first one's component, so it

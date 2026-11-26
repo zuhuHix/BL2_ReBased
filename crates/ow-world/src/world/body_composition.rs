@@ -1037,8 +1037,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 // unattached:
                 // - the world has no scene layer, so no attach record;
                 // - the record holds it under the pawn;
-                // - its `Owner` already names the pawn: an attach path that does not publish to the record (this
-                //   build's own actor attach is one) may have attached it.
+                // - its `Owner` already names the pawn: an attach path that does not publish to the record may have
+                //   attached it. (This build's own actor attach publishes since lane BODYCOMP-ATTACH-PUBLISHES, so a
+                //   second build meets the recorded arm above; this arm stays for the other paths.)
                 // Only an old component with a layer present, neither recorded under the pawn nor owned by it, is
                 // released with nothing to detach, and the new one is written as usual. UNVERIFIED.
                 let old_set = |name: &str| -> Result<bool, VmError> {
@@ -1101,6 +1102,11 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
             }
         }
     }
+    // An actor attach publishes to the attach record after every write (lane BODYCOMP-ATTACH-PUBLISHES): the record
+    // must not be borrowed then, so it is checked here, before the first write.
+    if made.iter().any(|m| matches!(m, Made::Component { socket: None, .. })) {
+        crate::actors::record_ready(vm)?;
+    }
     Ok(Some(Plan { attachments, made, authority, entry_struct }))
 }
 
@@ -1135,6 +1141,7 @@ fn entry_from(vm: &Vm, plan: &Plan, data: &Value, copied: &[&str]) -> Result<Val
 fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan) -> Result<(), VmError> {
     let mut set = set;
     let mut made_objects: Vec<Option<ObjRef>> = Vec::with_capacity(plan.made.len());
+    let mut actor_attached = Vec::new();
     for (a, m) in plan.attachments.iter().zip(&plan.made) {
         made_objects.push(None);
         match m {
@@ -1179,7 +1186,10 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                             .ok_or_else(|| script("a socket attach's parent was not made".into()))?;
                         write_socket_attach(vm, parent, made, sa)?;
                     }
-                    None => attach_to_actor(vm, owner, made)?,
+                    None => {
+                        attach_to_actor(vm, owner, made)?;
+                        actor_attached.push(made);
+                    }
                 }
                 // The `Parent` link (section 8.1): after the attach, before the pawn's PostInitBodyComposition writes.
                 if let Some(link) = link {
@@ -1224,6 +1234,12 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
         write_prop(vm, owner, REPLICATED, rep)?;
         write_prop(vm, owner, "bNetDirty", Value::Bool(true))?;
         write_prop(vm, owner, "bForceNetUpdate", Value::Bool(true))?;
+    }
+    // The attach record (the hub's ruling, lane BODYCOMP-ATTACH-PUBLISHES): each actor-attached component is published
+    // under the owner once every write succeeded, as the spawn's component update publishes its copies. In the game
+    // these components are attached. A world with no scene layer publishes nothing. UNVERIFIED.
+    for component in actor_attached {
+        crate::actors::publish_attach(vm, component, owner)?;
     }
     Ok(())
 }
@@ -1320,7 +1336,8 @@ fn make_component(vm: &mut Vm, owner: ObjRef, template: ObjRef) -> Result<ObjRef
 
 /// The actor attach with no socket name (section 4.1, step 6): the offsets are zero, so `Translation` and `Rotation`
 /// stay as they are; the component's `Owner` is the actor (by fit), and it joins the actor's `Components` unless it is
-/// there already (by fit). The global "attaching later" state is never set in the port (section 7, item 5).
+/// there already (by fit). The global "attaching later" state is never set in the port (section 7, item 5). The
+/// attach record is published by [`writes`], after every write (lane BODYCOMP-ATTACH-PUBLISHES).
 fn attach_to_actor(vm: &mut Vm, owner: ObjRef, component: ObjRef) -> Result<(), VmError> {
     write_prop(vm, component, "Owner", Value::Object(Some(owner)))?;
     let class = vm.space.heap.get(owner)?.class;
