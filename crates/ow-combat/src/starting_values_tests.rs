@@ -26,9 +26,9 @@ use super::*;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const KINDS: [&str; 7] = ["Object", "Float", "Struct", "Array", "Int", "Byte", "Bool"];
 /// The holder's fields, each naming one export.
-const HELD: [&str; 12] = [
+const HELD: [&str; 13] = [
     "Attr", "BaseAttr", "Def", "ParentAttr", "OwnAttr", "Broken", "NestAttr", "OperandAttr", "IfTrueAttr", "DefaultAttr",
-    "AfterAttr", "ParentClass",
+    "AfterAttr", "ParentClass", "ChildClass",
 ];
 
 /// The invented `Engine.upk`.
@@ -54,6 +54,10 @@ fn engine(categories: bool) -> Vec<u8> {
     let expr = toy_struct(&mut t, definition, "AttributeExpressionData", None);
     t.prop("Object", expr, "AttributeOperand1", 0, attribute);
     t.prop("Object", expr, "AttributeOperand2", 0, attribute);
+    // The rest of an expression as `ow-attr`'s reader requires it (the shared walk reads expressions as the preflight).
+    t.prop("Byte", expr, "ComparisonOperator", 0, 0);
+    t.prop("Byte", expr, "Operand2Usage", 0, 0);
+    t.prop("Float", expr, "ConstantOperand2", 0, 0);
     let cond_entry = toy_struct(&mut t, definition, "ConditionalExpression", None);
     toy_array_of(&mut t, cond_entry, "Expressions", "Struct", expr);
     t.prop("Struct", cond_entry, "BaseValueIfTrue", 0, init);
@@ -123,6 +127,17 @@ fn engine(categories: bool) -> Vec<u8> {
         .collect();
     // An exported AI class (empty lists): a parent the child names as an unloaded handle (the hub's point (a)).
     nested.push(t.p.add_export(class, "AIClass_Parent", empty(&none)));
+    // Discovery (the note's test 3): an archetype export whose AIClass is an exported class whose AttributeParentClass is
+    // AIClass_Parent; both reached as unloaded handles from the archetype's copy.
+    let mut c = ints(&[0]);
+    c.extend(t.p.object_tag("AttributeParentClass", *nested.last().unwrap()));
+    c.extend_from_slice(&none);
+    let child = t.p.add_export(class, "AIClass_Child", c);
+    nested.push(child);
+    let mut pawn = ints(&[0]);
+    pawn.extend(t.p.object_tag("AIClass", child));
+    pawn.extend_from_slice(&none);
+    t.p.add_export(archetype, "ToyPawn_Arch", pawn);
     let mut h = ints(&[0]);
     let targets = [a, base_attr, def, parent_attr, own_attr, broken].into_iter().chain(nested);
     for (f, r) in HELD.into_iter().zip(targets) {
@@ -420,4 +435,90 @@ fn an_unloaded_parent_class_is_followed() {
     assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 1, "the parent class");
     assert!(!x.unloaded(parent));
     assert!(x.lines().iter().any(|l| l.contains("AIClass_Parent")));
+}
+
+/// The note's test 3 (discovery): the archetype is found by a package and path and copied (logged once). The copy's
+/// own decode resolves an `AIClass` in the same package; that class's `AttributeParentClass` is an unloaded handle,
+/// loaded and logged before its fields are read. The copy is freed.
+#[test]
+fn the_archetype_is_found_by_package_and_path() {
+    let mut x = fx();
+    // The ToyPawn objects other than its class default (which the copy builds and keeps).
+    let pawns = |x: &Fx| {
+        let c = x.vm.space.classes.by_path("Engine.ToyPawn");
+        x.vm.space.heap.handles().into_iter().filter(|&o| x.vm.space.heap.get(o).is_ok_and(|h| Some(h.class) == c && !matches!(h.origin, ow_object::heap::Origin::Default { .. })))
+            .count()
+    };
+    let before = pawns(&x);
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "ToyPawn_Arch").unwrap(), Some(1));
+    assert_eq!(x.vm.log.iter().filter(|l| **l == copy_line("ToyPawn_Arch")).count(), 1, "{:?}", x.vm.log);
+    let lines = x.lines();
+    assert!(lines.len() == 1 && lines[0].contains("AIClass_Parent"), "{lines:?}");
+    assert!(!x.unloaded(x.held[11]));
+    assert_eq!(pawns(&x), before, "the copy is freed");
+    // No such export, or no such package: nothing.
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "NoSuchPawn").unwrap(), None);
+    assert_eq!(preload_archetype(&mut x.vm, "NoSuchPackage", "ToyPawn_Arch").unwrap(), None);
+}
+
+/// The note's test 3 (a loop): a parent chain that comes back to a class already seen stops there; each class's list
+/// is read once.
+#[test]
+fn a_looping_parent_chain_stops_at_a_class_already_seen() {
+    let mut x = fx();
+    let archetype = x.chain();
+    let class = match x.vm.space.read(archetype, PropAddr::scalar(x.vm.space.prop(x.vm.space.heap.get(archetype).unwrap().class, "AIClass").unwrap())).unwrap() {
+        Value::Object(Some(c)) => *c,
+        other => panic!("{other:?}"),
+    };
+    let parent = match x.vm.space.read(class, PropAddr::scalar(x.vm.space.prop(x.vm.space.heap.get(class).unwrap().class, "AttributeParentClass").unwrap())).unwrap() {
+        Value::Object(Some(c)) => *c,
+        other => panic!("{other:?}"),
+    };
+    x.set(parent, "AttributeParentClass", Value::Object(Some(class)));
+    assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 7, "as without the loop");
+}
+
+/// The note's test 4: what the preload walks is what `SetBaseValue`'s preflight checks. Before the preload the preflight
+/// refuses the nested formula's unloaded attribute (the note's bounded alternative's remaining refusal); after it the
+/// preflight passes.
+#[test]
+fn after_the_preload_the_native_s_preflight_passes() {
+    let mut x = fx();
+    let (own, nest) = (x.held[4], x.held[6]);
+    let outer = x.make("Engine.AttributeInitializationDefinition");
+    let mut formula = {
+        let c = x.vm.space.heap.get(outer).unwrap().class;
+        let p = x.vm.space.prop(c, "ValueFormula").unwrap();
+        x.vm.space.read(outer, PropAddr::scalar(p)).unwrap().clone()
+    };
+    put(&x.vm, &mut formula, "bEnabled", Value::Bool(true));
+    put(&x.vm, &mut formula, "Multiplier.BaseValueAttribute", Value::Object(Some(nest)));
+    x.set(outer, "ValueFormula", formula);
+    let entry = x.entry(own, None, Some(outer));
+    let base = ow_attr::eval::field(&x.vm.space, &entry, "BaseValue").unwrap().clone();
+    let data = ow_attr::eval::init_data(&x.vm.space, &base).unwrap();
+    let attrs = x.vm.attrs.clone();
+    x.vm.defs.ensure_loaded(&mut x.vm.space, own).unwrap();
+    let refused = attrs.preflight_set_base_value(own, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm)).unwrap_err();
+    assert!(refused.to_string().contains(ow_attr::eval::PREFLIGHT_UNLOADED), "{refused}");
+    let archetype = x.make("Engine.ToyPawn");
+    x.set(archetype, "AttributeStartingValues", Value::array(vec![entry]));
+    preload_from(&mut x.vm, archetype).unwrap();
+    assert!(!x.unloaded(nest));
+    attrs.preflight_set_base_value(own, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm)).unwrap();
+}
+
+/// The note's test 3 (an unloaded `AIClass`, as from another package): the class and then its unloaded parent are
+/// each loaded and logged before their fields are read, child first.
+#[test]
+fn an_unloaded_ai_class_and_its_parent_are_loaded_in_order() {
+    let mut x = fx();
+    let (parent, child) = (x.held[11], x.held[12]);
+    assert!(x.unloaded(child) && x.unloaded(parent));
+    let archetype = x.make("Engine.ToyPawn");
+    x.set(archetype, "AIClass", Value::Object(Some(child)));
+    assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 2);
+    let lines = x.lines();
+    assert!(lines[0].contains("AIClass_Child") && lines[1].contains("AIClass_Parent"), "{lines:?}");
 }

@@ -29,7 +29,10 @@
 //! definition the game keeps resident; UNVERIFIED)", then its outcome. A failed load is logged and left, so the native's
 //! own refusal shows it later; its fields are not read.
 
+use ow_attr::api::{AttrError, EvalCx, InitData, WorldParts};
 use ow_core::{NotYet, ParityMode};
+use ow_defs::DefStore;
+use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -43,13 +46,6 @@ const WHAT: &str = "the starting-value preload";
 
 fn bad(message: impl Into<String>) -> VmError {
     VmError::Script { function: WHAT.to_string(), message: message.into() }
-}
-
-fn path(vm: &Vm, o: ObjRef) -> String {
-    match vm.defs.handle_path(o) {
-        Some(p) => p,
-        None => ow_attr::eval::class_path(&vm.space, o).to_string() + " object",
-    }
 }
 
 /// The declared kind of `name` on `class`, None when undeclared.
@@ -85,31 +81,39 @@ fn object(v: &Value) -> Option<ObjRef> {
     }
 }
 
-/// Loads `o` when it is an unloaded handle, logging the harness input and its outcome; whether `o` is readable after.
-fn preload(vm: &mut Vm, o: ObjRef, loaded: &mut usize) -> bool {
-    if !vm.defs.is_unloaded(&vm.space, o) {
-        return !vm.defs.is_failed(&vm.space, o);
+/// Loads `o` when it is an unloaded handle, logging the harness input and its outcome into `lines`; whether `o` is
+/// readable after.
+fn preload_in(space: &mut ObjectSpace, defs: &mut DefStore, o: ObjRef, lines: &mut Vec<String>, loaded: &mut usize) -> bool {
+    if !defs.is_unloaded(space, o) {
+        return !defs.is_failed(space, o);
     }
-    let path = path(vm, o);
-    vm.log.push(format!("harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"));
-    let r = vm.defs.ensure_loaded(&mut vm.space, o);
-    vm.log.extend(vm.defs.take_log());
+    let path = defs.handle_path(o).unwrap_or_else(|| ow_attr::eval::class_path(space, o).to_string() + " object");
+    lines.push(format!("harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"));
+    let r = defs.ensure_loaded(space, o);
+    lines.extend(defs.take_log());
     match r {
         Ok(()) => {
-            vm.log.push(format!("harness input: preload {path}: loaded"));
+            lines.push(format!("harness input: preload {path}: loaded"));
             *loaded += 1;
             true
         }
         Err(e) => {
-            vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+            lines.push(format!("harness input: preload {path}: failed ({e})"));
             false
         }
     }
 }
 
-/// The starting-value entries of `o`'s `AttributeStartingValues`: (attribute, base-value attribute, initialization
-/// definition) for each. Reads only.
-fn entries(vm: &Vm, o: ObjRef) -> Result<Vec<[Option<ObjRef>; 3]>, VmError> {
+/// [`preload_in`] on the VM's store and log.
+fn preload(vm: &mut Vm, o: ObjRef, loaded: &mut usize) -> bool {
+    let mut lines = Vec::new();
+    let ok = preload_in(&mut vm.space, &mut vm.defs, o, &mut lines, loaded);
+    vm.log.extend(lines);
+    ok
+}
+
+/// The starting-value entries of `o`'s `AttributeStartingValues`: (attribute, base value) for each. Reads only.
+fn entries(vm: &Vm, o: ObjRef) -> Result<Vec<(Option<ObjRef>, InitData)>, VmError> {
     let list = match read(vm, o, "AttributeStartingValues")? {
         Value::Array(a) => a,
         other => return Err(bad(format!("AttributeStartingValues holds {}, not an array", other.kind_name()))),
@@ -122,7 +126,7 @@ fn entries(vm: &Vm, o: ObjRef) -> Result<Vec<[Option<ObjRef>; 3]>, VmError> {
         };
         let base = ow_attr::eval::field(&vm.space, entry, "BaseValue").map_err(VmError::from)?.clone();
         let data = ow_attr::eval::init_data(&vm.space, &base).map_err(VmError::from)?;
-        out.push([attribute, data.base_value_attribute, data.initialization_definition]);
+        out.push((attribute, data));
     }
     Ok(out)
 }
@@ -140,8 +144,9 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
     let mut chain: Vec<ObjRef> = Vec::new();
     let mut cursor = object(&read(vm, archetype, "AIClass")?);
     while let Some(c) = cursor {
-        if chain.contains(&c) || chain.len() > 64 {
-            return Err(bad("the AttributeParentClass chain loops"));
+        // A class already seen ends the walk (a looping parent chain cannot run forever).
+        if chain.contains(&c) {
+            break;
         }
         let class = vm.space.heap.get(c)?.class;
         want_struct_array(vm, class, "AttributeStartingValues")?;
@@ -163,7 +168,7 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
         }
     }
     // Step 3: the entries, parents first, then the archetype's own list.
-    let mut found: Vec<[Option<ObjRef>; 3]> = Vec::new();
+    let mut found: Vec<(Option<ObjRef>, InitData)> = Vec::new();
     for &c in chain.iter().rev() {
         found.extend(entries(vm, c)?);
     }
@@ -171,115 +176,30 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
         want_struct_array(vm, archetype_class, "AttributeStartingValues")?;
         found.extend(entries(vm, archetype)?);
     }
-    // Step 4: what SetBaseValue's preflight walks, for each entry.
-    for [attribute, base_attribute, definition] in found {
-        if let Some(a) = attribute {
-            attribute_and_resolvers(vm, a, &mut loaded);
-        }
-        init_walk(vm, base_attribute, definition, 0, &mut loaded);
+    // Step 4: what SetBaseValue's preflight walks, for each entry: the preflight's own walk
+    // (`AttributeSystem::walk_set_base_value`), loading each unloaded object before its fields are read.
+    let attrs = vm.attrs.clone();
+    for (attribute, data) in found {
+        let mut lines = Vec::new();
+        let r = {
+            let mut visit = |cx: &mut EvalCx<'_>, o: ObjRef| -> Result<bool, AttrError> {
+                let WorldParts { space, defs, .. } = cx.world.parts();
+                Ok(match defs {
+                    Some(defs) => preload_in(space, defs, o, &mut lines, &mut loaded),
+                    None => true,
+                })
+            };
+            attrs.walk_set_base_value(attribute, &data, &mut EvalCx::new(vm), &mut visit)
+        };
+        vm.log.extend(lines);
+        r.map_err(VmError::from)?;
     }
     Ok(loaded)
 }
 
-/// The SetBaseValue preflight's depth (`ow_attr::eval`'s `PREFLIGHT_DEPTH`); deeper data is left to its refusal.
-const DEPTH: usize = 32;
-
-/// `attr` loaded, then its context resolvers and its value resolvers up to the first None.
-fn attribute_and_resolvers(vm: &mut Vm, attr: ObjRef, loaded: &mut usize) {
-    if !preload(vm, attr, loaded) {
-        return;
-    }
-    let mut resolvers: Vec<ObjRef> = Vec::new();
-    if let Ok(Value::Array(rs)) = read(vm, attr, "ContextResolverChain") {
-        resolvers.extend(rs.iter().filter_map(object));
-    }
-    if let Ok(Value::Array(rs)) = read(vm, attr, "ValueResolverChain") {
-        for r in rs.iter() {
-            match object(r) {
-                Some(r) => resolvers.push(r),
-                None => break,
-            }
-        }
-    }
-    for r in resolvers {
-        preload(vm, r, loaded);
-    }
-}
-
-/// One initialization data value (its attribute and its definition), followed as the preflight follows it (module
-/// documentation, step 4). A part that does not read is left.
-fn init_walk(vm: &mut Vm, attribute: Option<ObjRef>, definition: Option<ObjRef>, depth: usize, loaded: &mut usize) {
-    if depth > DEPTH {
-        return;
-    }
-    if let Some(a) = attribute {
-        attribute_and_resolvers(vm, a, loaded);
-    }
-    let Some(d) = definition else { return };
-    if !preload(vm, d, loaded) {
-        return;
-    }
-    let space_field = |vm: &Vm, v: &Value, name: &str| ow_attr::eval::field(&vm.space, v, name).ok().cloned();
-    let flag = |vm: &Vm, v: &Value, name: &str| matches!(space_field(vm, v, name), Some(Value::Bool(true)));
-    let data = |vm: &Vm, v: &Value, name: &str| {
-        space_field(vm, v, name).and_then(|x| ow_attr::eval::init_data(&vm.space, &x).ok())
-    };
-    let mut parts = Vec::new();
-    let mut operands: Vec<ObjRef> = Vec::new();
-    let (Ok(formula), Ok(conditional)) = (read(vm, d, "ValueFormula"), read(vm, d, "ConditionalInitialization")) else {
-        return;
-    };
-    if flag(vm, &formula, "bEnabled") {
-        for name in ["Multiplier", "Level", "Power", "Offset"] {
-            parts.extend(data(vm, &formula, name));
-        }
-    } else if flag(vm, &conditional, "bEnabled") {
-        let mut always = false;
-        if let Some(Value::Array(list)) = space_field(vm, &conditional, "ConditionalExpressionList") {
-            for entry in list.iter() {
-                let exprs = match space_field(vm, entry, "Expressions") {
-                    Some(Value::Array(e)) => e,
-                    _ => continue,
-                };
-                for e in exprs.iter() {
-                    if let Some(first) = space_field(vm, e, "AttributeOperand1").as_ref().and_then(object) {
-                        operands.push(first);
-                        if let Some(second) = space_field(vm, e, "AttributeOperand2").as_ref().and_then(object) {
-                            operands.push(second);
-                        }
-                    }
-                }
-                parts.extend(data(vm, entry, "BaseValueIfTrue"));
-                if exprs.is_empty() {
-                    always = true;
-                    break;
-                }
-            }
-        }
-        if !always {
-            parts.extend(data(vm, &conditional, "DefaultBaseValue"));
-        }
-    }
-    if let Ok(variance) = read(vm, d, "RandomVariance")
-        && flag(vm, &variance, "bEnabled")
-    {
-        parts.extend(data(vm, &variance, "LowerBound"));
-        parts.extend(data(vm, &variance, "UpperBound"));
-    }
-    if let Ok(range) = read(vm, d, "RangeRestriction") {
-        if flag(vm, &range, "bEnableMinValueRestriction") {
-            parts.extend(data(vm, &range, "MinValue"));
-        }
-        if flag(vm, &range, "bEnableMaxValueRestriction") {
-            parts.extend(data(vm, &range, "MaxValue"));
-        }
-    }
-    for a in operands {
-        attribute_and_resolvers(vm, a, loaded);
-    }
-    for p in parts {
-        init_walk(vm, p.base_value_attribute, p.initialization_definition, depth + 1, loaded);
-    }
+/// The harness line of the set-up's throwaway copy of `archetype` (never placed, freed after).
+pub fn copy_line(archetype: &str) -> String {
+    format!("harness input: set-up copy of {archetype} to read its starting values; UNVERIFIED")
 }
 
 /// The preload for the archetype at `archetype_path` in `package` (a copy of its export, as the spawn makes one,
@@ -294,6 +214,7 @@ pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Re
         return Ok(None);
     }
     let Some(copy) = crate::hit::instantiate_copy(vm, package, archetype_path)? else { return Ok(None) };
+    vm.log.push(copy_line(archetype_path));
     let r = preload_from(vm, copy);
     vm.space.free(copy).map_err(VmError::from)?;
     r.map(Some)

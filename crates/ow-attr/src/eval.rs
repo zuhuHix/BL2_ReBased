@@ -1253,52 +1253,104 @@ pub(crate) fn preflight_set_base_value(
     data: &InitData,
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
-    check_definition(sys, dest, true, cx)?;
-    check_init(sys, data, 0, cx)
+    let mut refuse = |cx: &mut EvalCx<'_>, obj: ObjRef| refuse_unloaded(cx, obj).map(|()| true);
+    let mut walk = SetBaseWalk { visit: &mut refuse, checks: true };
+    check_definition(sys, dest, true, cx, &mut walk)?;
+    check_init(sys, data, 0, cx, &mut walk)
+}
+
+/// The walk of [`preflight_set_base_value`] with `visit` in place of its refusal of an unloaded handle (decision
+/// 2026-11-26-NNN, NATIVE_SPAWN_SETBASEVALUE.md section 3, step 5): the same objects in the same order, so a preload
+/// built on it cannot drift from the preflight. `visit` sees each object the preflight would check before its fields
+/// are read (it may load it) and answers whether its fields can be read; `false` leaves that object's dependants.
+/// The preflight's class checks (multi-context, implemented resolver classes, a None read-chain entry, the depth
+/// bound) are not made: what the walk passes over is left to the preflight's own refusal. A field the preflight
+/// requires that is missing or of the wrong kind is the same error here.
+pub(crate) fn walk_set_base_value(
+    sys: &AttributeSystem,
+    dest: Option<ObjRef>,
+    data: &InitData,
+    cx: &mut EvalCx<'_>,
+    visit: &mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
+) -> Result<(), AttrError> {
+    let mut walk = SetBaseWalk { visit, checks: false };
+    if let Some(dest) = dest {
+        check_definition(sys, dest, true, cx, &mut walk)?;
+    }
+    check_init(sys, data, 0, cx, &mut walk)
+}
+
+/// What [`check_definition`] and [`check_init`] do at each object: `visit` it, and (`checks`) make the preflight's class
+/// checks.
+struct SetBaseWalk<'f> {
+    visit: &'f mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
+    checks: bool,
 }
 
 /// One attribute definition: loaded, not multi-context, its resolvers loaded and implemented. `set` is the set-base
 /// form (the value chain stops at its first None entry); otherwise the read form (a None entry refuses).
-fn check_definition(sys: &AttributeSystem, attr: ObjRef, set: bool, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-    refuse_unloaded(cx, attr)?;
-    if is_multi_context(cx.world.parts().space, attr)? {
+fn check_definition(
+    sys: &AttributeSystem,
+    attr: ObjRef,
+    set: bool,
+    cx: &mut EvalCx<'_>,
+    w: &mut SetBaseWalk<'_>,
+) -> Result<(), AttrError> {
+    if !(w.visit)(cx, attr)? {
+        return Ok(());
+    }
+    if w.checks && is_multi_context(cx.world.parts().space, attr)? {
         return Err(multi_context_not_read(if set { "ResolveContexts" } else { "GetValue" }));
     }
     let chain = required(cx, attr, "ContextResolverChain")?;
     for entry in elements("ContextResolverChain", &chain)? {
-        if let Some(resolver) = object("ContextResolverChain entry", entry)? {
-            refuse_unloaded(cx, resolver)?;
+        if let Some(resolver) = object("ContextResolverChain entry", entry)?
+            && (w.visit)(cx, resolver)?
+            && w.checks
+        {
             sys.context_resolver(cx.world.parts().space, resolver)?;
         }
     }
     let chain = required(cx, attr, "ValueResolverChain")?;
     for entry in elements("ValueResolverChain", &chain)? {
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
-            if set {
+            if set || !w.checks {
                 break;
             }
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
-        refuse_unloaded(cx, resolver)?;
-        sys.value_resolver(cx.world.parts().space, resolver)?;
+        if (w.visit)(cx, resolver)? && w.checks {
+            sys.value_resolver(cx.world.parts().space, resolver)?;
+        }
     }
     Ok(())
 }
 
 /// An initialisation data value: its attribute, and its definition followed into the nested data it evaluates.
-fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+fn check_init(
+    sys: &AttributeSystem,
+    data: &InitData,
+    depth: usize,
+    cx: &mut EvalCx<'_>,
+    w: &mut SetBaseWalk<'_>,
+) -> Result<(), AttrError> {
     if depth > PREFLIGHT_DEPTH {
+        if !w.checks {
+            return Ok(());
+        }
         return Err(AttrError::BadData {
             reason: format!("initialisation data nested deeper than {PREFLIGHT_DEPTH} (the SetBaseValue preflight)").into(),
         });
     }
     if let Some(attr) = data.base_value_attribute {
-        check_definition(sys, attr, false, cx)?;
+        check_definition(sys, attr, false, cx, w)?;
     }
     let Some(definition) = data.initialization_definition else {
         return Ok(());
     };
-    refuse_unloaded(cx, definition)?;
+    if !(w.visit)(cx, definition)? {
+        return Ok(());
+    }
     let nested = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<InitData, AttrError> {
         let space = cx.world.parts().space;
         init_data(space, field(space, v, name)?)
@@ -1326,9 +1378,9 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
             };
             for e in &exprs {
                 if let Some(first) = e.attribute_operand1 {
-                    check_definition(sys, first, false, cx)?;
+                    check_definition(sys, first, false, cx, w)?;
                     if let Some(second) = e.attribute_operand2 {
-                        check_definition(sys, second, false, cx)?;
+                        check_definition(sys, second, false, cx, w)?;
                     }
                 }
             }
@@ -1355,7 +1407,7 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
         parts.push(nested(cx, &range, "MaxValue")?);
     }
     for p in &parts {
-        check_init(sys, p, depth + 1, cx)?;
+        check_init(sys, p, depth + 1, cx, w)?;
     }
     Ok(())
 }
