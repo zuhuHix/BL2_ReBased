@@ -676,6 +676,9 @@ pub fn row_harness(route_notes: &[String], first: bool, setup: &[String], steps:
 }
 
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.
+/// The set-up line of the `TraceComponent` miss stand-in (the hub's ruling on #799).
+pub const TRACE_MISS_SETUP: &str = "harness input: the combat world answers Actor.TraceComponent on an attached      component with a miss (the hub's ruling on #799; UNVERIFIED)";
+
 fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
     let mut route_notes: Vec<String> = Vec::new();
     let mut setup = || -> Result<Run, ow_vm::error::VmError> {
@@ -687,6 +690,11 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             }
             Some(map) => combat::map_route::build(cooked, map, &mut route_notes)?,
         };
+        // The hub's ruling on #799 (lane IMPL-BOUNDING-CYLINDER-AND-AFTER): the slice's combat world answers
+        // `TraceComponent` on an attached component with a logged miss (UNVERIFIED stand-in).
+        let mut world = world;
+        ow_combat::bcyl_tail::enable_trace_component_miss(&mut world.vm)?;
+        world.vm.log.push(TRACE_MISS_SETUP.to_string());
         let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
         Run::with_bridge(world, Some(bridge))
     };

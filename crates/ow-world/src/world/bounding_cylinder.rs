@@ -331,8 +331,9 @@ pub const BOUNDS_RECORD: &str = "docs/verification/NATIVE_COMPONENT_BOUNDS.md";
 /// and draws nothing (NATIVE_COMPONENT_BOUNDS.md section 7 B, step 6; UNVERIFIED):
 /// - `Engine.CylinderComponent`: extent (R, R, H) from `CollisionRadius` and `CollisionHeight` (floats), origin the
 ///   owner's `Location`, only when the component's `Translation` is zero, none of `AbsoluteTranslation`,
-///   `AbsoluteRotation` and `AbsoluteScale` is set, and its `Owner` is `owner`. Else `NotYet { NotRead }`
-///   ([`WORLD_TRANSFORM`]);
+///   `AbsoluteRotation` and `AbsoluteScale` is set, and its `Owner` is `owner`; a non-zero `Translation` is added to
+///   it when both rotations are zero and the combined scale is exactly 1 (lane IMPL-BOUNDING-CYLINDER-AND-AFTER).
+///   Else `NotYet { NotRead }` ([`WORLD_TRANSFORM`]);
 /// - `Engine.SkeletalMeshComponent`: the skeletal bounds update's rule, NATIVE_COMPONENT_BOUNDS.md section 9.6
 ///   (lane IMPL-SKELMESH-BOUNDS-SOURCE, [`crate::world::skeletal_bounds::skeletal_box`]);
 /// - `Engine.StaticMeshComponent`: `NotYet { LayerAbsent }` ([`STATIC_LAYER`]);
@@ -349,11 +350,15 @@ pub fn entry_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32; 3
         for name in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
             absolute |= flag(space, c, name)?;
         }
-        if translation != [0.0; 3] || absolute || object(space, c, "Owner")? != Some(owner) {
-            return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
+        let location = vector(space, owner, &field(space, owner, "Location")?, "Location")?;
+        if translation == [0.0; 3] && !absolute && object(space, c, "Owner")? == Some(owner) {
+            return Ok((location, [r, r, h]));
         }
-        let origin = vector(space, owner, &field(space, owner, "Location")?, "Location")?;
-        return Ok((origin, [r, r, h]));
+        // A translated cylinder under zero rotations and unit scale (NATIVE_BOUNDING_CYLINDER_AND_AFTER.md section 2).
+        let Some(t) = crate::world::skeletal_bounds::translated_unit_transform(vm, owner, c)? else {
+            return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
+        };
+        return Ok(([0, 1, 2].map(|k| location[k] + t[k]), [r, r, h]));
     }
     if exactly("Engine.SkeletalMeshComponent") {
         return crate::world::skeletal_bounds::skeletal_box(vm, owner, c);

@@ -1288,8 +1288,17 @@ fn a_skeletal_entry_with_a_mesh_takes_the_stored_bounds() {
     let doubled = box_cylinder(&[([13.0, 24.0, 36.0], [16.0, 20.0, 24.0])]);
     x.answers(pickup, (doubled[0], doubled[2]), "a uniform scale of 2");
     x.set(c, "Scale", Value::Float(1.0));
-    x.vector3(c, "Translation", [0.0, 0.0, 1.0]);
+    // A translated component (lane IMPL-BOUNDING-CYLINDER-AND-AFTER, NATIVE_BOUNDING_CYLINDER_AND_AFTER.md section 2):
+    // under zero rotations and unit scale the box moves by the translation; scaled or rotated, the NotRead.
+    x.vector3(c, "Translation", [0.0, 0.0, -86.0]);
+    let moved = box_cylinder(&[([11.5, 22.0, -53.0], [8.0, 10.0, 12.0])]);
+    x.answers(pickup, (moved[0], moved[2]), "translated, unit scale");
+    x.set(c, "Scale", Value::Float(2.0));
     x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.set(c, "Scale", Value::Float(1.0));
+    x.member(c, "Rotation", "Pitch", Value::Int(100));
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.member(c, "Rotation", "Pitch", Value::Int(0));
     x.vector3(c, "Translation", [0.0; 3]);
     // A non-empty SpaceBases with a mesh that lists per-poly collision bones: the per-bone step, not read.
     x.set(c, "SpaceBases", Value::array(vec![Value::Int(0), Value::Int(0)]));
@@ -1462,4 +1471,41 @@ fn a_skeletal_subclass_keeps_the_unread_bounds_update() {
     x.set(c, "CollideActors", Value::Bool(true));
     x.components(pickup, vec![Some(c)]);
     x.refuses(pickup, Missing::NotRead, "Actor.GetBoundingCylinder: the bounds update of Engine.ToySkeletalKind", BOUNDS_RECORD);
+}
+
+/// NATIVE_BOUNDING_CYLINDER_AND_AFTER.md section 9, test 1 (lane IMPL-BOUNDING-CYLINDER-AND-AFTER): a cylinder entry
+/// with a `Translation`, zero rotations and unit scale is centred at `Location` + `Translation`; scaled or rotated it
+/// is the world transform's `NotRead`; untranslated it is the owner's `Location` as before. Reads only.
+#[test]
+fn a_translated_cylinder_under_unit_scale_moves_by_its_translation() {
+    let mut x = fx();
+    let (pickup, _) = x.skeletal();
+    let c = x.cylinder(42.0, 80.0);
+    x.set(c, "Owner", Value::Object(Some(pickup)));
+    x.unit_scales(pickup, c, 1.0);
+    x.vector3(pickup, "Location", [10.0, 20.0, 30.0]);
+    assert_eq!(entry_box(&x.vm, pickup, c).unwrap(), ([10.0, 20.0, 30.0], [42.0, 42.0, 80.0]));
+    x.vector3(c, "Translation", [0.0, 0.0, -86.0]);
+    let before = x.vm.space.heap.committed_writes();
+    assert_eq!(entry_box(&x.vm, pickup, c).unwrap(), ([10.0, 20.0, -56.0], [42.0, 42.0, 80.0]));
+    assert_eq!(x.vm.space.heap.committed_writes(), before, "reads only");
+    for (scale, pitch) in [(2.0, 0), (1.0, 100)] {
+        x.set(c, "Scale", Value::Float(scale));
+        x.member(c, "Rotation", "Pitch", Value::Int(pitch));
+        match entry_box(&x.vm, pickup, c) {
+            Err(VmError::NotYet(n)) => assert_eq!(n.what.as_ref(), WORLD_TRANSFORM, "{n}"),
+            other => panic!("scale {scale} pitch {pitch}: {other:?}"),
+        }
+    }
+    // The #799 review's conditions: a non-zero PrePivot, an Absolute flag, or another Owner is the NotRead too.
+    x.set(c, "Scale", Value::Float(1.0));
+    x.member(c, "Rotation", "Pitch", Value::Int(0));
+    x.vector3(pickup, "PrePivot", [0.0, 0.0, 5.0]);
+    assert!(matches!(entry_box(&x.vm, pickup, c), Err(VmError::NotYet(n)) if n.what.as_ref() == WORLD_TRANSFORM), "PrePivot");
+    x.vector3(pickup, "PrePivot", [0.0; 3]);
+    x.set(c, "AbsoluteTranslation", Value::Bool(true));
+    assert!(matches!(entry_box(&x.vm, pickup, c), Err(VmError::NotYet(n)) if n.what.as_ref() == WORLD_TRANSFORM), "Absolute");
+    x.set(c, "AbsoluteTranslation", Value::Bool(false));
+    x.set(c, "Owner", Value::Object(None));
+    assert!(matches!(entry_box(&x.vm, pickup, c), Err(VmError::NotYet(n)) if n.what.as_ref() == WORLD_TRANSFORM), "Owner");
 }

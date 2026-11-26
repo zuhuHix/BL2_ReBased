@@ -52,7 +52,11 @@
 //! (the root-adjusted local box scaled, then moved to the owner), **UNVERIFIED**: the port's reading of the engine
 //! maths, not read from the native. At `s` = 1 it is the earlier unit-scale rule, term for term. Any other case (a
 //! non-uniform, zero, negative or non-finite scale among them) is the bounding cylinder's `WORLD_TRANSFORM`
-//! `NotRead`. A non-empty `SpaceBases` with a mesh that lists
+//! `NotRead`. **A translated component** (lane IMPL-BOUNDING-CYLINDER-AND-AFTER, NATIVE_BOUNDING_CYLINDER_AND_AFTER.md
+//! section 2, UNVERIFIED): a non-zero `Translation` is accepted only when both rotations are zero and the combined
+//! scale is exactly 1 on every axis ([`translated_unit_transform`]): each matrix is then a pure translation, so the
+//! origin is `Location` + `Translation` + the mesh origin + `RootBoneTranslation`, the extent unchanged; a scaled or
+//! rotated translated component stays the `NotRead`. A non-empty `SpaceBases` with a mesh that lists
 //! per-poly collision bones (`PerPolyCollisionBones`) is [`PER_BONE`]'s `NotRead`: the per-bone step is not read.
 //!
 //! **The template gap** (note section 9.5): the port's `new` ignores a component's template, so the slice's pickup
@@ -179,7 +183,7 @@ pub fn skeletal_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32
 /// none of the three Absolute flags, `owner` as the component's `Owner`, zero component and owner `Rotation`, a zero
 /// owner `PrePivot` (UNVERIFIED), and a uniform, positive combined scale, which is the answer; `None` for any other
 /// transform.
-fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<f32>, VmError> {
+fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<(f32, [f32; 3])>, VmError> {
     let space = &vm.space;
     let component_owner = object(space, c, "Owner")?;
     let translation = vector(space, c, &field(space, c, "Translation")?, "Translation")?;
@@ -187,8 +191,7 @@ fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<f32>, Vm
     for name in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
         absolute |= flag(space, c, name)?;
     }
-    if translation != [0.0; 3]
-        || absolute
+    if absolute
         || component_owner != Some(owner)
         || !rotation_zero(vm, c)?
         || !rotation_zero(vm, owner)?
@@ -196,7 +199,23 @@ fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<f32>, Vm
     {
         return Ok(None);
     }
-    Ok(uniform_scale(combined_scale(vm, c, component_owner)?))
+    let Some(s) = uniform_scale(combined_scale(vm, c, component_owner)?) else { return Ok(None) };
+    // A translated component only under unit scale (the note's section 2; the composition order is not settled for
+    // a scaled one).
+    if translation != [0.0; 3] && s != 1.0 {
+        return Ok(None);
+    }
+    Ok(Some((s, translation)))
+}
+
+/// The translated case of the simplest world transform (module documentation), for the cylinder rule: the
+/// component's `Translation` when the three Absolute flags are clear, `owner` is its `Owner`, both rotations and the
+/// owner's `PrePivot` are zero and the combined scale is exactly 1 on every axis; `None` otherwise. Reads only.
+pub(crate) fn translated_unit_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
+    Ok(match simple_transform(vm, owner, c)? {
+        Some((s, t)) if s == 1.0 => Some(t),
+        _ => None,
+    })
 }
 
 /// The one factor of a uniform, positive scale: the three axes exactly equal, finite and above 0 (the hub's ruling;
@@ -241,7 +260,7 @@ fn stored_box(vm: &Vm, owner: ObjRef, c: ObjRef, mesh: ObjRef) -> Result<([f32; 
     let Some(bounds) = crate::world::skeletal::mesh_bounds(vm, mesh)? else {
         return Err(NotYet::layer_absent(SKELETAL_BOUNDS, STORED_LAYER, BOUNDS_RECORD).into());
     };
-    let Some(s) = simple_transform(vm, owner, c)? else {
+    let Some((s, translation)) = simple_transform(vm, owner, c)? else {
         return Err(NotYet::not_read(WORLD_TRANSFORM, BOUNDS_RECORD).into());
     };
     if space_bases(vm, c)? > 0 && list_len(vm, mesh, "PerPolyCollisionBones")? > 0 {
@@ -251,7 +270,8 @@ fn stored_box(vm: &Vm, owner: ObjRef, c: ObjRef, mesh: ObjRef) -> Result<([f32; 
     let root = vector(space, c, &field(space, c, "RootBoneTranslation")?, "RootBoneTranslation")?;
     let scale = float(space, c, "BoundsScale")?;
     // UNVERIFIED: the port's reading of the UE3 bounds transform (module documentation, "The stored box").
-    let origin = [0, 1, 2].map(|k| location[k] + s * bounds.origin[k] + s * root[k]);
+    // The translation is zero unless the scale is exactly 1 (`simple_transform`).
+    let origin = [0, 1, 2].map(|k| location[k] + translation[k] + s * bounds.origin[k] + s * root[k]);
     let extent = bounds.extent.map(|e| e * s * scale);
     Ok((origin, extent))
 }
