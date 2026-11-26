@@ -30,7 +30,8 @@
 //!      `Champion`, **1.0 or 0.0**; another class: [`DOES_SPAWN_CHAMPION`] naming it); any other class:
 //!      [`IS_CHAMPION`] naming it.
 //!
-//!   It writes, loads and interns nothing. The first native class: a class with code in the store by its decoded
+//!   The resolver's own definition is loaded first, as every resolver's is (`ensure_loaded`, which a load-free scope
+//!   refuses); the rule then writes, loads and interns nothing. The first native class: a class with code in the store by its decoded
 //!   body's native bit (a body that did not decode counts as native, as `ow-world`'s `first_native` does), a class
 //!   without code by the class table's native mark.
 //!
@@ -149,15 +150,11 @@ fn struct_field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v
 
 /// The Off get (module documentation). Reads only.
 pub(super) fn read_off(cx: &mut EvalCx<'_>, resolver: ObjRef, context: Option<ObjRef>) -> Result<f32, AttrError> {
+    // The resolver's own definition is loaded as every resolver's is (the chain's load, which a load-free scope
+    // refuses); the rule itself reads its context and balance without a load.
+    ensure_loaded(cx, resolver)?;
     let WorldParts { space, defs, .. } = cx.world.parts();
     let (space, defs): (&ObjectSpace, Option<&ow_defs::DefStore>) = (space, defs.as_deref());
-    if not_resident(space, defs, resolver)? {
-        return Err(NotYet::not_read(
-            "TargetableAttributeValueResolver: the resolver is not loaded (a load is a write)",
-            RECORD_OFF,
-        )
-        .into());
-    }
     match field(space, resolver, "ValueToResolve")? {
         (Value::Byte(0), PropKind::Byte { .. }) => {}
         (Value::Byte(_), PropKind::Byte { .. }) => return Ok(0.0),
