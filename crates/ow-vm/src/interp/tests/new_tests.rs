@@ -1,5 +1,5 @@
 //! `New` with five operands (decision 2026-11-26, NEW-FIVE-OPERANDS; NATIVE_TOUCH_COMPONENT_TEMPLATE.md sections 3.1,
-//! 3.3 and 6) and option B's template copy (decision 2026-11-26-NNN, IMPL-NEW-TEMPLATE-COPY) on invented packages
+//! 3.3 and 6) and option B's template copy (decision 2026-11-26-14, IMPL-NEW-TEMPLATE-COPY) on invented packages
 //! (AGENTS.md rule 9): `Core` (an `Object` declaring `ObjectArchetype`, a `Foo` holding the calls, `Thing` and
 //! `SubThing` with no decodable class body, three classes with real bodies and chosen flags, `Plain` holding an int, a
 //! transient int and an array of objects, a lazy `Thing` reached through a holder, and the native `Op(int)`, which
@@ -467,7 +467,7 @@ fn reference_drops_the_template() {
     assert_eq!(r.vm.space.heap.get(made).unwrap().archetype, None);
 }
 
-// The component-instancing pass (NATIVE_NEW_COMPONENT_INSTANCING.md section 5, decision 2026-11-26-NNN).
+// The component-instancing pass (NATIVE_NEW_COMPONENT_INSTANCING.md section 5, decision 2026-11-26-14).
 
 impl Run {
     /// A `Holds` template (its default built) with every object field None, and a `Gadget`.
