@@ -38,6 +38,8 @@ use crate::hit::bind_fn;
 pub const RECORD: &str = "docs/verification/NATIVE_LINK34_AFTER_MIND.md";
 pub const NOT_LOADED: &str = "an object the store has not loaded (a load is a write)";
 pub const COOP_FRIENDLY_FIRE: &str = "WillowCoopGameInfo.IsFriendlyFire: four parts are not named";
+pub const INTERFACE_UNRESOLVED: &str =
+    "GameInfo.IsFriendlyFire: whether InstigatingTargetable's class implements the interface needs its interface table resolved (a load)";
 pub const GOD_NOT_LOADED: &str = "Pawn.InGodMode: an object the store has not loaded";
 pub const IS_FRIENDLY_FIRE: [&str; 2] =
     ["Engine.GameInfo.IsFriendlyFire", "WillowGame.WillowCoopGameInfo.IsFriendlyFire"];
@@ -149,8 +151,24 @@ pub fn is_friendly_fire(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if !matches!(c.arg(0)?, Value::Object(_)) {
         return Err(bad(WHAT, format!("Victim holds {}, not an object", c.arg(0)?.kind_name())));
     }
-    if !matches!(c.arg(1)?, Value::Interface(_) | Value::Object(None)) {
-        return Err(bad(WHAT, format!("InstigatingTargetable holds {}, not an interface", c.arg(1)?.kind_name())));
+    // An object whose class implements the declared interface is the same value (option (B) of
+    // NATIVE_LINKS_3_4_TAIL.md section 3, lane IMPL-LINKS-3-4-TAIL; UNVERIFIED, pending the hub's ruling): the script's
+    // DynamicCast into the interface local leaves the object. Decided read-only: an interface table that would need
+    // resolving first is `NotRead`.
+    match c.arg(1)?.clone() {
+        Value::Interface(_) | Value::Object(None) => {}
+        Value::Object(Some(o)) => {
+            let PropKind::Interface { class: iface } = params[1].kind else { unreachable!("checked above") };
+            let class = c.vm.space.heap.get(o)?.class;
+            match c.vm.implements_read_only(class, iface)? {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(bad(WHAT, "InstigatingTargetable holds an object whose class does not implement the interface"));
+                }
+                None => return Err(NotYet::not_read(INTERFACE_UNRESOLVED, RECORD).into()),
+            }
+        }
+        other => return Err(bad(WHAT, format!("InstigatingTargetable holds {}, not an interface", other.kind_name()))),
     }
     if is_a(c.vm, game, "WillowGame.WillowCoopGameInfo")? {
         return Err(NotYet::not_read(COOP_FRIENDLY_FIRE, RECORD).into());
