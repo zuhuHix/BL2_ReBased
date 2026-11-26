@@ -65,30 +65,71 @@ the port's numbers with the stubs of section 6, not observations of the game.
 ## 3. Off answer: a set-up preload of the starting values' definitions
 
 **Proposed** (the same shape as `equip_run::preload_threshold_attributes`, whose destinations are also
-`SetBaseValue`'s; hub ruling needed, open question 1). At the combat world's set-up, in Off, before any step writes,
-for each AI pawn archetype the run can spawn:
-1. take the archetype's `AIClass` and walk it, then its `AttributeParentClass` chain, as the script does;
-2. on each class, read its `AttributeStartingValues` entries. For each, read the entry's `Attribute`, and the
-   `BaseValueAttribute` and `InitializationDefinition` of its `BaseValue`;
-3. also read the archetype's own `AttributeStartingValues` the same way;
-4. for each attribute found, also read:
-   - its `ContextResolverChain` entries;
-   - its `ValueResolverChain` entries up to the first None;
-5. load each unloaded one through the store, and log it as a harness input: "preload <path> (a SetBaseValue definition
-   the game keeps resident; UNVERIFIED)";
-6. a failed load is logged and left, so the native's own refusal shows it later.
+`SetBaseValue`'s; hub ruling needed, open question 1). It runs at the combat world's set-up, in Off, before the run's
+first step, in three phases.
+
+**Phase 1, discovery: which archetypes and classes.**
+- **The archetypes** are the run's spawn kinds: each entry of `ow_combat::run::KINDS` names a package and an archetype
+  path. The store does not load pawn archetypes, so the spawn copies one from its package (`hit::instantiate_copy`).
+  Set-up does the same for each kind: one throwaway copy, never placed in the world, read and then left. The copy is
+  a set-up write, logged as a harness input ("set-up copy of <archetype> to read its starting values; UNVERIFIED").
+- **The classes:** the copy's `AIClass` is often an unloaded handle. The adopt loads it today at spawn time, through
+  `hit::access::loaded`. Set-up loads it instead, and likewise each `AttributeParentClass` in turn, which can also be
+  an unloaded handle. Each load goes through the store and is logged as a preload. Only after its load are a class's
+  fields read. The walk stops at a None parent, and at a class it has already seen (it keeps its own list), so a
+  parent chain that loops cannot run forever.
+
+**Phase 2, the starting values and the closure `SetBaseValue`'s preflight walks.**
+1. On each class of the chain, and on the archetype copy itself, read the `AttributeStartingValues` entries. For each
+   entry, take its `Attribute` (the destination) and its `BaseValue`.
+2. **The destination**, as the preflight's set form checks it (`ow-attr` `check_definition`): the attribute itself;
+   its `ContextResolverChain` entries; its `ValueResolverChain` entries up to the first None.
+3. **The base value**, as the preflight's `check_init` walks it, to its depth bound (`PREFLIGHT_DEPTH`):
+   - its `BaseValueAttribute`, checked in the read form: the attribute, its context resolvers and its value resolvers;
+   - its `InitializationDefinition`;
+   - when that definition's `ValueFormula` is enabled, the four nested values `Multiplier`, `Level`, `Power` and
+     `Offset`, each walked the same way;
+   - otherwise, when its `ConditionalInitialization` is enabled, only the entries the preflight reaches. That means each
+     expression's attribute operands (the second only when the first is set), and each reached branch's nested value,
+     stopping at the first entry with no expressions; the default value only when no such entry exists.
+4. A definition must be loaded before its own fields can be read, so the walk loads as it goes. Its next level appears
+   only after that load.
+5. **Recommended to the implementing lane:** factor `check_init`'s traversal in `ow-attr` into one walk that both the
+   preflight and the preload use, with a callback for an unloaded handle (the preflight refuses; the preload loads and
+   logs). Then the two cannot drift apart. Otherwise the preload must mirror `check_init` and `check_definition` by
+   hand.
+
+**Phase 3, the loads.** Each unloaded object found is loaded through the store and logged as a harness input: "preload
+<path> (a SetBaseValue definition the game keeps resident; UNVERIFIED)". A failed load is logged and left, so the
+native's own refusal shows it later.
+
+**What the "nothing is loaded" guarantee covers:**
+- `SetBaseValue`'s preflight, as today: it loads nothing during the run, and an unloaded handle it reaches refuses;
+- the set-up preload loads, writes its throwaway copies, and logs, all before the run's first step. #518's counters
+  therefore count them, but before any link's own marks are taken, so no link's partial-writes prefix comes from them;
+- the adopt's existing load of the AI class (`access::loaded`, at spawn time, pre-existing) becomes a no-op for a
+  class the preload already loaded. It is not new, and this note does not change it;
+- **not covered:** anything the evaluation reaches beyond the preflight's walk. For example, a resolver's own
+  definitions, which `ow-attr` loads as it loads them today. #572 already accepts that and marks it with the
+  partial-writes prefix.
+
+**Bounded alternative** (if the lane does not take the closure): load only the immediate set, steps 2 and 3's first
+two items. **A predicted stop** then remains for any nested value that names an unloaded definition: the preflight's
+"a definition the SetBaseValue preflight reaches is not loaded (a load is a write): an object of class <class>". In the
+probe the immediate set was enough: after its nine loads the preflight passed for all three slice attributes.
 
 **Declarations:**
 - the fields must be declared: `AIClass` an object, `AttributeParentClass` an object, `AttributeStartingValues` an array
   of `AttributeStartingValue` structs, and `Attribute` an object on the entry;
 - `BaseValue` must be an `AttributeInitializationData`, read with the evaluator's own data reader;
-- an undeclared field or a wrong kind is a `VmError::Script`, and nothing is loaded.
+- the nested fields are those `check_init` already requires, with its own errors;
+- an undeclared field or a wrong kind is a `VmError::Script`, raised before that object's dependants are loaded.
 
 **What is not covered:**
 - `AttributeStartingValuesNew` (the category lists). The script walks them after the plain list, but their entry layout
-  is not read here. A class whose `AttributeStartingValuesNew` is declared and non-empty gives the preload's `NotYet {
-  NotRead }`, "the starting-value categories' layout", before anything loads. In the probe the plain lists sufficed;
-  whether the slice's classes have category entries was not checked (open question 2).
+  is not read here. A class whose `AttributeStartingValuesNew` is declared and non-empty gets the preload's not-read
+  refusal (kind NotRead), "the starting-value categories' layout", before that class's starting values load. In the
+  probe the plain lists sufficed; whether the slice's classes have category entries was not checked (open question 2).
 
 **The native is unchanged:** `SetBaseValue`'s preflight keeps refusing an unloaded handle, so a definition the preload
 missed still shows. **Reference:** nothing changes; the C++ does not implement `SetBaseValue`.
@@ -161,9 +202,12 @@ With 3 to 5 loaded (open question 5), **link 4 passes** in the probe.
 - on the third swing she is below 30% of her maximum, so `AdjustDamage` reads the instigator's
   `AttackInjuredMeleeDamageModifier` (NATIVE_DAMAGE_DEATH.md section 1, stage 2);
 - the port reads it on the AI's `WillowMind`. The packages declare it only on `WillowPlayerController`, so the port's
-  `NotYet { NotRead }` follows: "the attribute WillowMind.AttackInjuredMeleeDamageModifier: the VM object's class does
-  not declare it" (open question 6);
-- past it, that swing would take Maya below 0, the first time a probe has seen her go down on link 13.
+  not-read refusal (kind NotRead) follows: "the attribute WillowMind.AttackInjuredMeleeDamageModifier: the VM object's
+  class does not declare it" (open question 6);
+- **a projection, not a measurement:** the run stopped at that attribute before the third swing's damage was
+  computed. If that swing dealt the same 69.73 as the first two, it would take Maya from 3.48 to below 0, the first
+  time a probe would have seen her go down on link 13. Her shield, the protection timer and the melee-injured factor
+  are not in that figure.
 
 **Link 14** needs link 13's down, so it is blocked by link 13.
 
@@ -192,20 +236,29 @@ With all of them, the probe scored 9 ok / 14 (X = 10.75/14 = 76.8%): link 4 pass
    - one harness line each, in walk order (parents first);
    - a second run loads and logs nothing.
 2. **The archetype's own list:** a starting value on the archetype alone is preloaded too.
-3. **Declarations:** an undeclared `AttributeStartingValues`, or one of another kind, is a `VmError::Script` with
+3. **Discovery:** the archetype is found through a spawn kind's package and path. Its `AIClass` and the parent's
+   `AttributeParentClass` are both unloaded handles; both are loaded and logged before their fields are read; a parent
+   chain that loops stops at the class already seen.
+4. **The closure:** a base value whose initialization definition has an enabled `ValueFormula` whose `Multiplier`
+   names an unloaded attribute. That attribute, its definition and its resolvers are loaded, and the native's
+   preflight then passes. The same holds for a conditional initialization's reached expression operand, and not for an
+   operand in an entry after the first entry with no expressions.
+5. **Declarations:** an undeclared `AttributeStartingValues`, or one of another kind, is a `VmError::Script` with
    nothing loaded.
-4. **Categories:** a declared, non-empty `AttributeStartingValuesNew` is the `NotRead`, decided before any load.
-5. **A failed load** is logged, left, and the run goes on; the native's later call refuses with its own text.
-6. **Reference:** the preload does nothing and logs nothing.
-7. **The effect:** after the preload, an Off spawn of the toy pawn writes the starting value's base on its context,
+6. **Categories:** a declared, non-empty `AttributeStartingValuesNew` is the `NotRead`, decided before any load.
+7. **A failed load** is logged, left, and the run goes on; the native's later call refuses with its own text.
+8. **Reference:** the preload does nothing and logs nothing.
+9. **The effect:** after the preload, an Off spawn of the toy pawn writes the starting value's base on its context,
    and without it the native refuses with `UNLOADED` (a test of the existing native's preflight through the spawn).
 
 ## 8. Predicted stop per link
 
-The installed Off strict `--slice-gate`, after section 3's preload alone (nothing else of section 6; measured by the probe
-on #807's head 0a9cfdaf, the base of this note):
+**A prediction for the set-up form.** The probe did not run section 3's set-up preload. It loaded the same nine
+objects at the native's refusal (section 6, stub 1), on #807's head 0a9cfdaf. With that stub alone the run went on to
+the stop below, and the set-up form is predicted to give the same:
 - **links 3, 4 (and 5, 13, 14 blocked behind them):** both spawns stop at the unbound
-  `BaseBalanceDefinition.ApplyGradeCustomizations` (until IMPL-COMBAT-MUSIC lands);
+  `BaseBalanceDefinition.ApplyGradeCustomizations` (until IMPL-COMBAT-MUSIC lands). Measured with the at-refusal stub;
+  predicted for the set-up preload;
 - with IMPL-COMBAT-MUSIC in too, both at the unbound `DamagePipeline.GetBarrelSourceTime()`;
 - then the `IsFriendlyFire` argument (open question 3), and then each link as section 5 lists.
 

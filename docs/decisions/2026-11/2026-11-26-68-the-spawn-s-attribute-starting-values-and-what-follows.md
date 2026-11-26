@@ -36,3 +36,13 @@ changes.
   `NothingTouched` under `NoLevel`; the combat world's globals preload and its two subobjects; the melee-injured
   attribute for an AI instigator.
 - **Verified:** nothing in the game. The predicted stops come from the probe.
+- **Review of #811 (fix round):**
+  - the preload now has a discovery phase (the run's spawn kinds, a set-up copy of each archetype, its `AIClass` and
+    `AttributeParentClass` chain loaded before their fields are read);
+  - it walks the transitive closure `SetBaseValue`'s preflight walks (nested formulas and reached conditionals), with a
+    bounded alternative whose remaining refusal is named as a predicted stop;
+  - it says which loads the guarantee covers;
+  - section 8's stop is a prediction for the set-up form (the probe loaded at the refusal);
+  - Maya's down is a projection;
+  - the index cell states the Rust Off binding and Reference;
+  - the refusal kinds are written in prose.
