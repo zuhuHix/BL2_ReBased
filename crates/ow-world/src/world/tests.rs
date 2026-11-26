@@ -4461,9 +4461,10 @@ mod link6 {
             let e = set_base_skel(&mut x, r, Some(base), skel);
             assert_eq!(not_read(&mut x, e, before), BONE_PLACEMENT);
             // A hard-attached authority: the full inverse's NotRead; a hard-attached simulated proxy: attached, no
-            // relative pose.
+            // relative pose. The receiver sits one unit off its base, so this is not the identity case (review of #805).
             set_field(&mut x.w.vm.space, r, "bHardAttach", Value::Bool(true)).unwrap();
             set_field(&mut x.w.vm.space, r, "Role", Value::Byte(3)).unwrap();
+            vector(&mut x, r, "Location", [1.0, 0.0, 0.0]);
             let before = counters(&x);
             let e = set_base(&mut x, r, Some(base));
             assert_eq!(not_read(&mut x, e, before), HARD_ATTACH);
@@ -4514,6 +4515,12 @@ mod link6 {
                             } else {
                                 set_field(&mut c.vm.space, r, "bHardAttach", Value::Bool(true))?;
                                 set_field(&mut c.vm.space, r, "Role", Value::Byte(3))?;
+                                // One unit off the new base, so not the identity case (review of #805).
+                                let class = c.vm.space.heap.get(r)?.class;
+                                let p = c.vm.space.prop(class, "Location").unwrap();
+                                let mut at = c.vm.space.read(r, PropAddr::scalar(p))?.clone();
+                                at.struct_mut().unwrap().fields[0] = Value::Float(1.0);
+                                c.vm.space.write(r, PropAddr::scalar(p), at)?;
                             }
                             Ok(Value::None)
                         }),

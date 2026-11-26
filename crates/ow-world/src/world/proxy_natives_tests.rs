@@ -418,12 +418,23 @@ fn set_hard_attach_refusals_and_the_prefix() {
 // Test 3: SetBase on a toy PawnInteractionProxy, the identity case.
 #[test]
 fn set_base_on_a_proxy_the_identity_case() {
+    // A non-zero relative pose before each call (review of #805): the identity case writes zeros over it.
+    let stale = |x: &mut Fx, p: ObjRef| {
+        let v = x.vector([4.0, 5.0, 6.0]);
+        x.set(p, "RelativeLocation", v);
+        let mut r = x.get(p, "RelativeRotation");
+        r.struct_mut().unwrap().fields[1] = Value::Int(77);
+        x.set(p, "RelativeRotation", r);
+    };
     for role in [AUTHORITY, AUTONOMOUS] {
         let mut x = fx();
         let (p, maya) = (x.obj("WillowGame.PawnInteractionProxy"), x.obj("Engine.Actor"));
         x.set(p, "bHardAttach", Value::Bool(true));
         x.set(p, "Role", Value::Byte(role));
+        stale(&mut x, p);
         x.base(p, Some(maya)).unwrap();
+        let rotation = x.get(p, "RelativeRotation");
+        assert!(rotation.as_struct().unwrap().fields.iter().all(|f| *f == Value::Int(0)), "role {role}: {rotation:?}");
         assert_eq!(x.get(p, "Base"), Value::Object(Some(maya)), "role {role}");
         let zero = x.vector([0.0, 0.0, 0.0]);
         assert_eq!(x.get(p, "RelativeLocation"), zero);
@@ -438,15 +449,21 @@ fn set_base_on_a_proxy_the_identity_case() {
     x.set(p, "Role", Value::Byte(SIMULATED));
     let away = x.vector([5.0, 0.0, 0.0]);
     x.set(p, "Location", away);
+    stale(&mut x, p);
+    let (location, rotation) = (x.get(p, "RelativeLocation"), x.get(p, "RelativeRotation"));
     x.base(p, Some(maya)).unwrap();
-    let zero = x.vector([0.0, 0.0, 0.0]);
-    assert_eq!(x.get(p, "RelativeLocation"), zero, "no pose written");
+    assert_eq!((x.get(p, "RelativeLocation"), x.get(p, "RelativeRotation")), (location, rotation), "no pose written");
 }
 
 #[test]
 fn set_base_on_a_proxy_off_identity_is_the_hard_attach_not_read() {
     use crate::world::set_base::HARD_ATTACH;
-    let cases: [(&str, fn(&mut Fx, ObjRef, ObjRef)); 4] = [
+    let cases: [(&str, fn(&mut Fx, ObjRef, ObjRef)); 7] = [
+        ("equal infinite Locations", |x, p, m| {
+            let v = x.vector([f32::INFINITY, 0.0, 0.0]);
+            x.set(p, "Location", v.clone());
+            x.set(m, "Location", v);
+        }),
         ("one unit away", |x, p, _| {
             let v = x.vector([1.0, 0.0, 0.0]);
             x.set(p, "Location", v);
@@ -456,6 +473,15 @@ fn set_base_on_a_proxy_off_identity_is_the_hard_attach_not_read() {
             r.struct_mut().unwrap().fields[1] = Value::Int(100);
             x.set(m, "Rotation", r.clone());
             x.set(p, "Rotation", r);
+        }),
+        ("a turned receiver on an unturned base", |x, p, _| {
+            let mut r = x.get(p, "Rotation");
+            r.struct_mut().unwrap().fields[1] = Value::Int(100);
+            x.set(p, "Rotation", r);
+        }),
+        ("DrawScale3D (1, 1, 2)", |x, _, m| {
+            let v = x.vector([1.0, 1.0, 2.0]);
+            x.set(m, "DrawScale3D", v);
         }),
         ("DrawScale 2", |x, _, m| x.set(m, "DrawScale", Value::Float(2.0))),
         ("a PrePivot", |x, _, m| {
