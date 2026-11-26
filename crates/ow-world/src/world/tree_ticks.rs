@@ -12,7 +12,7 @@
 //! **The preflight** ([`plan`]) reads only: no write, no store load, no class-code load, nothing interned (a name is
 //! matched by its text). In order, the first refusal met is the answer:
 //! 1. `Animations` declared as an object (checked by the caller); None is nothing at all;
-//! 2. the tree root resident ([`NOT_LOADED`]), declaring `NodeInitTag` as an int; the component declares `InitTag` as
+//! 2. the tree root resident ([`not_loaded`], which names the object's role and path), declaring `NodeInitTag` as an int; the component declares `InitTag` as
 //!    an int (the tag field's name is the bone-transform note's fit, **UNVERIFIED**) and `AnimTickArray` as an array.
 //!    The tick list is the component's `AnimTickArray` (the copy fills the component's and the root's alike);
 //! 3. each tick-list entry in order: None skipped; a store handle not loaded is [`TICK_NODE_NOT_LOADED`]. By its
@@ -54,6 +54,11 @@ const UNIT: &str = "UpdateAnimations";
 /// The refusal texts (the note's section 5).
 pub const TICK_NODE_NOT_LOADED: &str = "UpdateAnimations: a tick node not loaded at set-up (a load is a write)";
 pub const NOT_LOADED: &str = "UpdateAnimations: an object the store has not loaded (a load is a write)";
+
+/// [`NOT_LOADED`] for the object of `role` at `path` (the store's handle path), so a refusal says which one.
+pub fn not_loaded(role: &str, path: &str) -> String {
+    format!("{NOT_LOADED}: {role} {path}")
+}
 pub const AUTO_NAME_ISSUING: &str = "UpdateAnimations: the additive auto-name while issuing notifies";
 pub const SEQUENCE_CHANGES: &str = "UpdateAnimations: the steps after a sequence node's sequence changes";
 pub const LINKUP: &str = "UpdateAnimations: an additive sequence's mesh link-up";
@@ -170,9 +175,11 @@ fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
     v.elements().map(<[Value]>::to_vec).ok_or_else(|| script(format!("{what} holds {}, not an array", v.kind_name())))
 }
 
-fn resident(vm: &Vm, o: ObjRef, refusal: &'static str) -> Result<(), VmError> {
+/// `o` resident, else [`not_loaded`] naming `role` and its handle path.
+fn resident(vm: &Vm, o: ObjRef, role: &str) -> Result<(), VmError> {
     if !skeletal::resident(vm, o)? || vm.defs.is_failed(&vm.space, o) {
-        return Err(not_read(refusal));
+        let path = vm.defs.handle_path(o).unwrap_or_default();
+        return Err(not_read(not_loaded(role, &path)));
     }
     Ok(())
 }
@@ -206,9 +213,9 @@ fn lookup(vm: &Vm, component: ObjRef, reverse: bool, text: &str) -> Result<Optio
         sets.reverse();
     }
     for set in sets.iter().filter_map(object) {
-        resident(vm, set, NOT_LOADED)?;
+        resident(vm, set, "the anim set")?;
         for sequence in elements(&declared(vm, set, "Sequences", Want::Array)?, "Sequences")?.iter().filter_map(object) {
-            resident(vm, sequence, NOT_LOADED)?;
+            resident(vm, sequence, "the anim sequence")?;
             let name = name_of(&declared(vm, sequence, "SequenceName", Want::Name)?);
             if name != NameId::NONE && vm.space.names.text(name).eq_ignore_ascii_case(text) {
                 return Ok(Some(sequence));
@@ -239,7 +246,7 @@ fn additive(vm: &Vm, node: ObjRef, guard: bool) -> Result<bool, VmError> {
     let Some(component) = object(&declared(vm, node, "SkelComponent", Want::Object)?) else {
         return Ok(auto);
     };
-    resident(vm, component, NOT_LOADED)?;
+    resident(vm, component, "the node's SkelComponent")?;
     if object(&declared(vm, component, "SkeletalMesh", Want::Object)?).is_none() {
         return Ok(auto);
     }
@@ -257,7 +264,7 @@ pub fn plan(vm: &Vm, component: ObjRef) -> Result<Option<Plan>, VmError> {
     let Some(root) = object(&declared(vm, component, "Animations", Want::Object)?) else {
         return Ok(None);
     };
-    resident(vm, root, NOT_LOADED)?;
+    resident(vm, root, "the tree root")?;
     let tag = int_of(&declared(vm, root, "NodeInitTag", Want::Int)?);
     declared(vm, component, "InitTag", Want::Int)?;
     let ticks = elements(&declared(vm, component, "AnimTickArray", Want::Array)?, "AnimTickArray")?;
