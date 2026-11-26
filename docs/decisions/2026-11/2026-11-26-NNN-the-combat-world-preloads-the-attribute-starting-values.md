@@ -1,6 +1,6 @@
 ## 2026-11-26: The combat world preloads the attribute starting values' definitions
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-SPAWN-SETBASEVALUE, on main c1058de. Clean room: implemented from
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-SPAWN-SETBASEVALUE, on main c1058de, rebased onto f80b68e. Clean room: implemented from
 docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811 at 3aedca6, then as fixed at 0b0a1e6) alone; this lane did not read the
 executable. No session was run. Every rule is UNVERIFIED in the running game.
 
@@ -64,6 +64,8 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
   Reference doing nothing; and, for the hub's points, an unloaded parent class followed, and a nested formula term and
   conditional (an operand and a `BaseValueIfTrue` loaded; the entry after an always-holding one and the default not
   reached, not loaded). **Not tested:** test 7 (the effect through a spawn); the installed gate shows it.
-- **Measured:** see the GATES row of this lane.
+- **Measured** (rebased onto main f80b68e, which has #808 and #810; the GATES row): 8 ok / 14, 9.500/14 = 67.9%
+  (main 60.7%). Both spawns complete, and links 3, 4 and 13 stop at the unbound `DamagePipeline.GetBarrelSourceTime()`,
+  as the note's sections 5 and 8 predicted; links 5 and 14 are blocked behind them.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.

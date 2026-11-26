@@ -60,23 +60,19 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue from main c1058de):** AI-assisted
-(Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting values' definitions, Off.
-`cargo test --workspace` 4,059 passed / 0 failed / 59 ignored (with the hub's points on #811: the walk follows what
-`SetBaseValue`'s preflight walks, nested formulas and conditionals included, and an unloaded parent class);
-`crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock, rerun after those
-points): 8 ok / 6 not ok, 8.500/14 = 60.7%. **Links 3, 4, 5, 13 and 14 move past `SetBaseValue`**: both spawns now stop
-at the unbound `BaseBalanceDefinition.ApplyGradeCustomizations(object,int)` (graded error, as an unbound native is;
-#808 binds it), measured here; the note's section 8 predicted it. The preload loaded the AI
-classes' starting-value attributes (`Attribute_EnemyNonWeaponDamageMultiplier`,
-`Attribute_DamageToVehiclesOnCollisionMultiplier`, `Attribute_HealthMultiplier`, `Attribute_ExperienceMultiplier`),
-their resolvers and the XP multiplier definitions, each logged. Link 7 is at the HUD's pickup targeting (#810 is not on
-this base); 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
-With #811's fixed note (0b0a1e6): the preload runs on `ow-attr`'s shared preflight walk (`walk_set_base_value`), a
-looping parent chain stops, and the set-up copy is logged. `cargo test --workspace` 4,063 passed / 0 failed / 59
-ignored. Installed Off strict `--slice-gate` (release build, under the machine lock, on 07a60ed6): 8 ok / 6 not ok,
-8.500/14 = 60.7%, the same. Links 3, 4 and 13 stop at the unbound `ApplyGradeCustomizations` (5 and 14 blocked), with
-four set-up copies and 16 objects preloaded (none failed), each logged.
+**IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue, rebased onto main f80b68e, which has
+#808 and #810):** AI-assisted (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting
+values' definitions, Off, in the note's three phases (#811 as landed): discovery (each spawn kind's archetype copied
+once, logged, freed; its AI class chain loaded before its fields are read; a looping chain stops), the closure
+`SetBaseValue`'s preflight walks (one walk shared with the preflight, `ow-attr` `walk_set_base_value`), and the loads
+(logged; a failed one left). `cargo test --workspace` 4,090 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock, on 01035e1a): 8 ok / 6 not ok, 9.500/14 =
+67.9% (main: 60.7%). The set-up made 4 copies and loaded 16 objects, none failed, each logged. **Links 3, 4, 5, 13 and
+14 move past `SetBaseValue`, and both spawns now complete**: link 3 (`kill_enemy`) passes its spawn step (1/2) and
+stops at its hit, link 4 (`enemy_attacks_maya`) passes its spawn step (1/2) and stops at its first swing, both at the
+unbound `DamagePipeline.GetBarrelSourceTime()` (the note's section 5, first item). Link 5 is blocked by link 3, link 13
+stops at the same native on link 4's world (0/4), and link 14 is blocked by 13. Link 7 is at the line check's decoy
+`NotRead` (ruling 4); 1, 2, 6 and 8 to 12 ok, 8 ok as before. UNVERIFIED in game. Decision 2026-11-26-NNN.
 
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
