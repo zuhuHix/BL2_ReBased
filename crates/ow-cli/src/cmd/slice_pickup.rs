@@ -285,11 +285,20 @@ pub type Prepare<'a> = dyn FnMut(&mut Vm, &str, bool, &mut bool) -> Result<ObjRe
 /// `equip_run::pickup_gun_init`).
 pub type Init<'a> = dyn FnMut(&mut Vm, ObjRef) -> Result<(), VmError> + 'a;
 
+/// How a gun is dropped: (the pickup class, the gun, the spawner, the place) to its pickup actor; `make` uses
+/// [`drop_at`].
+pub type DropGun<'a> = dyn FnMut(&mut Vm, ClassId, ObjRef, ObjRef, [f32; 3]) -> Result<ObjRef, VmError> + 'a;
+
+/// The init `make` gives each gun: the gun's init before its drop (review of #761: a test compares it with
+/// `equip_run::pickup_gun_init`).
+pub const MAKE_INIT: fn(&mut Vm, ObjRef) -> Result<(), VmError> = equip_run::pickup_gun_init;
+
 /// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line. Each gun
 /// runs its init before its drop (NATIVE_LINK67_PICKUP_GUN_INIT.md section 3), as a dropped weapon in the game was
 /// initialised when it was made.
 pub fn make(vm: &mut Vm, setup: &PickupSetup, line: &str, decoy: bool) -> Result<Pickup, VmError> {
     let class = preflight(vm, setup)?;
+    let mut init = MAKE_INIT;
     build(
         vm,
         class,
@@ -302,7 +311,7 @@ pub fn make(vm: &mut Vm, setup: &PickupSetup, line: &str, decoy: bool) -> Result
                 equip_run::prepare_unowned_typed(vm, line, wrote)
             }
         },
-        &mut equip_run::pickup_gun_init,
+        &mut init,
     )
 }
 
@@ -316,11 +325,26 @@ pub fn build(
     prepare: &mut Prepare<'_>,
     init: &mut Init<'_>,
 ) -> Result<Pickup, VmError> {
+    build_dropping(vm, class, line, decoy, prepare, init, &mut drop_at)
+}
+
+/// [`build`] with the drop given (its tests run the whole fixture, the decoy's path included, with a toy drop; review
+/// of #761).
+pub fn build_dropping(
+    vm: &mut Vm,
+    class: ClassId,
+    line: &str,
+    decoy: bool,
+    prepare: &mut Prepare<'_>,
+    init: &mut Init<'_>,
+    drop: &mut DropGun<'_>,
+) -> Result<Pickup, VmError> {
     let mut wrote = false;
-    let made = build_with(vm, class, line, decoy, prepare, init, &mut wrote);
+    let made = build_with(vm, class, line, decoy, prepare, init, drop, &mut wrote);
     made.map_err(|e| if wrote { after_writes(e) } else { e })
 }
 
+#[allow(clippy::too_many_arguments)] // the fixture's three seams and its write flag, each one named
 fn build_with(
     vm: &mut Vm,
     class: ClassId,
@@ -328,6 +352,7 @@ fn build_with(
     decoy: bool,
     prepare: &mut Prepare<'_>,
     init: &mut Init<'_>,
+    drop: &mut DropGun<'_>,
     wrote: &mut bool,
 ) -> Result<Pickup, VmError> {
     let weapon = gun(vm, line, true, prepare, init, wrote)?;
@@ -336,11 +361,11 @@ fn build_with(
     let origin = place(vm, pawn, [0.0, 0.0, 0.0])?;
     write(vm, pawn, "Location", origin)?;
     *wrote = true;
-    let pickup = drop_at(vm, class, weapon, pawn, AIMED_AT)?;
+    let pickup = drop(vm, class, weapon, pawn, AIMED_AT)?;
     let decoy = if decoy {
         // The decoy's gun, after the first gun's drop: the same steps.
         let w = gun(vm, line, false, prepare, init, wrote)?;
-        Some((w, drop_at(vm, class, w, pawn, DECOY_AT)?))
+        Some((w, drop(vm, class, w, pawn, DECOY_AT)?))
     } else {
         None
     };
