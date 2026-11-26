@@ -131,14 +131,14 @@ reading one field.
    - **not a player's pawn:** `SetRBCollidesWithChannel(7, true)`;
    - **a player's pawn (Maya, with a player's controller):** for each foot, left then right:
      - a new `NxFootForceFieldComponent` (the component `New`, NATIVE_NEW_COMPONENT_INSTANCING.md);
-     - attached to the body mesh at the bone `L_Foot` (then `R_Foot`) by `SkeletalMeshComponent.AttachComponent`, which
-       the port does not bind;
+     - attached, at the bone `L_Foot` (then `R_Foot`), by `SkeletalMeshComponent.AttachComponent` to the mesh the
+       virtual `GetSkelMesh()` returns (not `Mesh` directly; review of #767). The port binds neither;
      - `DoInitRBPhys` on it (2.C).
 
 **What a level above 0 costs the port:**
 - a physics layer: scene, articulated bodies, force fields;
 - a pose refresh;
-- the bone attachment;
+- the bone attachment, and `GetSkelMesh()` (not read, no binding);
 - two component instances;
 - the cross-package constant.
 
