@@ -2,6 +2,21 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, on fix/rust-link7-hud from main d118d2b, which has the note
+#806):** AI-assisted (Claude Code, Opus 5.5). The hub's four rulings on #806
+as Off harness inputs (the harness HUD, the `AddPickup` registration, the eye-point view, the no-hit line check under
+`NoLevel`) and the shrink step's rule, Off. `cargo test --workspace` 4,049 passed / 0 failed / 59 ignored;
+`crate_edges_test.py` OK (rebuilt on d118d2b: `cargo test -p ow-inventory -p ow-cli -p ow-world` 1,645 passed / 0
+failed / 15 ignored). Installed Off strict `--slice-gate` on d118d2b (release build, under the machine lock): 8 ok / 6
+not ok, 8.500/14 = 60.7% (no change in count). **Link 7 passes `make` and `touch` and stops in `look` at the line check's
+`NotRead`**: the decoy `WillowPickup`, whose collision is its `SkeletalMeshComponent`, has bounds by the
+bounding-cylinder rule of (0, 45, 0) ± (118.5, 118.5, 32.7), which meets the line's box from (127.6, 0, 11.2) to (0, 0,
+75), so ruling 4's geometric clearance does not clear it. Link 6 ok, 3/3 (the registration on). Links 3, 4, 5, 13 and
+14 are at `AttributeInitializationDefinition.SetBaseValue` (as on main); 1, 2 and 8 to 12 are ok. **Begun play (ruling 2's
+first form) was measured** and broke link 6: its `make` stopped at the spawn's "the base search after PostBeginPlay"
+(7 ok / 14, 50.0%), so the registration fallback is used. Before the review rulings, with the line check answered no
+hit outright, link 7 passed (9 ok / 14, 64.3%). UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-PLAYER-PAWN-FLAG (2026-11-26, pc-hummer, on fix/rust-player-pawn-on, on main c1058de6):** AI-assisted (Claude
 Code, Opus 5.5). In Off, the slice's combat set-up turns on the player set-up's `Pawn` (logged), and #805's
 nothing-touched stand-in also applies to a collision service with no geometry (its own line). `cargo test --workspace -j
