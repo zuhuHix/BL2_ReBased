@@ -2,10 +2,10 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-LINK34-AFTER-MIND (2026-11-26, pc-hummer, on fix/rust-link34-after-mind: main 54c9cf0 with #792 merged):**
+**IMPL-LINK34-AFTER-MIND (2026-11-26, pc-hummer, on fix/rust-link34-after-mind, stacked on #792 @ 464346d9):**
 AI-assisted (Claude Code, Opus 5.5). `SetPhysics`' base search (with the `NoLevel` stand-in) and the player pawn's
 layers; `IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumForSurfaceType` and
-`IsVulnerableToFriendlyFire`, Off. `cargo test --workspace -j 8 --no-fail-fast` 3,987 passed / 0 failed / 59 ignored;
+`IsVulnerableToFriendlyFire`, Off. `cargo test --workspace -j 8 --no-fail-fast` 3,991 passed / 0 failed / 59 ignored;
 `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 7 not ok,
 58.3%. Links 3, 4, 5, 13 and 14 move from #792's "the base search for a walking-type mode" to "the base search's floor
 trace", the `LayerAbsent` of a world with no collision service (the combat world installs none, as the note says), so
