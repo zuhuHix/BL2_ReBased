@@ -21,7 +21,10 @@ generated name are the first writes; a `NotYet` after them carries the partial-w
 **The transient flag.** The note names no bit. `PropertyDecl::TRANSIENT` = 0x2000 (bit 13 of the low flag word) comes
 from the installed packages (`tools/ghidra/class_layout.py`'s property reader, counts and names only). It is set on
 `Engine.PrimitiveComponent`'s run-time state (`Tag`, `Bounds`, `SceneInfo`, the local-to-world matrices) and on none
-of its editable fields. That is a fit, UNVERIFIED.
+of its editable fields. That is a fit, UNVERIFIED. The structural check (review of #755, a census over the 9
+packages in `class_layout.py`'s list, counts only): the bit is set on 3,862 of 27,287 class and struct member
+properties; only 83 of those (2.1%) also carry Edit (0x1), against 43% of all members; it is never set on Core.Object's
+own fields.
 
 **The component-instancing rule** (NATIVE_NEW_COMPONENT_INSTANCING.md section 3, #749). It replaces the blanket
 bit-23 refusal, on both paths of `new`, read only and before anything is made:
