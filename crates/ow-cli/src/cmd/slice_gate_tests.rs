@@ -557,7 +557,7 @@ fn a_set_up_harness_line_reaches_the_row() {
         "a note that is not a harness input".into(),
         "harness input: no engine object; PhysXLevel not set".into(),
     ];
-    let lines = setup_harness(&log);
+    let lines = setup_harness(&log, &[]);
     assert_eq!(
         lines,
         [
@@ -571,4 +571,39 @@ fn a_set_up_harness_line_reaches_the_row() {
     let json = row.json();
     assert!(json.contains("\"harness\":[\"world set-up: harness input: the engine object's PhysXLevel = 0"), "{json}");
     assert!(json.ends_with("\"harness input: a step's own line\"]}"), "{json}");
+}
+
+/// Review of #777, item 1: on the `--map` route the route's notes are logged too; the set-up lines leave them out, so
+/// the first combat row shows each once and the other rows not at all.
+#[test]
+fn the_map_route_s_notes_are_not_repeated_as_set_up_lines() {
+    let route: Vec<String> = vec![
+        "harness input: the world's globals (an invented route note)".into(),
+        "harness input: the local player (an invented route note)".into(),
+    ];
+    let mut log = route.clone();
+    log.push("harness input: the engine object's PhysXLevel = 0 (an invented line)".into());
+    let setup = setup_harness(&log, &route);
+    assert_eq!(setup, ["world set-up: harness input: the engine object's PhysXLevel = 0 (an invented line)"]);
+    let steps = vec!["harness input: a step's own line".to_string()];
+    let first = row_harness(Some(&route), &setup, &steps);
+    assert_eq!(first, [route[0].as_str(), route[1].as_str(), setup[0].as_str(), steps[0].as_str()]);
+    for line in &route {
+        assert_eq!(first.iter().filter(|l| l.ends_with(line.as_str())).count(), 1, "{line} once");
+    }
+    let later = row_harness(None, &setup, &steps);
+    assert_eq!(later, [setup[0].as_str(), steps[0].as_str()], "no route notes on a later row");
+}
+
+/// Review of #777, item 2: a row's harness list is the route's notes, then the set-up lines, then its steps' lines.
+#[test]
+fn a_row_s_harness_list_is_route_then_set_up_then_steps() {
+    let setup = vec!["world set-up: harness input: s1".to_string(), "world set-up: harness input: s2".to_string()];
+    let steps = vec!["harness input: t1".to_string(), "harness input: t2".to_string()];
+    assert_eq!(row_harness(None, &setup, &steps), [&setup[..], &steps[..]].concat());
+    assert_eq!(row_harness(None, &[], &steps), steps);
+    assert_eq!(row_harness(None, &setup, &[]), setup);
+    let route = vec!["harness input: r1".to_string()];
+    assert_eq!(row_harness(Some(&route), &setup, &steps), [&route[..], &setup[..], &steps[..]].concat());
+    assert_eq!(row_harness(Some(&[]), &setup, &steps), [&setup[..], &steps[..]].concat());
 }
