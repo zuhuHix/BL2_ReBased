@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-MAYA9-NATIVES (decision 2026-11-26-NNN). `WillowPawn.SetDefaultStance()` and
+//! Owner: lane IMPL-MAYA9-NATIVES (decision 2026-11-26-39). `WillowPawn.SetDefaultStance()` and
 //! `WillowPlayerPawn.SetDefaultStance()` in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_MAYA9_AND_AFTER.md section 3.1 alone (lane
