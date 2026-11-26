@@ -34,12 +34,25 @@ slice gate) the current baseline is the newest row that reports it. Older rows a
   (`docs/TOOLING.md`, "Leak gate").
 
 ## Standing baselines
-Numbers that seldom move, as last recorded. A newer row wins, and the change that moves one updates its line here.
-- ctest 173 of 173 passed; `verify_packages` 9 packages, 3,339/3,339 class bodies exact with the C++ reader and with
-  the Rust reader (2026-11-25, pc-hummer runner, main a3b548d; row PHASE-0R-READER-CHECK, in the archive).
-- Fire event order: the self-test passes and 33 of 33 rules hold on the installed packages (2026-11-18, pc-hummer;
-  row FIX-BEHAVIOR-CONTEXT-OBJECT, in the archive).
-- `cargo test --workspace` and the installed Off strict `--slice-gate`: the newest row below that reports them.
+The last result on record for each gate, with the row it comes from and what it ran on, as of the last time rows were
+moved out (2026-11-26). A newer row below wins. Whoever moves rows out brings every line up to date first
+(`gates-archive/README.md`), so that a gate's last result is never only in the archive.
+- ctest: 173 of 173 passed (row PHASE-0R-READER-CHECK, 2026-11-25, pc-hummer runner, main a3b548d; in the archive).
+- `verify_packages`: 9 packages, 3,339/3,339 class bodies exact with the C++ reader and with the Rust reader (the same
+  row).
+- `cargo test --workspace`: 4,064 passed / 0 failed / 59 ignored (row IMPL-LINK7-HUD-TARGETING, its review r2 of #810,
+  2026-11-26, pc-hummer, branch fix/rust-link7-hud from main d118d2b; below). A lane's figure is its own branch's.
+- `crate_edges_test.py`: OK (the same row). Its last recorded count is 19 tests (row FIX-BEHAVIOR-CONTEXT-OBJECT,
+  2026-11-18, pc-hummer; in the archive).
+- Installed Off strict `--slice-gate`: 8 ok / 6 not ok of 14, 8.500/14 = 60.7% (row IMPL-LINK7-HUD-TARGETING,
+  2026-11-26, pc-hummer, release build under the machine lock, "on d118d2b" in the row's words; below). The row has
+  each link's stop.
+- Fire event order: the self-test passes and 33 of 33 rules hold on the installed packages with the C++ reader (row
+  FIX-BEHAVIOR-CONTEXT-OBJECT, 2026-11-18, pc-hummer, base 2fcae040; in the archive).
+- `verify_combat_pawn --vm`: 55 pass / 0 fail / 4 missing of 59 on the S-a to S-f run, and 97 pass / 0 fail /
+  4 missing / 1 open of 102 with the loot run added (row "After lane Sg", 2026-10-09; in the archive). No later run
+  is on record here or in the archive.
+- The Rust host's gates: each baseline stands with its gate under "When the Rust host changes".
 
 ## Dated rows, newest first
 

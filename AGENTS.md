@@ -1,9 +1,10 @@
 # BL2_ReBased agent brief
 
-The brief for AI assistants on this repository, whatever the tool (`CLAUDE.md` imports it). Lanes and sub-agents also
-read [docs/LANE_BRIEF.md](docs/LANE_BRIEF.md) (lane procedures) and
-[docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline, at its top). Open
-longer documents only for the part your task touches.
+The brief for AI assistants on this repository, whatever the tool (`CLAUDE.md` imports it).
+
+**Lanes, sub-agents and short tasks:** also read [docs/LANE_BRIEF.md](docs/LANE_BRIEF.md) (lane procedures and the
+clean room) and [docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline, at
+its top), then open longer documents only for the part your task touches.
 
 BL2_ReBased (code prefix `OpenWillow` / `ow`) is a Borderlands 2 engine reimplementation in Rust: the C++ core in
 `src/` is being ported crate by crate (`crates/`), and the host is our own engine on wgpu + winit (`crates/ow-host`).
@@ -14,10 +15,9 @@ self-taught developer directing an AI-heavy build.
 
 ## Rules that do not bend
 
-This is the short form. `docs/LEGAL.md` is the full text and wins where it says more (`README.md`, "Is this legal?",
-is its public summary). Before you start, read the part of it that covers your work: "Rules" and "Analysing the
-executable" for native analysis, and the whole file for licences, provenance, reuse of third-party code, releases or
-anything published, money, or anything that moves game-derived data.
+This is the short form. `docs/LEGAL.md` and the "Is this legal?" section of `README.md` are the full text and win
+where they say more. Read them before any work on native analysis, licences, provenance, reuse of third-party code,
+releases or anything published, money, or anything that moves game-derived data.
 
 1. **No game-derived payload in the repository, and none distributed or packaged by the project.** Not in a tracked
    file, a commit message, a PR, an issue or a verification record: no game files, assets, package or level dumps,

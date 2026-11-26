@@ -2,9 +2,9 @@
 
 For lanes, sub-agents and short tasks. `AGENTS.md` holds the rules and is normally already in your context (Claude
 Code loads it through `CLAUDE.md`, Codex directly). If you cannot see its section "Rules that do not bend", read
-`AGENTS.md` first: this page repeats only the two lines a brief must carry. Open `docs/LEGAL.md`,
-`docs/NATIVE_ANALYSIS.md` and the other long documents only for the part your task touches. If this page and a long
-document disagree, the long document wins; say so in your report.
+`AGENTS.md` first: this page repeats only the two lines a brief must carry. `AGENTS.md` also says which work needs
+`docs/LEGAL.md` read first; open the other long documents only for the part your task touches. If this page and a
+long document disagree, the long document wins; say so in your report.
 
 ## Two rules that bind you and go into every brief you write
 - **Process safety (rule 10).** Never kill a process by image name (`taskkill /IM`, `Stop-Process -Name`, `pkill`,
