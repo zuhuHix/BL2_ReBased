@@ -10,7 +10,7 @@ the sequence family's reset with its guard, and the additive re-set and lookup, 
 Off strict `--slice-gate` (release build, under the machine lock), base afde0d73 and this change: 6 ok / 8 NotYet,
 42.9% on both. Links 1, 3, 4, 5, 13 and 14 move in `maya:8` from "UpdateAnimations: the tree nodes' ticks" to the
 lookup's not-loaded `NotRead` for the anim set `Anim_Siren.Unarmed_Siren` (the note's section 7 second case; a preload
-is the hub's call). UNVERIFIED in game. Decision 2026-11-26-NNN.
+is the hub's call). UNVERIFIED in game. Decision 2026-11-26-10.
 
 **REBUILD-TEST-GAPS (2026-11-26, pc-hummer, on main afde0d73):** AI-assisted (Claude Code, Opus 5.5). #745's review
 gaps: the unloaded-mesh text with a skeleton source installed, NATIVE_AIMOFFSET_REBUILD.md test 8 through the profiles
