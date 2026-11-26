@@ -169,7 +169,7 @@ impl PropertyDecl {
     /// Return value (`isReturn`).
     pub const RETURN: u64 = 0x400;
     /// Transient: a run-time field, not saved and (for `New` with a template) reset from the class default. Bit 13 of
-    /// the low flag word, recovered from the installed packages (decision 2026-11-26-NNN): it is set on
+    /// the low flag word, recovered from the installed packages (decision 2026-11-26-14): it is set on
     /// `PrimitiveComponent`'s run-time state (`Tag`, `Bounds`, `SceneInfo`, the local-to-world matrices) and on none
     /// of its editable fields (bit 0). By fit; UNVERIFIED in the running game.
     pub const TRANSIENT: u64 = 0x2000;
