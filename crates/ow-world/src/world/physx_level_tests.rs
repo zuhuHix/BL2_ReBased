@@ -188,7 +188,12 @@ fn the_harness_setting_writes_0_to_2_and_logs_it() {
         assert_eq!(x.get(e, "PhysXLevel"), Value::Int(1));
     }
     let mut x = fx();
+    let lines = x.vm.log.len();
+    let before = x.marks();
     assert!(!set_physx_level(&mut x.vm, HARNESS_PHYSX_LEVEL).unwrap(), "no engine object: nothing set");
+    // Lane GATE-SETUP-HARNESS-LINES: that case logs its own harness line, and still writes nothing.
+    assert_eq!(x.vm.log[lines..], [NO_ENGINE_LINE.to_string()]);
+    assert_eq!(x.marks(), before, "nothing written");
     let mut x = fx();
     x.engine("Test.EngineWithAFloatLevel");
     let before = x.marks();
