@@ -9,7 +9,7 @@ NATIVE_LINK1_RIGID_BODY_LAYER.md's class table, every refusal before the first w
 OK. Installed Off strict `--slice-gate` (release build, under the machine lock), main and this change: 6 ok / 8 NotYet,
 47.0% on both. Links 1, 3, 4, 5, 13 and 14 move from the physics `LayerAbsent` to refusal L ("Actor.GetBoundingCylinder:
 the colliding components' bounds"): Maya's body mesh and cylinder are not in the attach record (the body composition's
-attach publishes none). Not `GetPhysXLevel`, as predicted. UNVERIFIED in game. Decision 2026-11-26-NNN.
+attach publishes none). Not `GetPhysXLevel`, as predicted. UNVERIFIED in game. Decision 2026-11-26-25.
 
 **IMPL-MAYA-PAWN-FROM-ARCHETYPE (2026-11-26, pc-hummer, on fix/maya-pawn-from-archetype from main 5f43a0b9):**
 AI-assisted (Claude Code, Opus 5.5). In Off, with a `PlayerClass`, the bridge spawns the player pawn from the class's
