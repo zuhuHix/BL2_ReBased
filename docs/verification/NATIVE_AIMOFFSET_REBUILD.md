@@ -1,6 +1,6 @@
 # The aim-offset node's required-bones rebuild (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-AIMOFFSET-REBUILD (decision 2026-11-25-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-AIMOFFSET-REBUILD (decision 2026-11-25-76), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/aimrebuild/`. This
 note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here
 is UNVERIFIED in the running game.**

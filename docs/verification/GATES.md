@@ -6,7 +6,7 @@ Update this file in the commit that changes a number. Paste real output in repor
 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). NATIVE_AIMOFFSET_REBUILD.md: the aim-offset node's required-bones
 rebuild, read whole (the gate, the lookup table, the component match, the sort, the parent pass), with a load-free Off
 answer. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in game.
-Decision 2026-11-25-NNN.
+Decision 2026-11-25-76.
 
 **ANALYST-INITIALIZE-BEHAVIOR-PROVIDERS (2026-11-25, pc-hummer, docs only, on docs/native-initialize-behavior-providers
 from main fb09b0a0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md names the player
