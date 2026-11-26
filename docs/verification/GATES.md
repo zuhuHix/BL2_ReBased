@@ -9,7 +9,7 @@ Opus 5.5). `CanAffordToPickUpPickupable`, `PayForPickupable` and `UpdateAmmoCoun
 and this change: 6 ok / 8 not ok, 51.2% on both. Link 6 passes `CanAffordToPickUpPickupable` (true for the free gun)
 and stops, still in `key`, at the unbound `WillowPlayerController.GetPawnInventoryManager()` (the controller's
 `HasRoomInInventoryFor`), before `UpdateAmmoCounts`; every other row is unchanged. UNVERIFIED in game. Decision
-2026-11-26-NNN.
+2026-11-26-32.
 
 **SOCKETS-PUBLISH-AND-PHYSX-LEVEL (2026-11-26, pc-hummer, on fix/sockets-publish-and-physx-level, stacked on #770 @
 92e14e9e):** AI-assisted (Claude Code, Opus 5.5). A socket attach takes its parent's `Owner` and is published under the
