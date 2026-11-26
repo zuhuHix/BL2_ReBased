@@ -10,7 +10,7 @@ layers; `IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumFor
 58.3%. Links 3, 4, 5, 13 and 14 move from #792's "the base search for a walking-type mode" to "the base search's floor
 trace", the `LayerAbsent` of a world with no collision service (the combat world installs none, as the note says), so
 the hit and swing natives are not reached in the gate yet. Link 6 stops at `Actor.SetBase` (main's), link 7 at the HUD's
-pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-55.
 
 **ANALYST-GETBOUNDINGCYLINDER-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-bounding-cylinder, read and probed on
 main 54c9cf05, rebased onto 7a67b9f9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BOUNDING_CYLINDER_AND_AFTER.md finds that Maya's
