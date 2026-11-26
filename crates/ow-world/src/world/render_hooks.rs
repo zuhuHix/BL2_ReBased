@@ -32,7 +32,7 @@
 //!    ordinary one passes, and hook 2's plan (`bOwnerNoSee`, then `bNeedsReattach`) is applied in the body
 //!    composition's write phase, after the custom head and before hook 3.
 //!
-//!    **The native** (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS, decision 2026-11-26-NNN): `Pawn.IsPlayerPawn()` itself
+//!    **The native** (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS, decision 2026-11-26-38): `Pawn.IsPlayerPawn()` itself
 //!    ([`IS_PLAYER_PAWN`], [`is_player_pawn`]) answers by this same pawn test, bound in Off only and keep-existing:
 //!    a pass is true, a decided failure false. The rule body is one ([`PawnRule`]); the native names its own refusals
 //!    under [`IS_PLAYER_PAWN_RECORD`] (review r1 of #776, item 5): a lazy `Controller` the test must read is
