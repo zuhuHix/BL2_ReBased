@@ -298,7 +298,7 @@ self-inflicted damage by `GlobalsDefinition.SelfInflictedDamageMultiplier` (0.5 
   `CharacterDamageTypeModifierAttribute` (class default 1 where the attribute has no override).
 - `RecordRecentDamage(tracker, damage, instigator, damageTypeDef, bWasShieldDamage)`: adds the damage to the tracker's total
   and to either its shield-side or health-side sum.
-- `IsHealingDamageType` (not read): the healing definition is `GD_Healing.DamageType.DmgType_Healing_Impact_NoDoT` (type 6).
+- `IsHealingDamageType` (read since: NATIVE_LINK34_AFTER_MIND.md section 6): the healing definition is `GD_Healing.DamageType.DmgType_Healing_Impact_NoDoT` (type 6).
 - Class defaults: flesh/armor/shield modifier 1, `UpwardMomentumScale` 0.4, `RigidBodyMomentumScale` 0.1, radius falloff
   `MaxDamageRadius` 0.2, `MinDamageRadius` 0.8, `MinDamagePercent` 0.2.
 
@@ -540,6 +540,8 @@ once. When the dead camera ends (`EndInjuredDeadCamera`) the state's `InjuredRes
 - `WillowExperiencePipeline` amount rule (both natives, structure only).
 - The status chance's remaining factors; status spreading; `GetStatusEffectChanceModifier`/`BaseDamage` natives.
 - `ConvertDamageToHealing`, `IsFriendlyFire`, healing damage handling; vehicle damage; interactive-object damage.
+  (`IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumForSurfaceType` and
+  `IsVulnerableToFriendlyFire` are read since: NATIVE_LINK34_AFTER_MIND.md.)
 - Crit multiplier base values; `bWasLastDamageACriticalHit` setter.
 - `TeleporterDestination.GetNextExitPoint` (G3), `TravelStation.CanResurrectHere` and station activation
   (`ReplacePreviouslyActivatedStation`).

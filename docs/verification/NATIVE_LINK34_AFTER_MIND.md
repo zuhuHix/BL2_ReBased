@@ -59,11 +59,18 @@ The trace's flags were not decoded, so **which kinds of objects it can hit is no
 - no collision service in the world: `LayerAbsent`, "Actor.SetPhysics: the base search's floor trace", layer
   "collision (the world has no collision service)";
 - with a service: `NotRead`, "Actor.SetPhysics: the base search's floor trace (its trace flags are not decoded)";
+- **both are decided in the preflight, before the mode write** (review r1 of #793). Neither carries the
+  partial-writes prefix, and the base search has no commit-time refusal;
 - **for the hub, a possible stand-in:** in a world whose service is `NoLevel` (no level), and where no live actor
-  holds collision, the trace hits nothing. With `Base` already None, the step then changes nothing. That is a harness
-  input to log, and only with the hub's ruling;
-- the step comes after the mode write. So a refusal decided in the preflight carries no prefix, and one met during the
-  commit carries it.
+  holds collision, the trace hits nothing, so the floor is None:
+  - with `Base` already None, the step changes nothing. That is a harness input to log, and only with the hub's
+    ruling;
+  - with a `Base` set, the floor (None) differs from it, so the base setter would run. Until lane E's SETBASE note (in
+    progress) lands, that case is `NotRead`, "Actor.SetPhysics: the base search's base setter", decided in the
+    preflight.
+
+**What the `--combat-run` world gets** (probe; review r1 of #793): it installs no collision service. Only the slice
+gate's pickup worlds install `NoLevel`. So the combat world's answer is the `LayerAbsent`.
 
 **On the slice** (#788 r1): both spawns ask `SetPhysics` for `PHYS_None` from `PHYS_Walking`, with `Base` None.
 Under the stand-in nothing changes past the mode write, and `Velocity` and `Acceleration` are zeroed (the existing
@@ -150,7 +157,10 @@ The two flags are `GameInfo` bits. Both are true in the `WillowGameInfo` and `Wi
 - **`Controller`, `PlayerController`, `WillowPlayerController`:** `bGodMode` or `bNonCheatGodMode`;
 - **`GearboxMind`:**
   - the `Controller` rule first;
-  - else, when the pawn's `bCanBeInjured` is set (by the layout tool's place, UNVERIFIED): false;
+  - else, when **the mind's own `Pawn`** is set and has `bCanBeInjured` set (by the layout tool's place, UNVERIFIED):
+    false. This is the mind's `Pawn`, read from the controller, also when the call comes through `Pawn.InGodMode` or
+    directly through a controller key. With no `Pawn` the step is skipped and the `GodOnHold` step decides (review r1
+    of #793);
   - else true exactly when the mind's `AIComponent` is set and its **`GodOnHold()`** answers true (that exec reaches the
     same class-table slot; NATIVE_AI_HOLDS.md, bound in Off);
 - **`WillowMind`:** true when the **process-wide AI-god flag** is set. That is the static value behind
@@ -164,11 +174,16 @@ the same virtual.
 - bind `Pawn.InGodMode` and the controller keys in Off to this rule, dispatched on the controller's class;
 - the AI-god flag is a VM-wide value, initially false. `GetAIGod` and `SetAIGod` are bound in Off to read and write it;
 - each field must be declared with its kind, else `VmError::Script`;
+- **load-free** (review r1 of #793): every object it reads (the `Controller`, the `DrivenVehicle`, that vehicle's
+  `Controller`, the mind's `Pawn` and its `AIComponent`) must be resident, else `NotRead`, "Pawn.InGodMode: an object
+  the store has not loaded", decided before anything is evaluated;
 - `GodOnHold` answers through the existing hold lists;
 - write-free.
 
-**On the slice** (probe and `--def-dump`): the baby's mind has `bGodMode` and `bNonCheatGodMode` false. Both archetypes
-have `bCanBeInjured` false, and the mind's god hold list is empty. So the answer is **false**.
+**On the slice** (probe and `--def-dump`):
+- link 3, the baby: its mind has `bGodMode` and `bNonCheatGodMode` false. Both archetypes have `bCanBeInjured` false,
+  and the mind's god hold list is empty. So the answer is **false**;
+- link 4, Maya: her `WillowPlayerController` has both flags false, so the answer is **false** (review r1 of #793).
 
 ## 6. `DamageTypeDefinition.IsHealingDamageType()` (link 4)
 
@@ -230,33 +245,35 @@ checked**.
 ## 8. `Pawn.IsVulnerableToFriendlyFire()` (link 4)
 
 - **`Pawn`, `WillowPawn` and `WillowAIPawn`:** one shared body, **false**;
-- **`WillowPlayerPawn`:** true when its **`FriendlyFireDamageAccepted`** value is above **0.0001**. This is by fit: the
-  layout tool puts the base value at the place the routine reads, and the attribute's value one field earlier, which is
-  the known one-field gap on late Willow pawn fields. Which of the two is read is UNVERIFIED.
+- **`WillowPlayerPawn`:** true when its **`FriendlyFireDamageAcceptedBaseValue`** is above **0.0001**: the field at
+  the layout tool's place for the read (review r1 of #793). UNVERIFIED: with the known one-field gap on late Willow
+  pawn fields, the read would be the attribute's value, `FriendlyFireDamageAccepted`, instead.
 
 **Proposed Off answer:** bind the `Pawn` key and `WillowPlayerPawn`'s own key in Off to this rule, dispatched on the
 receiver's class; the field must be declared as a float attribute, else `VmError::Script`. **On the slice:** the
-player's value is 0.0, so false.
+player's `FriendlyFireDamageAccepted` was 0.0 in the probe, so false under either reading.
 
 ## 9. Predicted stops (from the probe, each earlier stop stubbed)
 
-- **The spawns of links 3, 4, 13 and 14** (link 5 runs on link 3's): `SetDefaultPhysics`' base search (section 2) comes
-  first, as the `LayerAbsent` or `NotRead` above. With the hub's stand-in they pass, to #788 section 5's next stop.
+- **The spawns of links 3 and 4** (link 5 runs on link 3's, links 13 and 14 on link 4's): `SetDefaultPhysics`' base
+  search (section 2) comes first, as the `LayerAbsent` in the combat world. With the hub's stand-in they pass, to #788 section 5's next stop.
 - **Link 3's `hit`** passes `IsFriendlyFire` (false, twice), `InGodMode` (false) and `AdjustMomentumForSurfaceType`
   (unchanged). It then stops at **`AdjustDamage`'s hit-region cap** for `GD_PrimalBeastShared.HitRegions.HitRegion_Body`,
   whose `bTrackDamage` is set. That is the port's existing `NotPorted`; its rule (the hit-region consumer's
   `AddDamageToHitRegion`) is only outlined in NATIVE_DAMAGE_DEATH.md section 1 stage 13. **The next read.**
-- **Link 4's `swing`** passes, in order:
+- **Link 4's `swing`** passes, in the probe's order:
   1. `SetPhysics` (section 3);
   2. `IsFriendlyFire` (false);
-  3. `IsVulnerableToFriendlyFire` (false);
-  4. `IsHealingDamageType` (false);
-  5. `AdjustMomentumForSurfaceType` (0).
+  3. `IsHealingDamageType` (false);
+  4. `IsFriendlyFire` again (false);
+  5. `InGodMode` on Maya's controller (false);
+  6. `IsVulnerableToFriendlyFire` (false);
+  7. `AdjustMomentumForSurfaceType` (0).
 
   It then stops at **`AdjustDamage` stage 11's existing `NotRead`**, "the damage surface of a hit whose region names
   none". Section 7's surface rule is the lead for it.
-- **Link 5** stops with link 3. **Links 13 and 14** spawn an adult and swing it, so link 4's stops are expected; they
-  were not probed.
+- **Link 5** stops with link 3. **Links 13 and 14** have no spawn of their own: link 13 swings link 4's adult three
+  more times and link 14 bleeds out, so they meet link 4's stops first; they were not probed here.
 
 In the slice gate these links start where link 1 ends (NATIVE_MAYA9_AND_AFTER.md section 5).
 
@@ -267,7 +284,7 @@ In the slice gate these links start where link 1 ends (NATIVE_MAYA9_AND_AFTER.md
      written;
    - with a collision service: `NotRead`;
    - (only if the hub rules for the stand-in) under `NoLevel` with `Base` None: the mode written, `Velocity` and
-     `Acceleration` zeroed, `Base` unchanged.
+     `Acceleration` zeroed, `Base` unchanged; with a `Base` set: the base setter's `NotRead`, nothing written.
 2. **`SetPhysics` on a toy `WillowPlayerPawn`:**
    - from `PHYS_None` to `PHYS_Falling`: `Physics` 2, and `BeganFalling(0)` when `bNotifyBeginFalling` is set;
    - `PHYS_NavMeshWalking`: no AI step.
@@ -283,6 +300,8 @@ In the slice gate these links start where link 1 ends (NATIVE_MAYA9_AND_AFTER.md
      - flag clear, pawn `bCanBeInjured` set: false;
      - clear, a god hold present: true; none: false;
    - `SetAIGod` / `GetAIGod` round trip;
+   - an unloaded `Controller`, `DrivenVehicle` or `AIComponent`: the not-loaded `NotRead`, nothing evaluated;
+   - a toy mind with no `Pawn`, called through the controller key: the `GodOnHold` step decides;
    - a vehicle driver's controller.
 5. **`IsHealingDamageType`:** `DamageType` 6: true; 5: false; a base `DamageTypeDefinition`: false.
 6. **`AdjustMomentumForSurfaceType`:**

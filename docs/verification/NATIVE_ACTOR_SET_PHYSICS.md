@@ -60,8 +60,8 @@ These two happen **before** the gates below. So even a request that then changes
 **Effects that depend on the transition:**
 - *into `PHYS_Walking` from any other mode* (`Pawn`): `bForceFloorCheck` is set, before the mode is written;
 - *into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider`* (`Actor`): with no new floor, which is always
-  the case from script, an actor virtual is called. It was not identified, and is presumably the base search (now
-  read: the base search, a downward floor trace of 8 units, NATIVE_LINK34_AFTER_MIND.md section 2);
+  the case from script, an actor virtual is called. It is the base search: a downward floor trace of 8 units, then
+  the base setter when the floor differs (NATIVE_LINK34_AFTER_MIND.md section 2);
 - *into any other mode except `PHYS_Interpolating`, while a `Base` is set* (`Actor`): the base is cleared (set to None,
   with the floor normal up, notifying the actor). This is by fit to the base setter's argument shape;
 - *into `PHYS_None` or `PHYS_Rotating`* (`Actor`): `Velocity` and `Acceleration` are zeroed;
@@ -130,7 +130,8 @@ has not loaded (a load is a write)". In order:
    - `bHardAttach` set and the mode not `PHYS_Interpolating`: answer at once, with nothing changed;
 2. the same mode as now: answer at once, with nothing changed;
 3. the transition refusals:
-   - into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider`: a `NotYet` of kind `NotRead`,
+   - into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider` (read since: NATIVE_LINK34_AFTER_MIND.md
+     section 2, with its proposed answer there): a `NotYet` of kind `NotRead`,
      "Actor.SetPhysics: the base search for a walking-type mode";
    - into any other mode except `PHYS_Interpolating`, with a `Base` set (resident): a `NotYet` of kind `NotRead`,
      "Actor.SetPhysics: clearing the base (the base setter is not ported)";
@@ -206,9 +207,10 @@ unchanged:
 
 1. Not read:
    - the `WillowAIPawn` nav-mesh walking check and its rigid-body event;
-   - the `Actor` base-search virtual for walking-type modes;
+   - the `Actor` base-search virtual for walking-type modes: read since (NATIVE_LINK34_AFTER_MIND.md section 2);
    - the two rigid-body component virtuals;
-   - `WillowPlayerPawn` and other classes' overrides;
+   - `WillowPlayerPawn` and other classes' overrides: `WillowPlayerPawn` read since, it has none
+     (NATIVE_LINK34_AFTER_MIND.md section 3); other classes not read;
 2. UNVERIFIED:
    - that `LiftTarget`'s call is the one link 9 stops at (no caller stack was recorded);
    - the event names (by fit);

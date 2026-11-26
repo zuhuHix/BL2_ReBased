@@ -3,7 +3,7 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **ANALYST-LINK34-AFTER-MIND (2026-11-26, pc-hummer, docs only, on docs/native-link34-after-mind, read and probed on main
-d3be3e5e, rebased onto c79c2f8c):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK34_AFTER_MIND.md reads the natives on links 3 and 4 past the mind. It
+d3be3e5e, rebased onto fc860b5c):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK34_AFTER_MIND.md reads the natives on links 3 and 4 past the mind. It
 names `SetPhysics`' base search, the spawns' first stop: a downward floor trace of 8 units, whose flags are not decoded.
 It finds the player pawn's physics change is `WillowPawn`'s, and `IsFriendlyFire` false on `GameInfo` and
 `WillowGameInfo` (the combat world's stand-in), with `WillowCoopGameInfo`'s own rule outlined. It also reads

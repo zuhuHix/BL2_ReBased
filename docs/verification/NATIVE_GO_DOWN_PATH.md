@@ -268,6 +268,10 @@ be visited answers `NotRead`, "SetShadowCasting: which component flags it sets".
 
 ## 5. Link 4's swing path (met first by link 4, listed for completeness, not read here)
 
+Read since, for the getters, `IsHealingDamageType`, `IsFriendlyFire`, `InGodMode`, `AdjustMomentumForSurfaceType`
+and `IsVulnerableToFriendlyFire`: NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 4.2 and
+NATIVE_LINK34_AFTER_MIND.md.
+
 `Controller.InGodMode`, `DamagePipeline.GetBarrelSourceTime`, `GetCanInflictFriendlyFire`, `GetPlantSourceTime`,
 `DamageTypeDefinition.IsHealingDamageType`, `GameInfo.IsFriendlyFire`, `Pawn.GetController`, `Pawn.InGodMode`,
 `Pawn.IsUsingWalkingPhysics`, `Pawn.PawnCheckPlayHitPreconditions`, `PlayerController.DoForceFeedbackWaveform`,

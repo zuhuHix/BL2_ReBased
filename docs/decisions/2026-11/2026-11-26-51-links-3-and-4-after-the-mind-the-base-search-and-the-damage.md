@@ -10,7 +10,7 @@ check changed.
   rest of links 3, 4 and 5 as far as possible.
 - **What:**
   - the new note `docs/verification/NATIVE_LINK34_AFTER_MIND.md`;
-  - six NATIVE_INDEX rows and a pointer on the `Actor.SetPhysics` row;
+  - five NATIVE_INDEX rows and an edited SetPhysics row;
   - two pointers in NATIVE_ACTOR_SET_PHYSICS.md;
   - a GATES row.
 - **Evidence:**
@@ -41,4 +41,12 @@ check changed.
 - **Needs the hub:**
   - whether the base search may use a `NoLevel` stand-in;
   - the combat world's `WillowGameInfo` stand-in, where the installed game uses `WillowCoopGameInfo`.
+- **Review r1 (#793):**
+  - the base-search row folded into the SetPhysics row;
+  - NATIVE_ACTOR_SET_PHYSICS.md's preflight step and open questions point at the reading;
+  - both base-search answers are preflight refusals with no prefix, the combat world gets the `LayerAbsent`, and a set
+    `Base` with an empty trace is `NotRead` until lane E's SETBASE note lands;
+  - `InGodMode` is load-free, and reads the mind's own `Pawn`; link 4's `InGodMode` on Maya is listed;
+  - `IsVulnerableToFriendlyFire` reads the base value at the tool's place, the value being the alternative;
+  - pointers from NATIVE_DAMAGE_DEATH.md and NATIVE_GO_DOWN_PATH.md.
 - **Clean room:** a different lane implements this note.
