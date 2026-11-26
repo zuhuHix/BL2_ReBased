@@ -689,3 +689,30 @@ fn a_missing_pool_map_is_refused_by_the_preflight() {
     assert!(asked.is_empty(), "no lookup ran");
     assert_eq!(x.marks(), before);
 }
+
+/// Review of #800, item 3: `SelectAkEvent` (lane IMPL-LINK6-AFTER-TAKE, `crate::link6`) over real expressions: the
+/// first entry whose expressions hold answers its event, ahead of an earlier fallback and of a later entry; an entry
+/// whose expressions fail is passed over.
+#[test]
+fn select_ak_event_answers_the_first_entry_that_holds() {
+    let (mut vm, weapon, bonus, ty) = expr_world();
+    let object = vm.space.classes.by_path("Core.Object").unwrap();
+    let d = |vm: &mut Vm, name: &str, kind: PropKind| PropertyDecl::new(vm.space.names.intern(name), kind);
+    let fields = vec![
+        d(&mut vm, "Event", PropKind::Object { class: object }),
+        d(&mut vm, "Expressions", PropKind::Array(Box::new(PropKind::Struct(ty)))),
+    ];
+    let sound = vm.space.classes.define_struct("Test.ConditionalSoundData", None, fields).unwrap();
+    let (fallback, holds, fails, later) = (
+        vm.space.alloc(object, "Fallback", None, Origin::Runtime).unwrap(),
+        vm.space.alloc(object, "Holds", None, Origin::Runtime).unwrap(),
+        vm.space.alloc(object, "Fails", None, Origin::Runtime).unwrap(),
+        vm.space.alloc(object, "Later", None, Origin::Runtime).unwrap(),
+    );
+    let (yes, no) = (above(&vm, ty, bonus, 3.0), above(&vm, ty, bonus, 7.0));
+    let entry = |event: ObjRef, rows: Vec<Value>| Value::structure(sound, vec![Value::Object(Some(event)), Value::array(rows)]);
+    let list = [entry(fallback, vec![]), entry(fails, vec![no.clone()]), entry(holds, vec![yes.clone()]), entry(later, vec![yes])];
+    assert_eq!(crate::link6::select_ak_event(&mut vm, Some(weapon), &list).unwrap(), Some(holds), "the first that holds");
+    let none_hold = [entry(fallback, vec![]), entry(fails, vec![no])];
+    assert_eq!(crate::link6::select_ak_event(&mut vm, Some(weapon), &none_hold).unwrap(), Some(fallback), "else the fallback");
+}

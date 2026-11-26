@@ -122,6 +122,25 @@ fn toy_state(t: &mut ScriptToy, owner: i32, name: &str) -> i32 {
     t.p.add_export_with(export)
 }
 
+/// A state `name` of `owner` with parent state `parent` (0: none) and no state code, which `GotoState` can enter (the
+/// state body of `ow_vm::states`' own tests; review of #800, item 1).
+fn code_free_state(t: &mut ScriptToy, owner: i32, name: &str, parent: i32) -> i32 {
+    use ow_package::testkit::ints;
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    // Next, super (the parent state), script text, children, C++ text, line, text position.
+    payload.extend_from_slice(&ints(&[0, parent, 0, 0, 0, 0, 0]));
+    payload.extend_from_slice(&ints(&[0, 0]));
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&ow_vm::states::NO_LABEL_TABLE.to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&ints(&[0]));
+    let mut export = ow_package::testkit::Export::new(t.import("State"), name, payload);
+    export.outer = owner;
+    export.super_ = parent;
+    t.p.add_export_with(export)
+}
+
 fn package() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
@@ -142,6 +161,11 @@ fn package() -> Vec<u8> {
         "ClassProperty",
     ]);
     let object = t.class("Object", 0);
+    // Object.GotoState, the VM's native 113, so a test makes a real state frame (review of #800, item 1).
+    let mut goto = FunctionSpec::new(NATIVE, "GotoState");
+    goto.native = 113;
+    let goto_params = [opt("Name", "NewState", 0), opt("Name", "Label", 0), opt("Bool", "bForceEvents", 0), opt("Bool", "bKeepStack", 0)];
+    t.function(object, "GotoState", &goto_params, None, &[], &goto, |_| None);
     let vector = toy_struct(&mut t, object, "Vector", None);
     for f in ["X", "Y", "Z"] {
         t.prop("Float", vector, f, 0, 0);
@@ -208,7 +232,21 @@ fn package() -> Vec<u8> {
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
     t.prop("Object", actor, "CollisionComponent", 0, object);
-    for b in ["Role", "RemoteRole", "TickGroup"] {
+    // `Role` an enum byte (invented values in the order the raw bytes of these tests use: 3 is the authority), so
+    // SetBase reads it by name (review of #800).
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    let roles = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority", "ROLE_MAX"];
+    payload.extend(ow_package::testkit::ints(&[0, roles.len() as i32]));
+    for v in roles {
+        let bytes = t.p.fname(v, 0);
+        payload.extend_from_slice(&bytes);
+    }
+    let mut e = ow_package::testkit::Export::new(t.import("Enum"), "ENetRole", payload);
+    e.outer = actor;
+    let net_role = t.p.add_export_with(e);
+    t.prop("Byte", actor, "Role", 0, net_role);
+    for b in ["RemoteRole", "TickGroup"] {
         t.prop("Byte", actor, b, 0, 0);
     }
     t.prop("Byte", actor, "Physics", 0, physics);
@@ -808,19 +846,24 @@ fn package() -> Vec<u8> {
     void(&mut t, actor, "Attach", &[opt("Object", "Other", actor)], |_, a| note(a, &ids, 51));
     void(&mut t, actor, "BaseChange", &[], |_, a| note(a, &ids, 52));
     t.class("StaticMeshCollectionActor", actor);
+    // Review of #800, item 3: a base whose `Detach` is a native a test binds, to change the state the recheck reads.
+    let hook = t.class("DetachHookActor", actor);
+    native(&mut t, hook, "Detach", &[opt("Object", "Other", actor)], None, NATIVE);
     let stated = t.class("StatedActor", actor);
-    void(&mut t, stated, "EndState", &[], |_, _| {});
+    void(&mut t, stated, "EndState", &[opt("Name", "NextStateName", 0)], |_, _| {});
     void(&mut t, stated, "Destroyed", &[], |_, a| note(a, &ids, 41));
-    let bare = toy_state(&mut t, stated, "Bare");
-    void(&mut t, bare, "EndState", &[], |_, _| {});
-    let busy = toy_state(&mut t, stated, "Busy");
-    void(&mut t, busy, "EndState", &[], |_, a| note(a, &ids, 40));
-    toy_state(&mut t, stated, "Fallback");
-    let native_state = toy_state(&mut t, stated, "NativeEnd");
-    native(&mut t, native_state, "EndState", &[], None, NATIVE);
+    let bare = code_free_state(&mut t, stated, "Bare", 0);
+    void(&mut t, bare, "EndState", &[opt("Name", "NextStateName", 0)], |_, _| {});
+    let busy = code_free_state(&mut t, stated, "Busy", 0);
+    void(&mut t, busy, "EndState", &[opt("Name", "NextStateName", 0)], |_, a| note(a, &ids, 40));
+    code_free_state(&mut t, stated, "Fallback", 0);
+    // Review of #800, item 1: `state Child extends Busy`, its EndState Busy's (a body), never the class's bare one.
+    code_free_state(&mut t, stated, "Child", busy);
+    let native_state = code_free_state(&mut t, stated, "NativeEnd", 0);
+    native(&mut t, native_state, "EndState", &[opt("Name", "NextStateName", 0)], None, NATIVE);
     let busy_class = t.class("BusyStatedActor", actor);
-    void(&mut t, busy_class, "EndState", &[], |_, a| note(a, &ids, 40));
-    toy_state(&mut t, busy_class, "Fallback");
+    void(&mut t, busy_class, "EndState", &[opt("Name", "NextStateName", 0)], |_, a| note(a, &ids, 40));
+    code_free_state(&mut t, busy_class, "Fallback", 0);
     t.p.build()
 }
 
@@ -962,7 +1005,7 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
         "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
 
         "Probe", "Dud", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
-        "ListedPawn", "ListedOwner", "CollidingPawn", "StatedActor", "BusyStatedActor",
+        "ListedPawn", "ListedOwner", "CollidingPawn", "StatedActor", "BusyStatedActor", "DetachHookActor",
     ] {
         let cdo =
             w.vm.defs
@@ -4377,6 +4420,114 @@ mod link6 {
         });
     }
 
+    fn not_read(x: &mut Fx, r: Result<(), VmError>, before: (u64, u64, u64, u64, usize)) -> String {
+        assert_eq!(counters(x), before, "nothing written: {r:?}");
+        match r {
+            Err(VmError::NotYet(n)) => {
+                assert_eq!(n.missing, Missing::NotRead, "{n}");
+                n.what.to_string()
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn set_base_skel(x: &mut Fx, receiver: ObjRef, base: Option<ObjRef>, skel: ObjRef) -> Result<(), VmError> {
+        let floor = field(&x.w.vm.space, receiver, "Location").unwrap();
+        let f = x.w.vm.find_function("Engine.Actor.SetBase").unwrap();
+        x.w.vm.call(f, Some(receiver), vec![Value::Object(base), floor, Value::Object(Some(skel))]).map(|_| ())
+    }
+
+    // Review of #800, item 3: the two SkelComp cases, the hard attach, an unloaded base and an unloaded actor on the
+    // loop walk.
+    #[test]
+    fn set_base_skel_comp_hard_attach_and_unloaded() {
+        run(|| {
+            use crate::world::set_base::{BONE_PLACEMENT, HARD_ATTACH, NOT_LOADED};
+            let mut x = fx();
+            let (r, base) = (movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+            // A SkelComp owned by another actor: nothing.
+            let (skel, other) = (movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+            set_field(&mut x.w.vm.space, skel, "Owner", Value::Object(Some(other))).unwrap();
+            let before = counters(&x);
+            set_base_skel(&mut x, r, Some(base), skel).unwrap();
+            assert_eq!(counters(&x), before, "a SkelComp of another owner: nothing");
+            // One owned by the new base: the bone placement's NotRead.
+            set_field(&mut x.w.vm.space, skel, "Owner", Value::Object(Some(base))).unwrap();
+            let before = counters(&x);
+            let e = set_base_skel(&mut x, r, Some(base), skel);
+            assert_eq!(not_read(&mut x, e, before), BONE_PLACEMENT);
+            // A hard-attached authority: the full inverse's NotRead; a hard-attached simulated proxy: attached, no
+            // relative pose.
+            set_field(&mut x.w.vm.space, r, "bHardAttach", Value::Bool(true)).unwrap();
+            set_field(&mut x.w.vm.space, r, "Role", Value::Byte(3)).unwrap();
+            let before = counters(&x);
+            let e = set_base(&mut x, r, Some(base));
+            assert_eq!(not_read(&mut x, e, before), HARD_ATTACH);
+            set_field(&mut x.w.vm.space, r, "Role", Value::Byte(1)).unwrap();
+            vector(&mut x, r, "Location", [7.0, 0.0, 0.0]);
+            set_base(&mut x, r, Some(base)).unwrap();
+            assert_eq!(obj(&x, r, "Base"), Some(base));
+            assert_eq!(floats(&x, r, "RelativeLocation"), [Value::Float(0.0), Value::Float(0.0), Value::Float(0.0)], "no pose");
+            // An unloaded base, and an unloaded actor on the new base's Base chain.
+            let class = x.class("Actor");
+            let lazy = x.w.vm.space.alloc_stand_in(class, "Lazy", ow_object::heap::Origin::Default { class }).unwrap();
+            let r2 = movable(&mut x, "Actor");
+            let before = counters(&x);
+            let e = set_base(&mut x, r2, Some(lazy));
+            assert_eq!(not_read(&mut x, e, before), NOT_LOADED, "an unloaded base");
+            let chained = movable(&mut x, "Actor");
+            set_field(&mut x.w.vm.space, chained, "Base", Value::Object(Some(lazy))).unwrap();
+            let before = counters(&x);
+            let e = set_base(&mut x, r2, Some(chained));
+            assert_eq!(not_read(&mut x, e, before), NOT_LOADED, "an unloaded actor on the loop walk");
+        });
+    }
+
+    // Review of #800, item 3: the recheck after `Detach`. The old base's native `Detach` turns the new base (the
+    // TURNED refusal) or hard-attaches the receiver (the HARD_ATTACH refusal); either comes after the old base's
+    // `Attached` write, so it is prefixed and the base is not changed.
+    #[test]
+    fn set_base_rechecks_after_detach() {
+        run(|| {
+            use crate::world::set_base::{HARD_ATTACH, TURNED};
+            for (what, expected) in [("turn", TURNED), ("hard", HARD_ATTACH)] {
+                let mut x = fx();
+                let (old, new, r) = (movable(&mut x, "DetachHookActor"), movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+                set_base(&mut x, r, Some(old)).unwrap();
+                assert_eq!(obj(&x, r, "Base"), Some(old));
+                let f = x.w.vm.find_function("Engine.DetachHookActor.Detach").unwrap();
+                let turn = what == "turn";
+                x.w.vm
+                    .register_native_for(
+                        f,
+                        Rc::new(move |c: &mut NativeCall<'_>| {
+                            if turn {
+                                let class = c.vm.space.heap.get(new)?.class;
+                                let p = c.vm.space.prop(class, "Rotation").unwrap();
+                                let mut rot = c.vm.space.read(new, PropAddr::scalar(p))?.clone();
+                                rot.struct_mut().unwrap().fields[1] = Value::Int(100);
+                                c.vm.space.write(new, PropAddr::scalar(p), rot)?;
+                            } else {
+                                set_field(&mut c.vm.space, r, "bHardAttach", Value::Bool(true))?;
+                                set_field(&mut c.vm.space, r, "Role", Value::Byte(3))?;
+                            }
+                            Ok(Value::None)
+                        }),
+                    )
+                    .unwrap();
+                match set_base(&mut x, r, Some(new)) {
+                    Err(VmError::NotYet(n)) => {
+                        assert_eq!(n.missing, Missing::NotRead, "{what}");
+                        assert!(n.what.contains(expected) && n.what.starts_with("stopped after partial writes"), "{what}: {n}");
+                    }
+                    other => panic!("{what}: {other:?}"),
+                }
+                assert_eq!(obj(&x, r, "Base"), Some(old), "{what}: Base not written");
+                assert!(attached(&x, old).is_empty(), "{what}: the old base's Attached was written first");
+            }
+        });
+    }
+
     // NATIVE_LINK6_AFTER_TAKE.md tests 5 to 7: AllControllers over C1 -> C2 -> C3.
     fn iterate(x: &mut Fx, class: Option<&str>) -> Result<Vec<Value>, VmError> {
         let base = class.map(|c| x.class(c));
@@ -4399,13 +4550,62 @@ mod link6 {
         it(&mut call).map(|r| r.items)
     }
 
+    /// The iterator's guard for a walk over the whole list (review of #800, item 3).
+    fn guard(x: &mut Fx) -> ow_vm::api::IteratorGuard {
+        iterate(x, None).unwrap();
+        let f = x.w.vm.find_function("Engine.WorldInfo.AllControllers").unwrap();
+        let it = x.w.vm.iterator_for(f).unwrap();
+        let wi = x.wi;
+        let args = vec![Arg::new(Value::Class(None), false, true), Arg::new(Value::Object(None), true, true)];
+        let mut call = NativeCall::new(&mut x.w.vm, f, Some(wi), args);
+        it(&mut call).unwrap().guard.expect("a guard")
+    }
+
+    #[test]
+    fn all_controllers_guard_unloaded_and_undeclared() {
+        run(|| {
+            use crate::world::all_controllers::{CHANGED, NOT_LOADED};
+            let mut x = fx();
+            let (c1, c2) = (x.spawn("Controller"), x.spawn("Controller"));
+            let wi = x.wi;
+            set_field(&mut x.w.vm.space, wi, "ControllerList", Value::Object(Some(c1))).unwrap();
+            set_field(&mut x.w.vm.space, c1, "NextController", Value::Object(Some(c2))).unwrap();
+            set_field(&mut x.w.vm.space, c2, "NextController", Value::Object(None)).unwrap();
+            // The guard: quiet on the same chain, the CHANGED NotRead (prefixed) once a body unlinks an entry.
+            let g = guard(&mut x);
+            g(&x.w.vm).unwrap();
+            set_field(&mut x.w.vm.space, c1, "NextController", Value::Object(None)).unwrap();
+            match g(&x.w.vm) {
+                Err(VmError::NotYet(n)) => {
+                    assert_eq!(n.missing, Missing::NotRead);
+                    assert!(n.what.contains(CHANGED) && n.what.starts_with("stopped after partial writes"), "{n}");
+                }
+                other => panic!("{other:?}"),
+            }
+            // An unloaded controller in the list: NotRead.
+            let class = x.class("Controller");
+            let lazy = x.w.vm.space.alloc_stand_in(class, "Lazy", ow_object::heap::Origin::Default { class }).unwrap();
+            set_field(&mut x.w.vm.space, c1, "NextController", Value::Object(Some(lazy))).unwrap();
+            match iterate(&mut x, None) {
+                Err(VmError::NotYet(n)) => assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, NOT_LOADED)),
+                other => panic!("{other:?}"),
+            }
+            // An entry whose class declares no NextController: a script error.
+            let probe = x.spawn("Probe");
+            set_field(&mut x.w.vm.space, wi, "ControllerList", Value::Object(Some(probe))).unwrap();
+            assert!(matches!(iterate(&mut x, None), Err(VmError::Script { .. })), "no NextController");
+        });
+    }
+
     #[test]
     fn all_controllers_walks_the_list_by_class() {
         run(|| {
             let mut x = fx();
             let (c1, c2, c3) = (x.spawn("Controller"), x.spawn("PlayerController"), x.spawn("Controller"));
             let wi = x.wi;
-            assert!(iterate(&mut x, None).unwrap().is_empty() || obj(&x, wi, "ControllerList").is_some());
+            // An empty list gives no items (review of #800, item 3).
+            set_field(&mut x.w.vm.space, wi, "ControllerList", Value::Object(None)).unwrap();
+            assert!(iterate(&mut x, None).unwrap().is_empty(), "an empty list");
             set_field(&mut x.w.vm.space, wi, "ControllerList", Value::Object(Some(c1))).unwrap();
             set_field(&mut x.w.vm.space, c1, "NextController", Value::Object(Some(c2))).unwrap();
             set_field(&mut x.w.vm.space, c2, "NextController", Value::Object(Some(c3))).unwrap();
@@ -4419,11 +4619,15 @@ mod link6 {
         });
     }
 
-    // NATIVE_ACTOR_SETBASE.md test 11: the destroy's empty-EndState lift.
+    // NATIVE_ACTOR_SETBASE.md test 11: the destroy's empty-EndState lift, on real state frames (`GotoState`; review
+    // of #800, item 1).
     fn in_state(x: &mut Fx, class: &str, state: &str) -> ObjRef {
         let a = x.spawn(class);
+        assert_eq!(x.w.vm.space.heap.get(a).unwrap().state, None, "{class}: spawned in no state");
         let s = x.name(state);
-        x.w.vm.space.heap.get_mut(a).unwrap().state = Some(s);
+        let f = x.w.vm.find_function("Engine.Object.GotoState").unwrap();
+        x.w.vm.call(f, Some(a), vec![Value::Name(s)]).unwrap();
+        assert_eq!(x.w.vm.space.heap.get(a).unwrap().state, Some(s), "{class} in {state}");
         a
     }
 
@@ -4436,6 +4640,7 @@ mod link6 {
                 ("StatedActor", "Fallback", true),
                 ("StatedActor", "Busy", false),
                 ("StatedActor", "NativeEnd", false),
+                ("StatedActor", "Child", false),
                 ("BusyStatedActor", "Fallback", false),
             ] {
                 let a = in_state(&mut x, class, state);
@@ -4448,11 +4653,23 @@ mod link6 {
                     assert!(notes.contains(&41) && !notes.contains(&40), "{class} {state}: Destroyed, no EndState: {notes:?}");
                     let line = crate::actors::lifted_destroy_line(state);
                     assert!(x.w.vm.log.iter().any(|l| *l == line), "{state}: logged");
+                    // The frame goes with the actor (review of #800, item 5): a kept frame would still resolve the
+                    // state's EndState.
+                    let after = ow_vm::states::find_loaded_event(&x.w.vm, a, "EndState");
+                    assert!(!matches!(after, Ok(Some(Some(_)))) || state == "Fallback", "{state}: no frame: {after:?}");
                 } else {
                     assert!(matches!(missing(WorldError::Vm(r.unwrap_err())), Missing::LayerAbsent(_)), "{class} {state}");
                     assert_eq!(counters(&x), before, "{class} {state}: nothing written");
                 }
             }
+            // A state named on the heap with no frame: the lookup would make the frame (a write), so no lift.
+            let cold = x.spawn("StatedActor");
+            let bare = x.name("Bare");
+            x.w.vm.space.heap.get_mut(cold).unwrap().state = Some(bare);
+            let before = counters(&x);
+            let r = crate::actors::destroy(&mut x.w.vm, cold);
+            assert!(matches!(missing(WorldError::Vm(r.unwrap_err())), Missing::LayerAbsent(_)), "no frame");
+            assert_eq!(counters(&x), before, "no frame: nothing written");
             // Reference keeps the refusal for a bare EndState too.
             let mut r = fx_in(true, ParityMode::Reference);
             let a = in_state(&mut r, "StatedActor", "Bare");
