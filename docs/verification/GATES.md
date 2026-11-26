@@ -2,7 +2,7 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-LINK34-AFTER-MIND (2026-11-26, pc-hummer, on fix/rust-link34-after-mind, stacked on #792 @ 464346d9):**
+**IMPL-LINK34-AFTER-MIND (2026-11-26, pc-hummer, on fix/rust-link34-after-mind, on main 7a67b9f):**
 AI-assisted (Claude Code, Opus 5.5). `SetPhysics`' base search (with the `NoLevel` stand-in) and the player pawn's
 layers; `IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumForSurfaceType` and
 `IsVulnerableToFriendlyFire`, Off. `cargo test --workspace -j 8 --no-fail-fast` 3,991 passed / 0 failed / 59 ignored;
@@ -10,7 +10,12 @@ layers; `IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumFor
 58.3%. Links 3, 4, 5, 13 and 14 move from #792's "the base search for a walking-type mode" to "the base search's floor
 trace", the `LayerAbsent` of a world with no collision service (the combat world installs none, as the note says), so
 the hit and swing natives are not reached in the gate yet. Link 6 stops at `Actor.SetBase` (main's), link 7 at the HUD's
-pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-55.
+pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-55. **Review of #798, r1:** the
+`NoLevel` stand-in behind the Off harness setting `NoLevelBaseSearch` (on in the slice's two `NoLevel` worlds), the
+momentum evaluation load-free, the review's tests; `cargo test --workspace` 3,995 passed / 0 failed / 59 ignored;
+`crate_edges_test.py` OK; the installed Off strict `--slice-gate` unchanged: 7 ok / 7 not ok, 8.167/14 = 58.3%, the same
+stops (links 3, 4, 5, 13 and 14 at "the base search's floor trace", link 6 at `Actor.SetBase`, link 7 at the HUD's
+pickup targeting).
 
 **ANALYST-GETBOUNDINGCYLINDER-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-bounding-cylinder, read and probed on
 main 54c9cf05, rebased onto 7a67b9f9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BOUNDING_CYLINDER_AND_AFTER.md finds that Maya's

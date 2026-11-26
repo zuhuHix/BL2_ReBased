@@ -482,6 +482,18 @@ fn hard_attach_drops_all_but_interpolating() {
     assert_eq!(x.get(pawn, "Physics"), Value::Byte(7));
 }
 
+/// NATIVE_LINK34_AFTER_MIND.md section 10 (review of #798, finding 6): `PHYS_None` to `PHYS_Falling` with
+/// `bNotifyBeginFalling` set sends `BeganFalling(0)` after the write.
+#[test]
+fn from_none_to_falling_sends_began_falling_with_none() {
+    let mut x = fx();
+    let pawn = x.obj("WillowGame.ToyAIPawn");
+    x.set(pawn, "Physics", Value::Byte(0));
+    x.set(pawn, "bNotifyBeginFalling", Value::Bool(true));
+    x.physics(pawn, 2).unwrap();
+    assert_eq!(x.calls(), vec!["BeganFalling(0) physics=Byte(2)"]);
+}
+
 /// The note's tests 4 and 5: the falling and walking events, after the write, each with its flag.
 #[test]
 fn the_falling_and_walking_events_follow_the_transition() {
@@ -750,8 +762,9 @@ impl crate::placement::SpawnCollision for WithGeometry {
 }
 
 /// NATIVE_LINK34_AFTER_MIND.md section 2 (test 1; lane IMPL-LINK34-AFTER-MIND): the base search. No collision service
-/// is the trace's `LayerAbsent`; a service with geometry its `NotRead`; under `NoLevel` with no `Base` the mode is
-/// written, the vectors zeroed and the stand-in logged; with a `Base` set the base setter's `NotRead`. Each refusal
+/// is the trace's `LayerAbsent`; a service with geometry its `NotRead`; `NoLevel` without the harness setting its
+/// `NotRead` too (review of #798, R1); under `NoLevel` with the setting and no `Base` the mode is written, both vectors
+/// zeroed and the stand-in logged, the actor's own collision skipped (R2) and another actor's refused (finding 4); with a `Base` set the base setter's `NotRead`. Each refusal
 /// writes nothing.
 #[test]
 fn the_base_search() {
@@ -764,11 +777,15 @@ fn the_base_search() {
     let pawn = x.obj("Engine.ToyPlainPawn");
     x.set(pawn, "Physics", Value::Byte(2));
     assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_TRACE_FLAGS.to_string()));
-    // The stand-in: into PHYS_None, the vectors zeroed and the line logged.
+    // NoLevel without the harness setting (the hub's ruling on review of #798, R1): the trace flags' NotRead.
     let mut x = fx();
     crate::placement::install_collision(x.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
     let pawn = x.obj("Engine.ToyPlainPawn");
     x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_TRACE_FLAGS.to_string()));
+    // The stand-in, with the setting on: into PHYS_None, both vectors zeroed and the line logged.
+    enable_no_level_base_search(x.vm()).unwrap();
+    assert!(x.vm().log.iter().any(|l| l == BASE_STAND_IN_INPUT), "the set-up line");
     let moving = {
         let mut v = x.get(pawn, "Velocity");
         for f in v.struct_mut().unwrap().fields.iter_mut() {
@@ -776,12 +793,33 @@ fn the_base_search() {
         }
         v
     };
-    x.set(pawn, "Velocity", moving);
+    x.set(pawn, "Velocity", moving.clone());
+    x.set(pawn, "Acceleration", moving);
+    // The actor's own CollisionComponent is skipped (R2, UNVERIFIED), even when it is placed in the world.
+    let own = x.obj("Engine.Actor");
+    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
+    let actors = crate::actors::actors_of(x.vm()).unwrap();
+    let info = x.obj("Engine.Actor"); // a stand-in first actor, with no collision
+    actors.borrow_mut().place_world_info(info).unwrap();
+    actors.borrow_mut().place(pawn).unwrap();
     x.physics(pawn, 0).unwrap();
     assert_eq!(x.get(pawn, "Physics"), Value::Byte(0));
-    let zero = x.get(pawn, "Velocity");
-    assert!(zero.as_struct().unwrap().fields.iter().all(|f| *f == Value::Float(0.0)), "{zero:?}");
+    for f in ["Velocity", "Acceleration"] {
+        let zero = x.get(pawn, f);
+        assert!(zero.as_struct().unwrap().fields.iter().all(|f| *f == Value::Float(0.0)), "{f}: {zero:?}");
+    }
     assert!(x.vm().log.iter().any(|l| l == BASE_STAND_IN), "logged");
+    // Another placed actor with a CollisionComponent (review of #798, finding 4): the trace flags' NotRead, nothing
+    // written.
+    let other = x.obj("Engine.ToyPlainPawn");
+    let component = x.obj("Engine.Actor");
+    x.set(other, "CollisionComponent", Value::Object(Some(component)));
+    actors.borrow_mut().place(other).unwrap();
+    let pawn2 = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn2, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn2, 0)), (Missing::NotRead, BASE_TRACE_FLAGS.to_string()));
+    x.set(other, "CollisionComponent", Value::Object(None));
+    x.set(pawn, "CollisionComponent", Value::Object(None));
     // Into PHYS_Walking: bForceFloorCheck set, the vectors kept.
     let pawn = x.obj("Engine.ToyPlainPawn");
     x.set(pawn, "Physics", Value::Byte(2));
@@ -793,4 +831,18 @@ fn the_base_search() {
     x.set(pawn, "Physics", Value::Byte(2));
     x.set(pawn, "Base", Value::Object(Some(base)));
     assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_SETTER.to_string()));
+}
+
+/// The base search's harness setting is Off only, and turned on once (review of #798, R1).
+#[test]
+fn the_base_search_setting_is_off_only() {
+    let mut x = fx();
+    enable_no_level_base_search(x.vm()).unwrap();
+    assert!(matches!(enable_no_level_base_search(x.vm()), Err(VmError::Registration { .. })), "twice");
+    let mut r = fx_variant(ParityMode::Reference, Variant::Good);
+    match enable_no_level_base_search(r.vm()) {
+        Err(VmError::Registration { key, .. }) => assert_eq!(key, BASE_STAND_IN_KEY),
+        other => panic!("{other:?}"),
+    }
+    assert!(!r.vm().log.iter().any(|l| l == BASE_STAND_IN_INPUT));
 }

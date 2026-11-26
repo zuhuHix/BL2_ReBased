@@ -18,7 +18,9 @@
 //! - **`WillowPawn.AdjustMomentumForSurfaceType(Magnitude, InstigatedBy, DamageType, HitInfo)`** (section 7): no
 //!   damage type, the magnitude; else the magnitude times the damage type's momentum scale for the victim's surface,
 //!   the scale's init data evaluated with `InstigatedBy` as the context source (its definition and resolvers resident
-//!   first, else `NotRead`). The surface and the scale are in [`surface`] and [`momentum_scale`].
+//!   first, else `NotRead`), in a load-free scope, so a nested unloaded handle is `NotRead` too (review of #798,
+//!   finding 1). A `HitInfo` that is not a struct is `VmError::Script`. The surface and the scale are in [`surface`]
+//!   and [`momentum_scale`].
 //! - **`Pawn.IsVulnerableToFriendlyFire()`** (section 8): a `WillowPlayerPawn` whose
 //!   `FriendlyFireDamageAcceptedBaseValue` is above 0.0001 (UNVERIFIED: the note's layout reading; with the known gap
 //!   the read would be `FriendlyFireDamageAccepted`); any other pawn false.
@@ -83,6 +85,11 @@ fn boolean(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<bool, VmError> 
     }
 }
 
+/// A float field: a plain `Float`, or a `FloatAttribute` value side (review of #798, finding 7). The two fields this
+/// module reads are a pool's `CurrentValue` and `FriendlyFireDamageAcceptedBaseValue`, an attribute's base side, which
+/// the packages declare as plain floats (the base side carries the plain-attribute flag, not the attribute kind;
+/// `ow_object::layout`, "Attribute companions"), so a plain `Float` is the expected declaration; the attribute kind is
+/// accepted as the same stored float.
 fn float(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<f32, VmError> {
     match read(vm, o, name, what)? {
         (Value::Float(f), PropKind::Float | PropKind::FloatAttribute) => Ok(f),
@@ -137,6 +144,13 @@ pub fn is_friendly_fire(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     );
     if !declared {
         return Err(bad(WHAT, "the parameters are not declared as an object and an interface"));
+    }
+    // The values too (review of #798, finding 6): Victim an object, InstigatingTargetable an interface (or None).
+    if !matches!(c.arg(0)?, Value::Object(_)) {
+        return Err(bad(WHAT, format!("Victim holds {}, not an object", c.arg(0)?.kind_name())));
+    }
+    if !matches!(c.arg(1)?, Value::Interface(_) | Value::Object(None)) {
+        return Err(bad(WHAT, format!("InstigatingTargetable holds {}, not an interface", c.arg(1)?.kind_name())));
     }
     if is_a(c.vm, game, "WillowGame.WillowCoopGameInfo")? {
         return Err(NotYet::not_read(COOP_FRIENDLY_FIRE, RECORD).into());
@@ -244,6 +258,10 @@ pub fn surface(vm: &Vm, pawn: ObjRef, hit: &Value) -> Result<u8, VmError> {
     let (reference, _) = read(vm, pawn, "ShieldArmor", MOMENTUM)?;
     // A mistyped reference is an error (as `default_physics`' shield read, review of #792, item 7).
     let r = ow_world::pools::read_ref(&vm.space, &reference)?;
+    // The manager resident before its slots are read (review of #798, finding 8).
+    if let Some(manager) = r.manager {
+        resident(vm, manager, NOT_LOADED)?;
+    }
     if let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)? {
         resident(vm, pool, NOT_LOADED)?;
         if float(vm, pool, "CurrentValue", MOMENTUM)? > 0.0 {
@@ -330,15 +348,23 @@ fn adjust_momentum(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(definition) = crate::hit::arg_object(c, 2)? else {
         return Ok(Value::Float(magnitude));
     };
-    let hit = if c.arg_count() > 3 { c.arg(3)?.clone() } else { Value::None };
-    let s = surface(c.vm, pawn, &hit)?;
-    let scale = match momentum_scale(c.vm, definition, s)? {
-        Err(constant) => constant,
-        Ok(data) => {
-            let attrs = c.vm.attrs.clone();
-            attrs.evaluate_init(&data, instigator, None, &mut ow_attr::api::EvalCx::new(c.vm))?
-        }
-    };
+    let hit = c.arg(3)?.clone();
+    if hit.as_struct().is_none() {
+        return Err(bad(MOMENTUM, format!("HitInfo holds {}, not a struct", hit.kind_name())));
+    }
+    // The preflight and the evaluation in a load-free scope (review of #798, finding 1): a nested unloaded handle the
+    // evaluation reaches (the formula's, the conditional's, the variance's or the range's terms) answers `NotRead`
+    // and loads nothing.
+    let scale = ow_attr::eval::load_free(MOMENTUM, || -> Result<f32, VmError> {
+        let s = surface(c.vm, pawn, &hit)?;
+        Ok(match momentum_scale(c.vm, definition, s)? {
+            Err(constant) => constant,
+            Ok(data) => {
+                let attrs = c.vm.attrs.clone();
+                attrs.evaluate_init(&data, instigator, None, &mut ow_attr::api::EvalCx::new(c.vm))?
+            }
+        })
+    })?;
     Ok(Value::Float(magnitude * scale))
 }
 
