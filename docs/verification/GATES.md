@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, docs only, on docs/native-link7-hud-targeting, probed on main 21a668a7,
+rebased onto eef4f83e):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK7_HUD_TARGETING.md finds the HUD's pickup targeting a pure query that
+needs no Flash; its inputs are what a headless run lacks. The HUD's data come from script whose presentation steps
+reach movie natives, the pickups never register because the pickup world has not begun play, and the view point
+needs the camera layer. It reads the pass's shrink step (not split-screen, `MaxNumPickups` by fit). A local probe (an
+installed Off strict `--slice-gate`, the inputs stood in, reverted and not committed) shows link 7's `look` passing
+with the aimed gun reported; rerun on main eef4f83 (SetBase bound), link 7 passes all four steps under those
+stand-ins. No code changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-COMBAT-WORLD-COLLISION (2026-11-26, pc-hummer, on fix/rust-combat-world-collision, stacked on #804 153ac950,
 on main baa414fd):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's combat world without
 `--map` gets three settings, each logged as a set-up harness input: link 9's `NoLevel` collision service, #798's

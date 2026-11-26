@@ -285,7 +285,8 @@ on a supplied view.
    presentation step the pass calls with the winner, which writes nothing the targeting reads.
 2. **UNVERIFIED:** which `HUDDefinition` the player's HUD holds, and so the `PickupRange` value, and whether the
    slice's globals definition has a hover particle (`PartItemHover`).
-3. **UNVERIFIED:** the shrink bookkeeping's enable query on the HUD and the limit the HUD holds (section 8).
+3. **UNVERIFIED:** the shrink bookkeeping's enable query on the HUD and the limit the HUD holds (section 8). Read
+   since: NATIVE_LINK7_HUD_TARGETING.md section 7 (not a split-screen player; `MaxNumPickups` by fit).
 4. Resolved in review r1 of #461: the events go to `WillowHUD.WPlayerOwner`, which `WillowHUD.PostBeginPlay` sets to
    the owner cast to `WillowPlayerController`. **UNVERIFIED** in play, and the field's identity is a declared-order
    fit (medium confidence); the live check below records it.
