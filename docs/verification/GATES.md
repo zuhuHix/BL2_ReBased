@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**BRIDGE-PAWN-ATTACH (2026-11-26, pc-hummer, on fix/bridge-pawn-attach, stacked on #757 over main 457c46e4):**
+AI-assisted (Claude Code, Opus 5.5). In Off the bridge's player pawn takes the spawn's component attach, so its
+component copies land in the attach record under the pawn. `cargo test --workspace -j 8 --no-fail-fast` 3,811 passed
+/ 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the
+machine lock): 6 ok / 8 NotYet, 47.0%. Links 1, 3, 4, 5, 13 and 14 now stop at `InitializeRBPhysics`' rigid-body
+`LayerAbsent` (2.A); links 8 to 12 stay ok. No real-game run.
+
 **LINK1-RBPHYSICS-UNLOADED-COMPONENT (2026-11-26, pc-hummer, on fix/link1-rbphysics-component from main 5ce85058,
 rebased onto a5fb1a18):** AI-assisted (Claude Code, Opus 5.5). The `InitializeRBPhysics` not-loaded stop was the class
 default's `SpecialMoveComponent0` (one of five shared class-default sub-objects in the bridge pawn's `Components`). In

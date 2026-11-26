@@ -432,9 +432,16 @@ fn willowgame() -> Vec<u8> {
     // class default reads its tags 16 bytes in (decision 2026-11-16-70): a zero word, its own name, a word.
     let player_pawn = t.class("WillowPlayerPawn", engine_pawn);
     toy_array_of(&mut t, player_pawn, "Components", "Object", object);
+    // The spawn's component attach reads these (lane BRIDGE-PAWN-ATTACH, NATIVE_SPAWN_COMPONENT_ATTACH.md).
+    toy_array_of(&mut t, player_pawn, "AllComponents", "Object", object);
     let engine_actor_component = t.p.add_import("Core", "Class", engine, "ActorComponent");
     let pawn_component = t.class("ToyPawnComponent", engine_actor_component);
     t.prop("Int", pawn_component, "ToyLevel", 0, 0);
+    t.prop("Object", pawn_component, "Owner", 0, object);
+    t.prop("Object", pawn_component, "Scene", 0, object);
+    for flag in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform", "bSkipChildComponentUpdate"] {
+        t.prop("Bool", pawn_component, flag, 0, 0);
+    }
     let mut payload = 0i32.to_le_bytes().to_vec();
     payload.extend(t.p.fname("ToyPawnComp0", 0));
     payload.extend(0i32.to_le_bytes());
@@ -2208,8 +2215,8 @@ fn the_balance_refresh_waits_for_the_globals_lookup() {
 
 /// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-16): the player's pawn, made from the class
 /// defaults, gets its own copy of the component its class default owns, as a spawned actor does: `Components` names a
-/// resident copy outered to the pawn with the default's values (`ToyLevel` 4), not the class default's sub-object.
-/// Reference keeps the shared reference.
+/// resident copy outered to the pawn with the default's values (`ToyLevel` 4), not the class default's sub-object,
+/// and in the attach record under the pawn (lane BRIDGE-PAWN-ATTACH). Reference keeps the shared reference.
 #[test]
 fn the_player_pawn_gets_its_own_copy_of_the_class_default_s_components() {
     let mut env = Env::new(false);
@@ -2226,6 +2233,14 @@ fn the_player_pawn_gets_its_own_copy_of_the_class_default_s_components() {
     assert!(!vm.defs.is_unloaded(&vm.space, copy), "resident");
     assert_eq!(vm.space.heap.get(copy).unwrap().outer, Some(pawn));
     assert_eq!(get(&vm.space, copy, "ToyLevel").unwrap(), Value::Int(4), "the default's values");
+    // Lane BRIDGE-PAWN-ATTACH (decision 2026-11-26-NNN): the spawn's component attach ran on the copy, so it is in the
+    // attach record under the pawn, with the generic attach writes; the class default's own sub-object is not.
+    assert!(ow_world::actors::attached_to(vm, copy, pawn).unwrap(), "in the attach record under the pawn");
+    assert!(!ow_world::actors::attached_to(vm, own, pawn).unwrap());
+    assert_eq!(get(&vm.space, copy, "Owner").unwrap(), Value::Object(Some(pawn)));
+    assert_eq!(get(&vm.space, copy, "bNeedsReattach").unwrap(), Value::Bool(false));
+    assert_eq!(get(&vm.space, copy, "bAttached").unwrap(), Value::Bool(false), "not an AI component: unchanged");
+    assert_eq!(get(&vm.space, pawn, "AllComponents").unwrap(), Value::array(vec![]), "nothing appended");
     assert_eq!(s.player_pawn(vm).unwrap(), pawn, "made once");
 
     let mut env = Env::with_mode(false, ParityMode::Reference);
