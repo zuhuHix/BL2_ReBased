@@ -91,14 +91,18 @@ fn willow_game_with(field: Option<&str>) -> Vec<u8> {
     let controller = t.p.add_import("Core", "Class", engine, "Controller");
     let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
     let dropped = t.p.add_import("Core", "Class", engine, "DroppedPickup");
-    let player = t.class("WillowPlayerPawn", pawn);
+    // `WillowPawn` between, as in the game (review of #778: the on-foot rule's other class).
+    let willow_pawn = t.class("WillowPawn", pawn);
+    let player = t.class("WillowPlayerPawn", willow_pawn);
     t.class("ToyPlayerPawnSubclass", player);
     let player = t.class("WillowPlayerController", controller);
     native(&mut t, player, "GetInventoryPawn", &[], Some(("Object", pawn)));
     native(&mut t, player, "GetPawnInventoryManager", &[], Some(("Object", object)));
     // GetPawnInventoryManager's answer class (invented here as a plain class of the package).
     let actor = t.p.add_import("Core", "Class", engine, "Actor");
-    t.class("WillowInventoryManager", actor);
+    let manager = t.class("WillowInventoryManager", actor);
+    // One invented field, so a manager the store has not built (slots empty) is told from a built one (review of #778).
+    t.prop("Object", manager, "ToyField", 0, object);
     let globals = t.class("WillowGlobals", object);
     native(&mut t, globals, "RemovePickup", &[Param { type_ref: object, ..Param::new("Object", "inPickup") }], None);
     let pickup = t.class("WillowPickup", dropped);
@@ -524,6 +528,43 @@ fn get_pawn_inventory_manager_answers_an_on_foot_pawn_s_manager() {
     assert_eq!(ask(&mut x), Value::Object(Some(manager)));
     x.set(maya, "InvManager", Value::Object(Some(other)));
     assert_eq!(ask(&mut x), Value::Object(None), "not a WillowInventoryManager");
+}
+
+/// Review of #778: the rule's other on-foot class, a `WillowPawn` that is not a player pawn, answers its manager the
+/// same way.
+#[test]
+fn get_pawn_inventory_manager_answers_a_willow_pawn_s_manager() {
+    let mut x = fx(ParityMode::Off);
+    let controller = x.obj("WillowGame.WillowPlayerController");
+    let pawn = x.obj("WillowGame.WillowPawn");
+    let manager = x.obj("WillowGame.WillowInventoryManager");
+    x.set(controller, "Pawn", Value::Object(Some(pawn)));
+    x.set(pawn, "InvManager", Value::Object(Some(manager)));
+    let before = marks(&x.vm);
+    assert_eq!(x.call(PAWN_MANAGER, controller, vec![]).unwrap(), Value::Object(Some(manager)));
+    assert_eq!(marks(&x.vm), before, "nothing written, drawn, loaded or interned");
+}
+
+/// Review of #778: an on-foot pawn whose `InvManager` the store has not loaded is the not-loaded `NotRead`, nothing
+/// counted.
+#[test]
+fn get_pawn_inventory_manager_refuses_a_cold_manager() {
+    let mut x = fx(ParityMode::Off);
+    let controller = x.obj("WillowGame.WillowPlayerController");
+    let maya = x.obj("WillowGame.WillowPlayerPawn");
+    let (manager, _) = cold(&mut x, "WillowGame.WillowInventoryManager");
+    x.vm.space.heap.get_mut(manager).unwrap().slots.clear();
+    x.set(controller, "Pawn", Value::Object(Some(maya)));
+    x.set(maya, "InvManager", Value::Object(Some(manager)));
+    let before = marks(&x.vm);
+    match x.call(PAWN_MANAGER, controller, vec![]) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD_HELPERS), "{n}");
+            assert_eq!(n.what.as_ref(), INVENTORY_MANAGER_UNLOADED);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(marks(&x.vm), before);
 }
 
 /// The note's refusals: a vehicle (or any pawn whose first native class is not an on-foot Willow pawn) is the
