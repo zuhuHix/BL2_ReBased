@@ -252,8 +252,10 @@ pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Re
     // below loads and logs each of them; nothing is copied, so nothing is left to free, and a second discovery finds it
     // loaded. A failed load is logged and left: the spawn's own copy and the native's refusal show it.
     // The export in the named package, as the spawn finds it (review r2 of #815, item 2), not the path's holder under
-    // the identity policy: another package's copy of the path may name another AIClass. The store gives that export's
-    // object only when it is the path's object; otherwise its refusal is logged and left.
+    // the identity policy: another package's copy of the path may name another AIClass. The path's handle, not loaded,
+    // then the named file's own copy loaded into it (`DefStore::load_export_of_file`, the store rule the combat
+    // world's body walk uses; UNVERIFIED). A handle already loaded from another file's copy is that rule's refusal,
+    // logged and left.
     let found = {
         let (_, store) = vm.defs.code_mut();
         store.load(&name).ok().and_then(|id| store.get(id).find_export(archetype_path).ok().flatten().filter(|i| *i > 0).map(|i| (id, i)))
@@ -263,10 +265,17 @@ pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Re
         return Ok(None);
     };
     vm.log.push(archetype_line(archetype_path));
-    let loaded = vm.defs.load_export(&mut vm.space, id, index, ow_object::prefix::PropertyPrefix::Ordinary);
+    let loaded = vm
+        .defs
+        .handle_of_ref(&mut vm.space, id, index)
+        .and_then(|o| vm.defs.load_export_of_file(&mut vm.space, o, id).map(|copy| (o, copy)));
     vm.log.extend(vm.defs.take_log());
     let archetype = match loaded {
-        Ok(o) => o,
+        Ok((o, ow_defs::store::FileCopy::Loaded)) => o,
+        Ok((_, ow_defs::store::FileCopy::NotInFile)) => {
+            vm.log.push(format!("harness input: preload {archetype_path}: not {package}'s own export"));
+            return Ok(None);
+        }
         Err(e) => {
             vm.log.push(format!("harness input: preload {archetype_path}: failed ({e})"));
             return Ok(None);
