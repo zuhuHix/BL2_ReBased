@@ -42,6 +42,8 @@ fn core() -> Vec<u8> {
     let mut t = ScriptToy::new(&[]);
     let object = t.class("Object", 0);
     t.class("Package", object);
+    // The component base (public UE3 `Core.Component`), which the spawn's instancing matches by path.
+    t.class("Component", object);
     t.build()
 }
 
@@ -119,8 +121,10 @@ fn engine() -> Vec<u8> {
     t.prop("Object", context, "ContextObject", 0, object);
     t.prop("Byte", context, "BehaviorContext", 0, 0);
     t.prop("Struct", base, "ToyContextData", 0, context);
-    // The component base the store reads at 8 (the director's dialog component).
-    t.class("ActorComponent", object);
+    // The component base the store reads at 8 (the director's dialog component), a `Core.Component`.
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let component = t.p.add_import("Core", "Class", core, "Component");
+    t.class("ActorComponent", component);
     let resolve = [
         param("Struct", "ContextData", 0, context),
         param("Object", "SelfObject", 0, object),
@@ -423,7 +427,25 @@ fn willowgame() -> Vec<u8> {
     t.prop("Int", handle, "PID", 0, 0);
     t.prop("Struct", willow_pawn, "ConsumerHandle", 0, handle);
     native(&mut t, willow_pawn, "GetBehaviorConsumerHandle", &[], Some(("Struct", handle)), NATIVE);
-    t.class("WillowPlayerPawn", engine_pawn);
+    // The player's pawn class, its class default holding one component sub-object in `Components` (lane
+    // LINK1-RBPHYSICS-UNLOADED-COMPONENT): `ToyPawnComponent` (an actor component, `ToyLevel` 4). A sub-object of a
+    // class default reads its tags 16 bytes in (decision 2026-11-16-70): a zero word, its own name, a word.
+    let player_pawn = t.class("WillowPlayerPawn", engine_pawn);
+    toy_array_of(&mut t, player_pawn, "Components", "Object", object);
+    let engine_actor_component = t.p.add_import("Core", "Class", engine, "ActorComponent");
+    let pawn_component = t.class("ToyPawnComponent", engine_actor_component);
+    t.prop("Int", pawn_component, "ToyLevel", 0, 0);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(t.p.fname("ToyPawnComp0", 0));
+    payload.extend(0i32.to_le_bytes());
+    payload.extend(t.p.int_tag("ToyLevel", 4));
+    payload.extend_from_slice(&t.none);
+    let own = t.p.add_export(pawn_component, "ToyPawnComp0", payload);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(t.p.array_tag("Components", 1, &own.to_le_bytes()));
+    payload.extend_from_slice(&t.none);
+    let default = t.p.add_export(player_pawn, "Default__WillowPlayerPawn", payload);
+    t.p.set_outer(own, default);
     let ai_pawn = t.class("WillowAIPawn", willow_pawn);
     t.prop("Object", ai_pawn, "BodyClass", 0, object);
     t.prop("Object", ai_pawn, "MissionDirectives", 0, object);
@@ -2182,4 +2204,37 @@ fn the_balance_refresh_waits_for_the_globals_lookup() {
     let before = format!("{:?}", env.vm().space.heap);
     assert_eq!(call(&mut env).unwrap(), Value::Bool(false));
     assert_eq!(format!("{:?}", env.vm().space.heap), before, "no write");
+}
+
+/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-NNN): the player's pawn, made from the class
+/// defaults, gets its own copy of the component its class default owns, as a spawned actor does: `Components` names a
+/// resident copy outered to the pawn with the default's values (`ToyLevel` 4), not the class default's sub-object.
+/// Reference keeps the shared reference.
+#[test]
+fn the_player_pawn_gets_its_own_copy_of_the_class_default_s_components() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let pawn = s.player_pawn(env.vm()).unwrap();
+    let vm = env.vm();
+    let path = ow_core::ObjectPath::parse("WillowGame.Default__WillowPlayerPawn.ToyPawnComp0").unwrap();
+    let own = vm.defs.find(&mut vm.space, &path).unwrap().expect("the class default's sub-object");
+    let list = get(&vm.space, pawn, "Components").unwrap();
+    let items = list.elements().unwrap().to_vec();
+    assert_eq!(items.len(), 1, "{items:?}");
+    let Value::Object(Some(copy)) = items[0] else { panic!("{items:?}") };
+    assert_ne!(copy, own, "not the class default's own sub-object");
+    assert!(!vm.defs.is_unloaded(&vm.space, copy), "resident");
+    assert_eq!(vm.space.heap.get(copy).unwrap().outer, Some(pawn));
+    assert_eq!(get(&vm.space, copy, "ToyLevel").unwrap(), Value::Int(4), "the default's values");
+    assert_eq!(s.player_pawn(vm).unwrap(), pawn, "made once");
+
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let s = env.script.clone();
+    let pawn = s.player_pawn(env.vm()).unwrap();
+    let vm = env.vm();
+    let list = get(&vm.space, pawn, "Components").unwrap();
+    let items = list.elements().unwrap().to_vec();
+    let Value::Object(Some(shared)) = items[0] else { panic!("{items:?}") };
+    let path = vm.defs.handle_path(shared).unwrap_or_default();
+    assert!(path.ends_with("Default__WillowPlayerPawn.ToyPawnComp0"), "Reference shares it: {path}");
 }

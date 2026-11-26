@@ -58,6 +58,20 @@ pub const APPLY_HOOK: &str = "WillowPlayerPawn.OnNativeApplyBodyClassStartingVal
 pub const RIGID_BODY: &str = "WillowPawn.InitializeRBPhysics: a component's rigid body";
 pub const RIGID_LAYER: &str = "a physics layer (rigid bodies)";
 pub const NOT_LOADED: &str = "WillowPawn.InitializeRBPhysics: a component the store has not loaded (a load is a write)";
+
+/// [`NOT_LOADED`] naming the entry: `"<NOT_LOADED>: <class> <path>"`, the path the store's handle records (else the
+/// object's path), as `tree_ticks::not_loaded` names its object.
+pub fn not_loaded(vm: &Vm, entry: ObjRef) -> String {
+    let class = vm
+        .space
+        .heap
+        .get(entry)
+        .ok()
+        .and_then(|x| vm.space.classes.get_layout(x.class))
+        .map_or_else(String::new, |l| l.path().as_str().to_string());
+    let path = vm.defs.handle_path(entry).unwrap_or_else(|| crate::pools::object_path(&vm.space, entry));
+    format!("{NOT_LOADED}: {class} {path}")
+}
 /// `PHYS_RigidBody`.
 pub const PHYS_RIGID_BODY: u8 = 10;
 const RB: &str = "WillowPawn.InitializeRBPhysics";
@@ -75,7 +89,7 @@ fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
 /// The entry checks of the first pass (module documentation): resident, and the attached test's field declared.
 fn check_entry(vm: &Vm, template: bool, entry: ObjRef) -> Result<(), VmError> {
     if !resident(vm, entry)? {
-        return Err(NotYet::not_read(NOT_LOADED, RECORD).into());
+        return Err(NotYet::not_read(not_loaded(vm, entry), RECORD).into());
     }
     if template {
         schemas(vm, entry, &[("bAttached", Want::Bool)], RB)
