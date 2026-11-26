@@ -3,13 +3,15 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **SOCKETS-PUBLISH-AND-PHYSX-LEVEL (2026-11-26, pc-hummer, on fix/sockets-publish-and-physx-level, stacked on #770 @
-f489ac7b):** AI-assisted (Claude Code, Opus 5.5). A socket attach takes its parent's `Owner` and is published under the
-pawn; `Engine.GetPhysXLevel` reads a harness setting of 0 on the engine object, with `SetHasPhysicsAssetInstance` and
-`DoInitRBPhys` refusing above 0. `cargo test --workspace -j 8 --no-fail-fast` 3,856 passed / 0 failed / 59 ignored;
+92e14e9e):** AI-assisted (Claude Code, Opus 5.5). A socket attach takes its parent's `Owner` and is published under the
+pawn; an unrecorded attachment back-linked to its entry is `InitializeRBPhysics`' `NotRead` (review of #770);
+`Engine.GetPhysXLevel` reads a harness setting of 0 on the engine object, with `SetHasPhysicsAssetInstance` and
+`DoInitRBPhys` refusing above 0. `cargo test --workspace -j 8 --no-fail-fast` 3,857 passed / 0 failed / 59 ignored;
 `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock), #770's head, then
 part 1, then part 2: 6 ok / 8 not ok, 51.2% on all three. Part 1 changes no row; with part 2, links 1, 3, 4, 5, 13 and
 14 pass `GetPhysXLevel` and stop at the unbound `Pawn.IsPlayerPawn()` (the `bAlwaysRelevant` step), not at
-`InitializeBehaviorProviders` as predicted. UNVERIFIED in game. Decisions 2026-11-26-NNN (two).
+`InitializeBehaviorProviders` as predicted. With the guard (24f08965) every row is unchanged. UNVERIFIED in game.
+Decisions 2026-11-26-NNN (two).
 
 **BODYCOMP-ATTACH-PUBLISHES (2026-11-26, pc-hummer, on fix/bodycomp-attach-publishes, on main 78a88b7):**
 AI-assisted (Claude Code, Opus 5.5). The body composition's actor attach publishes each component to the attach record

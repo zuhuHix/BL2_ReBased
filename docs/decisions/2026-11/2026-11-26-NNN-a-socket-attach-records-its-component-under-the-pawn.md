@@ -1,6 +1,6 @@
 ## 2026-11-26: A socket attach records its component under the pawn
 
-AI-assisted (Claude Code, Opus 5.5). Lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL, part 1, stacked on #770 (f489ac7b). It
+AI-assisted (Claude Code, Opus 5.5). Lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL, part 1, stacked on #770 (92e14e9e). It
 implements the hub's socket ruling: in the game, the head and gear-likeness meshes belong to Maya's pawn, attached to
 the body mesh's socket. This lane did not read the executable. No session was run. UNVERIFIED in the running game.
 
@@ -20,6 +20,14 @@ the body mesh's socket. This lane did not read the executable. No session was ru
 - **`InitializeRBPhysics`** then visits a recorded `Attachments` component by the class table (decision
   2026-11-26-25). For Maya's skeletal subclasses with their flags off, that writes `bSkelCompFixed`. The rows do not
   show that write.
+- **The guard** (review of #770, MED): in `InitializeRBPhysics`' attachment walk (`player_pawn_tail`), an
+  `Attachments` component that is not in the attach record but whose `AttachedToSkelComponent` is the entry is now
+  `NotYet { NotRead }`: the port cannot tell whether it is attached, as #766's release rule refuses. It is found in the
+  preflight, before any write. One not back-linked to the entry is still not visited. So #770's silent skip of the
+  socket children cannot come back unnoticed. Since socket attaches publish, Maya never meets it: the installed rows
+  are unchanged with it.
+- **Review of #770, LOW:** the borrowed-record test's doc now says `Vm::call`'s `check_none_borrowed` refuses first. The
+  preflight's `record_ready` stays as the build's own guard.
 - **Reference:** unchanged.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock; #770's head f489ac7b and this
   commit): 6 ok / 8 not ok, 51.2% on both, and **every row unchanged**. Links 1, 3, 4, 5, 13 and 14 still stop at the
@@ -28,6 +36,9 @@ the body mesh's socket. This lane did not read the executable. No session was ru
   - a socket-attached head and likeness component take the pawn as `Owner` (their template's is None) and are in the
     record under the pawn, as their parent is;
   - `InitializeRBPhysics`' half is `player_pawn_tail::tests::an_attached_attachment_takes_the_same_rule`.
+
+  - the guard: a back-linked unrecorded attachment is the `NotRead`, nothing written; one back-linked elsewhere is
+    not visited. Dropping the guard fails it.
 
   The earlier test that told a socket hit from the owner retry by `Owner` now uses the pawn's `Components`, since
   both now end with the pawn as `Owner`. Mutation-checked: dropping the `Owner` write, or the socket publish, fails the
