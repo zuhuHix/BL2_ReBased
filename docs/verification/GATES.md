@@ -11,7 +11,7 @@ lock), main d3be3e5 and this branch: 7 ok / 7 not ok, X 58.3% on both. Links 3, 
 "a resolver the store has not loaded" to `WillowPawn.SetDefaultPhysics` "past its gates" (NATIVE_MIND_ROUTE.md section
 1; no partial-writes prefix), not to `WillowMind.RecalculateAttributeInitializedState` as #788's probe expected.
 Links 6 (`UpdateAmmoCounts`) and 7 (the HUD's pickup targeting) are unchanged; 1, 2 and 8 to 12 stay ok. UNVERIFIED in
-game. Decision 2026-11-26-NNN.
+game. Decision 2026-11-26-49.
 
 **MAYA9-SKIPPED-FLAG-LAYERABSENT + queue 0an (2026-11-26, pc-hummer, on fix/followups-0an from main d3be3e5):**
 AI-assisted (Claude Code, Opus 5.5). `FlagDefinition.ApplyFlagInitializationData` answers `LayerAbsent` when its `const
