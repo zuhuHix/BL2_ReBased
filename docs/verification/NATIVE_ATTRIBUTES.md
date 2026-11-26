@@ -412,7 +412,7 @@ Currency, Random, AmmoDropWeight and Constraint are now read in
   `WillowInventoryManagerAttributeContextResolver`, `WillowInteractiveObjectAttributeContextResolver`,
   `ObjectPropertyContextResolver`, `BestTarget...`, `PopulationMaster...` (their registration could not be resolved by name).
 - Value resolvers: `TargetableAttributeValueResolver` (since read in NATIVE_TARGETABLE_RESOLVER.md, decision
-  2026-11-26-NNN), `StateAttributeResolver`,
+  2026-11-26-41), `StateAttributeResolver`,
   `NounAttributeValueResolver`, `TimeValueResolver`, `LevelNameAttributeValueResolver`,
   `ShopTimerRateValueResolver`, `AmmoResourceUpgradeAttributeValueResolver`,
   `BlackMarketUpgradeAttributeValueResolver`, `ClassDropWeightValueResolver`, `DamageTypeAttributeValueResolver`, `PlayerStat...`,
