@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-MAYA9-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-maya9-and-after from main 3b8df87a):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA9_AND_AFTER.md lists what link 1 meets after its predicted
+`InitializeBehaviorProviders` stop, measured by a local probe: an installed Off strict `--slice-gate` with each earlier
+stop stubbed and a call trace, reverted and not committed. Today's stop sits in the health set-up's
+`ApplyCharacterClassDefaults` → `BodySelectClass`. Four natives are read, each a no-op for Maya: `SetDefaultStance`,
+the shield idle hook, `ApplyFlagInitializationData` and the playthrough effects. Four wiring gaps have rules on main
+(`IsPlayerPawn`, `AttachComponent` in the combat world, the `MaterialInstanceConstant` keys, the stance objects'
+preload). With every stop stubbed link 1 is ok, and links 3, 4, 13 and 14 reach their own spawn steps
+(`TargetableAttributeValueResolver`). No code changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-LINK67-KEY (2026-11-26, pc-hummer, on fix/rust-link67-key from main c345fdb):** AI-assisted (Claude Code,
 Opus 5.5). `CanAffordToPickUpPickupable`, `PayForPickupable` and `UpdateAmmoCounts` bound in Off
 (NATIVE_LINK67_KEY_AND_LOOK.md sections 2 and 4). `cargo test --workspace -j 8 --no-fail-fast` 3,857 passed / 0 failed /
