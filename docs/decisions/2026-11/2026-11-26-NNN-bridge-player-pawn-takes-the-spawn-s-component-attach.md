@@ -4,6 +4,11 @@ AI-assisted (Claude Code, Claude Opus 5.5). Lane BRIDGE-PAWN-ATTACH, the hub's r
 (decision 2026-11-26-16) over main 457c46e4. No native was read; no bl-sdk session was granted. **UNVERIFIED in the
 running game.**
 
+Edits: docs/decisions/2026-11/2026-11-26-16-bridge-player-pawn-instances-its-class-default-components.md
+
+That entry gains a line saying the spawn's `load_own_definitions` is not done for the bridge pawn (review of #757, LOW
+4).
+
 **What changed.** In Off, the bridge's player pawn (made from the class defaults, decision 2026-11-16-54, with its own
 component copies since decision 2026-11-26-16) now also takes the component attach step every spawned actor takes
 (`ow_world::actors::component_attach`, NATIVE_SPAWN_COMPONENT_ATTACH.md, #605/#610):
@@ -27,3 +32,9 @@ on main 457c46e4. Links 1, 3, 4, 5, 13 and 14 move from "Actor.GetBoundingCylind
 to NATIVE_LINK1_RBPHYSICS_AND_AFTER.md 2.A's "WillowPawn.InitializeRBPhysics: a component's rigid body"
 (`LayerAbsent`, a physics layer), as predicted. No step count moves, so X is unchanged. Links 8 to 12 (equip,
 phaselock, the three mission links) stay ok; links 6 and 7 are unchanged at the template `NotRead` in touch.
+
+**Review of #757's LOWs** (a separate commit): `PLAYER_PAWN_CLASS` and `player_pawn_with_components` sit above
+`new_object`'s documentation; a failure of `apply_plan` or of an `Owner` write frees the pawn (and the copies), as
+the spawn frees its actor; a test of a plan refusal (a non-component sub-object of the class default in its
+`Components`: `NotRead`, no pawn made or cached); decision 16's line above. The toy component's `Owner` and its
+assertion came with this lane's first commit.
