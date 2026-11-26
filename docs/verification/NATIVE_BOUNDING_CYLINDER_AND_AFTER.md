@@ -101,8 +101,13 @@ Their union has half extents of about (42, 107.8, 115.1). So the answer is radiu
 - write-free until the outs, which are written only on a hit.
 
 **On the slice:** Maya's mesh component is attached by the record. So this is the `LayerAbsent`, and it is links 4 and
-13's next stop. **For the hub, a possible stand-in:** a miss (false, nothing written), so `CheckHitInfo` keeps the hit
-as it was. The probe used it.
+13's next stop.
+
+**Hub ruling (review of #799): a miss stand-in, behind a setting.** Under an Off-only slice harness setting (the same
+pattern as the base-search stand-in, the hub's ruling on review of #798), `TraceComponent` on an attached component
+answers a miss: false, with no out written, so `CheckHitInfo` keeps the hit as it was. Each use is logged as a harness
+input, and the answer is UNVERIFIED. Without the setting it stays the `LayerAbsent` above. Reference is unchanged. The
+probe used the miss.
 
 ## 4. `WillowPawn.TryFullBodyGib(Damage, Controller, DamageType, ..., ..., ...)`
 
@@ -183,7 +188,7 @@ maximum. Write-free. **On the slice:** Maya's `ShieldArmor` names a pool.
 
 **Links 4 and 13**, past #796's stops, on each swing:
 1. `GetBoundingCylinder`'s world transform (section 2), until the extension is in;
-2. `TraceComponent`'s `LayerAbsent` (section 3), unless the hub rules the miss stand-in;
+2. `TraceComponent`'s `LayerAbsent` (section 3); with the hub's harness setting on, the logged miss instead;
 3. past sections 4 to 7: **`WillowGameInfo.GetCombatMusicManager`'s lazy-creation `NotRead`.** The next read.
 
 **Link 14:** it needs a down. With the stubs, the swings still took about 13.9 health each (Maya at 156.9 after four),
@@ -200,7 +205,9 @@ so there is no down and `bleed:50` does nothing (#796 section 7, the hub's no-ca
    - the same with a scale of 2 or a rotation: the `WORLD_TRANSFORM` `NotRead`;
    - a cylinder component with a translation under the same conditions.
 2. **`TraceComponent`:** no component: false; `bAttached` clear: false and outs unchanged; attached: the `LayerAbsent`;
-   unknown to the record: refusal L.
+   unknown to the record: refusal L. With the hub's harness setting on (hub ruling): an attached component gives
+   false, the outs unchanged and one harness-input log line; the unattached and unknown cases answer as without it;
+   Reference with the setting on is unchanged.
 3. **`TryFullBodyGib`:**
    - gibbed: true;
    - no `MyDeathDef`: false;
@@ -230,7 +237,7 @@ so there is no down and `bleed:50` does nothing (#796 section 7, the hub's no-ca
    - the combat music manager's creation;
    - `NotifyKilledEnemy`.
 3. **By fit:** `SpawnParent`'s place; the trace flags' meaning.
-4. **For the hub:** `TraceComponent`'s miss stand-in (section 3).
+4. **Ruled by the hub on #799:** `TraceComponent`'s miss stand-in, behind an Off-only harness setting (section 3).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

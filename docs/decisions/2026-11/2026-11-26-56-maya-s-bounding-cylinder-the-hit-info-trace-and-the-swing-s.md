@@ -27,5 +27,8 @@ no bounds check changed.
   - read with Off answers: `TryFullBodyGib` (its gates), `GetParent` (resolved), the shield getters, `ShakeView`,
     `DoForceFeedbackWaveform` (its gates), `GetCombatMusicManager` (the field).
 - **Next** (from the probe): `GetCombatMusicManager`'s lazy creation, `NotRead` with the field None.
-- **Needs the hub:** whether `TraceComponent` may answer a miss as a stand-in.
+- **Hub ruling (review of #799):** `TraceComponent` on an attached component may answer a miss (false, nothing
+  written) as a stand-in, behind an Off-only slice harness setting, the same pattern as the base-search stand-in
+  (ruling on review of #798). It is logged and UNVERIFIED. Without the setting it stays the `LayerAbsent`; Reference is
+  unchanged.
 - **Clean room:** a different lane implements this note.
