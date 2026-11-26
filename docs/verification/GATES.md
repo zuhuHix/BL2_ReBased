@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on docs/native-spawn-setbasevalue, on main d118d2bb):**
+AI-assisted (Claude Code, Opus 5.5). Docs only: NATIVE_SPAWN_SETBASEVALUE.md, the index rows and decision 2026-11-26-NNN;
+no code, so no test numbers change. The installed Off strict `--slice-gate` on #807's head 0a9cfdaf (the base of the
+note): **8 ok / 14, X = 8.5/14 = 60.7%**. Links 3, 4, 5, 13 and 14 stop at the spawn's `SetBaseValue`, a starting
+value's unloaded attribute. A local probe (temporary, reverted) under the machine lock, with IMPL-COMBAT-MUSIC's and
+#805's commits laid over it and each later stop stubbed in turn (note section 6), reached **9 ok / 14, X = 10.75/14 =
+76.8%**: link 4 passes, link 3 stops at the unbound `NotifyKilledEnemy`, and link 13 at the AI mind's
+`AttackInjuredMeleeDamageModifier`. The predicted stop after the note's preload alone is `ApplyGradeCustomizations`
+(section 8). UNVERIFIED in game.
+
 **ANALYST-FLOOR-TRACE-FLAGS (2026-11-26, pc-hummer, docs only, on docs/native-floor-trace-flags from main
 153ac950, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md reads the
 base search's floor trace:
