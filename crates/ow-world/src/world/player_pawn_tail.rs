@@ -11,15 +11,19 @@
 //! **2.A `InitializeRBPhysics`**, write-free and load-free. The pawn declares `bDeleteMe`, `Physics` (a byte),
 //! `Components` (an array of object references), `CollisionComponent` and `bPushesRigidBodies`, else
 //! `VmError::Script`. With `bDeleteMe` set: nothing. Else the walk over `Components` in order, after the `Physics`
-//! filter (with `PHYS_RigidBody`, 10, only the `CollisionComponent`): None skipped; a store handle not loaded (or a
-//! slotless stand-in) is [`NOT_LOADED`] (`NotRead`). Whether an entry is **attached**: on a template receiver
-//! (`Origin::Default`), its `bAttached`; on a live one, the attach record under the pawn (`actors::attached_to`; the
-//! entry must declare `Owner` as an object, else `VmError::Script`), or its own `bAttached`. Attached is
-//! [`RIGID_BODY`] (`LayerAbsent`, [`RIGID_LAYER`]); a live entry neither recorded nor `bAttached` follows refusal L's
-//! convention (`bounding_cylinder::REFUSAL_L` and its layer, `LayerAbsent`): attachment is unknown. This takes every
-//! such entry, colliding or not, as the conservative side. Then `SetPushesRigidBodies(bPushesRigidBodies)`: clear (the
-//! port makes no pushing body) is nothing, and the same-value write is skipped, so the native never writes; set, with
-//! a `CollisionComponent`, the same attached test and answers. No entry and no pushing body: nothing.
+//! filter (with `PHYS_RigidBody`, 10, only the `CollisionComponent`), None entries skipped. **The entry checks run
+//! first, in one pass, before any answer** (review of #742): over every entry the walk meets, and the
+//! `CollisionComponent` when `bPushesRigidBodies` is set, a store handle not loaded (or a slotless stand-in) is
+//! [`NOT_LOADED`] (`NotRead`), and the field the attached test reads must be declared (`bAttached` a bool on a
+//! template receiver, `Owner` an object on a live one), else `VmError::Script`. Then, in order, whether an entry is
+//! **attached**: on a template receiver (`Origin::Default`), its `bAttached`; on a live one, **the attach record under
+//! the pawn only** (`actors::attached_to`; NATIVE_COMPONENT_BOUNDS.md section 7 A, as `bounding_cylinder`'s live path
+//! reads it): a live entry's own `bAttached` is not read. Attached is [`RIGID_BODY`] (`LayerAbsent`,
+//! [`RIGID_LAYER`]); a live entry not in the record follows refusal L's convention (`bounding_cylinder::REFUSAL_L`
+//! and its layer, `LayerAbsent`): attachment is unknown. This takes every such entry, colliding or not, as the
+//! conservative side. Then `SetPushesRigidBodies(bPushesRigidBodies)`: clear (the port makes no pushing body) is
+//! nothing, and the same-value write is skipped, so the native never writes; set, with a `CollisionComponent`, the
+//! same attached test and answers. No entry and no pushing body: nothing.
 //!
 //! **2.D `GetLinearColor(C)`:** each of R, G, B and A as `byte as f32 * (1.0f32 / 255.0)` (an f32 multiply by the f32
 //! constant, not a divide). Nothing written.
@@ -70,22 +74,25 @@ fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
 }
 
-/// Whether `entry` counts as attached (module documentation): `Some(true)` attached, `Some(false)` not attached
-/// (a template entry with `bAttached` clear), `None` unknown (a live entry neither recorded nor `bAttached`).
-fn attached(vm: &Vm, pawn: ObjRef, template: bool, entry: ObjRef) -> Result<Option<bool>, VmError> {
+/// The entry checks of the first pass (module documentation): resident, and the attached test's field declared.
+fn check_entry(vm: &Vm, template: bool, entry: ObjRef) -> Result<(), VmError> {
     if !resident(vm, entry)? {
         return Err(NotYet::not_read(NOT_LOADED, RECORD).into());
     }
-    schemas(vm, entry, &[("bAttached", Want::Bool)], RB)?;
-    let flag = bool_of(&read(vm, entry, "bAttached", RB)?, "bAttached", RB)?;
     if template {
-        return Ok(Some(flag));
+        schemas(vm, entry, &[("bAttached", Want::Bool)], RB)
+    } else {
+        schemas(vm, entry, &[("Owner", Want::Object)], RB)
     }
-    schemas(vm, entry, &[("Owner", Want::Object)], RB)?;
-    if flag || crate::actors::attached_to(vm, entry, pawn)? {
-        return Ok(Some(true));
+}
+
+/// Whether `entry` (checked) counts as attached (module documentation): `Some(true)` attached, `Some(false)` not
+/// attached (a template entry with `bAttached` clear), `None` unknown (a live entry not in the attach record).
+fn attached(vm: &Vm, pawn: ObjRef, template: bool, entry: ObjRef) -> Result<Option<bool>, VmError> {
+    if template {
+        return Ok(Some(bool_of(&read(vm, entry, "bAttached", RB)?, "bAttached", RB)?));
     }
-    Ok(None)
+    Ok(if crate::actors::attached_to(vm, entry, pawn)? { Some(true) } else { None })
 }
 
 /// The refusal for an entry by its attached state (`Ok` for a template entry not attached).
@@ -125,17 +132,21 @@ pub fn initialize_rb_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let template = matches!(vm.space.heap.get(pawn)?.origin, Origin::Default { .. });
     let collision = object_of(&read(vm, pawn, "CollisionComponent", RB)?, RB)?;
     let components = read(vm, pawn, "Components", RB)?;
+    let mut walk = Vec::new();
     for item in components.elements().unwrap_or(&[]) {
         let Some(entry) = object_of(item, RB)? else { continue };
         if physics == PHYS_RIGID_BODY && Some(entry) != collision {
             continue;
         }
-        answer(attached(vm, pawn, template, entry)?)?;
+        walk.push(entry);
     }
-    if bool_of(&read(vm, pawn, "bPushesRigidBodies", RB)?, "bPushesRigidBodies", RB)?
-        && let Some(cc) = collision
-    {
-        answer(attached(vm, pawn, template, cc)?)?;
+    let pushing = if bool_of(&read(vm, pawn, "bPushesRigidBodies", RB)?, "bPushesRigidBodies", RB)? { collision } else { None };
+    // The first pass: every entry's checks, before any answer.
+    for &entry in walk.iter().chain(pushing.iter()) {
+        check_entry(vm, template, entry)?;
+    }
+    for &entry in walk.iter().chain(pushing.iter()) {
+        answer(attached(vm, pawn, template, entry)?)?;
     }
     Ok(Value::None)
 }

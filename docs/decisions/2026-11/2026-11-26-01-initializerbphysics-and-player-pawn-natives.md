@@ -14,10 +14,14 @@ keep-existing by key in the world pack's Off block. The keys were read from the 
 - `WillowPlayerPawn.OnNativeApplyBodyClassStartingValuesHook()`.
 
 **2.A `InitializeRBPhysics`**, write-free and load-free. With `bDeleteMe`: nothing. Otherwise the `Components` walk,
-after the `PHYS_RigidBody` filter: None skipped; a lazy handle `NotYet { NotRead }`. An attached entry (the attach
-record under the pawn, or `bAttached`; on a template receiver `bAttached` alone) is `NotYet { LayerAbsent }`,
-"WillowPawn.InitializeRBPhysics: a component's rigid body", layer "a physics layer (rigid bodies)". A live entry
-neither recorded nor `bAttached` follows refusal L's convention (its text and layer). The port applies that to every
+after the `PHYS_RigidBody` filter: None skipped. The entry checks run first, in one pass over every entry the walk
+meets (and the pushing body's `CollisionComponent`): a lazy handle is `NotYet { NotRead }`, and an entry whose class
+does not declare the field the attached test reads is `VmError::Script` (review of #742). Then the answers: an
+attached entry (on a live receiver the attach record under the pawn only, as COMPONENT_BOUNDS section 7 A and
+`bounding_cylinder` read it; on a template receiver `bAttached`) is `NotYet { LayerAbsent }`,
+"WillowPawn.InitializeRBPhysics: a component's rigid body", layer "a physics layer (rigid bodies)". A live entry not
+in the record follows refusal L's convention (its text and layer), whatever its own `bAttached` holds (review of
+#742). The port applies that to every
 such entry, colliding or not, the conservative side; the note's test names a colliding one. Then
 `SetPushesRigidBodies`: clear is nothing, the same-value write skipped, so the native never writes and no
 partial-writes prefix can arise; set, the `CollisionComponent` by the same test.

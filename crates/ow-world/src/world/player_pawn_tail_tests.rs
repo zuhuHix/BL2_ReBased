@@ -276,11 +276,53 @@ fn the_hook_sets_immune_to_falling_damage_only() {
     assert_eq!(before.iter().zip(&after).filter(|(a, b)| a != b).count(), 1);
 }
 
-/// Reference binds none of the five keys.
+/// Reference binds none of the five keys through the world pack's own gate (review of #742, item 4); Off binds them all.
 #[test]
 fn reference_binds_nothing() {
-    let x = fx_in(ParityMode::Reference);
-    for key in [INITIALIZE_RB_PHYSICS, INITIALIZE_BEHAVIOR_PROVIDERS, GET_LINEAR_COLOR, GET_INSTANCED_MIC, APPLY_HOOK] {
-        assert!(!x.vm.has_native(key), "{key}");
+    let keys = [INITIALIZE_RB_PHYSICS, INITIALIZE_BEHAVIOR_PROVIDERS, GET_LINEAR_COLOR, GET_INSTANCED_MIC, APPLY_HOOK];
+    let mut r = fx_in(ParityMode::Reference);
+    ow_vm::api::NativePack::register(&crate::world::Pack, &mut r.vm).unwrap();
+    for key in keys {
+        assert!(!r.vm.has_native(key), "{key}");
+    }
+    let x = fx();
+    for key in keys {
+        assert!(x.vm.has_native(key), "{key}");
+    }
+}
+
+/// Review of #742, item 1: on a live receiver only the attach record counts. An unrecorded entry whose `bAttached` is
+/// set is refusal L's convention (its text and layer), not the physics `LayerAbsent`.
+#[test]
+fn a_live_entry_s_own_b_attached_is_not_read() {
+    let mut x = fx();
+    let p = x.pawn(&[]);
+    let c = x.component("Unrecorded", Some(p), false);
+    x.set(c, "bAttached", Value::Bool(true));
+    x.set(p, "Components", Value::array(vec![Value::Object(Some(c))]));
+    match x.rb(p) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(&*n.what, super::super::bounding_cylinder::REFUSAL_L);
+            assert!(matches!(n.missing, Missing::LayerAbsent(l) if l == super::super::bounding_cylinder::BOUNDS_LAYER), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review of #742, items 2 and 3: the entry checks run in one pass before the first answer. A recorded mesh (whose
+/// answer would be the physics `LayerAbsent`) followed by an entry whose class declares no `Owner` is the
+/// `VmError::Script` of the second entry, on a live receiver.
+#[test]
+fn the_entry_checks_run_before_the_first_answer() {
+    let mut x = fx();
+    let p = x.pawn(&[]);
+    let mesh = x.component("Mesh", Some(p), true);
+    let object = x.vm.space.classes.by_path("Core.Object").unwrap();
+    let ownerless = x.vm.space.classes.define("Test.OwnerlessComponent", Some(object), vec![]).unwrap();
+    let stray = x.make(ownerless, "Stray");
+    x.set(p, "Components", Value::array(vec![Value::Object(Some(mesh)), Value::Object(Some(stray))]));
+    match x.rb(p) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Owner"), "{message}"),
+        other => panic!("{other:?}"),
     }
 }
