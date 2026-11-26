@@ -695,6 +695,23 @@ fn a_complete_mission_is_stored_only_when_repeatable() {
     assert_eq!(counters(&x.t.vm), before, "nothing written");
 }
 
+/// Review of #784: a Complete `LinkedMission` the store has not loaded is the mission's not-loaded `NotRead`, nothing
+/// written or linked (its text names the mission when the store gives it a path; a run-time stand-in has none, so the
+/// text here is the constant).
+#[test]
+fn a_complete_mission_not_loaded_is_not_read() {
+    let mut x = p2(true);
+    let (world, _) = x.world("NM_Standalone", Tracker::Role(true));
+    let (_, h) = x.consumer(world, "Maya");
+    let class = x.mission;
+    let lazy = x.t.vm.space.alloc_stand_in(class, "LazyMission", ow_object::heap::Origin::Default { class }).unwrap();
+    x.answers.complete.borrow_mut().push(lazy);
+    let c = x.condition(Some(lazy));
+    let d = x.definition(OFF.0, OFF.1, c);
+    let n = x.refused(&h, d, c);
+    assert_eq!((n.missing, &*n.what), (Missing::NotRead, MISSION_NOT_LOADED));
+}
+
 // 11.
 #[test]
 fn a_client_world_has_no_pass_two() {
