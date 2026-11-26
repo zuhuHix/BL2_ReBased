@@ -1029,10 +1029,16 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 };
                 // The pawn's PostInitBodyComposition (section 4.5), mode 0.
                 let mut post = PostInit::default();
-                // A pawn field the hook releases first (a detach and a global list) is set: refused until the note
-                // gives a port answer (hub, 20:03Z). For `Mesh` the animation-node refusal is reported first.
+                // A pawn field the hook releases first (a detach and a global list): the hub's release ruling (lane
+                // IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6.3, following the game):
+                // the release detaches only an attached component, so an old component the attach record does not
+                // hold under the pawn is released with nothing to detach, and the new one is written as usual. One
+                // the record holds keeps the refusal (the detach and the global list are not read). UNVERIFIED.
                 let old_set = |name: &str| -> Result<bool, VmError> {
-                    Ok(read_prop(vm, owner, name)?.and_then(|v| object_of(&v)).is_some())
+                    match read_prop(vm, owner, name)?.and_then(|v| object_of(&v)) {
+                        Some(old) => crate::actors::attached_to(vm, old, owner),
+                        None => Ok(false),
+                    }
                 };
                 // Section 4.5.1: the old Pawn.Mesh is released before the new one is set (review r1 of #542, item 2).
                 if name_is(vm, &a.parent_id, MESH_ID) {

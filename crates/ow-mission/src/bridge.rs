@@ -445,6 +445,78 @@ fn find_class(vm: &mut Vm, path: &str) -> Result<ow_object::ids::ClassId, Missio
 /// The player's pawn class (decision 2026-11-16-54: the bridge's player from class defaults, no map spawn).
 pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
 
+/// The refusal for a player class whose pawn archetype is not in memory (NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B).
+pub const ARCHETYPE_NOT_LOADED: &str = "the player pawn's archetype is not loaded (a load is a write)";
+/// The record of the archetype spawn.
+pub const RECORD_PAWN_SOURCE: &str = "docs/verification/NATIVE_MAYA_PAWN_SPAWN_SOURCE.md";
+
+/// Off (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B, decision 2026-11-26-NNN): the
+/// preflight of the archetype spawn, write-free and load-free. With no `PlayerClass` on `controller` (the field
+/// undeclared, None, or not an object): `None`, and the bridge keeps the class-default pawn. Otherwise the class
+/// definition is resident, its `PawnArchetypePath` is a string, and the pawn data manager's lookup
+/// (`FindAlreadyLoadedObject`, which loads nothing) finds a `WillowPlayerPawn` there. A class not resident, an
+/// archetype not in memory or of another class is `NotYet { NotRead }` ([`ARCHETYPE_NOT_LOADED`]); a malformed
+/// declaration is a script error. UNVERIFIED in the running game (the game's `SpawnDefaultPawnFor`).
+fn player_archetype(vm: &mut Vm, controller: ObjRef) -> Result<Option<ObjRef>, MissionError> {
+    let not_loaded =
+        || -> MissionError { VmError::NotYet(NotYet::not_read(ARCHETYPE_NOT_LOADED, RECORD_PAWN_SOURCE)).into() };
+    let class = vm.space.heap.get(controller).map_err(VmError::from)?.class;
+    let Some(p) = vm.space.prop(class, "PlayerClass") else {
+        return Ok(None);
+    };
+    let Value::Object(Some(definition)) = vm.space.read(controller, PropAddr::scalar(p)).map_err(VmError::from)?.clone()
+    else {
+        return Ok(None);
+    };
+    if vm.defs.is_unloaded(&vm.space, definition) || vm.defs.is_failed(&vm.space, definition) {
+        return Err(not_loaded());
+    }
+    let path = match get(&vm.space, definition, "PawnArchetypePath")? {
+        Value::Str(s) => s.to_string(),
+        other => {
+            return Err(data(format!(
+                "mission script bridge: PawnArchetypePath holds {}, not a string",
+                other.kind_name()
+            )));
+        }
+    };
+    let found = match ow_world::world::pawn_data::find_already_loaded(vm, controller, &path) {
+        Ok(found) => found,
+        Err(VmError::NotYet(_)) => return Err(not_loaded()),
+        Err(e) => return Err(e.into()),
+    };
+    let Some(archetype) = found else {
+        return Err(not_loaded());
+    };
+    let pawn_class = vm.find_class(PLAYER_PAWN_CLASS)?;
+    let a = vm.space.heap.get(archetype).map_err(VmError::from)?;
+    let slotless = vm.space.classes.get_layout(a.class).is_some_and(|l| a.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, archetype) || slotless || !vm.space.classes.is_child_of(a.class, pawn_class) {
+        return Err(not_loaded());
+    }
+    Ok(Some(archetype))
+}
+
+/// Off (NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B, step 2): the player pawn spawned through the world's spawn with
+/// `archetype` as its `ActorTemplate` (the spawn's own instancing plan and component update included), at the world's
+/// `WorldInfo` (the origin, as the class-default pawn) and with no collision placement asked. Play has not begun, so no
+/// begin-play event runs. The spawn marks a refusal after its writes ("stopped after partial writes"). A spawn that
+/// makes nothing is a script error. `pawn_for` sets `Controller` afterwards, as for the class-default pawn.
+fn spawn_player_pawn(vm: &mut Vm, archetype: ObjRef, controller: ObjRef) -> Result<ObjRef, MissionError> {
+    let class = vm.space.heap.get(archetype).map_err(VmError::from)?.class;
+    let actors = ow_world::actors::actors_of(vm)?;
+    let spawner = actors.try_borrow().ok().and_then(|a| a.world_info()).unwrap_or(controller);
+    let req = ow_world::actors::SpawnRequest::new(Some(class))
+        .with_template(Some(archetype))
+        .with_no_collision_fail(true);
+    let pawn = ow_world::actors::spawn(vm, spawner, &req)?.ok_or_else(|| {
+        data("mission script bridge: the world's spawn made no pawn from the player's archetype".to_string())
+    })?;
+    // The heap's archetype field (decision 2026-11-26-14): the template the pawn was made from. Not a heap write.
+    vm.space.heap.get_mut(pawn).map_err(VmError::from)?.archetype = Some(archetype);
+    Ok(pawn)
+}
+
 /// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-16): the bridge's player pawn from the class
 /// defaults, with its own copy of each component the class default owns, as the world's spawn gives every actor
 /// (`ow_world::actors::plan_components` / `apply_plan`, decision 2026-11-19-44; the target dummy's placement does the
@@ -1494,10 +1566,12 @@ impl MissionScript {
         }
         let pawn = match who {
             Toucher::Player => {
-                let p = if vm.parity == ParityMode::Off {
-                    player_pawn_with_components(vm, PLAYER_PAWN_CLASS)?
-                } else {
+                let p = if vm.parity != ParityMode::Off {
                     new_object(vm, PLAYER_PAWN_CLASS)?
+                } else if let Some(archetype) = player_archetype(vm, self.inner.o.controller)? {
+                    spawn_player_pawn(vm, archetype, self.inner.o.controller)?
+                } else {
+                    player_pawn_with_components(vm, PLAYER_PAWN_CLASS)?
                 };
                 // The player's pawn is controlled by the player's controller; Marcus has no player controller.
                 set(&mut vm.space, p, "Controller", Value::Object(Some(self.inner.o.controller)))?;
