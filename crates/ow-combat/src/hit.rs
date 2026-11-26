@@ -1443,6 +1443,9 @@ pub fn spawn_enemy(
             "combat: no such pawn archetype: {archetype_path}"
         )));
     };
+    // The combat run's spawn position under its Off-only harness setting (lane IMPL-COMBAT-WORLD-COLLISION), before
+    // anything else of the spawn reads the pawn.
+    crate::spawn_positions::place(vm, pawn)?;
     if vm.parity == ParityMode::Off {
         // The archetype record (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC): a second copy, never written, stands for
         // the archetype object the spawn copied (the store does not load pawn archetypes; `instantiate_copy`).

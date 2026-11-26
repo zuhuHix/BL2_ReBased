@@ -27,7 +27,9 @@
 //!    (the hub's ruling on #793, and on review of #798, R1): only with the Off-only harness setting
 //!    [`NoLevelBaseSearch`] on (the slice's worlds turn it on, as they do `PhysXLevel` and `AtRestBodyPose`;
 //!    [`enable_no_level_base_search`]), a service with no geometry ([`crate::placement::NoLevel`]) and no other actor
-//!    with collision gives no floor; with `Base` None that changes nothing (logged as a harness input at the commit),
+//!    with collision the line could touch gives no floor. Another actor's collision is cleared only by geometry
+//!    (the hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION): a cylinder component the line runs wholly outside of,
+//!    whatever the trace's flags; any other component keeps the `NotRead` (`clear_of`); with `Base` None that changes nothing (logged as a harness input at the commit),
 //!    with a `Base` set it is `NotRead` ([`BASE_SETTER`]) until the base setter is read. Without the setting the
 //!    `NoLevel` case keeps [`BASE_TRACE_FLAGS`]' `NotRead`. The actor's own `CollisionComponent` is skipped (R2,
 //!    UNVERIFIED: the common convention that an engine trace ignores its source). All decided here, before the mode
@@ -82,7 +84,8 @@ pub const BASE_TRACE_FLAGS: &str = "Actor.SetPhysics: the base search's floor tr
 pub const BASE_SETTER: &str = "Actor.SetPhysics: the base search's base setter";
 /// The harness-input line of the stand-in.
 pub const BASE_STAND_IN: &str = "harness input: Actor.SetPhysics' base search found no floor (a world with no level \
-     geometry and no other actor with collision; UNVERIFIED stand-in, the hub's ruling on #793)";
+     geometry and no other actor's collision cylinder within the line's reach; UNVERIFIED stand-in, the hub's rulings \
+     on #793 and for lane IMPL-COMBAT-WORLD-COLLISION)";
 /// The set-up line of [`enable_no_level_base_search`].
 pub const BASE_STAND_IN_INPUT: &str = "harness input: the world turns on SetPhysics' no-floor base search for a world \
      with no level geometry (the hub's ruling on review of #798, R1; UNVERIFIED)";
@@ -394,7 +397,8 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
     for other in list.into_iter().filter(|o| *o != actor) {
         let Ok(x) = vm.space.heap.get(other) else { continue };
         if let Some(p) = vm.space.prop(x.class, "CollisionComponent")
-            && matches!(vm.space.read(other, PropAddr::scalar(p))?, Value::Object(Some(_)))
+            && let Value::Object(Some(component)) = *vm.space.read(other, PropAddr::scalar(p))?
+            && !clear_of(vm, actor, other, component)?
         {
             return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
         }
@@ -403,6 +407,62 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
         return Err(NotYet::not_read(BASE_SETTER, RECORD).into());
     }
     Ok(())
+}
+
+/// The floor trace's length (NATIVE_LINK34_AFTER_MIND.md section 2): a line straight down by 8 units.
+pub const FLOOR_TRACE_LENGTH: f32 = 8.0;
+
+/// Whether the floor trace from `actor` misses `other`'s collision `component` by geometry alone, whatever the
+/// trace's flags (the hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION; UNVERIFIED until the flags are read). Decided
+/// only for an exact `Engine.CylinderComponent` whose box the bounding-cylinder rule answers
+/// ([`crate::world::bounding_cylinder::entry_box`]: radius R, half-height H, centred on the owner's `Location` plus an
+/// accepted `Translation`), with the actor's `Location` read and its own collision component holding no translation
+/// (the note fits the trace's start offset to it). The line from `Location` down by [`FLOOR_TRACE_LENGTH`] misses
+/// when it runs more than R from the axis, or wholly above or below the cylinder; touching counts as a hit. `false`
+/// in every other case, so the caller keeps the trace flags' `NotRead`. Reads only.
+fn clear_of(vm: &Vm, actor: ObjRef, other: ObjRef, component: ObjRef) -> Result<bool, VmError> {
+    let space = &vm.space;
+    resident(vm, component)?;
+    if space.classes.by_path("Engine.CylinderComponent") != Some(space.heap.get(component)?.class) {
+        return Ok(false);
+    }
+    let (centre, extent) = match crate::world::bounding_cylinder::entry_box(vm, other, component) {
+        Ok(b) => b,
+        Err(VmError::NotYet(_)) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let Some(start) = trace_start(vm, actor)? else { return Ok(false) };
+    let (radius, half) = (f64::from(extent[0]), f64::from(extent[2]));
+    if !(radius.is_finite() && half.is_finite() && radius >= 0.0 && half >= 0.0) {
+        return Ok(false);
+    }
+    let (dx, dy) = (f64::from(start[0]) - f64::from(centre[0]), f64::from(start[1]) - f64::from(centre[1]));
+    let (top, bottom) = (f64::from(start[2]), f64::from(start[2]) - f64::from(FLOOR_TRACE_LENGTH));
+    let apart = dx * dx + dy * dy > radius * radius;
+    let above = bottom > f64::from(centre[2]) + half;
+    let below = top < f64::from(centre[2]) - half;
+    Ok(apart || above || below)
+}
+
+/// The floor trace's start for [`clear_of`]: `actor`'s `Location`, when the class declares it and the actor's own
+/// collision component holds a zero `Translation` (or declares none); `None` otherwise. Reads only.
+fn trace_start(vm: &Vm, actor: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
+    let space = &vm.space;
+    let read = |o: ObjRef, name: &str| -> Result<Option<[f32; 3]>, VmError> {
+        if space.prop(space.heap.get(o)?.class, name).is_none() {
+            return Ok(None);
+        }
+        let v = crate::actors::field(space, o, name)?;
+        crate::world::bounding_cylinder::vector(space, o, &v, name).map(Some)
+    };
+    let Some(location) = read(actor, "Location")? else { return Ok(None) };
+    if let Some(own) = object(vm, actor, "CollisionComponent")? {
+        resident(vm, own)?;
+        if read(own, "Translation")?.is_some_and(|t| t != [0.0; 3]) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(location))
 }
 
 /// `v`, a vector struct, with every float field 0.

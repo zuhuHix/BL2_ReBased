@@ -2,17 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-COMBAT-WORLD-COLLISION (2026-11-26, pc-hummer, on fix/rust-combat-world-collision, stacked on
-fix/rust-bounding-cylinder 614a99a3 (#804 r1), on main 21a668a7):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's
-combat world without `--map` gets two settings, each logged as a set-up harness input: link 9's `NoLevel` collision
-service, and #798's base-search setting. Four harness strings that had lost a continuation backslash are single-spaced
-again. `cargo test --workspace -j 8 --no-fail-fast` 4,021 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
-Installed Off strict `--slice-gate` (release build, under the machine lock): **7 ok / 14, X = 8.167/14 = 58.3%**, the
-same score as the base. Links 3, 4, 5, 13 and 14 move from the floor trace's `LayerAbsent` (no collision service) to
-its `NotRead` (the trace flags are not decoded). Every other row is as on the base. The cause, from a local probe
-(reverted): the AI pawn's search finds Maya's `WillowPlayerPawn` with its `CylinderComponent` set, and both stand at
-the origin. Getting past needs the trace flags or separate spawn positions, a hub question. UNVERIFIED in game.
-Decision 2026-11-26-NNN.
+**IMPL-COMBAT-WORLD-COLLISION (2026-11-26, pc-hummer, on fix/rust-combat-world-collision, stacked on #804 88191026,
+on #803 dc0e9ef9 and main 21a668a7):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's combat world without
+`--map` gets three settings, each logged as a set-up harness input: link 9's `NoLevel` collision service, #798's
+base-search setting, and the combat run's spawn positions (the n-th spawn at (1000 n, 0, 0); hub ruling). The base
+search now clears another actor's collision cylinder by geometry (the 8-unit line wholly outside it), and keeps the
+trace flags' `NotRead` for any other component. `cargo test --workspace -j 8 --no-fail-fast` 4,026 passed / 0 failed /
+59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock), base
+7b9daea9 against this head: both **7 ok / 14, X = 8.167/14 = 58.3%**. Links 3, 4, 5, 13 and 14 get past the floor
+trace (the spawns at 1000 and 2000, the stand-in logged) and stop at the spawn's
+`AttributeInitializationDefinition.SetBaseValue` ("a definition it names is not loaded"). Every other row is as on the
+base. The stack lacks #800, so link 6 is not ok here. UNVERIFIED in game. Decision 2026-11-26-NNN.
 
 **IMPL-BOUNDING-CYLINDER-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-bounding-cylinder, stacked on fix/rust-links-13-14
 e00e3de):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BOUNDING_CYLINDER_AND_AFTER.md (#799 at its r1 fix fc8d2c42) in

@@ -686,19 +686,21 @@ pub const COMBAT_COLLISION_SETUP: &str = "harness input: the combat world's coll
 
 /// The slice's combat world without a map (lane IMPL-COMBAT-WORLD-COLLISION, the hub's ruling): link 9's `NoLevel`
 /// collision service, logged as [`COMBAT_COLLISION_SETUP`], then `SetPhysics`' no-floor base search under its harness
-/// setting (review of #798, R1), which logs its own line. Both are UNVERIFIED stand-ins for a world that loads no
-/// level, so they are Off only: in Reference this refuses before writing anything. The `--map` route loads a level
-/// and gets neither.
+/// setting (review of #798, R1), which logs its own line, then the combat run's spawn positions
+/// (`ow_combat::spawn_positions`, the hub's ruling on the lane's open question), which log theirs. All three are
+/// UNVERIFIED stand-ins for a world that loads no level and has no spawn points, so they are Off only: in Reference
+/// this refuses before writing anything. The `--map` route loads a level and gets none of them.
 pub fn combat_world_collision(vm: &mut ow_vm::api::Vm) -> Result<(), ow_vm::error::VmError> {
     if vm.parity != ParityMode::Off {
         return Err(ow_vm::error::VmError::Registration {
             key: "the combat world's collision stand-ins".to_string(),
-            reason: "the combat world's NoLevel collision and base search are Off harness settings",
+            reason: "the combat world's NoLevel collision, base search and spawn positions are Off harness settings",
         });
     }
     ow_world::placement::install_collision(vm, Rc::new(ow_world::placement::NoLevel))?;
     vm.log.push(COMBAT_COLLISION_SETUP.to_string());
-    ow_world::world::set_physics::enable_no_level_base_search(vm)
+    ow_world::world::set_physics::enable_no_level_base_search(vm)?;
+    ow_combat::spawn_positions::enable_spawn_positions(vm)
 }
 
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.

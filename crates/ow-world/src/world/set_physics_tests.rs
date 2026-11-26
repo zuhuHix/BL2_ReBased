@@ -156,6 +156,18 @@ fn engine() -> Vec<u8> {
     for f in ["X", "Y", "Z"] {
         t.prop("Float", vector, f, 0, 0);
     }
+    // The floor trace's start and the cylinder the geometric test reads (lane IMPL-COMBAT-WORLD-COLLISION): the actor's
+    // Location, and a CylinderComponent with the fields the bounding-cylinder rule's cylinder case reads.
+    t.prop("Struct", actor, "Location", 0, vector);
+    let cylinder = t.class("CylinderComponent", object);
+    t.prop("Object", cylinder, "Owner", 0, actor);
+    t.prop("Struct", cylinder, "Translation", 0, vector);
+    for f in ["AbsoluteTranslation", "AbsoluteRotation", "AbsoluteScale"] {
+        t.prop("Bool", cylinder, f, 0, 0);
+    }
+    for f in ["CollisionRadius", "CollisionHeight"] {
+        t.prop("Float", cylinder, f, 0, 0);
+    }
     for f in ["Velocity", "Acceleration"] {
         t.prop("Struct", actor, f, 0, vector);
     }
@@ -831,6 +843,85 @@ fn the_base_search() {
     x.set(pawn, "Physics", Value::Byte(2));
     x.set(pawn, "Base", Value::Object(Some(base)));
     assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_SETTER.to_string()));
+}
+
+/// A vector value `v` of the toy `Vector` struct (`template` is any vector the fixture holds), written by field name.
+fn vec3(x: &mut Fx, template: &Value, v: [f32; 3]) -> Value {
+    let space = &x.vm().space;
+    let layout = space.classes.struct_layout(template.as_struct().unwrap().ty).unwrap();
+    let slots = ["X", "Y", "Z"].map(|n| layout.field(space.names.find(n).unwrap()).unwrap().0 as usize);
+    let mut out = template.clone();
+    let fields = &mut out.struct_mut().unwrap().fields;
+    for (slot, value) in slots.into_iter().zip(v) {
+        fields[slot] = Value::Float(value);
+    }
+    out
+}
+
+/// The hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION: another actor's collision is cleared by geometry alone. With
+/// `NoLevel` and the setting on, a placed actor whose cylinder (radius 42, half-height 80) the 8-unit line from the
+/// subject's `Location` runs wholly outside of gives the stand-in; one the line touches or enters, a non-cylinder
+/// component, a cylinder the bounding-cylinder rule does not answer, or the subject's own translated collision
+/// component keeps the trace flags' `NotRead`, with nothing written. Invented positions throughout.
+#[test]
+fn the_base_search_clears_another_actor_s_cylinder_by_geometry() {
+    let mut x = fx();
+    crate::placement::install_collision(x.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
+    enable_no_level_base_search(x.vm()).unwrap();
+    let actors = crate::actors::actors_of(x.vm()).unwrap();
+    let info = x.obj("Engine.Actor");
+    actors.borrow_mut().place_world_info(info).unwrap();
+    let other = x.obj("Engine.ToyPlainPawn");
+    let cylinder = x.obj("Engine.CylinderComponent");
+    x.set(cylinder, "Owner", Value::Object(Some(other)));
+    x.set(cylinder, "CollisionRadius", Value::Float(42.0));
+    x.set(cylinder, "CollisionHeight", Value::Float(80.0));
+    x.set(other, "CollisionComponent", Value::Object(Some(cylinder)));
+    actors.borrow_mut().place(other).unwrap();
+    let template = x.get(other, "Location");
+    let refused = (Missing::NotRead, BASE_TRACE_FLAGS.to_string());
+    // The subject at the origin; the other actor's centre at `at`.
+    let case = |x: &mut Fx, at: [f32; 3]| -> Result<Value, VmError> {
+        let at = vec3(x, &template, at);
+        x.set(other, "Location", at);
+        let pawn = x.obj("Engine.ToyPlainPawn");
+        x.set(pawn, "Physics", Value::Byte(2));
+        x.same(pawn, 0)
+    };
+    for at in [[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [42.0, 0.0, 0.0], [0.0, 0.0, -85.0], [0.0, 0.0, 80.0]] {
+        assert_eq!(not_yet(case(&mut x, at)), refused, "touched or entered at {at:?}");
+    }
+    for at in [[43.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 43.0, 0.0], [0.0, 0.0, -100.0], [0.0, 0.0, 81.0]] {
+        let v = vec3(&mut x, &template, at);
+        x.set(other, "Location", v);
+        let pawn = x.obj("Engine.ToyPlainPawn");
+        x.set(pawn, "Physics", Value::Byte(2));
+        x.physics(pawn, 0).unwrap_or_else(|e| panic!("clear at {at:?}: {e:?}"));
+        assert_eq!(x.get(pawn, "Physics"), Value::Byte(0), "{at:?}");
+    }
+    // Far away, but a cylinder the bounding-cylinder rule does not answer (an Absolute flag): the NotRead.
+    let v = vec3(&mut x, &template, [1000.0, 0.0, 0.0]);
+    x.set(other, "Location", v);
+    x.set(cylinder, "AbsoluteTranslation", Value::Bool(true));
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), refused, "Absolute flag");
+    x.set(cylinder, "AbsoluteTranslation", Value::Bool(false));
+    // Far away, but the subject's own collision component holds a translation (the start offset is fitted).
+    let own = x.obj("Engine.CylinderComponent");
+    let v = vec3(&mut x, &template, [0.0, 0.0, 5.0]);
+    x.set(own, "Translation", v);
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(own, "Owner", Value::Object(Some(pawn)));
+    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
+    x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), refused, "own translation");
+    // Far away, but not a cylinder: the NotRead (the trace's flags decide it).
+    let plain = x.obj("Engine.Actor");
+    x.set(other, "CollisionComponent", Value::Object(Some(plain)));
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), refused, "not a cylinder");
 }
 
 /// The base search's harness setting is Off only, and turned on once (review of #798, R1).
