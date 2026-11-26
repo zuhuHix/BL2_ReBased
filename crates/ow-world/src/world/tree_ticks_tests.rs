@@ -527,3 +527,18 @@ fn the_additive_override_under_the_guard() {
     x.link(n, c, &[set]);
     refused(&mut x, c, LINKUP);
 }
+
+/// Review r1 of #758: this module keeps its own residency test. A tick node with some but not all of its slots is
+/// resident here (only a node with no slots, a handle not loaded or a failed load is refused), so an empty-step node
+/// of that shape gets its empty step and the tag is written, as before the shared helper.
+#[test]
+fn a_partly_slotted_tick_node_counts_as_resident() {
+    let mut x = fx();
+    let n = x.obj("Engine.AnimNodeBlendList");
+    let len = x.vm.space.heap.get(n).unwrap().slots.len();
+    assert!(len > 1, "the toy node has more than one slot");
+    x.vm.space.heap.get_mut(n).unwrap().slots.truncate(len - 1);
+    let c = x.component(&[n]);
+    x.update(c).unwrap();
+    assert_eq!(x.get(c, "InitTag"), Value::Int(8), "the tag, after the node's empty step");
+}

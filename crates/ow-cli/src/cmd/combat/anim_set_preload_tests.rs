@@ -253,3 +253,23 @@ fn chain_loops_stop_with_a_harness_line() {
     assert!(vm.log.iter().any(|l| l.contains("the weapon-hold chain comes back to")), "{:?}", vm.log);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Review r1 of #758, LOW 2: a `Mesh` component that is a stand-in without its slots is logged and skipped (#754's
+/// guard, kept): its `AnimSets` is never read.
+#[test]
+fn a_slotless_mesh_component_is_logged_and_skipped() {
+    let dir = std::env::temp_dir().join(format!("ow-cli-animsets-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut vm = toy_vm(&dir);
+    let archetype = runtime(&mut vm, "ToyPawn", "Archetype");
+    let mesh = runtime(&mut vm, "ToyMeshComponent", "StandInMesh");
+    vm.space.heap.get_mut(mesh).unwrap().slots.clear();
+    put(&mut vm, archetype, "Mesh", Value::Object(Some(mesh)));
+    preload_mesh_anim_sets(&mut vm, archetype).unwrap();
+    assert!(
+        vm.log.iter().any(|l| l.starts_with("harness input: set-up preload: the Mesh component ") && l.ends_with(" is not resident; skipped")),
+        "{:?}",
+        vm.log
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
