@@ -7,8 +7,9 @@
 //! **The layers by class.** From the actor's class up to its first native class (the fitted native bit, as
 //! `ow-combat`'s `pawn_interface` walk takes it): `WillowGame.WillowAIPawn` has the AI, `WillowPawn`, `Pawn` and
 //! `Actor` layers; `WillowGame.WillowPawn` the last three; `GearboxFramework.GearboxPawn` and `Engine.Pawn` the `Pawn`
-//! and `Actor` layers; `Engine.Actor` the `Actor` layer only. Any other first native class (`WillowPlayerPawn`
-//! included) is `NotYet { NotRead }`, "Actor.SetPhysics: the physics change of <class>".
+//! and `Actor` layers; `Engine.Actor` the `Actor` layer only; `WillowGame.WillowPlayerPawn` `WillowPawn`'s three (it
+//! keeps `WillowPawn`'s body, NATIVE_LINK34_AFTER_MIND.md section 3). Any other first native class is
+//! `NotYet { NotRead }`, "Actor.SetPhysics: the physics change of <class>".
 //!
 //! **Preflight, write-free and load-free** (reads by name lookup on resident objects; each field read must have its
 //! declared kind, else `VmError::Script` naming it). The actor itself must be resident. The mode is the argument's low
@@ -18,8 +19,15 @@
 //!    clear and `Role` not `ROLE_Authority` is `NotRead` ([`RIGID_EVENT`]); `bHardAttach` set and the mode not
 //!    `PHYS_Interpolating` (7) answers at once, with nothing changed;
 //! 2. the same mode as now answers at once, with nothing changed;
-//! 3. the transition refusals: into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider` (0, 1, 5, 8) is
-//!    `NotRead` ([`BASE_SEARCH`]); into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
+//! 3. the transitions: into `PHYS_None`, `PHYS_Walking`, `PHYS_Rotating` or `PHYS_Spider` (0, 1, 5, 8) runs the
+//!    **base search** (NATIVE_LINK34_AFTER_MIND.md section 2, lane IMPL-LINK34-AFTER-MIND): a floor trace 8 units down,
+//!    then the base setter when the floor differs from `Base`. No collision service is `LayerAbsent`
+//!    ([`BASE_TRACE`], [`BASE_TRACE_LAYER`]); a service with geometry, or a world where another live actor has a
+//!    `CollisionComponent`, is `NotRead` ([`BASE_TRACE_FLAGS`]: the trace's flags are not decoded). **The stand-in**
+//!    (the hub's ruling on #793): a service with no geometry ([`crate::placement::NoLevel`]) and no other actor with
+//!    collision gives no floor; with `Base` None that changes nothing (logged as a harness input at the commit), with
+//!    a `Base` set it is `NotRead` ([`BASE_SETTER`]) until the base setter is read. All decided here, before the mode
+//!    write. Then into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
 //!    ([`BASE_CLEAR`]); into or out of `PHYS_RigidBody` with a `CollisionComponent` set is `LayerAbsent`
 //!    ([`RIGID_BODY`], [`RIGID_LAYER`]);
 //! 4. every script event the commit will call is resolved now, as Off event dispatch resolves it (the active state,
@@ -33,8 +41,9 @@
 //! `Physics` is read after step 1, so the AI layer's answers do not depend on it. The rule is bound for `Engine`'s
 //! function only, by its package-qualified identity.
 //!
-//! The note's commit step 1 (`bForceFloorCheck` set on a transition into `PHYS_Walking`) is never reached in the port:
-//! every transition into `PHYS_Walking` is refused at step 3 (the base search), so it is not written here.
+//! With the base search's stand-in, the transition commits are reached: `bForceFloorCheck` set on a transition into
+//! `PHYS_Walking` (the `Pawn` layer, before the mode), and `Velocity` and `Acceleration` zeroed into `PHYS_None` or
+//! `PHYS_Rotating` (each field of the vector set to 0, after the mode).
 //!
 //! **Commit, in the game's order** (each handler resolved again, load-free, right before its dispatch, so a callback
 //! that changes a receiver's state is followed; review r2 of #696): `Physics` = the mode; with a `PhysicsVolume`, its
@@ -62,8 +71,14 @@ pub const NOT_LOADED: &str = "Actor.SetPhysics: an object the store has not load
 pub const NAV_MESH: &str = "Actor.SetPhysics: a WillowAIPawn's nav-mesh walking check";
 /// Step 1's rigid-body event.
 pub const RIGID_EVENT: &str = "Actor.SetPhysics: a WillowAIPawn's rigid-body event";
-/// Step 3's base search.
-pub const BASE_SEARCH: &str = "Actor.SetPhysics: the base search for a walking-type mode";
+/// Step 3's base search (the floor trace and the base setter; NATIVE_LINK34_AFTER_MIND.md section 2).
+pub const BASE_TRACE: &str = "Actor.SetPhysics: the base search's floor trace";
+pub const BASE_TRACE_LAYER: &str = "collision (the world has no collision service)";
+pub const BASE_TRACE_FLAGS: &str = "Actor.SetPhysics: the base search's floor trace (its trace flags are not decoded)";
+pub const BASE_SETTER: &str = "Actor.SetPhysics: the base search's base setter";
+/// The harness-input line of the stand-in.
+pub const BASE_STAND_IN: &str = "harness input: Actor.SetPhysics' base search found no floor (a world with no level \
+     geometry and no other actor with collision; UNVERIFIED stand-in, the hub's ruling on #793)";
 /// Step 3's base clearing.
 pub const BASE_CLEAR: &str = "Actor.SetPhysics: clearing the base (the base setter is not ported)";
 /// Step 3's rigid body, and its layer.
@@ -170,7 +185,9 @@ fn layers(vm: &Vm, o: ObjRef) -> Result<Layers, VmError> {
             let is = |p: &str| path.eq_ignore_ascii_case(p);
             return match () {
                 _ if is("WillowGame.WillowAIPawn") => Ok(Layers { ai: true, willow: true, pawn: true }),
-                _ if is("WillowGame.WillowPawn") => Ok(Layers { ai: false, willow: true, pawn: true }),
+                _ if is("WillowGame.WillowPawn") || is("WillowGame.WillowPlayerPawn") => {
+                    Ok(Layers { ai: false, willow: true, pawn: true })
+                }
                 _ if is("GearboxFramework.GearboxPawn") || is("Engine.Pawn") => {
                     Ok(Layers { ai: false, willow: false, pawn: true })
                 }
@@ -244,6 +261,12 @@ struct Plan {
     /// The `WillowPawn` events to fire, in order: name, parameter shape and arguments (validated in preflight; the
     /// handler is resolved again at dispatch, review r2 of #696).
     events: Vec<(&'static str, Shape, Vec<Value>)>,
+    /// The base search passed by the stand-in (logged at the commit).
+    stand_in: bool,
+    /// `bForceFloorCheck` set before the mode (into `PHYS_Walking`, the `Pawn` layer).
+    force_floor: bool,
+    /// `Velocity` and `Acceleration` zeroed after the mode (into `PHYS_None` or `PHYS_Rotating`).
+    zero: bool,
 }
 
 /// The preflight (module documentation): `Ok(None)` when nothing changes. Reads only.
@@ -267,11 +290,25 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     if mode == old {
         return Ok(None);
     }
-    // Step 3.
-    if matches!(mode, PHYS_NONE | PHYS_WALKING | PHYS_ROTATING | PHYS_SPIDER) {
-        return Err(NotYet::not_read(BASE_SEARCH, RECORD).into());
+    // Step 3: the base search, decided here (module documentation).
+    let base_search = matches!(mode, PHYS_NONE | PHYS_WALKING | PHYS_ROTATING | PHYS_SPIDER);
+    if base_search {
+        search_base(vm, actor)?;
     }
-    if mode != PHYS_INTERPOLATING
+    let force_floor = layers.pawn && mode == PHYS_WALKING && old != PHYS_WALKING;
+    if force_floor {
+        flag(vm, actor, "bForceFloorCheck")?;
+    }
+    let zero = matches!(mode, PHYS_NONE | PHYS_ROTATING);
+    if zero {
+        for f in ["Velocity", "Acceleration"] {
+            if !matches!(field(vm, actor, f)?.0, PropKind::Struct(_)) {
+                return Err(script(format!("{f} is not declared as a struct")));
+            }
+        }
+    }
+    if !base_search
+        && mode != PHYS_INTERPOLATING
         && let Some(base) = object(vm, actor, "Base")?
     {
         resident(vm, base)?;
@@ -309,7 +346,44 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
             }
         }
     }
-    Ok(Some(Plan { actor, mode, volume, events }))
+    Ok(Some(Plan { actor, mode, volume, events, stand_in: base_search, force_floor, zero }))
+}
+
+/// The base search's preflight (module documentation, step 3). Reads only.
+fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
+    let Some(model) = crate::placement::collision_model(vm)? else {
+        return Err(NotYet::layer_absent(BASE_TRACE, BASE_TRACE_LAYER, RECORD).into());
+    };
+    if !model.holds_no_geometry() {
+        return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
+    }
+    let actors = crate::actors::actors_of(vm)?;
+    let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
+    for other in list.into_iter().filter(|o| *o != actor) {
+        let Ok(x) = vm.space.heap.get(other) else { continue };
+        if let Some(p) = vm.space.prop(x.class, "CollisionComponent")
+            && matches!(vm.space.read(other, PropAddr::scalar(p))?, Value::Object(Some(_)))
+        {
+            return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
+        }
+    }
+    if object(vm, actor, "Base")?.is_some() {
+        return Err(NotYet::not_read(BASE_SETTER, RECORD).into());
+    }
+    Ok(())
+}
+
+/// `v`, a vector struct, with every float field 0.
+fn zeroed(v: &Value) -> Value {
+    let mut out = v.clone();
+    if let Some(s) = out.struct_mut() {
+        for f in s.fields.iter_mut() {
+            if matches!(f, Value::Float(_)) {
+                *f = Value::Float(0.0);
+            }
+        }
+    }
+    out
 }
 
 /// The preflight alone (module documentation), for a caller that must decide `SetPhysics`' refusals before its own
@@ -345,8 +419,22 @@ fn set_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn commit(c: &mut NativeCall<'_>, plan: &Plan) -> Result<Value, VmError> {
     let class = c.vm.space.heap.get(plan.actor)?.class;
+    if plan.stand_in {
+        c.vm.log.push(BASE_STAND_IN.to_string());
+    }
+    if plan.force_floor {
+        let p = c.vm.space.prop(class, "bForceFloorCheck").ok_or_else(|| script("no bForceFloorCheck".to_string()))?;
+        c.vm.space.write(plan.actor, PropAddr::scalar(p), Value::Bool(true))?;
+    }
     let p = c.vm.space.prop(class, "Physics").ok_or_else(|| script("the class declares no Physics".to_string()))?;
     c.vm.space.write(plan.actor, PropAddr::scalar(p), Value::Byte(plan.mode))?;
+    if plan.zero {
+        for f in ["Velocity", "Acceleration"] {
+            let p = c.vm.space.prop(class, f).ok_or_else(|| script(format!("no {f}")))?;
+            let v = zeroed(c.vm.space.read(plan.actor, PropAddr::scalar(p))?);
+            c.vm.space.write(plan.actor, PropAddr::scalar(p), v)?;
+        }
+    }
     // Each handler is resolved again, load-free, right before its dispatch: an earlier callback may have changed the
     // receiver's state (review r2 of #696). A refusal here comes after the Physics write, so it is marked.
     if let Some(volume) = plan.volume {

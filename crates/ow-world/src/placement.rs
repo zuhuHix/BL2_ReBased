@@ -141,6 +141,11 @@ pub trait SpawnCollision {
     fn actor_bounds(&self, _space: &ObjectSpace, _primitive: ObjRef) -> Result<Option<Bounds>, VmError> {
         Ok(None)
     }
+    /// Whether the service holds no geometry at all ([`NoLevel`]): a line through it hits no level part (lane
+    /// IMPL-LINK34-AFTER-MIND, `Actor.SetPhysics`' base-search stand-in). False by default.
+    fn holds_no_geometry(&self) -> bool {
+        false
+    }
 }
 
 /// The collision service of a world that loaded no level (a harness stand-in, as slice link 9's own world is,
@@ -159,6 +164,9 @@ impl SpawnCollision for NoLevel {
     }
     fn point_sweep(&self, _start: [f32; 3], _end: [f32; 3]) -> Result<Sweep, VmError> {
         Ok(Sweep::Clear)
+    }
+    fn holds_no_geometry(&self) -> bool {
+        true
     }
 }
 

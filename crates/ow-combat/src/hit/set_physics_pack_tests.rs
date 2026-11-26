@@ -100,7 +100,9 @@ fn off_gets_the_rule_in_either_order() {
         let (r, physics) = x.set_physics(1);
         match r {
             Err(VmError::NotYet(n)) => {
-                assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, ow_world::world::set_physics::BASE_SEARCH));
+                // The base search's refusal in a world with no collision service (lane IMPL-LINK34-AFTER-MIND).
+                assert_eq!(n.what.as_ref(), ow_world::world::set_physics::BASE_TRACE);
+                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
             }
             other => panic!("before {before}: expected the rule's refusal, got {other:?}"),
         }
