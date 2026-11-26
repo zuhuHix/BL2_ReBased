@@ -586,13 +586,13 @@ fn the_map_route_s_notes_are_not_repeated_as_set_up_lines() {
     let setup = setup_harness(&log, &route);
     assert_eq!(setup, ["world set-up: harness input: the engine object's PhysXLevel = 0 (an invented line)"]);
     let steps = vec!["harness input: a step's own line".to_string()];
-    let first = row_harness(Some(&route), &setup, &steps);
+    let first = row_harness(&route, true, &setup, &steps);
     assert_eq!(first, [route[0].as_str(), route[1].as_str(), setup[0].as_str(), steps[0].as_str()]);
     for line in &route {
         assert_eq!(first.iter().filter(|l| l.ends_with(line.as_str())).count(), 1, "{line} once");
     }
-    let later = row_harness(None, &setup, &steps);
-    assert_eq!(later, [setup[0].as_str(), steps[0].as_str()], "no route notes on a later row");
+    let later = row_harness(&route, false, &setup, &steps);
+    assert_eq!(later, [ROUTE_AS_ABOVE, setup[0].as_str(), steps[0].as_str()], "a later row names the route once");
 }
 
 /// Review of #777, item 2: a row's harness list is the route's notes, then the set-up lines, then its steps' lines.
@@ -600,10 +600,13 @@ fn the_map_route_s_notes_are_not_repeated_as_set_up_lines() {
 fn a_row_s_harness_list_is_route_then_set_up_then_steps() {
     let setup = vec!["world set-up: harness input: s1".to_string(), "world set-up: harness input: s2".to_string()];
     let steps = vec!["harness input: t1".to_string(), "harness input: t2".to_string()];
-    assert_eq!(row_harness(None, &setup, &steps), [&setup[..], &steps[..]].concat());
-    assert_eq!(row_harness(None, &[], &steps), steps);
-    assert_eq!(row_harness(None, &setup, &[]), setup);
+    for first in [true, false] {
+        assert_eq!(row_harness(&[], first, &setup, &steps), [&setup[..], &steps[..]].concat(), "no route");
+        assert_eq!(row_harness(&[], first, &[], &steps), steps);
+        assert_eq!(row_harness(&[], first, &setup, &[]), setup);
+    }
     let route = vec!["harness input: r1".to_string()];
-    assert_eq!(row_harness(Some(&route), &setup, &steps), [&route[..], &setup[..], &steps[..]].concat());
-    assert_eq!(row_harness(Some(&[]), &setup, &steps), [&setup[..], &steps[..]].concat());
+    assert_eq!(row_harness(&route, true, &setup, &steps), [&route[..], &setup[..], &steps[..]].concat());
+    let as_above = [ROUTE_AS_ABOVE.to_string()];
+    assert_eq!(row_harness(&route, false, &setup, &steps), [&as_above[..], &setup[..], &steps[..]].concat());
 }
