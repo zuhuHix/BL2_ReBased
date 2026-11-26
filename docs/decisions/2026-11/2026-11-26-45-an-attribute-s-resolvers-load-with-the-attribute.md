@@ -19,9 +19,20 @@ bounds check changed.
 - **Findings** (UNVERIFIED in game):
   - the walks call each non-None resolver directly, with no load and no residency check;
   - in the game the resolver is loaded with its attribute's package, before the attribute can be read, so it is
-    resident whenever its attribute is.
+    resident whenever its attribute is. That covers a resolver in the attribute's own package; an import from another
+    package is UNVERIFIED;
+  - the port's store is lazy (a load never loads what it references) and loads never nest, which is why step 0 is
+    met today.
 - **Proposed Off answer:**
-  - `ow-attr`'s load of an attribute definition also loads the resolvers of its two chains, in the same step;
+  - the evaluator's chain walks (`resolve_context`, the value walk and `preflight_read`) load each non-None entry
+    before they dispatch it, through the existing `load_free_refusal` check;
   - load-free scopes are unchanged;
-  - step 0 stays as a guard. No harness preload is needed.
+  - a failed resolver load leaves the handle, and the walk's residency check reports `BadData` where the entry is
+    reached;
+  - step 0 stays as a guard. No harness preload is needed;
+  - a `get_value` now loads 1+N, and #518's `load_transitions` rises to match.
+- **Review r1 (#787):** the trigger moved from the attribute's load to the walks, since the VM, the context resolvers,
+  direct store calls and harness preloads also make an attribute resident; the store's laziness is stated, and its
+  rule kept; a failed load and the 1+N count are written; the residency claim is limited to the attribute's own
+  package; a live check and two tests are added.
 - **Clean room:** a different lane implements this note.

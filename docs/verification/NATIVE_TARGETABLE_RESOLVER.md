@@ -95,7 +95,7 @@ In `ow-attr`'s `value_resolvers::targetable`, for the value and the base value a
 0. a resolver the store has not loaded: `NotRead`, "TargetableAttributeValueResolver: a resolver the store has not
    loaded (a load is a write)". The hub's ruling (review of #783): this note did not read whether the evaluator loads
    the resolver first, so the get does not load it. **Section 5.1 now reads that** (lane
-   ANALYST-EVALUATOR-LOADS-RESOLVER): with the store change it proposes, this step is a guard that the evaluator's
+   ANALYST-EVALUATOR-LOADS-RESOLVER): with the walk's load it proposes (review r1 of #787), this step is a guard that the evaluator's
    path no longer meets;
 1. `ValueToResolve` declared as a byte on the resolver's class, else `VmError::Script`; not 0: **0.0**;
 2. a None context: **0.0**;
@@ -142,28 +142,52 @@ That load order is the engine's standard package load, by fit, not read in this 
 loaded whole at start-up. **The resolver is resident whenever its attribute is**, so the game never meets step 0's
 case.
 
-**Proposed Off answer** (the port's store treats it so):
-- **when `ow-attr` loads an attribute definition** (its `ensure_loaded` on an `AttributeDefinitionBase`, where the
-  evaluator already loads), it loads the resolver objects of the definition's `ContextResolverChain` and
-  `ValueResolverChain` in the same step. That is one load of the definition with its resolvers, no new kind of write:
-  the evaluator was already allowed to load there;
-- **in a load-free scope** (`preflight_read_resident`, `load_free`), nothing changes. A resident attribute whose chain
-  still holds an unloaded handle refuses as today (`NotRead` naming it). Such a state can only come from a definition
-  loaded before this change, or from a synthetic store;
-- **step 0 stays** as a guard for a get reached outside the evaluator's path. On the links' path it is no longer met,
-  since the attribute's load brings the resolver with it;
-- no harness preload is needed: the evaluator's own load of the definition covers it.
+This claim covers only a resolver in the attribute's own package. A chain entry imported from another package is
+resident only if that package is loaded, which this reading did not check: the claim is UNVERIFIED there (review r1 of
+#787). The rule below loads such an entry all the same.
+
+**Why the port meets step 0 today.** The port's definition store is lazy: loading one definition never loads what it
+references, a subobject included, and loads never nest. So the attribute can be resident while its chain still holds
+an unloaded handle for the resolver. That is the state #786 refuses at step 0 (review r1 of #787). The store's rule
+stays as it is; the fix belongs in the evaluator's walk.
+
+**Proposed Off answer** (the port's evaluator treats it so; hub ruling on #787):
+- **the walks load each entry before they dispatch it.** `ow-attr`'s two chain walks on the attribute definition:
+  - the context walk (`resolve_context`);
+  - the value walk (`fold_chain`), and `preflight_read`'s walk over the same chains.
+
+  For each non-None entry, the walk calls `ow-attr`'s follow-on `ensure_loaded` on the entry before it reads or
+  dispatches it. That load goes through the existing `load_free_refusal` check, as the other loads of the evaluator
+  do. This does not depend on how the attribute became resident: `ow-attr`'s own `ensure_loaded`, the VM's
+  `loaded_for_read`, the context resolvers' `ensure_loaded`, a direct `DefStore` call or a harness preload all leave
+  the same state, and the walk covers each of them;
+- **in a load-free scope** (`preflight_read_resident`, `load_free`), nothing changes. An unloaded entry refuses through
+  `load_free_refusal` (`NotRead` naming it), as today;
+- **a resolver whose load fails** (hub ruling on #787): the failed handle is left in place, with no new refusal point.
+  The walk's existing residency check then reports the store's `BadData` where the entry is reached;
+- **step 0 stays** as a guard for a get reached outside the walks. On the links' path it is no longer met, since the
+  walk loads the resolver before the get;
+- no harness preload is needed;
+- **the count of loads changes.** A get through `ow-combat`'s `get_value`, which runs `preflight_read` first (its doc
+  comment in `crates/ow-attr/src/eval.rs`), now loads the definition and each of its N unloaded chain entries: 1+N
+  loads where it was 1. #518's `load_transitions` counter rises by the same amount (test 5 below).
 
 **Test sketch** (synthetic, with `package()` / `tag()`):
 1. A toy attribute definition whose `ValueResolverChain` holds a toy `TargetableAttributeValueResolver` export of the
    same package, both unloaded:
-   - an evaluation loads the definition and the resolver together;
+   - an evaluation loads the definition, then the resolver in the value walk;
    - the get answers by section 5 (0.0 on a mind context);
    - no `NotRead` for step 0.
-2. The same with a `ContextResolverChain` entry: loaded with the definition.
-3. In a load-free scope with the definition resident and the resolver a handle: the existing `NotRead`, nothing loaded.
-4. A None chain entry: skipped by the load, as the game's walks skip it.
-5. #518's counters: the chain loads count with the definition's load, in the scope that allows it.
+2. The same with a `ContextResolverChain` entry: loaded by the context walk.
+3. The attribute resident, the resolver a handle:
+   - in a load-free scope: the existing `NotRead`, nothing loaded;
+   - the attribute loaded by a direct `DefStore::ensure_loaded` (standing in for the VM's `loaded_for_read`), then an
+     evaluation outside a load-free scope: the walk still loads the resolver, and the get answers.
+4. A None chain entry: skipped by the walk's load, as the game's walks skip it.
+5. #518's counters: a `get_value` on the toy of test 1 counts 1+N `load_transitions` (here 2), in the scope that
+   allows the loads.
+6. A resolver whose load fails (a toy export whose body is cut short): the handle stays, and the walk's residency check
+   answers the store's `BadData` where the entry is reached. No refusal before it.
 
 ## 6. Tests (synthetic fixtures, for the implementing lane)
 
@@ -217,3 +241,6 @@ case.
    on both.
 2. With a champion balance (one whose `Champion` is set), read it on the pawn: expect 1. On the mind: expect 0.
 3. Read the spawned pawn's `BalanceDefinitionState.BalanceDefinition`: expect its population balance.
+4. Right after start-up, before any spawn, find `D_Attributes.Targetable.Targetable_Is_Champion`'s
+   `TargetableAttributeValueResolver` subobject (section 5.1): expect it found, resident with its attribute (review r1
+   of #787).
