@@ -214,9 +214,20 @@ entry's `Event` (an object) and `Expressions` (an array of the expression struct
 - with an event: the audio engine plays it on the actor, with the four replication and lifetime flags, and returns a
   playing handle.
 
-**Off answer:** a None event is nothing. A set event is `LayerAbsent` ("an audio layer"), by default. That stops
-link 6 here. **The hub's call:** whether to answer it with a presentation stand-in instead: nothing played, the
-default handle returned, and a logged UNVERIFIED line. The probe did that to read on. Its result is unused on this path.
+**Off answer:**
+- a None event: nothing;
+- a set event, by default: `LayerAbsent` ("an audio layer");
+- **the hub's ruling (2026-11-26), UNVERIFIED:** audio has no gameplay effect on the slice. So, under a harness
+  setting that the slice's set-up turns on, a set event is a logged no-op: nothing is played, and the return value is
+  the default (zeroed) handle. This follows the pattern of the `PhysXLevel` and `AtRestBodyPose` settings:
+  - the setting is Off only, and turning it on outside Off is a registration refusal;
+  - the set-up logs one harness-input line when it turns the setting on;
+  - each stand-in call logs "harness input: PlayAkEvent: audio is not modelled: the event is not played (hub ruling;
+    UNVERIFIED)";
+  - without the setting, the default `LayerAbsent` stands, Reference included.
+
+  The call reads its arguments only, so the stand-in writes nothing. Its result is unused on this path. The probe
+  answered it this way to read on.
 
 ### 4.3 The pickup's destroy
 
@@ -239,12 +250,30 @@ The scripts that would run:
   - each local player controller's HUD told to forget the pickup;
   - the Gearbox globals' spawned-actor removal.
 
-**Off answer: the hub's call.** One option is a narrow lift for an actor whose current state's `EndState` is empty
-(the slice's case): destroy it as if stateless. The other is to keep the refusal until W5-STATES models the state frame.
+**How "empty" was read.** In the script, `WillowPickup.Pickup.EndState` is a bare return: a return with no value,
+then the end of the script, and no other statement. It is the `EndState` that the state lookup finds for a
+`WillowPickup` in `Pickup`, because the class's own state replaces `DroppedPickup`'s. `Object.EndState`, the
+declaration every state falls back to, has the same bare body.
+
+**Off answer: the hub's ruling (2026-11-26), UNVERIFIED.** A narrow lift of the port's state refusal. It is written
+against the script, not against a state name:
+- take the `EndState` that the VM's method lookup resolves for the actor's class in its current state (the state's own
+  function first, then the class chain). The lookup must load nothing (`Vm::find_loaded_method`);
+- when that function is a script function whose body is exactly a bare return, the destroy goes on as if the actor
+  were stateless. `EndState` is not sent: an empty body has no effect either way. The rest of the routine runs as the
+  port already runs it: `Destroyed` and what follows;
+- in every other case, the W5-STATES `LayerAbsent` stands:
+  - an `EndState` with any statement;
+  - a native `EndState`;
+  - a lookup that would need a load;
+  - no function found.
+
+The check is part of the destroy's write-free preflight. NATIVE_ENGINE_CORE.md's own condition for sending
+`EndState` stays an open point: under this rule it makes no difference, because the body is empty.
 
 ### 4.4 The next stop
 
-The probe lifted 4.3 for the pickup only. Link 6 then stops at `WillowGlobals.RemovePickup`'s existing `NotRead`
+The probe lifted 4.3 for the pickup only, which is the case the hub's ruling covers. Link 6 then stops at `WillowGlobals.RemovePickup`'s existing `NotRead`
 ("the pickup events of RemovePickup", NATIVE_WILLOW_GLOBALS.md), inside `WillowPickup.Destroyed`, after partial writes.
 
 `PickupPickupable`'s remaining steps were not reached: the touched and seen slots cleared, `UnTouchedPickupable`, and
@@ -256,8 +285,10 @@ after it, the gate checks that the gun was taken.
 Once `SetBase` is bound (3.8), link 6 meets, in order:
 1. `WillowWeapon.GetAmmoCount()` unbound: an error row (4.1);
 2. `AttributeExpression.SelectAkEvent` unbound: an error row (4.2);
-3. `Actor.PlayAkEvent` unbound: an error row. Bound by 4.2's default, it is the audio `LayerAbsent` (the hub's call);
-4. the pickup's stateful destroy, the existing W5-STATES `LayerAbsent` (4.3; the hub's call);
+3. `Actor.PlayAkEvent` unbound: an error row. Bound with the hub's audio stand-in on in the slice's set-up, it is a
+   logged no-op (4.2);
+4. the pickup's stateful destroy, the existing W5-STATES `LayerAbsent`. Under the hub's empty-`EndState` lift
+   (4.3), the destroy goes on;
 5. `WillowGlobals.RemovePickup`'s `NotRead` (4.4).
 
 The probe answered 1 to 3 and lifted 4 to reach 5. Link 7 is unchanged: the HUD `LayerAbsent` in `look`.
@@ -300,9 +331,20 @@ The probe answered 1 to 3 and lifted 4 to reach 5. Link 7 is unchanged: the HUD 
    - an entry that fails, then one that holds: the second;
    - two empty-expression entries: the last;
    - an empty entry, then one that holds: the one that holds.
-10. `PlayAkEvent`: a None event writes nothing. A set event is the audio `LayerAbsent` (or, under a ruling, the
-    stand-in line).
-11. Reference binds none of the keys.
+10. `PlayAkEvent` (the hub's ruling):
+    - a None event writes nothing, with or without the setting;
+    - a set event without the setting: the audio `LayerAbsent`;
+    - with the setting: the default handle, nothing written, and the stand-in line logged once per call;
+    - turning the setting on outside Off is a registration refusal; Reference keeps the `LayerAbsent`.
+11. The stateful destroy (the hub's ruling):
+    - an actor in a toy state whose `EndState` is a bare return is destroyed: `Destroyed` runs, and `EndState` does not;
+    - the same with an `EndState` that has a statement: the W5-STATES `LayerAbsent`, nothing written;
+    - a state with no `EndState` of its own falls back along the lookup. A bare fallback (as `Object.EndState`) is
+      lifted; a fallback with a statement is not;
+    - a native `EndState`, or a lookup that would load: the `LayerAbsent`;
+    - an actor in no state: unchanged;
+    - each refusal leaves the counters, `class_code_loads` and the name table unchanged.
+12. Reference binds none of the keys.
 
 ## Open questions
 
@@ -315,9 +357,9 @@ The probe answered 1 to 3 and lifted 4 to reach 5. Link 7 is unchanged: the HUD 
    - the audio engine's play routine (4.2);
    - the world's info lookup (step 1);
    - the destroy routine's `EndState` condition. It is the same open point as NATIVE_ENGINE_CORE.md's.
-4. **The hub's calls:**
-   - `PlayAkEvent`'s stand-in (4.2);
-   - the pickup's stateful destroy (4.3).
+4. **The hub's rulings (2026-11-26), UNVERIFIED:**
+   - `PlayAkEvent`'s presentation stand-in, behind a harness setting (4.2);
+   - the stateful destroy lifted only for an empty `EndState` (4.3).
 5. **Gaps the implementer should record:**
    - the port's event call has no probe masks (section 3);
    - `GetAmmoCount`'s cache refresh is not written back (4.1).

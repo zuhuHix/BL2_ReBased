@@ -1,6 +1,6 @@
 ## 2026-11-26: Actor.SetBase is read, and link 6's take to RemovePickup
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE, docs only, rebased onto main c79c2f8 (from d3be3e5; #789 landed in between). The analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE, docs only, rebased onto main 969d7a3 (from d3be3e5; #789, #790 and #791 landed in between). The analyst half of the
 clean room: another lane implements NATIVE_ACTOR_SETBASE.md. No session was run. Raw output stays under ignored
 `local/analysis/setbase/`. UNVERIFIED in the running game.
 
@@ -23,11 +23,17 @@ clean room: another lane implements NATIVE_ACTOR_SETBASE.md. No session was run.
      slice it answers `StoredAmmo`, 30;
   2. `AttributeExpression.SelectAkEvent`, unbound. It is read: the first entry whose non-empty expressions hold, else
      the last entry with none. The slice's list has one empty entry;
-  3. `Actor.PlayAkEvent`, unbound. The note's default Off answer is the audio `LayerAbsent`. **The hub's call:** a
-     presentation stand-in;
+  3. `Actor.PlayAkEvent`, unbound. The note's default Off answer is the audio `LayerAbsent`;
   4. the pickup's `Destroy()` while it is in its state `Pickup`, the port's W5-STATES `LayerAbsent`. That state's
-     `EndState` is empty. **The hub's call:** a narrow lift, or keep the refusal;
+     `EndState` is a bare return in the script;
   5. `WillowGlobals.RemovePickup`'s `NotRead`, in `WillowPickup.Destroyed`.
+- **The hub's rulings (2026-11-26), recorded in the note, UNVERIFIED:**
+  - `PlayAkEvent`: a presentation stand-in behind an Off-only harness setting that the slice turns on, like
+    `PhysXLevel` and `AtRestBodyPose`. With it on, a set event is a logged no-op returning the default handle ("audio
+    is not modelled: the event is not played (hub ruling)"). Without it, the audio `LayerAbsent` stands;
+  - the stateful destroy: lifted only when the `EndState` that the method lookup resolves for the actor's current
+    state is a script function whose body is a bare return, read with no load. Every other case keeps the W5-STATES
+    `LayerAbsent`. The rule checks the body, not a state name.
 - **Paperwork:**
   - `NATIVE_INDEX.md`:
     - new rows for `SetBase`, and for `SelectAkEvent` with `PlayAkEvent`;
