@@ -22,7 +22,7 @@ tests, plus a dated correction in NATIVE_ANIM_NODE_INIT.md section 2 D. No depen
 - **Clean room:** implemented from #747's note (lane D's analysis) and the init note. This lane did not read the
   executable for this change.
 - **Tests** (synthetic): the guard with no name, and with a set sequence; the override with the flag set (the intern
-  at the write) and clear; a case-insensitive lookup match, with nothing written or interned; no mesh, so no lookup;
+  at the write) and clear; a lookup match by name, with nothing written or interned; no mesh, so no lookup;
   the auto-name while issuing; Maya's three additive nodes by toy values. The old issuing test now gives its node a
   name.
 - **Review r1 (#752):**
