@@ -29,8 +29,7 @@
 //!    `Actor` row (note section 1). No row is inherited.
 //!
 //! **What stays unread**, naming the rule ([`Unread`]):
-//! - a primitive whose owner is a `Terrain` actor (the terrain bit's handling), ahead of every test above, blocking or
-//!   not; the owner is resolved first (the hub's ruling on review of #818);
+//! - a `Terrain` actor's primitive (the terrain bit's handling), ahead of every test above, blocking or not;
 //!
 //! and, only when every read test above passes (note section 7, step 3):
 //! - an owner whose exact class has no read row;
@@ -453,14 +452,16 @@ pub fn tested_from(
         return Ok(Candidate::NotTested);
     }
     // The terrain bit's handling is unread and comes ahead of every other test (NATIVE_SPAWN_PLACEMENT.md, kept by
-    // the hub for IMPL-LINK9-TRACE-FILTER): a primitive whose owner is a `Terrain` actor is Unsupported, blocking or
-    // not. The owner is resolved first and its filter applies (the hub's ruling on review of #818, which replaces the
-    // walked-actor check of reviews r1 and r2 of #514): a primitive a terrain lists but another actor owns takes that
-    // owner's filter, so a pickup's is passed over by its row.
+    // the hub for IMPL-LINK9-TRACE-FILTER): a `Terrain` actor's primitive is Unsupported, blocking or not. The walked
+    // actor is checked first, before any owner is resolved, then the resolved owner (review r1 of #514, item 2): a
+    // terrain on either side refuses, so a component owner can never discard a walked terrain's primitive.
     let is_terrain = |o: ObjRef| -> Result<bool, VmError> {
         let class = space.heap.get(o)?.class;
         Ok(space.classes.by_path("Engine.Terrain").is_some_and(|t| space.classes.is_child_of(class, t)))
     };
+    if is_terrain(walked)? {
+        return Ok(Candidate::Unsupported(Unread::TerrainHandling));
+    }
     let owner = owner_of(space, primitive, walked)?;
     if is_terrain(owner)? {
         return Ok(Candidate::Unsupported(Unread::TerrainHandling));

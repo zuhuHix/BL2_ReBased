@@ -590,7 +590,8 @@ fn the_fixed_note_s_section_6_4a_cases() {
 }
 
 /// The review of #818, items 1 to 6 and 8: overflowing box limits are malformed, even when another axis would clear;
-/// a primitive a terrain lists but an exact pickup owns is the pickup's (passed over); a mover's static mesh, whose
+/// a primitive a terrain lists but an exact pickup owns refuses on the terrain (the hub's ruling: #514's rule, a terrain
+/// on either side, the conservative answer, UNVERIFIED); a mover's static mesh, whose
 /// bounds the rule does not answer, is the hash admission's refusal; an exact WillowPlayerPawn is passed over whatever
 /// the chain says; `Components` and `CollisionComponent` must be declared with their kinds; a slotless entry of a
 /// non-primitive class is skipped; an actor whose Owner is the HUD is passed over (the reverse walk).
@@ -603,13 +604,16 @@ fn the_review_of_818_cases() {
     x.set(m, "bWorldGeometry", Value::Bool(true));
     x.set(c, "CollisionRadius", Value::Float(3.0e38));
     assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_MALFORMED));
-    // 2. A terrain lists a cylinder an exact WillowPickup owns: the pickup's row passes it over.
+    // 2. A terrain lists a cylinder an exact WillowPickup owns: the terrain handling refuses (#514's rule, kept by the
+    // hub's ruling on the #818 fix: no note reads the game's answer, so the conservative one, UNVERIFIED).
     let (mut x, hud, target, mut host) = line_world();
     let pickup = x.obj("WillowGame.WillowPickup");
     x.set(pickup, "bCollideActors", Value::Bool(true));
     let (_, c) = x.colliding("Engine.Terrain", [60.0, 0.0, 40.0], 20.0, 20.0);
     x.set(c, "Owner", Value::Object(Some(pickup)));
-    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    let (m, what) = not_yet(line(&x, &mut host, hud, target));
+    assert_eq!(m, Missing::NotRead);
+    assert!(what.contains(ow_world::trace_filter::TERRAIN_HANDLING), "{what}");
     // 3. A mover on the line whose primitive is a static mesh (bounds not answered): the hash admission, not a layer.
     let (mut x, hud, target, mut host) = line_world();
     let (mover, _) = x.colliding("Engine.InterpActor", [60.0, 0.0, 40.0], 20.0, 20.0);
