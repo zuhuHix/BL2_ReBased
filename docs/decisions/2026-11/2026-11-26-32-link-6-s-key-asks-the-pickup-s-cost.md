@@ -27,6 +27,15 @@ did not read the executable. No session was run. Every rule is UNVERIFIED in the
     gives that Off answer and test 8 tests it;
   - a method resolved from a class whose code is not loaded is a named `NotRead` (a class load is a write);
   - no pack bound any of the three keys before (checked by grep). The all-packs wiring test passes.
+- **Review of #774:**
+  - a raised `SpendGoldenKey` is a write, so an error of a later raise is now marked "stopped after partial writes",
+    kind and record kept, as the crate's other natives mark one after their first write. The first raise's error
+    stays unmarked;
+  - the two natives' shared refusals name the asking native ("CanAffordToPickUpPickupable: ..." or
+    "PayForPickupable: ...");
+  - tests: a toy handler refusing on its second call (marked) and on its first (not), and `PayForPickupable` on a lazy
+    pickupable, an unread cost class and a lazy replication info. Dropping the mark, or passing the other name, fails
+    them.
 - **Reference:** unchanged; it binds none of the three.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock; main c345fdb and this change): 6
   ok / 8 not ok, 51.2% on both.
