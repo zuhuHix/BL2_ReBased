@@ -149,6 +149,31 @@ fn a_socket_hit_writes_the_entry_and_the_back_link() {
     assert!(!components.elements().unwrap().contains(&Value::Object(Some(made))), "no owner retry for a true attach");
 }
 
+/// The hub's socket ruling (lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL): a socket-attached component takes its parent's
+/// `Owner` (the pawn, the parent being actor-attached) and is in the attach record under the pawn, as its parent is,
+/// after the build. `InitializeRBPhysics` visits an `Attachments` component so recorded
+/// (`player_pawn_tail::tests::an_attached_attachment_takes_the_same_rule`).
+#[test]
+fn a_socket_attached_component_is_recorded_under_the_pawn() {
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
+    let (pt, _) = parent_with(&mut e, vec![s], None);
+    let head = child(&mut e, "Shield_Template");
+    let likeness = child(&mut e, "Likeness_Template");
+    let p = body(&mut e, pt, &[(head, "Shield"), (likeness, "Shield")]);
+    assert_eq!(prop(&e.vm, head, "Owner"), Value::Object(None), "the template's own Owner is None");
+    run(&mut e, p).unwrap();
+    let (parent, list) = parent_list(&e, p);
+    assert_eq!(list.len(), 2);
+    for (i, what) in [(1, "the head"), (2, "the likeness")] {
+        let made = made_of(&e, &entries(&e, p)[i]);
+        assert_eq!(prop(&e.vm, made, "Owner"), Value::Object(Some(p)), "{what}: the parent's Owner");
+        assert!(crate::actors::attached_to(&e.vm, made, p).unwrap(), "{what} in the record under the pawn");
+    }
+    assert!(crate::actors::attached_to(&e.vm, parent, p).unwrap(), "the parent too");
+}
+
 /// Test 2: a bone hit (no socket of that name) has zero offsets and the name as its bone; a socket and a bone of the
 /// same name: the socket wins.
 #[test]
@@ -467,7 +492,10 @@ fn a_none_name_remapped_to_a_socket_is_attached() {
     let (_, bone, loc, ..) = entry(&e, &list[0]);
     assert_eq!((bone.as_str(), loc), ("Hips", [5.0, 0.0, 0.0]));
     let made = made_of(&e, &entries(&e, p)[1]);
-    assert_ne!(prop(&e.vm, made, "Owner"), Value::Object(Some(p)), "not the owner retry");
+    // Not the owner retry: the actor attach appends to the pawn's `Components`; a socket attach does not (since lane
+    // SOCKETS-PUBLISH-AND-PHYSX-LEVEL both end with the pawn as `Owner`, so `Owner` no longer tells them apart).
+    let listed = prop(&e.vm, p, "Components").elements().unwrap().iter().any(|v| *v == Value::Object(Some(made)));
+    assert!(!listed, "not the owner retry");
 }
 
 /// Review r1 of #641, item 2: a destination whose `RelativeRotation.Yaw` is declared a float cannot take the int
