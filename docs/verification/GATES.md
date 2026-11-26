@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK67-KEY (2026-11-26, pc-hummer, on fix/rust-link67-key from main c345fdb):** AI-assisted (Claude Code,
+Opus 5.5). `CanAffordToPickUpPickupable`, `PayForPickupable` and `UpdateAmmoCounts` bound in Off
+(NATIVE_LINK67_KEY_AND_LOOK.md sections 2 and 4). `cargo test --workspace -j 8 --no-fail-fast` 3,857 passed / 0 failed /
+59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock), main
+and this change: 6 ok / 8 not ok, 51.2% on both. Link 6 passes `CanAffordToPickUpPickupable` (true for the free gun)
+and stops, still in `key`, at the unbound `WillowPlayerController.GetPawnInventoryManager()` (the controller's
+`HasRoomInInventoryFor`), before `UpdateAmmoCounts`; every other row is unchanged. UNVERIFIED in game. Decision
+2026-11-26-NNN.
+
 **SOCKETS-PUBLISH-AND-PHYSX-LEVEL (2026-11-26, pc-hummer, on fix/sockets-publish-and-physx-level, stacked on #770 @
 92e14e9e):** AI-assisted (Claude Code, Opus 5.5). A socket attach takes its parent's `Owner` and is published under the
 pawn; an unrecorded attachment back-linked to its entry is `InitializeRBPhysics`' `NotRead` (review of #770);
