@@ -2352,7 +2352,7 @@ fn willow(vm: &mut Vm, path: &str) -> ObjRef {
 }
 
 /// NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 8, tests 1 and 4 (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, decision
-/// 2026-11-26-NNN): with a `PlayerClass` whose `PawnArchetypePath` names a loaded archetype, the bridge's player pawn
+/// 2026-11-26-23): with a `PlayerClass` whose `PawnArchetypePath` names a loaded archetype, the bridge's player pawn
 /// is spawned from it: the archetype's value (`ToyEye` 7), the archetype on the heap, in the level list, with the
 /// controller set; its inherited `Components` entry is a copy of the archetype's own `ToyPawnComp0` (`ToyLevel` 9), not
 /// the class default's, outered to the pawn and in the attach record under it.

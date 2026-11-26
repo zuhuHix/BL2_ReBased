@@ -450,7 +450,7 @@ pub const ARCHETYPE_NOT_LOADED: &str = "the player pawn's archetype is not loade
 /// The record of the archetype spawn.
 pub const RECORD_PAWN_SOURCE: &str = "docs/verification/NATIVE_MAYA_PAWN_SPAWN_SOURCE.md";
 
-/// Off (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B, decision 2026-11-26-NNN): the
+/// Off (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B, decision 2026-11-26-23): the
 /// preflight of the archetype spawn, write-free and load-free. With no `PlayerClass` on `controller` (the field
 /// undeclared, None, or not an object): `None`, and the bridge keeps the class-default pawn. Otherwise the class
 /// definition is resident, its `PawnArchetypePath` is a string, and the pawn data manager's lookup
