@@ -78,7 +78,12 @@ discovery reads each archetype through the store's own load (logged; its referen
 or left; data errors are `VmError::Script`; `AttributeStartingValuesNew` must be an array. `cargo test -p ow-attr -p
 ow-combat -p ow-cli` 892 passed / 0 failed / 12 ignored; `crate_edges_test.py` OK. Gate rerun on 867057a0: the same
 rows and 9.500/14 = 67.9%; the set-up logged 4 archetypes and loaded 20 objects (the AI classes the copy used to load
-unlogged now load in the walk, each logged), none failed.
+unlogged now load in the walk, each logged), none failed. Review of #815, r2: each definition is checked once per call
+with its nesting height, by the preload and the native preflight alike (the same answers, linear work); the archetype
+is the named package's own copy (its handle, then `DefStore::load_export_of_file`); a slotless stand-in is skipped,
+logged; a skipped `AttributeStartingValuesNew` tag is a data error. `cargo test -p ow-defs -p ow-attr -p ow-combat -p
+ow-cli -p ow-world` 1,779 passed / 0 failed / 23 ignored; gate rerun on cdd6a70e: the same rows, 9.500/14 = 67.9%, 20 objects preloaded
+from the named packages' copies, none failed.
 
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read

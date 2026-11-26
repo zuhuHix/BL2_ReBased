@@ -82,5 +82,19 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
     loads;
   - tests: a self-referential formula visited once and a 40-deep chain stopped by the bound; discovery by path (the
     order of the lines, the counts after a second discovery); a broken `AIClass` export; both malformed-data cases.
+- **Review of #815, r2:**
+  - the shared walk keeps, per call, each initialization definition it checked with its nesting height, and the
+    definitions on the current path. A definition reached again refuses exactly when its depth plus its height passes
+    the bound (as walking it again would), else it is skipped; one on its own path is a cycle and refuses with the
+    bound's error at once. The native preflight keeps them too, so its answers are unchanged and its work is linear in
+    the definitions reached (a 20-definition chain naming the next in all four terms: 20 visits, not 4^19);
+  - the archetype is the named package's own export, as the spawn reads it: its handle, not loaded
+    (`DefStore::handle_of_ref`, new), then that file's copy loaded into it (`DefStore::load_export_of_file`, the store
+    rule the combat body walk uses; UNVERIFIED). On the installed packages the policy's holder of each archetype path is
+    another file, so this matters there;
+  - a stand-in short of its class's slots (a missing import's) is skipped with a logged line, not read;
+  - an `AttributeStartingValuesNew` whose tag the decoder skipped (`DefStore::is_skipped`) is `VmError::Script`;
+  - tests: the 20-chain's visit counts for the preload and the preflight (`preflight_set_base_value_counted`, new); the
+    named package's missing export; a slotless stand-in; a skipped categories tag.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.
