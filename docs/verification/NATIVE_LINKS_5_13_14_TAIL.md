@@ -1,6 +1,6 @@
 # Links 5, 13 and 14 past the spawn: the death roll, the go-down and the bleed (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-5-13-14-TAIL (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-5-13-14-TAIL (decision 2026-11-26-76), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/l51314/`. This note
 is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
