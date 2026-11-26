@@ -83,7 +83,19 @@ So `HUDDef` is a data read that happens to sit beside the movie's creation.
 
 **Hub ruling (review of #806): yes, a harness HUD, data steps only** (Off only, logged as a harness input,
 UNVERIFIED, Reference unchanged). No movie native is called:
-- spawn the `GameInfo.HUDType` class owned by the controller into `myHUD`, as `ClientSetHUD` does;
+- **when:** the harness HUD is made **before the world begins play** (section 4), so the port's spawn runs no
+  begin-play event on it (review r1 of #806). Why this and not a spawn without events: the port's `begin_play` runs
+  no pass over actors that already exist (`ow_world::actors`: the game's later begin-play pass is not read), so a HUD
+  made first never meets `WillowHUD.PostBeginPlay` (`InitHud`, the unbound `IsBinkMoviePlaying`, the `OpenHUDMovie`
+  timer), and no new spawn variant is needed. Made after play began, it would run them. If a later lane ports the
+  begin-play pass over existing actors, this choice must be revisited (test 1 guards it);
+- **the class:** `HUDType` of the world's game (`WorldInfo.Game`). `Game` None: `NotRead`, "the harness HUD: the
+  world has no game". A `HUDType` that is None or not `WillowGame.WillowHUD` or a subclass: `NotRead`, "the harness
+  HUD: HUDType is not a WillowHUD";
+- spawn that class owned by the controller into `myHUD`, as `ClientSetHUD` does;
+- **a second set-up** (`myHUD` already set): `NotRead`, "the harness HUD: a second set-up", before any write. The
+  game's `PlayerController.ClientSetHUD` destroys the old HUD first and then spawns the new one; the old HUD's
+  destroy events were not read, so the harness does not run them;
 - set `PlayerOwner` := the controller (HUD's `PostBeginPlay`), `WPlayerOwner` := the controller (`WillowHUD`'s), and
   `HUDDef` := the globals definition's `HUDDefinition` (`CreateHUDMovie`'s first step);
 - skip the presentation steps: `InitHud`, `LoadBuildInfo`, the timer and the movies, and the material instances;
@@ -102,7 +114,9 @@ probe).
 
 **Hub ruling (review of #806): yes, begun play or the equivalent registration** (Off only, logged as a harness
 input, UNVERIFIED, Reference unchanged). This note's choice is **the pickup world begins play at set-up**, so each
-spawn runs its begin-play events as in the game, where the level has begun play before anything drops.
+spawn runs its begin-play events as in the game, where the level has begun play before anything drops. **The order
+at set-up** (review r1 of #806): the harness HUD first (section 3), then the world begins play, then the pickups and
+the gun are spawned.
 - this changes link 6's path too: its pickup and gun would run their `PostBeginPlay`. The implementer re-runs link 6
   under the setting;
 - the narrower alternative, registering the two pickups with `AddPickup` at the drop, leaves the rest of
@@ -112,6 +126,11 @@ spawn runs its begin-play events as in the game, where the level has begun play 
     same as without it (main eef4f83: ok, 3/3); the overall count must not drop;
   - in that run's call trace, each of link 6's spawns (the pickup and its gun) runs `PreBeginPlay` and
     `PostBeginPlay` once, and the pickup is in `PickupList` once;
+  - **the spawn's base-search refusal** (review r1 of #806): once play has begun, the port's spawn refuses a template
+    that needs a base search (`Base` None, `bCollideWorld`, `bShouldBaseAtStartup`, `Physics` `PHYS_None` or
+    `PHYS_Rotating`) with the collision `NotYet` "the base search after PostBeginPlay". Before the run, check each
+    template links 6 and 7 spawn after begun play (the pickups, the gun, the HUD is made before) against that test;
+    a template that needs it gives that refusal under the setting, and that is a stop to report;
   - the synthetic tests in section 9, row 2;
   - if link 6 regresses, report the new stop and fall back to the `AddPickup` registration.
 
@@ -136,7 +155,8 @@ plus the controller's offsets and time. It is not Flash, and it is not a pure re
 UNVERIFIED, Reference unchanged):
 - the point: the pawn's `Location` plus (0, 0, `BaseEyeHeight`); here (0, 0, 75). The reading gives nothing more
   exact headlessly: the camera's own point of view (its modes) is not read;
-- the rotation: the controller's `Rotation` (zero here);
+- the rotation: the controller's `Rotation` (zero here). The stand-in **drops `WillowPlayerController`'s own rotation
+  offsets** and its further adjustment virtual (section 5 above; review r1 of #806);
 - with no pawn: the camera `LayerAbsent` stays;
 - the first-person view by fit. The probe used it.
 - Declared, else `VmError::Script`: `Pawn`, `Location`, `BaseEyeHeight` (a float), the controller's `Rotation`.
@@ -188,8 +208,11 @@ play's effect on link 6 (section 4) was not measured.
 
 **Proposed Off answer** (replacing the pass's shrink `NotRead`):
 - that rule;
-- the split-screen test answers no for a `Player` of None, the headless case. A set `Player` needs the engine's
-  local-player count: `NotRead` until a layer holds it;
+- the split-screen test answers no for a `Player` of None, the headless case (the pickup worlds). **The `--map`
+  route sets `Player`** (`ow_world` `mapload/player.rs`, the login step), so there the test reads it (review r1 of
+  #806): a local player answers yes when more than one local player exists, and `ActorWalk::LocalPlayers` (the local
+  players' controllers) can give that count; a child network connection answers yes; any other `Player` object is
+  `NotRead`. Without that count wired, a set `Player` stays `NotRead`;
 - `BeginShrinking` is a script event on the pickup, planned like the pass's other events: resolved and checked in the
   plan, raised after the writes;
 - declared, else `VmError::Script`: `MaxNumPickups` (an int), `PickupShrinkDuration` and `LifeSpan` (floats),
@@ -200,12 +223,29 @@ play's effect on link 6 (section 4) was not measured.
 ## 8. Predicted stop
 
 - **Today** (main): the no-HUD `LayerAbsent`.
-- **The line check under `NoLevel`. Hub ruling (review of #806): it hits nothing**, the same rule as the base-search
-  stand-in (Off only, logged as a harness input, UNVERIFIED, Reference unchanged). So the aimed gun's line is
-  clear, as in the probe.
+- **The line check under `NoLevel`. Hub ruling (review r1 of #806)** (Off only, logged as a harness input, UNVERIFIED,
+  Reference unchanged):
+  - the setting: `pickup_targeting::NoLevelLineCheck`, turned on by `enable_no_level_line_check` (a registration
+    error outside Off or twice), which the slice's two `NoLevel` worlds turn on, as they do `NoLevelBaseSearch`. Its
+    set-up log line: "harness input: the world turns on the pickup targeting's no-hit line check for a world with no
+    level geometry (the hub's ruling on review of #806; UNVERIFIED)";
+  - with it on and a `NoLevel` service, the line check answers **no hit**. Only three actors are passed over: the
+    owner's pawn, the target pickup `W`, and `W`'s `Base`;
+  - **any other actor holding collision** (a `CollisionComponent` set) is `NotRead`, "the pickup targeting's line
+    check: another actor's collision", decided before any write, unless geometry clears it: the line's own box (the
+    segment's two ends) is disjoint from the actor's bounds box (the bounding-cylinder rule). That is the bounds step
+    every walker runs first. It is the form of the combat world's geometric clearance (#807) that fits a slanted line;
+    #807's exact test assumes a vertical line and does not apply as is;
+  - the per-call log line: "harness input: the pickup targeting's line check hit nothing (a world with no level
+    geometry; the owner's pawn, the target pickup and its Base passed over; UNVERIFIED stand-in, the hub's ruling on
+    review of #806)";
+  - so the aimed gun's line is clear, as in the probe.
 - **With the four rulings in** (a harness HUD, begun play, the eye-point view, the line check), the bounds from the
   port's rule, and section 7's rule: **`look` passes, and on main eef4f83 (SetBase bound) link 7 passes** (the
   probe). No further stop on link 7's path.
+- **Begun play's effect on link 7 is not measured either** (review r1 of #806): that probe registered the pickups
+  with `AddPickup` at the look, so neither link 6 nor link 7 ran with the world begun. Section 4's confirmation plan
+  covers both links.
 
 ## 9. Tests (synthetic fixtures)
 
@@ -214,19 +254,32 @@ play's effect on link 6 (section 4) was not measured.
      globals definition's, and no movie made;
    - an unloaded definition: `NotRead` before any write.
    - (hub ruling) with the setting off: the no-HUD `LayerAbsent`; Reference with it on: unchanged; one harness-input
-     log line.
+     log line;
+   - made before begun play: no `PostBeginPlay` runs on it (no `InitHud`, no timer); then the world begins play and
+     still none runs;
+   - `Game` None; a `HUDType` that is not a `WillowHUD`: each `NotRead`, nothing written;
+   - a second set-up with `myHUD` set: `NotRead`, the first HUD kept, nothing written.
 2. **Begun play:** a toy `WillowPickup` spawned in a world that has begun play is in `PickupList`; one spawned before is
    not.
    - (hub ruling) with the setting on, a toy pickup world: begins play at set-up; a toy pickup and a toy gun spawned
      after it each run `PreBeginPlay` and `PostBeginPlay` once, and the pickup is in `PickupList` once;
-   - with it off: neither event, `PickupList` empty; Reference: unchanged.
+   - with it off: neither event, `PickupList` empty; Reference: unchanged;
+   - a toy template that needs a base search, spawned after begun play: the collision `NotYet` "the base search after
+     PostBeginPlay", nothing made.
 3. **The view stand-in:** a toy pawn with `BaseEyeHeight` 64 and a controller rotation give that eye point and rotation;
    with the setting off, the camera `LayerAbsent`.
    - (hub ruling) a controller with no pawn: the camera `LayerAbsent`; a mistyped `BaseEyeHeight`: `VmError::Script`;
      one harness-input log line; Reference: unchanged.
 4. **(hub ruling) The line check under `NoLevel`:** with the setting on, a toy pickup beyond a quarter of
-   `PickupRange` is clear and can win; with it off, the line check's own refusal; Reference: unchanged.
+   `PickupRange` is clear and can win, with the per-call log line; with it off, the line check's own refusal;
+   Reference: unchanged;
+   - the owner's pawn, `W` and `W`'s `Base` each holding collision on the line: still no hit;
+   - a fourth actor holding collision whose bounds meet the line's box: `NotRead`, nothing written; the same actor
+     with bounds disjoint from it: no hit;
+   - the setting enabled twice, or outside Off: a registration error.
 5. **The shrink step:**
+   - (review r1 of #806) a controller whose `Player` is a toy local player, one local player: not split-screen;
+     two: split-screen, nothing counted; a `Player` of another class: `NotRead`;
    - three toy pickups with `LifeSpan` 20, 18 and 5, duration 15, `MaxNumPickups` 1: `BeginShrinking` on the 18;
    - with `MaxNumPickups` 2: nothing;
    - a client world, or a split-screen owner: nothing counted.

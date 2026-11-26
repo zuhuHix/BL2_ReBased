@@ -284,7 +284,8 @@ on a supplied view.
 1. **UNVERIFIED:** the suspend query of a pawn of another class and of a driven vehicle (section 2), and the HUD
    presentation step the pass calls with the winner, which writes nothing the targeting reads.
 2. **UNVERIFIED:** which `HUDDefinition` the player's HUD holds, and so the `PickupRange` value, and whether the
-   slice's globals definition has a hover particle (`PartItemHover`).
+   slice's globals definition has a hover particle (`PartItemHover`). Read since: NATIVE_LINK7_HUD_TARGETING.md
+   section 3 (`HUDDef` is the globals definition's `HUDDefinition`, `PickupRange` 400 in the installed data).
 3. **UNVERIFIED:** the shrink bookkeeping's enable query on the HUD and the limit the HUD holds (section 8). Read
    since: NATIVE_LINK7_HUD_TARGETING.md section 7 (not a split-screen player; `MaxNumPickups` by fit).
 4. Resolved in review r1 of #461: the events go to `WillowHUD.WPlayerOwner`, which `WillowHUD.PostBeginPlay` sets to

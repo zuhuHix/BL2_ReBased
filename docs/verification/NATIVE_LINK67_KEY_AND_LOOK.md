@@ -117,7 +117,8 @@ once per unit (amount 0 or less: none) and needs no count. Then its writes (2.2)
      for `OpenHUDMovie`, and two material instances made with `New` and parented.
 4. **`HUDDef`** is not set by any of these, and the class default leaves it None. `GlobalsDefinition.HUDDefinition`
    exists and is the likely source, set natively. **Where it is set was not read** (NATIVE_PICKUP_TARGETING.md's open
-   question 2 stays open).
+   question 2 stays open). Read since: NATIVE_LINK7_HUD_TARGETING.md section 3 (`CreateHUDMovie` sets it from the
+   globals definition).
 
 ### 3.3 Is there a headless answer?
 
@@ -128,6 +129,8 @@ once per unit (amount 0 or less: none) and needs no count. Then its writes (2.2)
   nothing, an ordinary failure, not the game's behaviour;
 - **even with a HUD, the next stop is the camera:** the pass reads the owner's view before anything else (that note's
   section 10, step 4). That is a `LayerAbsent` the hub left to a host lane.
+
+Read since: NATIVE_LINK7_HUD_TARGETING.md section 3 (the HUD's source, and the hub's harness HUD).
 
 **Proposed Off answer:** keep step 2's HUD `LayerAbsent` until two things exist: a HUD stand-in with `PlayerOwner`,
 `WPlayerOwner` and a `HUDDef` (a harness input, the hub's call), and `HUDDef`'s source read. Then the stop moves to the

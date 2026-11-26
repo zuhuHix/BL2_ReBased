@@ -40,4 +40,16 @@ check changed.
   - the line check under `NoLevel` hits nothing, as the base-search stand-in does.
 
   Written into the note (sections 3, 4, 5, 8, the tests and the open questions).
+- **Review r1 (#806):**
+  - the harness HUD is made before the world begins play, so no begin-play event runs on it (the port runs no
+    begin-play pass over existing actors); its class is the world game's `HUDType`, which must be a `WillowHUD`; a
+    second set-up is `NotRead`;
+  - the link 6 and 7 confirmation plan includes the spawn's "base search after PostBeginPlay" refusal; begun play's
+    effect on link 7 is unmeasured too;
+  - the line check (hub ruling): `NoLevelLineCheck`, no hit, passing over only the owner's pawn, `W` and `W`'s
+    `Base`; another actor with collision is `NotRead` unless its bounds are disjoint from the line's box; the setting
+    and both log lines named;
+  - the view stand-in drops the controller's rotation offsets; on the `--map` route the shrink step's split-screen
+    test reads the set `Player`, with `ActorWalk::LocalPlayers` for the count;
+  - "read since" pointers in NATIVE_LINK67_KEY_AND_LOOK.md (3.2, 3.3) and NATIVE_PICKUP_TARGETING.md (open question 2).
 - **Clean room:** a different lane implements this note.
