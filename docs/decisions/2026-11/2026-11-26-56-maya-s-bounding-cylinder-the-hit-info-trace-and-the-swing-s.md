@@ -31,4 +31,8 @@ no bounds check changed.
   written) as a stand-in, behind an Off-only slice harness setting, the same pattern as the base-search stand-in
   (ruling on review of #798). It is logged and UNVERIFIED. Without the setting it stays the `LayerAbsent`; Reference is
   unchanged.
+- **Review r1 (#799):** declared-field rules for `GetParent`, the shield getters, `ShakeView` (before the first write),
+  `DoForceFeedbackWaveform` (its `NotRead` before the `Scale` write) and `GetCombatMusicManager`; the translated-origin
+  rule lists every condition (Absolute flags, `Owner`, rotations, `PrePivot`, unit scale) and the cylinder's origin;
+  the trace flags in decimal.
 - **Clean room:** a different lane implements this note.

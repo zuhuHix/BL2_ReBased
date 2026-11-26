@@ -55,9 +55,14 @@ exactly 1, each matrix is a pure translation. The component's world position is 
 component's `Translation`, **whatever order the two matrices are composed in**.
 
 **Proposed Off answer** (an extension of the simplest world transform, for `stored_box` and the cylinder rule alike):
-- a non-zero `Translation` is accepted **only when** both rotations are zero and the combined scale is exactly 1 on every
-  axis (a stricter case than the uniform-scale rule). The origin becomes `Location` + `Translation` + the mesh origin
-  + `RootBoneTranslation`; the extent is unchanged;
+- a non-zero `Translation` is accepted **only when all of these hold** (review r1 of #799):
+  - the inherited conditions: none of the three Absolute flags set, and the component's `Owner` is the receiver;
+  - both rotations (the component's and the owner's) zero;
+  - the owner's `PrePivot` zero (UE3 also moves an actor's matrix by its pre-pivot; the probe read it as 0);
+  - the combined scale exactly 1 on every axis (a stricter case than the uniform-scale rule);
+- then the skeletal mesh's origin is `Location` + `Translation` + the mesh origin + `RootBoneTranslation`, and the
+  cylinder's origin is `Location` + `Translation`; the extents are unchanged;
+- any condition that fails is the `WORLD_TRANSFORM` `NotRead`;
 - any other non-zero `Translation` stays the `WORLD_TRANSFORM` `NotRead`. A scaled or rotated case needs the
   composition order, which is not settled here;
 - write-free, load-free, as now. UNVERIFIED in game.
@@ -85,7 +90,7 @@ Their union has half extents of about (42, 107.8, 115.1). So the answer is radiu
 **`Actor.TraceComponent(out HitLocation, out HitNormal, Component, TraceEnd, TraceStart, Extent, out HitInfo, bComplexCollision)`:**
 - **no component, or one whose `bAttached` is clear:** false, with the outs untouched;
 - **otherwise:** the component's own line check (a primitive class virtual) with the trace flags 0x20df, or 0x220df
-  when `bComplexCollision` is set. On a hit it answers true and fills:
+  when `bComplexCollision` is set (8415, or 139487; their meaning by fit, not decoded). On a hit it answers true and fills:
   - the hit location and normal;
   - `HitInfo`: the material, the physical material (from the hit's physical material, else its material's), the item,
     the level index, the bone name and the hit component.
@@ -145,6 +150,8 @@ they are now read:
 **Proposed Off answer:**
 - the two keys leave `go_down.rs`'s unresolved list and take this rule;
 - a set `DrivenVehicle` is `NotRead`, "GetParent: a driven vehicle's two queries";
+- declared, else `VmError::Script` (review r1 of #799): `DrivenVehicle`, `Owner`, `Base` (objects), `SpawnParent` (an
+  object on `WillowAIPawn`), `BodyClass` (an object) and its `bOnlyDisplayParentInfoWhileAttached` (a bool);
 - every object read must be resident, else `NotRead`; write-free.
 
 **On the slice:** the adult, the baby and Maya have no vehicle, no owner, no spawn parent and no base, so the answer is
@@ -160,7 +167,8 @@ Both go through the pawn's damageable interface. One body serves `WillowAIPawn` 
 These are the shield reads NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 2 already uses.
 
 **Proposed Off answer:** that rule, through the port's pool-handle rule (NATIVE_COMBAT_GROUNDWORK.md) with the effective
-maximum. Write-free. **On the slice:** Maya's `ShieldArmor` names a pool.
+maximum. Write-free. Declared, else `VmError::Script` (review r1 of #799): `ShieldArmor` (a `ResourcePoolReference`),
+`ShieldMaxVar` and `ShieldVar` (ints). **On the slice:** Maya's `ShieldArmor` names a pool.
 
 ## 7. `WillowPlayerController.ShakeView(Info)` and the rest of the swing's tail
 
@@ -169,7 +177,8 @@ maximum. Write-free. **On the slice:** Maya's `ShieldArmor` names a pool.
   - `CurrentViewShake` := Info;
   - then `ShakeOffsetLength`, `ShakeRotLength` and `ShakeFOVLength` := Info's `OffsetTime`, `RotTime` and `FOVTime`.
 
-  **Off:** those writes. `Info` is a `GearboxViewShakeInfo` and the fields must be declared, else `VmError::Script`;
+  **Off:** those writes. `Info` is a `GearboxViewShakeInfo`, and `CurrentViewShake` and the three lengths must be
+  declared, else `VmError::Script`, checked before the first write (review r1 of #799);
 - **`Controller.InGodMode()`:** #793 section 5's rule, the controller key (not yet bound in the port);
 - **`PlayerController.DoForceFeedbackWaveform(Waveform, ..., Scale)`** (`Scale` is 1 when omitted): one body for
   `PlayerController` and `WillowPlayerController`:
@@ -177,12 +186,15 @@ maximum. Write-free. **On the slice:** Maya's `ShieldArmor` names a pool.
   - nothing when `ForceFeedbackManager` is None, or `PlayerReplicationInfo` is None;
   - otherwise the waveform's `Scale` := `Scale`, and the manager's play virtual runs (not read).
 
-  **Off:** the gates as read. With a manager, the `NotRead` "DoForceFeedbackWaveform: the manager's play". **On the
-  slice:** `ForceFeedbackManager` is None in the port (also its class default), so nothing happens;
+  **Off:** the gates as read. With a manager, the `NotRead` "DoForceFeedbackWaveform: the manager's play", decided
+  **before** the waveform's `Scale` write, so nothing is written. Declared, else `VmError::Script` (review r1 of #799):
+  `PlayerInput`, its `bUsingGamepad`, `ForceFeedbackManager`, `PlayerReplicationInfo`, and the waveform's `Scale`.
+  **On the slice:** `ForceFeedbackManager` is None in the port (also its class default), so nothing happens;
 - **`WillowGameInfo.GetCombatMusicManager()`:** it answers `GlobalCombatMusicManager`. When that is None, it first makes
   a new manager on the game info and initialises it, a lazy creation that was not read further. **Off:** the field when
   set; when None, `NotRead`, "the combat music manager's lazy creation", as `GetVehicleLifetimeManager`'s answer in
-  NATIVE_GO_DOWN_PATH.md 4.2. **On the slice:** it is None, so this is the stop.
+  NATIVE_GO_DOWN_PATH.md 4.2. `GlobalCombatMusicManager` must be declared as an object, else `VmError::Script` (review
+  r1 of #799). **On the slice:** it is None, so this is the stop.
 
 ## 8. Predicted stops
 
