@@ -4,9 +4,11 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **ANALYST-LINK67-TOUCH-TEMPLATE (2026-11-26, pc-hummer, docs only, on docs/native-touch-component-template from main
 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_COMPONENT_TEMPLATE.md reads what the game's `new` does
-with a template, for links 6 and 7's `TEMPLATE` stop. It takes five operands; the handler and a local census of the
-packages agree, and both decoder tables decode 12,968 of 12,978 functions. It copies the template's values, takes
-transient fields from the class default, and loads nothing. It also marks `touch`'s steps after the bounds:
+with a template, for links 6 and 7's `TEMPLATE` stop. It takes five operands: the handler reads five. The structural
+oracles cannot tell four from five (both tables decode 12,968 of 12,978 functions), but an argument count against
+declared parameters does: 5 calls overflow under four operands, none under five. It copies the template's values,
+takes transient fields from the class default, and loads nothing. The port's rule refuses component instancing
+(class flag bit 23), which links 6 and 7 trip (review r1 of #743). It also marks `touch`'s steps after the bounds:
 `Pickupable_IsEnabled` is the first unbound native (`WillowPickup`: `bPickupable`). No code changed, so no measured
 number moved; the slice gate was not run for this lane. UNVERIFIED in game.
 

@@ -34,14 +34,25 @@ template (option B) is not read" (`NotYet { NotRead }`).
   - `Pickupable_IsEnabled`'s exec (shared by `DroppedPickup` and `WillowPickup`). It calls one method of the
     pickup interface table. That table was read in `WillowPickup`'s constructor chain, found as in
     NATIVE_COMPONENT_SKIP_FLAG.md section 6, and the routine in its slot was read.
-- **A structural census of `new`** (local, not a change to any tracked decoder):
-  - a copy of `research/script_disasm.py` decoding `New` with **five** operands decodes the same 12,968 of 12,978
-    script functions as the four-operand table. Memory sizes meet and jumps land on statements in both;
+- **A census of `new`** (local, not a change to any tracked decoder):
+  - **the structural oracles cannot tell four operands from five.** A bare expression is a valid statement, so with
+    four operands the template simply decodes as the next statement. A copy of `research/script_disasm.py` decoding
+    `New` with five operands decodes the same 12,968 of 12,978 script functions as the four-operand table, with
+    memory sizes meeting and jumps landing on statements in both;
   - with four operands, every one of the 225 `New` expressions in the packages is followed by a bare expression.
     189 times it is a `Nothing` statement (no template given). The other 36 times it is a bare value, such as
     `AttachMeshToPickup`'s `InstanceVariable(ThirdPersonMesh)`, or a value consumed as an extra call argument.
-    A bare value or `Nothing` statement does nothing at statement level, so these are the template operand.
-  - **So `New` has five operands in BL2's bytecode** (high): the handler reads five, and the census fits.
+    This fits five operands but does not prove them;
+  - **the check that tells them apart: argument counts against declared parameters.** For every call whose callee's
+    parameter list could be resolved (a final call by reference, or a virtual call by a name whose declarations all
+    have the same parameter count), the number of arguments was compared with the callee's declared parameters (the
+    `Parm` properties without `ReturnParm`):
+    - with four operands, **5 calls pass one argument more than declared, each with a `New` among the arguments.**
+      Four are `ParticleSystemComponent.SetTemplate(new ...(T))` in `EmitterPool.PostBeginPlay`, and one is
+      `SetSimObject` in `Behavior_SetVehicleSimObject.ApplyBehaviorToContext`;
+    - with five operands: **none.**
+  - **So `New` has five operands in BL2's bytecode.** The confidence (high) rests on the handler read, which takes
+    five. The argument-count check agrees, and the other two checks are consistent with it.
 - **Field places** (the local copy of `tools/ghidra/class_layout.py`):
   - `DroppedPickup`'s pickup interface table sits exactly where the constructor stores it, and so do
     `WillowPickup`'s three later interface tables;
@@ -49,12 +60,18 @@ template (option B) is not read" (`NotYet { NotRead }`).
     is exactly the padding a 16-byte-aligned quaternion in `RBState` (`Actor.RigidBodyState`) adds before it. The tool
     aligns `Quat` to 4. The field is the first bit of `WillowPickup`'s first bool group. **The 16-byte alignment is
     fitted (UNVERIFIED)**; the fit is exact, with no other candidate field.
+- **Class flags** (the store's `ClassBody.class_flags`, read from the packages with a local mirror of its reader):
+  - `SkeletalMeshComponent` has bit 23 (0x00800000) set, as do `PrimitiveComponent`, `SkeletalMeshActor` and
+    `WillowWeapon`. `MaterialInstanceConstant` does not;
+  - bit 10 (0x00000400) is clear on `SkeletalMeshComponent`.
 
 ## 3. What the game's `new` does with a template
 
 ### 3.1 The operator
 
-The script `new` reads **five operands, in order**: outer, name (a string), flags (an int), class, template. Then:
+The script `new` reads **five operands, in order**: outer, name (a string), flags (an int), class, template. **All
+five are evaluated before any check**, so outer, name, flags and the template are evaluated even when there is no
+class. Then:
 1. **no class:** a script error ("no class passed to new"), and no object;
 2. **flags outside the script-settable set:** a script warning. The flags passed on are masked to that set;
 3. **an `Actor` class** (any class whose chain reaches `Actor`): a script error ("use Spawn"), and the answer is
@@ -85,10 +102,15 @@ The script `new` reads **five operands, in order**: outer, name (a string), flag
      declarations mark transient (for example `Bounds`, `SpaceBases` and `Animations`, if their declarations carry the
      transient flag; check each in the store);
   3. then the class's own constructor runs;
-  4. a class flagged as owning components gets its components instanced from the archetype. Whether
-     `SkeletalMeshComponent` carries that flag was not read.
-- **Loads: none.** The template is an object already in memory, and the class default object exists for a loaded
-  class. Nothing is loaded from a package.
+  4. **a class whose flags have bit 23 set** gets a component-instancing step, against the archetype. By fit this is
+     the "has components" flag. **The step itself was not read.** `SkeletalMeshComponent` has the bit (section 2);
+  5. a class whose flags have bit 10 set gets a configuration read (by fit, per-object config; not read).
+     `SkeletalMeshComponent` does not have it.
+- **Loads: none in the game.** The template is an object already in memory, and the class default object exists for
+  a loaded class. Nothing is loaded from a package.
+  - In the port that last assumption does not hold by itself. The store's class default (`vm.defs.class_default`,
+    which `instantiate_from_defaults` uses) may be built or loaded on demand, which is a write;
+  - so the port's rule refuses a class default that is not resident (3.3).
 
 ### 3.3 What the port's `new` would need (option B, restated with this reading)
 
@@ -97,31 +119,50 @@ These are two VM changes, both **the hub's call**:
    evidence. `research/script_disasm.py` would change with it. This is a bytecode-layout change (rule 4): rerun the
    census in the same commit (`--check` totals unchanged, and no bare `Nothing` or value statement after a `New`);
 2. **the interpreter** (`ow-vm` `interp/eval.rs`, `new_object`), Off:
-   - evaluate the five operands in order;
-   - keep today's answers for no class (None), and refuse an `Actor` class as the game does (None, with the script
+   - **evaluate all five operands in the handler's order, before any check:** outer, name, flags, class, template.
+     This replaces main's order, which evaluates the class first and the outer only when there is a class. An operand
+     can be a call, so the order is observable;
+   - keep today's answer for no class (None), and refuse an `Actor` class as the game does (None, with the script
      error logged);
    - with a template:
      - copy its property values by declared property, deep-copying arrays and strings;
      - reset each property declared transient to the class default's value;
      - set the archetype to the template;
-   - **preflight, write-free and load-free:**
+   - **preflight, write-free and load-free. Every refusal below comes before the first write** (the made object):
      - a template that is a store handle not loaded yet is `NotYet { NotRead }`, "new: a template the store has not
        loaded (a load is a write)";
-     - a template whose class is neither the new class nor a subclass of it is `NotYet { NotRead }`, "new: a template
-       of another class" (that check was not read);
-     - a class that owns components, with a template whose components would be instanced, is `NotYet { NotRead }`,
-       "new: instancing a template's components";
+     - **a class default that is not resident** (the store would build or load it) is `NotYet { NotRead }`, "new: a
+       class default the store has not built (building it is a write)";
+     - **a template whose class is not exactly the new class** is `NotYet { NotRead }`, "new: a template of another
+       class". The game's own check was not read. A subclass template could copy fields past the new class's end, so
+       the port refuses it. The slice's case is exact (a `SkeletalMeshComponent` template for a
+       `SkeletalMeshComponent`);
+     - **a new class with bit 23 set in its class flags** (the store's `ClassBody.class_flags` of that class) is
+       `NotYet { NotRead }`, "new: instancing a template's components":
+       - the step is not read, so **any class with the bit trips this refusal until it is read**;
+       - **links 6 and 7 trip it:** `SkeletalMeshComponent` has the bit;
+       - a narrower test (only when the template holds a component reference) would let the fixture's template
+         pass. But it rests on what the unread step does, so it is not proposed;
+     - a new class with bit 10 set is `NotYet { NotRead }`, "new: a per-object configuration read";
    - the made object, and the unique name it interns, are the writes. Nothing is loaded.
      `body_composition.rs`'s `make_component` copies slots the same way, but it loads its template, which this rule
-     must not do.
+     must not do;
+   - **a failure after the object is made:**
+     - a `NotYet` carries the "stopped after partial writes: " prefix (`after_partial_writes`, by #518's counters),
+       its kind and record kept;
+     - a `VmError::Script` (a field of the wrong kind met during the copy) stays a `VmError`, which has no prefix. The
+       preflight checks the declarations it copies, so this should not arise.
 
 ### 3.4 Links 6 and 7 with option B (a prediction, not a run)
 
-1. **With option B alone,** the copied template has no mesh (the fixture skips the gun's init), so `skeletal_box`
-   meets source e again: the same `TEMPLATE` `NotRead`. The refusal's test would need to know that the component's
-   template has no mesh either. Then source e's base rule answers the game's own input, and the hub can retire the
-   refusal for that case.
-2. **With the gun's init run as well** (link 8's `InitMeshes` path), the template holds the composite third-person
+1. **With option B as proposed,** `new` itself stops first, at the component-instancing `NotRead` (3.3), because
+   `SkeletalMeshComponent` has class flag bit 23. That is the next stop on links 6 and 7 until the step is read.
+2. **Once that step answers,** the copied template has no mesh (the fixture skips the gun's init), so `skeletal_box`
+   meets source e again: the same `TEMPLATE` `NotRead`.
+   - **Whether to keep refusing a component whose template has no mesh is the hub's call. The hub keeps it refused.**
+   - Answering it would need the refusal's test to know that the template has no mesh either. Source e's base rule
+     would then answer the game's own input.
+3. **With the gun's init run as well** (link 8's `InitMeshes` path), the template holds the composite third-person
    mesh. The component takes **source f**, the mesh's stored bounds. That mesh is built at run time, not a package
    export, so `skeletal::mesh_bounds` answers none (it finds no export). **The next stop is source f's
    `NotYet { LayerAbsent }`, "Actor.GetBoundingCylinder: a skeletal mesh component's bounds", layer "a skeletal
@@ -176,21 +217,30 @@ and the touch ends.
 
 ## 6. Tests for the option-B interpreter rule (synthetic fixtures)
 
-1. `new(o) class'C'(T)` with `T` a toy `C` whose int field is 7: the new object's field is 7, and its archetype is `T`;
+1. `new(o) class'C'(T)` with `T` a toy `C` whose int field is 7, and `C`'s class flags with bits 23 and 10 clear: the
+   new object's field is 7, and its archetype is `T`;
 2. the same with a transient int field set to 9 on `T` and 2 on the class default: the new object's field is 2;
 3. a dynamic array of objects on `T`: the new object has its own array with the same elements. Changing one array
    leaves the other alone;
 4. a template that is an unloaded store handle: the not-loaded `NotRead`, no object made, no name interned;
 5. no template (`Nothing`): the class defaults, as today;
 6. an `Actor` subclass: None, the script error logged, no object made;
-7. **the decoder:** a synthetic function `Let(x, New(o, Nothing, Nothing, C, T)); Return(x)` decodes as two
-   statements, and its memory size meets the header.
+7. a class `C` with bit 23 set: the instancing `NotRead`, with no object made and no name interned. The same for bit 10
+   with the configuration `NotRead`;
+8. a template of a subclass of `C`: the other-class `NotRead`, nothing made;
+9. a class whose default the store has not built: the class-default `NotRead`, nothing made or built;
+10. the operand order: operands that are calls logging their order give outer, name, flags, class, template. With no
+    class, the other four are still evaluated;
+11. **the decoder:** a synthetic function `Let(x, New(o, Nothing, Nothing, C, T)); Return(x)` decodes as two
+    statements, and its memory size meets the header. With four operands, a `SetTemplate(new ...(T))` call decodes
+    with one argument more than its declaration.
 
 ## 7. Predicted next stop
 
 - **Today:** unchanged, the `TEMPLATE` `NotRead`.
-- **After option B and the gun's init:** source f's stored-bounds `LayerAbsent` for the run-time composite mesh
-  (3.4).
+- **After option B's decoder and interpreter change:** `new`'s component-instancing `NotRead` (3.3, 3.4 item 1).
+- **Once that step is read, with the gun's init:** source f's stored-bounds `LayerAbsent` for the run-time
+  composite mesh (3.4).
 - **Once bounds answer:** `TouchPickupTrace` (bound) and the pickup query (bound), then **`Pickupable_IsEnabled`
   (unbound; section 5's rule)**. Then the touch ends, and link 7 meets the HUD `LayerAbsent`.
 
@@ -198,12 +248,15 @@ and the touch ends.
 
 1. **UNVERIFIED:** every rule above.
 2. **Not read:**
-   - whether `SkeletalMeshComponent` owns components (the instancing step);
+   - the component-instancing step behind class flag bit 23, and the configuration read behind bit 10;
    - the template class check, if the construction makes one;
    - `DroppedPickup`'s own `Pickupable_IsEnabled` answer;
    - the composite mesh's bounds.
-3. **Fitted:** `RBState`'s 16-byte alignment (section 2). If it holds, fields after `RBState` in `WillowPickup` sit
-   16 bytes later than the layout tool says.
+3. **Fitted:** the 16-byte alignment of `Quat` (section 2), which the layout tool aligns to 4.
+   - If it holds, fields after **any struct holding a `Quat`** sit later than the tool says, not only after
+     `WillowPickup.RBState`. `RigidBodyState` also appears in `KActor`, `WillowAIPawn` and `SVehicle.VehicleState`;
+   - so a wrong alignment, either way, moves every by-fit offset after such a struct. The notes that place fields
+     after one should be rechecked against this.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

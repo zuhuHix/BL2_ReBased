@@ -36,4 +36,15 @@ bounds check changed.
   - tests listed.
 - **Next** (a prediction, not a run): unchanged today. After option B and the gun's init, source f's `LayerAbsent`.
   Then `Pickupable_IsEnabled`.
+- **Review r1 (#743):**
+  - the component-instancing predicate is named (class flag bit 23 in the store's class flags) and refused until
+    read; links 6 and 7 trip it;
+  - a class default that is not resident is refused, every refusal comes before the first write, and a failure after
+    the object is made is named;
+  - the operand order is the handler's, all five before any check, replacing main's;
+  - the structural oracles cannot tell four operands from five; an argument count against declared parameters does
+    (5 overflows under four, none under five);
+  - the `Quat` alignment question is widened to every struct holding one;
+  - a template must be exactly the new class;
+  - keeping the "template has no mesh" refusal is the hub's call, and it stays refused.
 - **Clean room:** a different lane implements this note.
