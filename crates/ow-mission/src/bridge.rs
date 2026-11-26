@@ -3470,8 +3470,8 @@ impl MissionScript {
         // this mission, a separate list the walk above never reaches, are re-evaluated through the one verdict. The
         // bridge has changed its own state by then, so a refusal is marked "stopped after partial writes".
         if vm.parity == ParityMode::Off {
-            let mission = self.inner.mission.definition();
-            ow_behavior::kernel::natives::reevaluate_conditions(vm, mission).map_err(|e| match e {
+            let mission = self.inner.mission.path().to_string();
+            ow_behavior::kernel::natives::reevaluate_conditions(vm, &mission).map_err(|e| match e {
                 VmError::NotYet(n) => VmError::NotYet(n.after_partial_writes()),
                 other => other,
             })?;

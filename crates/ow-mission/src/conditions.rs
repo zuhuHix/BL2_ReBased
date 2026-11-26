@@ -12,14 +12,18 @@
 //! - a true verdict with a non-empty `ObjectiveSetRestrictions` stays true only while one listed set of the system's
 //!   own mission is active.
 //!
-//! **The Fire slice's difference** (the hub's ruling 3): its old verdict counted a mission in its completed set as
-//! Complete; this one, like `GetMissionStatus`, has only the system's own mission. The slice now asks this verdict.
+//! **The Fire slice's difference** (the hub's ruling 3, narrowed by review of #775, item 1): the C++ verdict
+//! (`src/slice.cpp`) counts a mission in the slice's completed set as Complete. **Reference keeps that**: given a
+//! `completed` set, under `ParityMode::Reference` a mission other than the system's own that the set names is Complete.
+//! **Off** follows the bridge's `GetMissionStatus`, which has only the system's own mission, so every other mission is
+//! NotStarted. The slice asks this verdict with its set; the bridge's answers pass none.
 //!
 //! **The answers** ([`BridgeAnswers`]): the verdict above for the bridge's mission, and "is this mission Complete"
 //! (only the bridge's own can be). The bridge installs them in Off ([`install`]); the kernel reads them.
 
 use std::rc::Rc;
 
+use ow_core::{DetSet, ParityMode};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -39,7 +43,12 @@ pub struct Verdict {
 }
 
 /// `condition`'s verdict from `m`'s current state (module documentation). Reads only.
-pub fn verdict(vm: &Vm, m: &MissionSystem, condition: ObjRef) -> Result<Verdict, MissionError> {
+pub fn verdict(
+    vm: &Vm,
+    m: &MissionSystem,
+    condition: ObjRef,
+    completed: Option<&DetSet<String>>,
+) -> Result<Verdict, MissionError> {
     let linked = ref_path(vm, prop(&vm.space, condition, "LinkedMission")?.as_ref())?;
     let own = linked == m.path();
     let truth = |vm: &Vm, v: Option<&Value>| v.is_some_and(|v| v.truth(&vm.space.names));
@@ -48,8 +57,11 @@ pub fn verdict(vm: &Vm, m: &MissionSystem, condition: ObjRef) -> Result<Verdict,
         prop(&vm.space, condition, "bIsObjectiveSpecific")?.as_ref(),
     );
     let mut value = if !specific {
+        let reference_complete = vm.parity == ParityMode::Reference && completed.is_some_and(|c| c.contains(&linked));
         let state = if own {
             STATUS_FIELDS[usize::from(m.status().index())]
+        } else if reference_complete {
+            "bComplete"
         } else {
             "bNotStarted"
         };
@@ -116,7 +128,7 @@ pub struct BridgeAnswers {
 
 impl MissionConditionAnswers for BridgeAnswers {
     fn verdict(&self, vm: &Vm, condition: ObjRef) -> Result<bool, VmError> {
-        verdict(vm, &self.mission, condition)
+        verdict(vm, &self.mission, condition, None)
             .map(|v| v.value)
             .map_err(to_vm)
     }

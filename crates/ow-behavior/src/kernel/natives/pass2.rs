@@ -93,7 +93,8 @@ pub(super) enum Step {
     Link,
     /// Linked, registered under `mission` (stored when `store`), the verdict applied.
     Register {
-        mission: ObjRef,
+        /// The mission's stock path (one identity with the verdict's, review of #775, item 4).
+        mission: String,
         verdict: bool,
         store: bool,
     },
@@ -432,6 +433,14 @@ pub(super) fn plan(vm: &Vm, consumer: ObjRef, definition: ObjRef) -> Result<Vec<
         // 7 (the objective), 8.
         let verdict = verdict(vm, condition)?;
         let store = store_decision(vm, mission)?;
+        // Review of #775, item 5: commit step B cannot fail, so the service's borrow is checked here.
+        if store
+            && let Some(cell) = vm.service::<MissionConditions>()
+            && cell.try_borrow_mut().is_err()
+        {
+            return Err(VmError::ServiceBorrowed("MissionConditions"));
+        }
+        let mission_path = mission_key(vm, mission)?;
         // 9: the records linked before (any consumer), the ones planned earlier in this pass, and this one.
         let mut known = linked_states(vm, condition)?;
         known.extend(
@@ -447,13 +456,25 @@ pub(super) fn plan(vm: &Vm, consumer: ObjRef, definition: ObjRef) -> Result<Vec<
             seq,
             condition,
             step: Step::Register {
-                mission,
+                mission: mission_path,
                 verdict,
                 store,
             },
         });
     }
     Ok(out)
+}
+
+/// The service's identity of `mission` (review of #775, item 4): its stock path, the identity the verdict compares. A
+/// run-time object, which has none (no mission is one in the game), is keyed by its own name, marked so it meets no
+/// package path.
+pub fn mission_key(vm: &Vm, mission: ObjRef) -> Result<String, VmError> {
+    let path = provider::stock_path(vm, mission).map_err(to_vm)?;
+    if !path.is_empty() {
+        return Ok(path);
+    }
+    let name = vm.space.heap.get(mission)?.name;
+    Ok(format!("(run time) {}", vm.space.names.text(name)))
 }
 
 /// Applies `verdict` to every record in `condition`'s list (commit step C), in link order.
@@ -511,26 +532,27 @@ pub(super) fn commit(
             mission,
             verdict,
             store,
-        } = step.step
+        } = &step.step
         else {
             continue;
         };
-        // C, then B.
-        react(vm, step.condition, verdict)?;
-        if store && let Some(cell) = vm.service::<MissionConditions>() {
-            if let Ok(mut s) = cell.try_borrow_mut() {
-                s.store(mission, step.condition);
-            }
+        // C, then B (its borrow was checked in the plan; review of #775, item 5).
+        react(vm, step.condition, *verdict)?;
+        if *store && let Some(cell) = vm.service::<MissionConditions>() {
+            cell.try_borrow_mut()
+                .map_err(|_| VmError::ServiceBorrowed("MissionConditions"))?
+                .store(mission, step.condition);
         }
     }
     Ok(())
 }
 
-/// Re-evaluates every kernel-registered condition stored under `mission`, in registration order (module
+/// Re-evaluates every kernel-registered condition stored under the mission whose stock path is `mission`, in
+/// registration order (module
 /// documentation): its verdict again from the service, then applied to every record of its list. An unloaded object, a
 /// per-instance objective or a waypoint condition whose records would change is a typed refusal. Nothing without the
 /// service. The caller (the bridge, after its own observers) marks a refusal as after partial writes.
-pub fn reevaluate_conditions(vm: &mut Vm, mission: ObjRef) -> Result<(), VmError> {
+pub fn reevaluate_conditions(vm: &mut Vm, mission: &str) -> Result<(), VmError> {
     let stored = match vm.service::<MissionConditions>() {
         None => return Ok(()),
         Some(cell) => cell

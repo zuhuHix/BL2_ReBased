@@ -197,6 +197,24 @@ fn pass2_spec(provider: &'static str, on: bool) -> Spec {
     )
 }
 
+/// One conditioned sequence `Gated`, off at spawn, whose enabled event runs the refusing toy behavior `PR` (review of
+/// #775, item 3).
+fn pass2_refuse_spec() -> Spec {
+    Spec::new(
+        "ToyPass2Refuse",
+        vec![Seq {
+            name: "Gated",
+            enabled_on_spawn: Some(false),
+            condition: true,
+            events: vec![ev("OnBehaviorSequenceEnabled", (0, 1))],
+            behaviors: vec![beh("PR", "Behavior_ToyRefuse", (0, 0))],
+            links: vec![(0, -1, 0.0)],
+            ..Seq::default()
+        }],
+        vec![],
+    )
+}
+
 fn conditional() -> Spec {
     Spec::new(
         CONDITIONAL,
@@ -256,6 +274,8 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         // Pass 2's providers (lane IMPL-BEHAVIOR-KERNEL-PASS2): one conditioned sequence, off and on at spawn.
         ("TestPass2", provider_package(&pass2_spec("ToyPass2", false))),
         ("TestPass2Spawn", provider_package(&pass2_spec("ToyPass2Spawn", true))),
+        // Review of #775, item 3: the enabled event's behavior refuses.
+        ("TestPass2Refuse", provider_package(&pass2_refuse_spec())),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
