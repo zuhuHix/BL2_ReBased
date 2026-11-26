@@ -18,7 +18,9 @@ use ow_package::testkit::reflect::toy_array_of;
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::Vm;
 
-use super::super::{anim_set_preload_line, preload_mesh_anim_sets};
+use ow_object::heap::Origin;
+
+use super::super::{anim_set_preload_line, hold_anim_sets, preload_mesh_anim_sets};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -169,5 +171,85 @@ fn exactly_the_mesh_s_and_the_holds_anim_sets_and_their_sequences_are_loaded() {
     let loads = vm.defs.load_transitions();
     preload_mesh_anim_sets(&mut vm, archetype).unwrap();
     assert_eq!(vm.defs.load_transitions(), loads, "a second run loads nothing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A VM over the test package, nothing loaded yet.
+fn toy_vm(dir: &std::path::Path) -> Vm {
+    let bytes = package();
+    let defs = DefStore::from_synthetic(dir, &[("GD_ToyPawn.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .unwrap();
+    Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off)
+}
+
+/// A run-time object of `class` (a class of the test package) whose slots are all set. It has no store path, so the
+/// log names it by its reference.
+fn runtime(vm: &mut Vm, class: &str, name: &str) -> ObjRef {
+    let c = vm.find_class(&format!("GD_ToyPawn.{class}")).unwrap();
+    ow_vm::interp::instantiate_from_defaults(vm, c).unwrap();
+    let o = vm.space.alloc(c, name, None, Origin::Runtime).unwrap();
+    let defaults = vm.defs.class_default(&mut vm.space, &format!("GD_ToyPawn.{class}")).unwrap();
+    let slots = vm.space.heap.get(defaults).unwrap().slots.clone();
+    vm.space.heap.get_mut(o).unwrap().slots = slots;
+    o
+}
+
+fn put(vm: &mut Vm, o: ObjRef, name: &str, v: Value) {
+    let class = vm.space.heap.get(o).unwrap().class;
+    let p = vm.space.prop(class, name).unwrap();
+    *vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+}
+
+fn list(items: &[ObjRef]) -> Value {
+    Value::array(items.iter().map(|o| Value::Object(Some(*o))).collect())
+}
+
+/// Review of #754, LOW 1: a body class, a hold or an anim set that is a stand-in without its slots is logged and
+/// skipped, never read (no `SlotMissing`).
+#[test]
+fn stand_ins_are_logged_and_skipped() {
+    let dir = std::env::temp_dir().join(format!("ow-cli-animsets-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut vm = toy_vm(&dir);
+    // A stand-in body class: no slots.
+    let stand_in_body = runtime(&mut vm, "ToyBodyClass", "StandInBody");
+    vm.space.heap.get_mut(stand_in_body).unwrap().slots.clear();
+    assert_eq!(hold_anim_sets(&mut vm, stand_in_body).unwrap(), Vec::<ObjRef>::new());
+    assert!(vm.log.iter().any(|l| l.contains("the body class") && l.ends_with("skipped")), "{:?}", vm.log);
+    // A resident body class whose only hold is a stand-in.
+    let body = runtime(&mut vm, "ToyBodyClass", "Body");
+    let hold = runtime(&mut vm, "ToyHold", "StandInHold");
+    vm.space.heap.get_mut(hold).unwrap().slots.clear();
+    put(&mut vm, body, "WeaponHoldDefs", list(&[hold]));
+    assert_eq!(hold_anim_sets(&mut vm, body).unwrap(), Vec::<ObjRef>::new());
+    assert!(vm.log.iter().any(|l| l.contains("the weapon hold") && l.ends_with("skipped")), "{:?}", vm.log);
+    // A hold naming a stand-in set: the set is skipped at the preload, its Sequences never read.
+    let archetype = runtime(&mut vm, "ToyPawn", "Archetype");
+    let body = runtime(&mut vm, "ToyBodyClass", "Body2");
+    let hold = runtime(&mut vm, "ToyHold", "Hold");
+    let set = runtime(&mut vm, "ToyAnimSet", "StandInSet");
+    vm.space.heap.get_mut(set).unwrap().slots.clear();
+    put(&mut vm, hold, "AnimSetList", list(&[set]));
+    put(&mut vm, body, "WeaponHoldDefs", list(&[hold]));
+    put(&mut vm, archetype, "BodyClass", Value::Object(Some(body)));
+    preload_mesh_anim_sets(&mut vm, archetype).unwrap();
+    assert!(vm.log.iter().any(|l| l.contains("the anim set") && l.ends_with("skipped")), "{:?}", vm.log);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #754, LOW 2: a body-class chain and a hold chain that come back to themselves stop, logged.
+#[test]
+fn chain_loops_stop_with_a_harness_line() {
+    let dir = std::env::temp_dir().join(format!("ow-cli-animsets-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut vm = toy_vm(&dir);
+    let body = runtime(&mut vm, "ToyBodyClass", "LoopBody");
+    let hold = runtime(&mut vm, "ToyHold", "LoopHold");
+    put(&mut vm, body, "WeaponActionParentClass", Value::Object(Some(body)));
+    put(&mut vm, hold, "ParentDefinition", Value::Object(Some(hold)));
+    put(&mut vm, body, "WeaponHoldDefs", list(&[hold]));
+    hold_anim_sets(&mut vm, body).unwrap();
+    assert!(vm.log.iter().any(|l| l.contains("the body-class chain comes back to")), "{:?}", vm.log);
+    assert!(vm.log.iter().any(|l| l.contains("the weapon-hold chain comes back to")), "{:?}", vm.log);
     let _ = std::fs::remove_dir_all(&dir);
 }

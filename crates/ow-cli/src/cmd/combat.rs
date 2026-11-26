@@ -541,7 +541,7 @@ pub(crate) fn preload_mesh_anim_sets(vm: &mut Vm, archetype: ObjRef) -> Result<(
     let mut sets: Vec<ObjRef> = Vec::new();
     match object_slot(vm, archetype, "Mesh")? {
         None => vm.log.push("harness input: set-up preload: no Mesh component on the archetype".to_string()),
-        Some(mesh) if vm.defs.is_unloaded(&vm.space, mesh) => vm.log.push(format!(
+        Some(mesh) if !present(vm, mesh)? => vm.log.push(format!(
             "harness input: set-up preload: the Mesh component {} is not resident; skipped",
             object_path(vm, mesh)
         )),
@@ -559,6 +559,11 @@ pub(crate) fn preload_mesh_anim_sets(vm: &mut Vm, archetype: ObjRef) -> Result<(
     }
     for set in sets {
         preload_one(vm, set)?;
+        // A set the store keeps as a stand-in (or whose load failed earlier) has no Sequences to read (review of #754).
+        if !present(vm, set)? {
+            vm.log.push(format!("harness input: set-up preload: the anim set {} is not resident; skipped", object_path(vm, set)));
+            continue;
+        }
         for sequence in objects_of(vm, set, "Sequences")? {
             preload_one(vm, sequence)?;
         }
@@ -566,22 +571,39 @@ pub(crate) fn preload_mesh_anim_sets(vm: &mut Vm, archetype: ObjRef) -> Result<(
     Ok(())
 }
 
+/// Whether `o` can be read: neither a handle the store has not loaded (or whose load failed) nor a stand-in with fewer
+/// slots than its class lays out (`ow_world::world::weapon_hold`'s residency test; review of #754: a stand-in would
+/// fail the read with `SlotMissing`).
+fn present(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    let x = vm.space.heap.get(o)?;
+    let slotless = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
+}
+
 /// The anim sets `BodyClassDefinition.GetWeaponHoldAnimSets` can return for the body class `body`, read only (the script
 /// read of `GetWeaponHoldAnimSets` and `BodyWeaponHoldDefinition.GetAnimSets`): for `body`, then each class up its
 /// `WeaponActionParentClass` chain, every hold in `WeaponHoldDefs` and its `DefaultWeaponHoldDef`; for each hold, up
 /// its `ParentDefinition` chain from the farthest, the sets its `AnimSetList` names. In that order, each once. A body
-/// class or hold that is not resident is skipped and logged (holds are not preloaded); a chain that comes back to a
-/// visited object stops there. The first-person holds (`GetFirstPersonWeaponHoldAnimSets`, the arms) are not read.
+/// class or hold that is not resident (a handle not loaded, a failed load, or a stand-in without its slots) is skipped
+/// and logged (holds are not preloaded); a chain that comes back to a visited object stops there, logged. The
+/// first-person holds (`GetFirstPersonWeaponHoldAnimSets`, the arms) are not read.
+///
+/// The class order (the body class first, then up its parents) is this mirror's own: the native's recursion takes the
+/// parent class first. The set of objects loaded is the same, only their order differs (review of #754).
 pub(crate) fn hold_anim_sets(vm: &mut Vm, body: ObjRef) -> Result<Vec<ObjRef>, VmError> {
     let mut out: Vec<ObjRef> = Vec::new();
     let mut classes: Vec<ObjRef> = Vec::new();
     let mut cursor = Some(body);
     while let Some(class) = cursor {
         if classes.contains(&class) {
+            vm.log.push(format!(
+                "harness input: set-up preload: the body-class chain comes back to {}; stopped",
+                object_path(vm, class)
+            ));
             break;
         }
         classes.push(class);
-        if vm.defs.is_unloaded(&vm.space, class) {
+        if !present(vm, class)? {
             vm.log.push(format!("harness input: set-up preload: the body class {} is not resident; skipped", object_path(vm, class)));
             break;
         }
@@ -597,9 +619,13 @@ pub(crate) fn hold_anim_sets(vm: &mut Vm, body: ObjRef) -> Result<Vec<ObjRef>, V
             let mut h = Some(hold);
             while let Some(x) = h {
                 if chain.contains(&x) {
+                    vm.log.push(format!(
+                        "harness input: set-up preload: the weapon-hold chain comes back to {}; stopped",
+                        object_path(vm, x)
+                    ));
                     break;
                 }
-                if vm.defs.is_unloaded(&vm.space, x) {
+                if !present(vm, x)? {
                     vm.log.push(format!("harness input: set-up preload: the weapon hold {} is not resident; skipped", object_path(vm, x)));
                     break;
                 }
