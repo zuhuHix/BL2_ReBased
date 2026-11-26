@@ -1206,9 +1206,9 @@ pub(crate) fn bare_end_state(vm: &Vm, class: ow_object::ids::ClassId, state: ow_
     }
 }
 
-/// The line a lifted destroy logs (the hub's ruling).
+/// The line a lifted destroy logs (the hub's ruling), a harness input so the slice gate lists it.
 pub fn lifted_destroy_line(state: &str) -> String {
-    format!("hub ruling: destroy in state {state}, its EndState a bare return; EndState not sent (UNVERIFIED)")
+    format!("harness input: hub ruling: destroy in state {state}, its EndState a bare return; EndState not sent (UNVERIFIED)")
 }
 
 /// What a destroy will do, decided before its first write ([`destroy_preflight`]).
