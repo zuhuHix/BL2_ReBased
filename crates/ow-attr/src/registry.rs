@@ -209,8 +209,10 @@ impl AttributeSystem {
     }
 
     /// The objects [`AttributeSystem::preflight_set_base_value`] checks, in its order, each given to `visit` before its
-    /// fields are read (`visit` may load it; `false` leaves its dependants), without the preflight's class checks. For a
-    /// set-up preload that cannot drift from the preflight (`ow_attr::eval::walk_set_base_value`).
+    /// fields are read (`visit` may load it; `false` leaves its dependants), without the preflight's class checks. A
+    /// definition already followed is not followed again; past the preflight's depth bound the walk stops with the
+    /// preflight's own refusal (review of #815, item 1). For a set-up preload that cannot drift from the preflight
+    /// (`ow_attr::eval::walk_set_base_value`).
     pub fn walk_set_base_value(
         &self,
         dest: Option<ObjRef>,

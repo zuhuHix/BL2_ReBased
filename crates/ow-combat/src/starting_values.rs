@@ -6,8 +6,9 @@
 //! resident; the port loads them at set-up, a logged harness input, so that `SetBaseValue`'s own preflight (which
 //! refuses an unloaded handle, #572) finds them. The native is unchanged. Reference does nothing and logs nothing.
 //!
-//! **The walk**, for one AI pawn archetype (a copy of its export, as the spawn makes one, logged ([`copy_line`]) and
-//! freed after):
+//! **The walk**, for one AI pawn archetype (the store's own load of its export, logged ([`archetype_line`]); its
+//! references stay handles, so nothing loads before the walk logs it, and nothing is copied; review of #815, items 2
+//! and 3):
 //! 1. its `AIClass`, then that class's `AttributeParentClass` chain. Each class object is loaded when it is a handle
 //!    (logged), after its class's declarations are checked: `AttributeStartingValues` an array of structs,
 //!    `AttributeParentClass` an object (else `VmError::Script`, nothing loaded). The chain ends at a None parent or at
@@ -44,6 +45,15 @@ use ow_vm::error::VmError;
 pub const RECORD: &str = "docs/verification/NATIVE_SPAWN_SETBASEVALUE.md (section 3)";
 pub const CATEGORIES: &str = "the starting-value categories' layout (AttributeStartingValuesNew)";
 const WHAT: &str = "the starting-value preload";
+
+/// An attribute-system error of a data read as a data error (`VmError::Script`, review of #815, item 4); a `NotYet`
+/// keeps its kind.
+fn script(e: ow_attr::api::AttrError) -> VmError {
+    match VmError::from(e) {
+        VmError::Attr(a) => bad(a.to_string()),
+        other => other,
+    }
+}
 
 fn bad(message: impl Into<String>) -> VmError {
     VmError::Script { function: WHAT.to_string(), message: message.into() }
@@ -121,12 +131,12 @@ fn entries(vm: &Vm, o: ObjRef) -> Result<Vec<(Option<ObjRef>, InitData)>, VmErro
     };
     let mut out = Vec::new();
     for entry in list.iter() {
-        let attribute = match ow_attr::eval::field(&vm.space, entry, "Attribute").map_err(VmError::from)? {
+        let attribute = match ow_attr::eval::field(&vm.space, entry, "Attribute").map_err(script)? {
             Value::Object(a) => *a,
             other => return Err(bad(format!("a starting value's Attribute holds {}, not an object", other.kind_name()))),
         };
-        let base = ow_attr::eval::field(&vm.space, entry, "BaseValue").map_err(VmError::from)?.clone();
-        let data = ow_attr::eval::init_data(&vm.space, &base).map_err(VmError::from)?;
+        let base = ow_attr::eval::field(&vm.space, entry, "BaseValue").map_err(script)?.clone();
+        let data = ow_attr::eval::init_data(&vm.space, &base).map_err(script)?;
         out.push((attribute, data));
     }
     Ok(out)
@@ -161,11 +171,16 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
     // Step 2: the categories, before any definition loads.
     for &c in &chain {
         let class = vm.space.heap.get(c)?.class;
-        if vm.space.prop(class, "AttributeStartingValuesNew").is_some()
-            && let Value::Array(items) = read(vm, c, "AttributeStartingValuesNew")?
-            && !items.is_empty()
-        {
-            return Err(NotYet::not_read(CATEGORIES, RECORD).into());
+        if vm.space.prop(class, "AttributeStartingValuesNew").is_some() {
+            // Declared: an array, else a data error, before any definition loads (review of #815, item 4).
+            match (declared(vm, class, "AttributeStartingValuesNew"), read(vm, c, "AttributeStartingValuesNew")?) {
+                (Some(PropKind::Array(_)), Value::Array(items)) => {
+                    if !items.is_empty() {
+                        return Err(NotYet::not_read(CATEGORIES, RECORD).into());
+                    }
+                }
+                (kind, _) => return Err(bad(format!("AttributeStartingValuesNew is declared as {kind:?}, not an array"))),
+            }
         }
     }
     // Step 3: the entries, parents first, then the archetype's own list.
@@ -193,18 +208,20 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
             attrs.walk_set_base_value(attribute, &data, &mut EvalCx::new(vm), &mut visit)
         };
         vm.log.extend(lines);
-        r.map_err(VmError::from)?;
+        r.map_err(script)?;
     }
     Ok(loaded)
 }
 
-/// The harness line of the set-up's throwaway copy of `archetype` (never placed, freed after).
-pub fn copy_line(archetype: &str) -> String {
-    format!("harness input: set-up copy of {archetype} to read its starting values; UNVERIFIED")
+/// The harness line of the set-up's read of `archetype` (review of #815, items 2 and 3: the store's own load of the
+/// export, no copy).
+pub fn archetype_line(archetype: &str) -> String {
+    format!("harness input: preload {archetype} (the spawn kind's archetype, read for its starting values; UNVERIFIED)")
 }
 
-/// The preload for the archetype at `archetype_path` in `package` (a copy of its export, as the spawn makes one,
-/// freed after); None when the store holds no such package or the package no such export.
+/// The preload for the archetype at `archetype_path` (a full object path) of the spawn kind's `package` (the store's
+/// load of the export, logged); None when the store holds no such package, or the archetype is not found or fails to
+/// load (logged).
 pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Result<Option<usize>, VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(None);
@@ -214,11 +231,25 @@ pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Re
     if vm.defs.code_mut().1.load(&name).is_err() {
         return Ok(None);
     }
-    let Some(copy) = crate::hit::instantiate_copy(vm, package, archetype_path)? else { return Ok(None) };
-    vm.log.push(copy_line(archetype_path));
-    let r = preload_from(vm, copy);
-    vm.space.free(copy).map_err(VmError::from)?;
-    r.map(Some)
+    // The archetype as the store loads it (review of #815, items 2 and 3): its references stay handles, so the walk
+    // below loads and logs each of them; nothing is copied, so nothing is left to free, and a second discovery finds it
+    // loaded. A failed load is logged and left: the spawn's own copy and the native's refusal show it.
+    let Ok(path) = ow_core::ObjectPath::parse(archetype_path) else { return Ok(None) };
+    vm.log.push(archetype_line(archetype_path));
+    let found = vm.defs.find(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    let archetype = match found {
+        Ok(Some(o)) => o,
+        Ok(None) => {
+            vm.log.push(format!("harness input: preload {archetype_path}: no such object"));
+            return Ok(None);
+        }
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {archetype_path}: failed ({e})"));
+            return Ok(None);
+        }
+    };
+    preload_from(vm, archetype).map(Some)
 }
 
 /// The preload for every AI pawn archetype the run can spawn ([`crate::run::KINDS`] with a pawn balance), at the combat

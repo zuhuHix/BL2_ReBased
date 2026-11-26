@@ -1254,7 +1254,7 @@ pub(crate) fn preflight_set_base_value(
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
     let mut refuse = |cx: &mut EvalCx<'_>, obj: ObjRef| refuse_unloaded(cx, obj).map(|()| true);
-    let mut walk = SetBaseWalk { visit: &mut refuse, checks: true };
+    let mut walk = SetBaseWalk { visit: &mut refuse, checks: true, seen: Vec::new() };
     check_definition(sys, dest, true, cx, &mut walk)?;
     check_init(sys, data, 0, cx, &mut walk)
 }
@@ -1273,7 +1273,7 @@ pub(crate) fn walk_set_base_value(
     cx: &mut EvalCx<'_>,
     visit: &mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
 ) -> Result<(), AttrError> {
-    let mut walk = SetBaseWalk { visit, checks: false };
+    let mut walk = SetBaseWalk { visit, checks: false, seen: Vec::new() };
     if let Some(dest) = dest {
         check_definition(sys, dest, true, cx, &mut walk)?;
     }
@@ -1285,6 +1285,9 @@ pub(crate) fn walk_set_base_value(
 struct SetBaseWalk<'f> {
     visit: &'f mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
     checks: bool,
+    /// The initialization definitions the walk (`checks` false) already followed (review of #815, item 1): one is not
+    /// followed again, so data that refers back to its own definition costs one visit, not one per path to it.
+    seen: Vec<ObjRef>,
 }
 
 /// One attribute definition: loaded, not multi-context, its resolvers loaded and implemented. `set` is the set-base
@@ -1334,10 +1337,9 @@ fn check_init(
     cx: &mut EvalCx<'_>,
     w: &mut SetBaseWalk<'_>,
 ) -> Result<(), AttrError> {
+    // Past the depth bound both forms stop the whole walk with the same refusal (review of #815, item 1): the walk does
+    // not drop the branch and go on through its siblings.
     if depth > PREFLIGHT_DEPTH {
-        if !w.checks {
-            return Ok(());
-        }
         return Err(AttrError::BadData {
             reason: format!("initialisation data nested deeper than {PREFLIGHT_DEPTH} (the SetBaseValue preflight)").into(),
         });
@@ -1348,6 +1350,12 @@ fn check_init(
     let Some(definition) = data.initialization_definition else {
         return Ok(());
     };
+    if !w.checks {
+        if w.seen.contains(&definition) {
+            return Ok(());
+        }
+        w.seen.push(definition);
+    }
     if !(w.visit)(cx, definition)? {
         return Ok(());
     }

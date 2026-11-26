@@ -88,6 +88,11 @@ fn engine(categories: bool) -> Vec<u8> {
     t.prop("Object", archetype, "AIClass", 0, class);
     toy_array_of(&mut t, archetype, "AttributeStartingValues", "Struct", entry);
     // A pawn class whose AttributeStartingValues is an int (test 3).
+    // A class declaring AttributeStartingValuesNew as an int (review of #815, item 4).
+    let bad_categories = t.class("ToyBadCategoriesClass", object);
+    toy_array_of(&mut t, bad_categories, "AttributeStartingValues", "Struct", entry);
+    t.prop("Object", bad_categories, "AttributeParentClass", 0, class);
+    t.prop("Int", bad_categories, "AttributeStartingValuesNew", 0, 0);
     let mistyped = t.class("ToyMistypedClass", object);
     t.prop("Int", mistyped, "AttributeStartingValues", 0, 0);
     t.prop("Object", mistyped, "AttributeParentClass", 0, class);
@@ -138,6 +143,12 @@ fn engine(categories: bool) -> Vec<u8> {
     pawn.extend(t.p.object_tag("AIClass", child));
     pawn.extend_from_slice(&none);
     t.p.add_export(archetype, "ToyPawn_Arch", pawn);
+    // An archetype whose AIClass export is cut short: its load fails (review of #815, item 2).
+    let broken_class = t.p.add_export(class, "AIClass_Broken", ints(&[0]));
+    let mut pawn = ints(&[0]);
+    pawn.extend(t.p.object_tag("AIClass", broken_class));
+    pawn.extend_from_slice(&none);
+    t.p.add_export(archetype, "ToyPawn_BrokenArch", pawn);
     let mut h = ints(&[0]);
     let targets = [a, base_attr, def, parent_attr, own_attr, broken].into_iter().chain(nested);
     for (f, r) in HELD.into_iter().zip(targets) {
@@ -437,28 +448,112 @@ fn an_unloaded_parent_class_is_followed() {
     assert!(x.lines().iter().any(|l| l.contains("AIClass_Parent")));
 }
 
-/// The note's test 3 (discovery): the archetype is found by a package and path and copied (logged once). The copy's
-/// own decode resolves an `AIClass` in the same package; that class's `AttributeParentClass` is an unloaded handle,
-/// loaded and logged before its fields are read. The copy is freed.
+/// The note's test 3 (discovery), as review of #815 (items 2 and 3) has it: the archetype is the store's own load of
+/// the export, logged first; its `AIClass` and that class's `AttributeParentClass` stay handles until the walk loads
+/// and logs each, child first. Nothing is copied: a second discovery adds no object and no name.
 #[test]
-fn the_archetype_is_found_by_package_and_path() {
+fn the_archetype_is_found_by_its_path() {
     let mut x = fx();
-    // The ToyPawn objects other than its class default (which the copy builds and keeps).
-    let pawns = |x: &Fx| {
-        let c = x.vm.space.classes.by_path("Engine.ToyPawn");
-        x.vm.space.heap.handles().into_iter().filter(|&o| x.vm.space.heap.get(o).is_ok_and(|h| Some(h.class) == c && !matches!(h.origin, ow_object::heap::Origin::Default { .. })))
-            .count()
-    };
-    let before = pawns(&x);
-    assert_eq!(preload_archetype(&mut x.vm, "Engine", "ToyPawn_Arch").unwrap(), Some(1));
-    assert_eq!(x.vm.log.iter().filter(|l| **l == copy_line("ToyPawn_Arch")).count(), 1, "{:?}", x.vm.log);
+    let counts = |x: &Fx| (x.vm.space.heap.handles().len(), x.vm.space.names.len());
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "Engine.ToyPawn_Arch").unwrap(), Some(2));
     let lines = x.lines();
-    assert!(lines.len() == 1 && lines[0].contains("AIClass_Parent"), "{lines:?}");
-    assert!(!x.unloaded(x.held[11]));
-    assert_eq!(pawns(&x), before, "the copy is freed");
-    // No such export, or no such package: nothing.
-    assert_eq!(preload_archetype(&mut x.vm, "Engine", "NoSuchPawn").unwrap(), None);
-    assert_eq!(preload_archetype(&mut x.vm, "NoSuchPackage", "ToyPawn_Arch").unwrap(), None);
+    assert_eq!(lines[0], archetype_line("Engine.ToyPawn_Arch"), "{lines:?}");
+    assert!(lines[1].contains("AIClass_Child") && lines[2].contains("AIClass_Parent"), "{lines:?}");
+    assert!(!x.unloaded(x.held[11]) && !x.unloaded(x.held[12]));
+    let before = counts(&x);
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "Engine.ToyPawn_Arch").unwrap(), Some(0));
+    assert_eq!(counts(&x), before, "a second discovery: no object, no name");
+    // No such object, or no such package: nothing.
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "Engine.NoSuchPawn").unwrap(), None);
+    assert_eq!(preload_archetype(&mut x.vm, "NoSuchPackage", "Engine.ToyPawn_Arch").unwrap(), None);
+}
+
+/// Review of #815, item 2: an archetype whose `AIClass` export fails to load: the failure is logged and left (the
+/// spawn's own refusal shows it), set-up goes on.
+#[test]
+fn a_broken_ai_class_is_logged_and_left() {
+    let mut x = fx();
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "Engine.ToyPawn_BrokenArch").unwrap(), Some(0));
+    assert!(x.vm.log.iter().any(|l| l.contains("AIClass_Broken: failed")), "{:?}", x.vm.log);
+}
+
+/// `o.name` := `v` written raw, past the typed write's class check (a malformed value the typed write refuses).
+fn raw(x: &mut Fx, o: ObjRef, name: &str, v: Value) {
+    let class = x.vm.space.heap.get(o).unwrap().class;
+    let p = x.vm.space.prop(class, name).unwrap();
+    *x.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+}
+
+/// The initialization data of a starting value whose `BaseValue` names `definition` only.
+fn init_of(x: &Fx, definition: Option<ObjRef>) -> ow_attr::api::InitData {
+    let e = x.entry(x.held[4], None, definition);
+    let base = ow_attr::eval::field(&x.vm.space, &e, "BaseValue").unwrap().clone();
+    ow_attr::eval::init_data(&x.vm.space, &base).unwrap()
+}
+
+/// Review of #815, item 1: a formula whose four terms name its own definition is followed once (a visit count), and a
+/// chain of distinct definitions deeper than the bound stops the whole walk with the preflight's refusal.
+#[test]
+fn a_self_referential_formula_is_walked_once_and_the_depth_bound_stops_the_walk() {
+    let mut x = fx();
+    let me = x.make("Engine.AttributeInitializationDefinition");
+    let mut formula = {
+        let c = x.vm.space.heap.get(me).unwrap().class;
+        let p = x.vm.space.prop(c, "ValueFormula").unwrap();
+        x.vm.space.read(me, PropAddr::scalar(p)).unwrap().clone()
+    };
+    put(&x.vm, &mut formula, "bEnabled", Value::Bool(true));
+    for term in ["Multiplier", "Level", "Power", "Offset"] {
+        put(&x.vm, &mut formula, &format!("{term}.InitializationDefinition"), Value::Object(Some(me)));
+    }
+    x.set(me, "ValueFormula", formula.clone());
+    let data = init_of(&x, Some(me));
+    let attrs = x.vm.attrs.clone();
+    let mut visits = 0;
+    let mut count = |_: &mut ow_attr::api::EvalCx<'_>, _: ObjRef| -> Result<bool, ow_attr::api::AttrError> {
+        visits += 1;
+        Ok(true)
+    };
+    attrs.walk_set_base_value(None, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm), &mut count).unwrap();
+    assert_eq!(visits, 1, "the definition once");
+    // A chain of 40 distinct definitions, each one's Multiplier naming the next: the bound stops the walk.
+    let chain: Vec<ObjRef> = (0..40).map(|_| x.make("Engine.AttributeInitializationDefinition")).collect();
+    for w in chain.windows(2) {
+        let mut f = formula.clone();
+        for term in ["Level", "Power", "Offset"] {
+            put(&x.vm, &mut f, &format!("{term}.InitializationDefinition"), Value::Object(None));
+        }
+        put(&x.vm, &mut f, "Multiplier.InitializationDefinition", Value::Object(Some(w[1])));
+        x.set(w[0], "ValueFormula", f);
+    }
+    let data = init_of(&x, Some(chain[0]));
+    let mut ok = |_: &mut ow_attr::api::EvalCx<'_>, _: ObjRef| -> Result<bool, ow_attr::api::AttrError> { Ok(true) };
+    let e = attrs.walk_set_base_value(None, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm), &mut ok).unwrap_err();
+    assert!(e.to_string().contains("nested deeper than"), "{e}");
+}
+
+/// Review of #815, item 4: a definition that declares no `ValueFormula` (here another class's object in the slot) is
+/// a data error, and so is an `AttributeStartingValuesNew` declared as an int, before any definition loads.
+#[test]
+fn malformed_data_is_a_script_error() {
+    let mut x = fx();
+    let own = x.held[4];
+    let not_a_definition = x.make("Engine.AIClassDefinition");
+    let mut e = x.entry(own, None, None);
+    put(&x.vm, &mut e, "BaseValue.InitializationDefinition", Value::Object(Some(not_a_definition)));
+    let archetype = x.make("Engine.ToyPawn");
+    raw(&mut x, archetype, "AttributeStartingValues", Value::array(vec![e]));
+    assert!(matches!(preload_from(&mut x.vm, archetype), Err(VmError::Script { .. })));
+    let mut x = fx();
+    let class = x.make("Engine.ToyBadCategoriesClass");
+    let e = x.entry(x.held[0], None, None);
+    x.set(class, "AttributeStartingValues", Value::array(vec![e]));
+    let archetype = x.make("Engine.ToyPawn");
+    raw(&mut x, archetype, "AIClass", Value::Object(Some(class)));
+    let before = x.vm.defs.load_transitions();
+    assert!(matches!(preload_from(&mut x.vm, archetype), Err(VmError::Script { .. })));
+    assert_eq!(x.vm.defs.load_transitions(), before, "no definition loaded");
+    assert!(x.unloaded(x.held[0]));
 }
 
 /// The note's test 3 (a loop): a parent chain that comes back to a class already seen stops there; each class's list
