@@ -722,6 +722,9 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
         let mut world = world;
         ow_combat::bcyl_tail::enable_trace_component_miss(&mut world.vm)?;
         world.vm.log.push(TRACE_MISS_SETUP.to_string());
+        // The hub's ruling on review of #802 (lane IMPL-PAWN-INTERACTION-PROXY): SetCollisionSize's touch update in
+        // the combat world finds nothing (UNVERIFIED stand-in; it logs its own set-up line).
+        ow_world::world::proxy_natives::enable_nothing_touched(&mut world.vm)?;
         let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
         Run::with_bridge(world, Some(bridge))
     };

@@ -60,7 +60,7 @@ pub const COLLISION_LAYER: &str = "the world's collision";
 /// The natives of section 3.2 whose class implementation is not resolved: `NotRead` at entry.
 /// `WillowPlayerController.UpdateInputContext` left the list (lane PLACEHOLDER-SHADOWS): `ow_world::world::after_login`
 /// binds the native's own rule (its section 3.2), and in every world this entry was the binding given up.
-pub const UNRESOLVED: [&str; 10] = [
+pub const UNRESOLVED: [&str; 9] = [
     "Engine.Controller.IsLocalController",
     "Engine.PlayerController.IsLocalController",
     // `WillowPawn`'s and `WillowAIPawn`'s `GetParent` left the list (lane IMPL-BOUNDING-CYLINDER-AND-AFTER,
@@ -69,7 +69,8 @@ pub const UNRESOLVED: [&str; 10] = [
     // NATIVE_MAYA9_AND_AFTER.md section 3.1): `crate::stance` binds their rules, first. `WillowAIPawn`'s is not read.
     "WillowGame.WillowAIPawn.SetDefaultStance",
     "Engine.Actor.SetHidden",
-    "Engine.Actor.SetHardAttach",
+    // `Actor.SetHardAttach` left the list (lane IMPL-PAWN-INTERACTION-PROXY): `ow_world::world::proxy_natives` binds
+    // its rule for four classes and its own refusal for the rest.
     // `Actor.SetBase` left the list (lane IMPL-LINK6-AFTER-TAKE): `ow_world::world::set_base` binds its rule, and its
     // own refusal for a receiver outside the seven read classes.
     "Engine.Pawn.TermRagdoll",
@@ -80,14 +81,14 @@ pub const UNRESOLVED: [&str; 10] = [
 ];
 
 /// The natives answered `NotRead` with a fixed text, and that text's record.
-pub const NOT_READ: [(&str, &str, &str); 7] = [
+pub const NOT_READ: [(&str, &str, &str); 6] = [
     (
         "WillowGame.StatusEffectsComponent.ClearAllStatusEffects",
         "StatusEffectsComponent.ClearAllStatusEffects: the per-kind removal and the skill manager step",
         RECORD,
     ),
     ("Engine.Actor.SetCollision", "Actor.SetCollision: the collision hash and touch updates", RECORD),
-    ("Engine.Actor.SetCollisionSize", "Actor.SetCollisionSize: the component's world update", RECORD),
+    // `Actor.SetCollisionSize` left the list (lane IMPL-PAWN-INTERACTION-PROXY): `ow_world::world::proxy_natives`.
     ("Engine.Actor.SetLocation", "Actor.SetLocation: not read", RECORD_RESPAWN),
     ("Engine.Actor.SetRotation", "Actor.SetRotation: not read", RECORD_RESPAWN),
     ("WillowGame.WillowGameInfo.ResetAI", "WillowGameInfo.ResetAI: the per-entry conditions and the AI resets", RECORD_DOWN),
