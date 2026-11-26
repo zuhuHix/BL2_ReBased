@@ -29,7 +29,9 @@
 //! event on the stance's provider when the consumer registered it, and **nothing when it did not** (the hub's ruling,
 //! UNVERIFIED by fit: no consumer to dispatch to); a handle no one owns, nothing; a crate-owned one is [`CRATE_OWNED`]
 //! (`NotRead`). Each event's route (the handle's owner, the provider's path) is worked out in the preflight, so the
-//! crate-owned refusal and an undeclared `ConsumerHandle` come before any write (review of #781, item 1).
+//! crate-owned refusal and an undeclared `ConsumerHandle` come before any write (review of #781, item 1). **UNVERIFIED
+//! order:** the enter event's route is fixed before `OnExitStance` runs, so a behavior the exit event runs that changes
+//! the handle's owner or the new stance's provider is not seen by the enter event (review r2 of #781, item 3).
 //!
 //! **`SetSkelControlActive(bool)`** (stock engine): `StrengthTarget` := 1 or 0; `BlendTimeToGo` := |`StrengthTarget`
 //! − `ControlStrength`| × `BlendInTime` (activating) or `BlendOutTime`; not above 0: `BlendTimeToGo` := 0 and
