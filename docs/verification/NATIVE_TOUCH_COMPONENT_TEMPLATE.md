@@ -1,6 +1,6 @@
 # Links 6 and 7 in `touch`: the component template, and the touch path after the bounds (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK67-TOUCH-TEMPLATE (decision 2026-11-26-NNN), the analyst half of
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK67-TOUCH-TEMPLATE (decision 2026-11-26-02), the analyst half of
 the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/touchtpl/`. This
 note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule
 here is UNVERIFIED in the running game.**
