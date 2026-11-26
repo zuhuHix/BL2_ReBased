@@ -58,6 +58,16 @@ fn each_placed_pawn_stands_apart_in_off() {
     assert_eq!(vm.log, [SETUP_LINE.to_string(), placed_line(&class, 1000.0), placed_line(&class, 2000.0)]);
     let bare = make(&mut vm, "Engine.ToyNoLocation");
     assert!(matches!(place(&mut vm, bare), Err(VmError::Script { .. })), "no Location");
+    // Review of #807, LOW 3: the failed placement did not move the counter, so the next pawn takes the third place.
+    let third = make(&mut vm, "Engine.Actor");
+    assert_eq!(place(&mut vm, third).unwrap(), Some([3000.0, 0.0, 0.0]));
+}
+
+/// Review of #807, LOW 2: the set-up line states the spacing the code uses.
+#[test]
+fn the_set_up_line_states_the_spacing() {
+    let spacing = format!("({} n, 0, 0)", SPACING);
+    assert!(SETUP_LINE.contains(&spacing), "{SETUP_LINE} does not contain {spacing}");
 }
 
 /// Reference: the setting is refused, and even a directly added service places nothing.

@@ -888,7 +888,8 @@ fn the_base_search_clears_another_actor_s_cylinder_by_geometry() {
         x.set(pawn, "Physics", Value::Byte(2));
         x.same(pawn, 0)
     };
-    for at in [[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [42.0, 0.0, 0.0], [0.0, 0.0, -85.0], [0.0, 0.0, 80.0]] {
+    // [0, 0, -88]: the cylinder's top exactly at the line's bottom end, -8 (review of #807, LOW 1).
+    for at in [[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [42.0, 0.0, 0.0], [0.0, 0.0, -85.0], [0.0, 0.0, -88.0], [0.0, 0.0, 80.0]] {
         assert_eq!(not_yet(case(&mut x, at)), refused, "touched or entered at {at:?}");
     }
     for at in [[43.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 43.0, 0.0], [0.0, 0.0, -100.0], [0.0, 0.0, 81.0]] {

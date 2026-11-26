@@ -61,10 +61,10 @@ pub fn place(vm: &mut Vm, pawn: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
         return Ok(None);
     }
     let Some(service) = vm.service::<SpawnPositions>() else { return Ok(None) };
+    // The next position; the counter moves only once the write succeeded (review of #807, LOW 3).
     let n = {
-        let mut s = service.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?;
-        s.placed = s.placed.checked_add(1).ok_or_else(|| error("combat: too many spawn positions"))?;
-        s.placed
+        let s = service.try_borrow().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?;
+        s.placed.checked_add(1).ok_or_else(|| error("combat: too many spawn positions"))?
     };
     let x = SPACING * n as f32;
     let Some(mut location) = get(vm, pawn, "Location")? else {
@@ -76,6 +76,7 @@ pub fn place(vm: &mut Vm, pawn: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
         }
     }
     set(vm, pawn, "Location", location)?;
+    service.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?.placed = n;
     let line = placed_line(&class_name(vm, pawn), x);
     vm.log.push(line);
     Ok(Some([x, 0.0, 0.0]))
