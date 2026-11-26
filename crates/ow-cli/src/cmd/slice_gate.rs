@@ -1284,8 +1284,19 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     }
     let vm = &mut world.vm;
     r.steps.push("make".into());
+    // The card's preflight before the weapon is made, as link 8's driver runs it (NATIVE_LINK67_PICKUP_GUN_INIT.md
+    // section 3; lane IMPL-LINK67-PICKUP-GUN-INIT): nothing written yet, so its refusal is unprefixed.
+    if let Err(e) = ow_inventory::equip::card::preflight(vm) {
+        r.stop = Some(classify_error("make", &e));
+        ran[i] = Some(r);
+        return;
+    }
     // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).
-    let p = match crate::cmd::slice_pickup::make(vm, &setup, EQUIP_WEAPON, driver == Driver::AimedPickup) {
+    let log_before = vm.log.len();
+    let made = crate::cmd::slice_pickup::make(vm, &setup, EQUIP_WEAPON, driver == Driver::AimedPickup);
+    // The guns' init preloads log their harness lines, as link 8's do; kept on success and on failure alike.
+    r.harness.extend(vm.log[log_before.min(vm.log.len())..].iter().filter(|l| l.starts_with("harness input:")).cloned());
+    let p = match made {
         Ok(p) => p,
         Err(e) => {
             r.stop = Some(classify_error("make", &e));

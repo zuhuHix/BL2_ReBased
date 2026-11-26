@@ -1168,6 +1168,27 @@ fn a_skeletal_entry_with_no_mesh_refuses_on_its_template() {
     x.refuses(pickup, not_read(), TEMPLATE, BOUNDS_RECORD);
 }
 
+/// NATIVE_LINK67_PICKUP_GUN_INIT.md section 7, test 5 (lane IMPL-LINK67-PICKUP-GUN-INIT): the pickup's copied component
+/// with an export mesh. No mesh layer: the stored-bounds `LayerAbsent`; a layer with the gun's `Scale` 0.92: the world
+/// transform's `NotRead` (the combined scale is not exactly 1); `Scale` 1: the box (origin plus the root offset, the
+/// extent times `BoundsScale`).
+#[test]
+fn the_pickup_gun_s_copied_component_takes_source_f() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.refuses(pickup, stored(), SKELETAL_BOUNDS, BOUNDS_RECORD);
+    x.bounds_source(TOY_BOUNDS);
+    x.unit_scales(pickup, c, 1.0);
+    x.set(c, "Scale", Value::Float(0.92));
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.set(c, "Scale", Value::Float(1.0));
+    x.vector3(c, "RootBoneTranslation", [0.5, 0.0, 0.0]);
+    let want = box_cylinder(&[([1.5, 2.0, 3.0], [4.0, 5.0, 6.0])]);
+    x.answers(pickup, (want[0], want[2]), "the stored box at unit scale");
+}
+
 /// 9.7 tests 2 and 9a: a mesh takes source f. With no accessor answer, the stored-bounds `LayerAbsent`. With one, the
 /// simplest transform gives `Location` + the mesh origin + `RootBoneTranslation` and the extent × `BoundsScale`; a
 /// non-zero owner `Rotation`, a non-unit scale or a component `Translation` is the world transform's `NotRead`.

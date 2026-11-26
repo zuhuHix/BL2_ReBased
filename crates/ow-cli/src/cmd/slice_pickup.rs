@@ -281,23 +281,43 @@ fn drop_at(vm: &mut Vm, class: ClassId, weapon: ObjRef, spawner: ObjRef, at: [f3
 /// flag its first successful mutation sets.
 pub type Prepare<'a> = dyn FnMut(&mut Vm, &str, bool, &mut bool) -> Result<ObjRef, VmError> + 'a;
 
-/// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line.
+/// What `make` runs on each gun once it is made and before its drop: the gun's init (lane IMPL-LINK67-PICKUP-GUN-INIT,
+/// `equip_run::pickup_gun_init`).
+pub type Init<'a> = dyn FnMut(&mut Vm, ObjRef) -> Result<(), VmError> + 'a;
+
+/// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line. Each gun
+/// runs its init before its drop (NATIVE_LINK67_PICKUP_GUN_INIT.md section 3), as a dropped weapon in the game was
+/// initialised when it was made.
 pub fn make(vm: &mut Vm, setup: &PickupSetup, line: &str, decoy: bool) -> Result<Pickup, VmError> {
     let class = preflight(vm, setup)?;
-    build(vm, class, line, decoy, &mut |vm, line, owned, wrote| {
-        if owned {
-            equip_run::prepare_line_typed(vm, line, wrote)
-        } else {
-            equip_run::prepare_unowned_typed(vm, line, wrote)
-        }
-    })
+    build(
+        vm,
+        class,
+        line,
+        decoy,
+        &mut |vm, line, owned, wrote| {
+            if owned {
+                equip_run::prepare_line_typed(vm, line, wrote)
+            } else {
+                equip_run::prepare_unowned_typed(vm, line, wrote)
+            }
+        },
+        &mut equip_run::pickup_gun_init,
+    )
 }
 
-/// The fixture after the preflight, each gun made by `prepare`: a refusal after the first successful mutation is
-/// marked (module documentation), one before it is answered as it is.
-pub fn build(vm: &mut Vm, class: ClassId, line: &str, decoy: bool, prepare: &mut Prepare<'_>) -> Result<Pickup, VmError> {
+/// The fixture after the preflight, each gun made by `prepare` and then given `init`, before its drop: a refusal after
+/// the first successful mutation is marked (module documentation), one before it is answered as it is.
+pub fn build(
+    vm: &mut Vm,
+    class: ClassId,
+    line: &str,
+    decoy: bool,
+    prepare: &mut Prepare<'_>,
+    init: &mut Init<'_>,
+) -> Result<Pickup, VmError> {
     let mut wrote = false;
-    let made = build_with(vm, class, line, decoy, prepare, &mut wrote);
+    let made = build_with(vm, class, line, decoy, prepare, init, &mut wrote);
     made.map_err(|e| if wrote { after_writes(e) } else { e })
 }
 
@@ -307,9 +327,10 @@ fn build_with(
     line: &str,
     decoy: bool,
     prepare: &mut Prepare<'_>,
+    init: &mut Init<'_>,
     wrote: &mut bool,
 ) -> Result<Pickup, VmError> {
-    let weapon = prepare(vm, line, true, wrote)?;
+    let weapon = gun(vm, line, true, prepare, init, wrote)?;
     let pawn = object(&read(vm, weapon, "Owner")?).ok_or_else(|| error("the weapon has no owner"))?;
     let controller = object(&read(vm, pawn, "Controller")?).ok_or_else(|| error("the pawn has no controller"))?;
     let origin = place(vm, pawn, [0.0, 0.0, 0.0])?;
@@ -317,12 +338,27 @@ fn build_with(
     *wrote = true;
     let pickup = drop_at(vm, class, weapon, pawn, AIMED_AT)?;
     let decoy = if decoy {
-        let w = prepare(vm, line, false, wrote)?;
+        // The decoy's gun, after the first gun's drop: the same steps.
+        let w = gun(vm, line, false, prepare, init, wrote)?;
         Some((w, drop_at(vm, class, w, pawn, DECOY_AT)?))
     } else {
         None
     };
     Ok(Pickup { weapon, pawn, controller, pickup, decoy, wrote: true })
+}
+
+/// One gun of `make`: made by `prepare` (owned by Maya, or none for the decoy), then given `init`, before its drop.
+pub fn gun(
+    vm: &mut Vm,
+    line: &str,
+    owned: bool,
+    prepare: &mut Prepare<'_>,
+    init: &mut Init<'_>,
+    wrote: &mut bool,
+) -> Result<ObjRef, VmError> {
+    let weapon = prepare(vm, line, owned, wrote)?;
+    init(vm, weapon)?;
+    Ok(weapon)
 }
 
 /// One step after `make` (module documentation); its error, if any.

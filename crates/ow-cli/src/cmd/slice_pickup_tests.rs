@@ -200,7 +200,7 @@ fn a_not_yet_after_the_first_mutation_is_graded_as_partial_writes() {
             }
             Err(NotYet::not_read("the accuracy pool's setup", "NOTE.md").into())
         };
-        let e = build(&mut x.vm, class, "a line", false, &mut prepare).unwrap_err();
+        let e = build(&mut x.vm, class, "a line", false, &mut prepare, &mut |_, _| Ok(())).unwrap_err();
         let (outcome, stop) = crate::cmd::slice_gate::classify_error("make", &e);
         assert_eq!(outcome, crate::cmd::slice_gate::Outcome::NotYet, "graded by variant");
         assert_eq!(stop.record, "NOTE.md");
@@ -252,4 +252,95 @@ fn the_globals_preflight_refuses_a_world_without_globals() {
         VmError::NotYet(n) => assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}"),
         e => panic!("{e}"),
     }
+}
+
+/// NATIVE_LINK67_PICKUP_GUN_INIT.md section 7 (lane IMPL-LINK67-PICKUP-GUN-INIT). A toy `prepare` that makes the gun
+/// (a real write), and a toy init recording what it is given.
+fn toy_gun(x: &mut Fx) -> (ObjRef, std::cell::RefCell<Vec<String>>) {
+    let target = x.pickup();
+    (target, std::cell::RefCell::new(Vec::new()))
+}
+
+/// Test 1, the order: each gun's init runs right after the gun is made, before anything of its drop (the toy gun has
+/// no `Owner`, so the drop's first read is the error that follows the init).
+#[test]
+fn the_gun_s_init_runs_after_it_is_made_and_before_its_drop() {
+    let mut x = fx();
+    let class = x.vm.find_class("Engine.ToyPickup").unwrap();
+    let (target, events) = toy_gun(&mut x);
+    let mut prepare = |vm: &mut Vm, _: &str, owned: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
+        let c = vm.space.heap.get(target)?.class;
+        let p = vm.space.prop(c, "bTouchedGlobal").unwrap();
+        vm.space.write(target, PropAddr::scalar(p), Value::Bool(true))?;
+        *wrote = true;
+        events.borrow_mut().push(format!("made owned={owned}"));
+        Ok(target)
+    };
+    let mut init = |_: &mut Vm, w: ObjRef| -> Result<(), VmError> {
+        events.borrow_mut().push(format!("init {}", w == target));
+        Ok(())
+    };
+    let e = build(&mut x.vm, class, "a line", false, &mut prepare, &mut init).unwrap_err();
+    assert_eq!(*events.borrow(), ["made owned=true", "init true"]);
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("declares no Owner")), "the drop comes after: {e}");
+}
+
+/// Test 2, the init's refusal: a `NotYet { NotRead }` after the gun was made is answered with the partial-writes
+/// prefix, its kind kept, and the drop never starts.
+#[test]
+fn the_init_s_refusal_is_marked_and_nothing_is_dropped() {
+    let mut x = fx();
+    let class = x.vm.find_class("Engine.ToyPickup").unwrap();
+    let (target, events) = toy_gun(&mut x);
+    let mut prepare = |vm: &mut Vm, _: &str, _: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
+        let c = vm.space.heap.get(target)?.class;
+        let p = vm.space.prop(c, "bTouchedGlobal").unwrap();
+        vm.space.write(target, PropAddr::scalar(p), Value::Bool(true))?;
+        *wrote = true;
+        Ok(target)
+    };
+    let mut init = |_: &mut Vm, _: ObjRef| -> Result<(), VmError> {
+        events.borrow_mut().push("init".to_string());
+        Err(NotYet::not_read("a toy init refusal", "TOY.md").into())
+    };
+    match build(&mut x.vm, class, "a line", true, &mut prepare, &mut init).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert_eq!(&*n.what, format!("{PARTIAL_WRITES}: a toy init refusal"));
+            assert_eq!(n.record, "TOY.md");
+        }
+        e => panic!("{e}"),
+    }
+    assert_eq!(*events.borrow(), ["init"], "one init, the first gun's; no decoy and no drop after it");
+}
+
+/// Test 3, the decoy: link 7's second gun takes the same steps, made with no owner and then given the same init.
+/// (Its place after the first gun's drop is `build`'s order; the toy world has no spawn, so the drop is not run here.)
+#[test]
+fn the_decoy_gets_the_same_init() {
+    let mut x = fx();
+    let (target, events) = toy_gun(&mut x);
+    let mut prepare = |_: &mut Vm, _: &str, owned: bool, _: &mut bool| -> Result<ObjRef, VmError> {
+        events.borrow_mut().push(format!("made owned={owned}"));
+        Ok(target)
+    };
+    let mut init = |_: &mut Vm, w: ObjRef| -> Result<(), VmError> {
+        events.borrow_mut().push(format!("init {}", w == target));
+        Ok(())
+    };
+    let mut wrote = false;
+    assert_eq!(gun(&mut x.vm, "a line", false, &mut prepare, &mut init, &mut wrote).unwrap(), target);
+    assert_eq!(*events.borrow(), ["made owned=false", "init true"]);
+}
+
+/// Test 4, the mesh layer: a world that already has it gets no second install (its log line once), whichever gun asks.
+#[test]
+fn the_mesh_layer_is_installed_once_per_world() {
+    let mut x = fx();
+    let (a, b) = (x.pickup(), x.pickup());
+    crate::cmd::inventory::equip_run::install_mesh_layer(&mut x.vm, a).unwrap();
+    crate::cmd::inventory::equip_run::install_mesh_layer(&mut x.vm, b).unwrap();
+    let line = crate::cmd::inventory::equip_run::LOD_LAYER_LINE;
+    assert_eq!(x.vm.log.iter().filter(|l| l.as_str() == line).count(), 1, "{:?}", x.vm.log);
+    assert!(x.vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_some());
 }
