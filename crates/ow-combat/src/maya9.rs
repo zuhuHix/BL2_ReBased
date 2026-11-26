@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-MAYA9-NATIVES (decision 2026-11-26-NNN). Two static natives `maya:8`'s class defaults reach, in
+//! Owner: lane IMPL-MAYA9-NATIVES (decision 2026-11-26-39). Two static natives `maya:8`'s class defaults reach, in
 //! `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_MAYA9_AND_AFTER.md sections 3.3 and 3.4 alone (lane
