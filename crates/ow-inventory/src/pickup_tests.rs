@@ -219,10 +219,11 @@ fn the_touch_trace_without_a_collision_service_is_layer_absent() {
     }
 }
 
-/// `AddToNavigation` does nothing; `RemovePickup` is `NotYet { NotRead }` before it changes anything (the pickup keeps
-/// its inventory).
+/// `AddToNavigation` does nothing. `RemovePickup` is bound since IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-NNN; its
+/// removal is tested in `link6_tests.rs`); this fixture's globals declare no `PickupList`, so it is a `Script` error
+/// before it changes anything (the pickup keeps its inventory).
 #[test]
-fn add_to_navigation_is_a_no_op_and_remove_pickup_is_not_yet() {
+fn add_to_navigation_is_a_no_op_and_remove_pickup_checks_the_list_first() {
     let mut x = fx(ParityMode::Off);
     let pickup = x.obj("WillowGame.WillowPickup");
     let thing = x.obj("Engine.Actor");
@@ -230,11 +231,8 @@ fn add_to_navigation_is_a_no_op_and_remove_pickup_is_not_yet() {
     assert_eq!(x.call("Engine.DroppedPickup.AddToNavigation", pickup, vec![]).unwrap(), Value::None);
     let globals = x.obj("WillowGame.WillowGlobals");
     match x.call("WillowGame.WillowGlobals.RemovePickup", globals, vec![Value::Object(Some(pickup))]).unwrap_err() {
-        VmError::NotYet(n) => {
-            assert_eq!(n.missing, Missing::NotRead);
-            assert_eq!(n.record, crate::globals::RECORD);
-        }
-        e => panic!("expected NotYet, got {e}"),
+        VmError::Script { message, .. } => assert!(message.contains("PickupList"), "{message}"),
+        e => panic!("expected a Script error, got {e}"),
     }
     let class = x.vm.space.heap.get(pickup).unwrap().class;
     let p = x.vm.space.prop(class, "Inventory").unwrap();

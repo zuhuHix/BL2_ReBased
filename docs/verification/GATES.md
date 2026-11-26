@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK6-AFTER-TAKE (2026-11-26, pc-hummer, on fix/rust-link6-after-take from main 7a67b9f):** AI-assisted
+(Claude Code, Opus 5.5). `Actor.SetBase` for the seven read classes, GetAmmoCount, SelectAkEvent, PlayAkEvent (the
+Off audio stand-in), the empty-EndState destroy lift, RemovePickup and AllControllers, Off. `cargo test --workspace`
+3,997 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build,
+under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%; **link 6 ok, steps 3/3** (the destroy lifted in state
+`Pickup`, the audio stand-in logged); links 3, 4, 5, 13 and 14 at `Actor.SetPhysics`' "the base search for a
+walking-type mode" (as on main); link 7 at the HUD's pickup targeting pass, steps 2/4; 1, 2 and 8 to 12 ok.
+UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **ANALYST-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-combat-music, read and probed on main 03a8a09d,
 rebased onto fc8d2c42):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_COMBAT_MUSIC_AND_AFTER.md reads `GetCombatMusicManager`'s lazy creation
