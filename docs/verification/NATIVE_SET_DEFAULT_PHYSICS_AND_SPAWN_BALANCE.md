@@ -213,7 +213,8 @@ mind's `InitializeCharacterClass` script sets `bCharacterClassInitialized` and p
 and the class defaults, and the starting-values base makes pools only (NATIVE_CLASS_STARTING_VALUES.md section 1).
 Whether any other step of the game sets a mind's `CharacterClass` was not searched: UNVERIFIED. **Corrected since**
 (NATIVE_LINKS_13_14.md section 4): `WillowMind.Possess` sets it to the pawn's `AIClass` before `InitializeCharacterClass`,
-so in the game the class-level part runs; it is None in the port only because the adopt leaves that write out.
+so in the game the class-level part runs; it is None in the port only because the adopt leaves that write out. The
+earlier record is NATIVE_COMBAT_GROUNDWORK.md section 1.11, which the claim above contradicted.
 
 **Proposed Off answer:** that rule, with the existing evaluator (ow-attr) on the mind as context, after the controller
 part:

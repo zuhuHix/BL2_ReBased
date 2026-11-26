@@ -74,7 +74,8 @@ the new maximum with the old current value.
        effect, Incendiary impact, Incendiary status effect, Amp impact, Amp status effect, fed from
        `BaseNormalDamageModifiers`, `BaseExplosiveDamageModifiers`, `BaseShockDamageModifiers`,
        `BaseCorrosiveDamageModifiers`, `BaseIncendiaryDamageModifiers` and `BaseAmpDamageModifiers` (each a pair:
-       `ResistanceToImpact`, then `ResistanceToStatusEffect`).
+       `ResistanceToImpact`, then `ResistanceToStatusEffect`). The pawn properties each lands in are named in
+       NATIVE_LINKS_13_14.md section 3, which counts 13 written values with the encumbrance value (12 here).
   2. **Pool rebase (controller-class part, always, even with no pawn).** Every pool in the controller's
      `ResourcePoolManager` is rebased (section 2): by design the pools the controller owns (health, shield, accuracy, experience,
      both skill-cooldown pools and the ammo pools; that the health pool is one of them is observed, the rest follows from the

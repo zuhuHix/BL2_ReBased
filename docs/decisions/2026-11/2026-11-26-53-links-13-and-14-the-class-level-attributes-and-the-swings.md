@@ -30,7 +30,15 @@ changed.
   - read with Off answers: `GetController`, `UpdateTookDamageFromEnemyStats` (its gates), `GetAmmoTheftAmounts`, the
     two skill-event iterators, `PawnCheckPlayHitPreconditions`.
 - **Next** (from the probe): `Actor.GetBoundingCylinder`'s component world transform, an existing `NotRead`.
-- **Needs the hub:**
-  - the two spawn inputs of section 4;
-  - whether link 13's three swings can down Maya in Off (about 13.9 health each in the probe).
+- **The hub's rulings on #796** (each Off only, logged, UNVERIFIED; Reference unchanged):
+  - the AI adopt sets the mind's `CharacterClass` := the pawn's `AIClass` before `InitializeCharacterClass`, narrowing
+    decision 2026-11-19-26 by one write;
+  - the player set-up runs `ApplyCharacterClassDefaults` with the controller's `Pawn` set, logged as a harness input;
+    the `Pawn` stays set afterwards;
+  - no cap on link 13's swings: what the rules do is what the slice shows (about 13.9 health each in the probe).
+- **Review r1 (#796):**
+  - the rulings written into the note's sections 4 and 7;
+  - the Possess decision is 2026-11-19-26; NATIVE_COMBAT_GROUNDWORK.md section 1.11 is credited as the earlier record;
+  - declared-field rules for the summary reset, the ammo-theft fields, the iterators and `FinalDamage`;
+  - the class-level gates; the swing arithmetic; a pointer in NATIVE_LEVEL_UP_ATTRIBUTES.md.
 - **Clean room:** a different lane implements this note.
