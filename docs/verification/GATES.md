@@ -3,9 +3,9 @@
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
 **IMPL-RESOLVER-CHAIN-LOADS (2026-11-26, pc-hummer, on fix/rust-resolver-chain-loads from main d3be3e5):**
-AI-assisted (Claude Code, Opus 5.5). `ow-attr`'s chain walks (`resolve_context`, `fold_chain`, `preflight_read`) load
-each non-None entry before they dispatch it (NATIVE_TARGETABLE_RESOLVER.md section 5.1); load-free scopes unchanged; a
-failed load is `BadData` where the walk reaches it. `cargo test --workspace -j 8 --no-fail-fast` 3,933 passed / 0
+AI-assisted (Claude Code, Opus 5.5). `ow-attr`'s chain walks (`resolve_context`, `fold_chain`) load each non-None
+entry before they dispatch it, Off only (NATIVE_TARGETABLE_RESOLVER.md section 5.1; review of #791: Reference unchanged,
+`preflight_read` loads nothing); load-free scopes unchanged; a failed load is `BadData` where the walk reaches it. `cargo test --workspace -j 8 --no-fail-fast` 3,933 passed / 0
 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine
 lock), main d3be3e5 and this branch: 7 ok / 7 not ok, X 58.3% on both. Links 3, 4, 5, 13 and 14 move from step 0's
 "a resolver the store has not loaded" to `WillowPawn.SetDefaultPhysics` "past its gates" (NATIVE_MIND_ROUTE.md section

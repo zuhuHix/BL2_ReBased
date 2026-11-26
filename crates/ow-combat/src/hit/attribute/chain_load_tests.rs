@@ -21,6 +21,7 @@ pub(super) fn willow() -> Vec<u8> {
     let object = t.p.add_import("Core", "Class", engine, "Object");
     let attribute = t.p.add_import("Core", "Class", engine, "AttributeDefinition");
     let pawn_context = t.p.add_import("Core", "Class", engine, "PawnAttributeContextResolver");
+    let unread = t.p.add_import("Core", "Class", engine, "ToyUnreadResolver");
     let targetable = t.class("TargetableAttributeValueResolver", object);
     t.prop("Byte", targetable, "ValueToResolve", 0, 0);
     let none = t.none;
@@ -67,6 +68,17 @@ pub(super) fn willow() -> Vec<u8> {
     let mut broken = 0i32.to_le_bytes().to_vec();
     broken.extend_from_slice(&[0xff; 16]);
     sub(&mut t, targetable, "TargetableAttributeValueResolver_0", b, broken);
+    // Att_Unknown (review of #791, item 2): an unloaded resolver, then one of a class `ow-attr` does not implement.
+    let u = t.p.next_export();
+    let (ctx, res, unk) = (u + 1, u + 2, u + 3);
+    let mut p = ints(&[0]);
+    p.extend(t.p.array_tag("ContextResolverChain", 1, &refs(&[ctx])));
+    p.extend(t.p.array_tag("ValueResolverChain", 2, &refs(&[res, unk])));
+    p.extend_from_slice(&none);
+    assert_eq!(t.p.add_export(attribute, "Att_Unknown", p), u);
+    sub(&mut t, pawn_context, "PawnAttributeContextResolver_0", u, empty(&none));
+    sub(&mut t, targetable, "TargetableAttributeValueResolver_0", u, empty(&none));
+    sub(&mut t, unread, "ToyUnreadResolver_0", u, empty(&none));
     t.p.build()
 }
 
@@ -97,9 +109,9 @@ impl Fx {
     }
 }
 
-// Rows 1, 2 and 5: the attribute is loaded (here by the store's lookup), and an evaluation through `GetValue`
-// (`preflight_read` first) loads each of its two unloaded chain entries: 1+N = 3 load transitions. The get answers by
-// section 5 (0.0 on a pawn), with no step-0 refusal.
+// Rows 1, 2 and 5: the attribute is loaded (here by the store's lookup), and an evaluation through `GetValue` loads
+// each of its two unloaded chain entries in the walks, after `preflight_read` (which loads nothing; review of #791,
+// item 2): 1+N = 3 load transitions. The get answers by section 5 (0.0 on a pawn), with no step-0 refusal.
 #[test]
 fn a_read_loads_the_attribute_then_each_chain_entry() {
     let mut fx = Fx::new(ParityMode::Off);
@@ -173,4 +185,42 @@ fn a_resolver_whose_load_fails_is_bad_data_where_the_walk_reaches_it() {
     assert!(vm.defs.is_failed(&vm.space, res), "the failed handle is left in place");
     let ctx = fx.chain(a, "ContextResolverChain")[0].unwrap();
     assert!(!fx.unloaded(ctx), "the context walk ran first and loaded its entry: no refusal before the value entry");
+}
+
+
+/// Review of #791, item 2: `GetValue`'s preflight refuses a resolver class `ow-attr` does not implement before any load
+/// or write, though an unloaded entry comes first in the chain.
+#[test]
+fn the_preflight_refuses_an_unknown_class_with_nothing_loaded_or_written() {
+    let mut fx = Fx::new(ParityMode::Off);
+    let pawn = fx.pawn(1.0);
+    let a = fx.handle("WillowGame.Att_Unknown");
+    let res = fx.chain(a, "ValueResolverChain")[0].unwrap();
+    assert!(fx.unloaded(res));
+    let counters = |fx: &mut Fx| (fx.loads(), fx.vm().space.heap.committed_writes());
+    let before = counters(&mut fx);
+    match fx.get_value(a, Value::Object(Some(pawn)), Value::Object(None)) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(!ow_core::notyet::is_partial_writes(&n.to_string()), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(counters(&mut fx), before, "nothing loaded or written");
+    assert!(fx.unloaded(res), "the unloaded entry stays a handle");
+}
+
+/// Review of #791, item 1: Reference keeps main's behaviour: the walks load no chain entry. The context resolver's
+/// handle stays unloaded after a read (the Reference stand-in of the targetable resolver loads its own object, as on
+/// main, through its outer check).
+#[test]
+fn reference_loads_no_chain_entry_in_the_walks() {
+    let mut fx = Fx::new(ParityMode::Reference);
+    let pawn = fx.pawn(1.0);
+    let a = fx.handle("WillowGame.Att_Toy");
+    let ctx = fx.chain(a, "ContextResolverChain")[0].unwrap();
+    assert!(fx.unloaded(ctx));
+    let attrs = fx.vm().attrs.clone();
+    let _ = attrs.value_of(a, Some(pawn), None, &mut EvalCx::new(fx.vm()));
+    assert!(fx.unloaded(ctx), "Reference: the context walk did not load its entry");
 }

@@ -228,6 +228,12 @@ pub fn load_free_unit() -> Option<&'static str> {
 /// stand-in that stays one. Every other live object (run-time objects, loaded definitions, class defaults) is read as
 /// it is. A world without a store answers `NotYet { LayerAbsent("ow-defs") }` for a slotless resource handle.
 pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> {
+    ensure_loaded_as(cx, obj, "a default value's handle")
+}
+
+/// [`ensure_loaded`] with the `role` a load-free scope's refusal names (review of #791, item 3: a chain entry is named
+/// as the walk's resolver, not as a default value's handle).
+fn ensure_loaded_as(cx: &mut EvalCx<'_>, obj: ObjRef, role: &str) -> Result<(), AttrError> {
     let WorldParts { space, defs, .. } = cx.world.parts();
     let (resource, slotless) = {
         let o = space.heap.get(obj)?;
@@ -242,7 +248,7 @@ pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> 
     match defs {
         Some(defs) => {
             // Inside a load-free scope ([`load_free`]) an unloaded handle refuses instead of loading (a load is a write).
-            load_free_refusal(space, defs, obj, "a default value's handle")?;
+            load_free_refusal(space, defs, obj, role)?;
             defs.ensure_loaded(space, obj)?;
             slotless_refusal(space, true, obj)
         }
@@ -581,13 +587,17 @@ fn multi_context_not_read(what: &str) -> AttrError {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// A chain entry loaded before the walk reads or dispatches it (lane IMPL-RESOLVER-CHAIN-LOADS; NATIVE_TARGETABLE_
-/// RESOLVER.md section 5.1, the hub's ruling on #787). The port's store is lazy, so a resident definition's chain can
-/// still hold unloaded handles; the game's package load has them resident with it, by fit. The load is
-/// [`ensure_loaded`]'s, so a load-free scope refuses it as before (`NotRead` naming the entry). A load that fails
-/// leaves the handle in place, and the walk's residency check ([`resident`]) answers the store's `BadData` for it
-/// here, where the entry is reached.
+/// RESOLVER.md section 5.1, the hub's ruling on #787), **in `ParityMode::Off` only**: Reference keeps main's
+/// behaviour, loading nothing here (review of #791, item 1). The port's store is lazy, so a resident definition's
+/// chain can still hold unloaded handles; the game's package load has them resident with it, by fit (UNVERIFIED). The
+/// load is [`ensure_loaded`]'s, so a load-free scope refuses it as before (`NotRead` naming the entry by its role).
+/// A load that fails leaves the handle in place, and the walk's residency check ([`resident`]) answers the store's
+/// `BadData` for it here, where the entry is reached.
 fn load_entry(cx: &mut EvalCx<'_>, entry: ObjRef, what: &str) -> Result<(), AttrError> {
-    match ensure_loaded(cx, entry) {
+    if parity(cx) != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    match ensure_loaded_as(cx, entry, what) {
         Ok(()) => Ok(()),
         Err(e) => {
             let WorldParts { space, defs, .. } = cx.world.parts();
@@ -648,9 +658,11 @@ pub(crate) fn resolve_contexts(
 
 /// The context `GetValue` uses: the override source's when the override is given and resolves, else the source's.
 /// [`AttributeSystem::preflight_read`]: what a read can refuse before it evaluates anything (review of #442). The
-/// definition is loaded, and must not be multi-context. Every non-None entry of its two chains is loaded too, before
-/// it is checked ([`load_entry`]; lane IMPL-RESOLVER-CHAIN-LOADS), so a read that runs this first loads the definition
-/// and each of its N unloaded chain entries: 1+N loads, and #518's `load_transitions` rises by as many (it was 1).
+/// definition is loaded, and must not be multi-context. Its chain entries are not loaded here (the hub's ruling on
+/// review of #791, item 2): the class and availability checks run on the handles, so a refusal here comes before any
+/// load or write. The walks load each entry ([`load_entry`], Off), after this preflight: a read through `GetValue`
+/// loads the definition and each of its N unloaded chain entries, 1+N loads, and #518's `load_transitions` rises by as
+/// many (it was 1); a refusal from those walks follows the loads and is prefixed by the counters.
 /// Every resolver of its context chain must be a class this library implements. Every entry of its value chain must be
 /// set and a class it implements. Nothing is resolved or evaluated, so no generator is drawn and no resolver writes. A
 /// refusal from deeper in a read (a nested attribute, a resolver's own data) can only be found by evaluating, and is
@@ -663,7 +675,6 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
     let chain = required(cx, attr, "ContextResolverChain")?;
     for entry in elements("ContextResolverChain", &chain)? {
         if let Some(resolver) = object("ContextResolverChain entry", entry)? {
-            load_entry(cx, resolver, "a context resolver")?;
             sys.context_resolver(cx.world.parts().space, resolver)?;
         }
     }
@@ -672,7 +683,6 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
-        load_entry(cx, resolver, "a value resolver")?;
         sys.value_resolver(cx.world.parts().space, resolver)?.available(resolver, cx)?;
     }
     Ok(())
