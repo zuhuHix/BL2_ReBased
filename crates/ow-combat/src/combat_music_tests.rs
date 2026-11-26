@@ -31,9 +31,41 @@ fn fx_in(mode: ParityMode) -> Fx {
 
 /// The fixture, with or without the `CombatMusicManager` class.
 fn fx_with(mode: ParityMode, manager: bool) -> Fx {
+    fx_kind(mode, if manager { Kind::Manager } else { Kind::NoManager })
+}
+
+/// The fixture's variants (review of #808).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Manager,
+    NoManager,
+    /// The manager's `CombatMusicParams` declared as a reference to `Engine.DamageType` (item 2).
+    MistypedParams,
+    /// `WillowGame.GlobalsDefinition` held by a package but not in the class table (item 4).
+    ColdDefinition,
+}
+
+/// A store whose `WillowGame` package holds a `GlobalsDefinition` class the table does not (item 4).
+fn cold_store(mode: ParityMode) -> DefStore {
+    use ow_package::testkit::script::ScriptToy;
+    let mut t = ScriptToy::new(&[]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    t.class("GlobalsDefinition", object);
+    let bytes = t.build();
+    let dir = std::env::temp_dir().join(format!("ow-combat-music-cold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    DefStore::from_synthetic(&dir, &[("WillowGame.upk", bytes.as_slice())], ow_defs::identity::IdentityPolicy::FirstInScanOrder, mode).unwrap()
+}
+
+fn fx_kind(mode: ParityMode, kind: Kind) -> Fx {
+    let manager = kind != Kind::NoManager;
     let mut space = ObjectSpace::new();
     let object = space.classes.define("Core.Object", None, vec![]).unwrap();
-    let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), mode);
+    let store = if kind == Kind::ColdDefinition { cold_store(mode) } else { DefStore::new_empty() };
+    let mut vm = Vm::new(space, store, Rc::new(AttributeSystem::new_empty()), mode);
+    let props = vec![decl(&mut vm, "bCausedByWorld", PropKind::Bool)];
+    let damage = vm.space.classes.define("Engine.DamageType", Some(object), props).unwrap();
     let o = PropKind::Object { class: object };
     let objects = PropKind::Array(Box::new(o.clone()));
     let props = vec![decl(&mut vm, "Instigator", o.clone()), decl(&mut vm, "GRI", o.clone())];
@@ -55,9 +87,10 @@ fn fx_with(mode: ParityMode, manager: bool) -> Fx {
     // The music manager, its parameters, the game info, the globals and their definition.
     let props = vec![decl(&mut vm, "EnemyDamagesPlayerWeight", PropKind::Float)];
     vm.space.classes.define("WillowGame.CombatMusicParameters", Some(object), props).unwrap();
+    let params_kind = if kind == Kind::MistypedParams { PropKind::Object { class: damage } } else { o.clone() };
     let props = vec![
         decl(&mut vm, "bCombatMusicManagerEnabled", PropKind::Bool),
-        decl(&mut vm, "CombatMusicParams", o.clone()),
+        decl(&mut vm, "CombatMusicParams", params_kind),
     ];
     if manager {
         vm.space.classes.define("WillowGame.CombatMusicManager", Some(object), props).unwrap();
@@ -66,11 +99,11 @@ fn fx_with(mode: ParityMode, manager: bool) -> Fx {
     vm.space.classes.define("WillowGame.WillowGameInfo", Some(actor), props).unwrap();
     let gearbox = vm.space.classes.define("GearboxFramework.GearboxGlobalsDefinition", Some(object), vec![]).unwrap();
     let props = vec![decl(&mut vm, "CombatMusicProperties", o.clone())];
-    vm.space.classes.define("WillowGame.GlobalsDefinition", Some(gearbox), props).unwrap();
+    if kind != Kind::ColdDefinition {
+        vm.space.classes.define("WillowGame.GlobalsDefinition", Some(gearbox), props).unwrap();
+    }
     let props = vec![decl(&mut vm, "TheGlobalsDefinition", PropKind::Object { class: gearbox })];
     vm.space.classes.define("WillowGame.WillowGlobals", Some(object), props).unwrap();
-    let props = vec![decl(&mut vm, "bCausedByWorld", PropKind::Bool)];
-    vm.space.classes.define("Engine.DamageType", Some(object), props).unwrap();
     Fx { vm, play_through, balance_state }
 }
 
@@ -312,4 +345,70 @@ fn player_damaged_by_enemy_s_gates_and_the_no_op() {
     assert!(matches!(enable_threat_model_no_op(&mut x.vm), Err(VmError::Registration { .. })), "twice");
     let mut r = fx_in(ParityMode::Reference);
     assert!(matches!(enable_threat_model_no_op(&mut r.vm), Err(VmError::Registration { .. })), "Off only");
+}
+
+/// The globals, their definition and the params for the lazy creation; answers (game, params).
+fn music_world(x: &mut Fx, definition_class: &str) -> (ObjRef, ObjRef) {
+    let game = x.make("WillowGame.WillowGameInfo");
+    let globals = x.make("WillowGame.WillowGlobals");
+    let definition = x.make(definition_class);
+    let params = x.make("WillowGame.CombatMusicParameters");
+    if x.vm.space.prop(x.class(definition_class), "CombatMusicProperties").is_some() {
+        x.set(definition, "CombatMusicProperties", Value::Object(Some(params)));
+    }
+    x.set(globals, "TheGlobalsDefinition", Value::Object(Some(definition)));
+    let q = ow_world::query::install(&mut x.vm).unwrap();
+    q.borrow_mut().set_globals(globals);
+    let class = x.class("WillowGame.CombatMusicManager");
+    x.vm.space.alloc(class, "Default__CombatMusicManager", None, Origin::Default { class }).unwrap();
+    (game, params)
+}
+
+/// Review of #808, item 2: a manager whose `CombatMusicParams` does not accept the definition's params is a data
+/// error before anything is made, and a retry answers the same, never a half-made manager.
+#[test]
+fn a_mistyped_params_field_refuses_before_the_manager_is_made() {
+    let mut x = fx_kind(ParityMode::Off, Kind::MistypedParams);
+    let (game, _) = music_world(&mut x, "WillowGame.GlobalsDefinition");
+    for attempt in 0..2 {
+        let before = x.marks();
+        assert!(matches!(combat_music_manager(&mut x.vm, game), Err(VmError::Script { .. })), "attempt {attempt}");
+        assert_eq!(x.marks(), before, "attempt {attempt}: nothing made or written");
+        assert_eq!(x.get(game, "GlobalCombatMusicManager"), Value::Object(None));
+    }
+}
+
+/// Review of #808, item 4: the two definition classes come from the resident class table only. A class a package holds
+/// but the table does not is a typed NotRead, and nothing enters the reflection cache.
+#[test]
+fn a_cold_definition_class_is_not_read_and_loads_nothing() {
+    let mut x = fx_kind(ParityMode::Off, Kind::ColdDefinition);
+    let (game, _) = music_world(&mut x, "GearboxFramework.GearboxGlobalsDefinition");
+    let (before, classes) = (x.marks(), x.vm.defs.code().classes().count());
+    let what = not_read(combat_music_manager(&mut x.vm, game).unwrap_err());
+    assert!(what.starts_with(GLOBALS_CLASS_COLD) && what.contains("WillowGame.GlobalsDefinition"), "{what}");
+    assert_eq!(x.marks(), before, "nothing written or loaded");
+    assert_eq!(x.vm.defs.code().classes().count(), classes, "no class entered the reflection cache");
+}
+
+/// Review of #808, item 3: the no-params and no-enemy gates answer before the damage default and the weight are read:
+/// an unbuilt damage default and a params object with no weight change nothing there.
+#[test]
+fn the_no_op_gates_answer_before_the_damage_default() {
+    let mut x = fx();
+    let manager = x.make("WillowGame.CombatMusicManager");
+    let enemy = x.make("Engine.Actor");
+    let damage = x.class("Engine.DamageType");
+    let unbuilt = x.vm.space.classes.define("Test.UnbuiltDamage", Some(damage), vec![]).unwrap();
+    assert!(!damage_gates(&x.vm, manager, Some(enemy), Some(unbuilt)).unwrap(), "no params");
+    let wrong = x.make("Core.Object");
+    x.set(manager, "CombatMusicParams", Value::Object(Some(wrong)));
+    assert!(!damage_gates(&x.vm, manager, None, Some(unbuilt)).unwrap(), "no enemy");
+    // Caused by the world: answered before the weight, so the params' missing weight does not matter.
+    let default = x.vm.space.alloc(damage, "Default__DamageType", None, Origin::Default { class: damage }).unwrap();
+    x.set(default, "bCausedByWorld", Value::Bool(true));
+    assert!(!damage_gates(&x.vm, manager, Some(enemy), Some(damage)).unwrap(), "caused by the world");
+    // Past every gate, the missing weight is a data error.
+    x.set(default, "bCausedByWorld", Value::Bool(false));
+    assert!(matches!(damage_gates(&x.vm, manager, Some(enemy), Some(damage)), Err(VmError::Script { .. })));
 }

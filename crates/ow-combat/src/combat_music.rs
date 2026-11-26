@@ -258,14 +258,10 @@ fn apply_grade(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             Ok(Value::Bool(answer))
         }
         GradePlan::Run { pawn, instigator, behaviors } => {
-            let f = c.vm.find_function(ow_behavior::kernel::run::RUN_BEHAVIORS)?;
-            let entry = marks(c.vm);
-            let args = vec![behaviors, Value::Object(Some(pawn)), Value::Object(instigator), Value::Object(None)];
-            match c.vm.call(f, None, args) {
-                Ok(_) => Ok(Value::Bool(true)),
-                Err(e) if marks(c.vm) != entry => Err(ow_world::pools::after_partial_writes(e)),
-                Err(e) => Err(e),
-            }
+            // The shared runner with its write-aware policy: a refusal is prefixed only after a counted write
+            // (review of #808, item 1).
+            ow_behavior::kernel::run::run_behaviors_counted(c.vm, &behaviors, Some(pawn), instigator)?;
+            Ok(Value::Bool(true))
         }
     }
 }
@@ -303,22 +299,57 @@ fn manager_plan(vm: &mut Vm, game: ObjRef) -> Result<(ClassId, Option<ObjRef>), 
     let Some(class) = vm.space.classes.by_path(MANAGER) else {
         return Err(NotYet::not_read(MANAGER_CLASS, RECORD).into());
     };
-    // The manager's one field, declared as an object.
-    let p = vm.space.prop(class, "CombatMusicParams").ok_or_else(|| bad(WHAT, "CombatMusicManager declares no CombatMusicParams"))?;
-    if !matches!(vm.space.classes.decl(p).map(|d| &d.kind), Some(PropKind::Object { .. })) {
-        return Err(bad(WHAT, "CombatMusicParams is not declared as an object"));
-    }
     object(vm, game, "GlobalCombatMusicManager", WHAT)?;
+    // Both destinations' declared reference types accept what is written into them, checked before anything is made
+    // (review of #808, item 2): the game info's field takes the manager, the manager's field the params.
+    accepts(vm, vm.space.heap.get(game)?.class, "GlobalCombatMusicManager", class, WHAT)?;
     let globals = ow_inventory::globals::world_globals(vm)?;
     resident(vm, globals)?;
-    // The definition through the class table (no class load; COLD-LOAD-FIXES' read-only route).
-    let definition = ow_inventory::globals::globals_definition_resident(vm, globals, WHAT)?;
+    // The two definition classes from the resident class table only (review of #808, item 4): a class the table does
+    // not hold is a typed NotRead, so no class is loaded into the reflection cache.
+    let table = |path: &str| -> Result<ClassId, VmError> {
+        vm.space.classes.by_path(path).filter(|&c| vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined())).ok_or_else(|| {
+            NotYet::not_read(format!("{GLOBALS_CLASS_COLD}: {path}"), RECORD).into()
+        })
+    };
+    let gearbox = table(ow_inventory::globals::GEARBOX_GLOBALS_DEFINITION)?;
+    let globals_class = table(ow_inventory::globals::GLOBALS_DEFINITION_CLASS)?;
+    let definition = ow_inventory::globals::globals_definition_of(vm, globals, gearbox, globals_class, WHAT)?;
     resident(vm, definition)?;
     let params = object(vm, definition, "CombatMusicProperties", WHAT)?;
-    if let Some(params) = params {
-        resident(vm, params)?;
+    match params {
+        Some(params) => {
+            resident(vm, params)?;
+            accepts(vm, class, "CombatMusicParams", vm.space.heap.get(params)?.class, WHAT)?;
+        }
+        None => {
+            declared_object(vm, class, "CombatMusicParams", WHAT)?;
+        }
     }
     Ok((class, params))
+}
+
+/// The refusal for a definition class the resident class table does not hold.
+pub const GLOBALS_CLASS_COLD: &str = "GetCombatMusicManager: a globals definition class not in the class table (a class \
+     load is a write)";
+
+/// `class`'s `name` declared as one object reference, else a data error.
+fn declared_object(vm: &Vm, class: ClassId, name: &str, what: &str) -> Result<ClassId, VmError> {
+    let path = vm.space.classes.get_layout(class).map_or_else(String::new, |l| l.path().to_string());
+    let p = vm.space.prop(class, name).ok_or_else(|| bad(what, format!("{path} declares no {name}")))?;
+    match vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim)) {
+        Some((PropKind::Object { class: c }, 1)) => Ok(c),
+        other => Err(bad(what, format!("{name} is declared as {other:?}, not one object reference"))),
+    }
+}
+
+/// `class`'s `name` declared as an object reference that accepts a `value_class` object, else a data error.
+fn accepts(vm: &Vm, class: ClassId, name: &str, value_class: ClassId, what: &str) -> Result<(), VmError> {
+    let declared = declared_object(vm, class, name, what)?;
+    if !vm.space.classes.is_child_of(value_class, declared) {
+        return Err(bad(what, format!("{name} is declared as a reference that does not accept the value written into it")));
+    }
+    Ok(())
 }
 
 /// `GetCombatMusicManager()` (module documentation).
@@ -371,13 +402,10 @@ fn built_default(vm: &Vm, class: ClassId) -> Option<ObjRef> {
 pub fn damage_gates(vm: &Vm, manager: ObjRef, enemy: Option<ObjRef>, damage_type: Option<ClassId>) -> Result<bool, VmError> {
     const WHAT: &str = "CombatMusicManager.PlayerDamagedByEnemy";
     resident(vm, manager)?;
-    let params = object(vm, manager, "CombatMusicParams", WHAT)?;
-    if let Some(params) = params {
-        resident(vm, params)?;
-        match read(vm, params, "EnemyDamagesPlayerWeight", WHAT)? {
-            (Value::Float(_), PropKind::Float) => {}
-            _ => return Err(bad(WHAT, "EnemyDamagesPlayerWeight is not declared as a float")),
-        }
+    // The two no-op gates first (review of #808, item 3): no params or no enemy answers before the damage default.
+    let Some(params) = object(vm, manager, "CombatMusicParams", WHAT)? else { return Ok(false) };
+    if enemy.is_none() {
+        return Ok(false);
     }
     let caused_by_world = match damage_type {
         None => false,
@@ -392,7 +420,16 @@ pub fn damage_gates(vm: &Vm, manager: ObjRef, enemy: Option<ObjRef>, damage_type
             matches!(vm.space.read(default, PropAddr::scalar(p))?, Value::Bool(true))
         }
     };
-    Ok(params.is_some() && enemy.is_some() && !caused_by_world)
+    if caused_by_world {
+        return Ok(false);
+    }
+    // The threat call's weight, only past the world-damage gate.
+    resident(vm, params)?;
+    match read(vm, params, "EnemyDamagesPlayerWeight", WHAT)? {
+        (Value::Float(_), PropKind::Float) => {}
+        _ => return Err(bad(WHAT, "EnemyDamagesPlayerWeight is not declared as a float")),
+    }
+    Ok(true)
 }
 
 fn player_damaged(c: &mut NativeCall<'_>) -> Result<Value, VmError> {

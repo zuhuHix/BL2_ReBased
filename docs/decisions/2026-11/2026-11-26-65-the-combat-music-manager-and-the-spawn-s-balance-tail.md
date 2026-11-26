@@ -39,6 +39,16 @@ alone; this lane did not read the executable. No session was run. Every rule is 
   registration). **Not tested:** test 5 (Reference unchanged), which holds by construction (`register` returns before
   binding outside Off); the behaviour run itself through `RunBehaviors` (only its plan); the store-built class default
   path of the creation.
+- **Review of #808, r1:** `ApplyGradeCustomizations` runs its behaviours through `ow-behavior`'s new
+  `run_behaviors_counted`, the native's walk with a write-aware policy: a refusal carries the partial-writes prefix
+  only after a counted write (a heap write, a random draw or a load transition), so the first behaviour refusing, or a
+  write-free one before a refusal, is unprefixed. The native `RunBehaviors` keeps its own policy. The lazy creation
+  checks that `GlobalCombatMusicManager` accepts the manager and `CombatMusicParams` the params before anything is
+  made (a mismatch is `VmError::Script`, a retry the same). The two definition classes come from the resident class
+  table only (one the table lacks is `NotRead`, nothing enters the reflection cache), and `PlayerDamagedByEnemy`
+  answers its no-params and no-enemy gates before the damage default, and reads the threat weight only past the
+  world-damage gate. Tests: the counted walk on both sides of the first write, a mistyped params field, a cold
+  definition class with the reflection count unchanged, and the gate order.
 - **Measured:** see the GATES row of this lane. On the installed gate these natives are not reached yet: on main
   74b06d8 the spawns of links 3, 4, 5, 13 and 14 stop first at `AttributeInitializationDefinition.SetBaseValue` ("a
   definition it names is not loaded").
