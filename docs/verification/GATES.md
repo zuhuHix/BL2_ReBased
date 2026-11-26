@@ -9,7 +9,7 @@ placeholders removed (ow-world's `GetInstancedMaterialInstanceConstant`, ow-comb
 two shared wrappers kept by design (`ResolveContext`, `AddAttributeModifier`); after the change, 0 shadows besides
 those. `cargo test --workspace -j 8 --no-fail-fast` 3,774 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
 Installed Off strict `--slice-gate` (release build, under the machine lock), base 64f070fa and this change: 6 ok / 8
-NotYet, 47.0% on both, no row moved. Decision 2026-11-26-NNN.
+NotYet, 47.0% on both, no row moved. Decision 2026-11-26-07.
 
 **ANALYST-UPDATEANIMATIONS-TREE-TICKS (2026-11-26, pc-hummer, docs only, on docs/native-updateanimations-tree-ticks from
 main 1709b8a8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATEANIMATIONS_TREE_TICKS.md: `UpdateAnimations`' per-node
