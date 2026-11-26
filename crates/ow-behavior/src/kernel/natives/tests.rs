@@ -232,6 +232,9 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ("TestCreateOff", provider_package(&on_create_disabled())),
         ("TestCreateRefuse", provider_package(&on_create_spec(CREATE_REFUSE, "CR", "Behavior_ToyRefuse", None))),
         ("TestCreateEmpty", provider_package(&Spec::new(CREATE_EMPTY, vec![], vec![]))),
+        // WillowPawn.InitializeBehaviorProviders' pass-1 providers (lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
+        ("TestPassOk", provider_package(&on_create_spec(PASS_OK, "PO", "Behavior_ToySame", Some("OnBehaviorSequenceEnabled")))),
+        ("TestPassRefuse", provider_package(&on_create_spec(PASS_REFUSE, "PR", "Behavior_ToyRefuse", Some("OnBehaviorSequenceEnabled")))),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -1086,6 +1089,10 @@ const CREATE_OTHER: &str = "ToyCreateOther";
 const CREATE_OFF: &str = "ToyCreateOff";
 const CREATE_REFUSE: &str = "ToyCreateRefuse";
 const CREATE_EMPTY: &str = "ToyCreateEmpty";
+/// One enabled sequence whose `OnBehaviorSequenceEnabled` (pass 1) runs the logging toy behavior `PO`.
+const PASS_OK: &str = "ToyPassOk";
+/// One enabled sequence whose `OnBehaviorSequenceEnabled` (pass 1) runs the refusing toy behavior `PR`.
+const PASS_REFUSE: &str = "ToyPassRefuse";
 
 /// One enabled sequence whose event `event` (default `OnCreate`) runs one behavior of `class`.
 fn on_create_spec(provider: &'static str, behavior: &'static str, class: &'static str, event: Option<&'static str>) -> Spec {
@@ -1325,3 +1332,6 @@ fn reference_does_not_bind_on_create() {
     t.declare_on_create();
     assert!(!t.vm.has_native(ON_CREATE));
 }
+
+// WillowPawn.InitializeBehaviorProviders (lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
+mod pawn_providers;

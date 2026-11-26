@@ -74,6 +74,9 @@ pub mod damage_type;
 pub mod weapon_material;
 /// `MeshComponent.SetMaterial` and `MaterialInterface.GetScalarParameterValue` in Off (lane IMPL-SETMATERIAL-AND-GLOW).
 pub mod material_natives;
+/// `MeshComponent.GetMaterial`, `MaterialInstance.SetParent` and `.SetVectorParameterValue`, and
+/// `MeshComponent.GetInstancedMaterialInstanceConstant` in Off (lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
+pub mod material_instances;
 // WillowWeapon.GetFiringModeDefinition and the rule the shot helper shares (lane IMPL-GETFIRINGMODEDEFINITION).
 pub mod firing_mode;
 
