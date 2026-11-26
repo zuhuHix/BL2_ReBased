@@ -1,6 +1,6 @@
 # SetDefaultPhysics, the spawn's balance state, and links 3 and 4 after the spawn (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SETDEFAULTPHYSICS-AND-SPAWN-BALANCE (decision 2026-11-26-NNN), the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SETDEFAULTPHYSICS-AND-SPAWN-BALANCE (decision 2026-11-26-46), the
 analyst half of the clean room: **another lane implements this note.** Raw output stays under ignored
 `local/analysis/sdp/`. This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing
 structure. **Every rule here is UNVERIFIED in the running game.**
