@@ -2233,7 +2233,7 @@ fn the_player_pawn_gets_its_own_copy_of_the_class_default_s_components() {
     assert!(!vm.defs.is_unloaded(&vm.space, copy), "resident");
     assert_eq!(vm.space.heap.get(copy).unwrap().outer, Some(pawn));
     assert_eq!(get(&vm.space, copy, "ToyLevel").unwrap(), Value::Int(4), "the default's values");
-    // Lane BRIDGE-PAWN-ATTACH (decision 2026-11-26-NNN): the spawn's component attach ran on the copy, so it is in the
+    // Lane BRIDGE-PAWN-ATTACH (decision 2026-11-26-17): the spawn's component attach ran on the copy, so it is in the
     // attach record under the pawn, with the generic attach writes; the class default's own sub-object is not.
     assert!(ow_world::actors::attached_to(vm, copy, pawn).unwrap(), "in the attach record under the pawn");
     assert!(!ow_world::actors::attached_to(vm, own, pawn).unwrap());
