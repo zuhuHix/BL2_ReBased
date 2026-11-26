@@ -1,6 +1,6 @@
 # Links 13 and 14: the swings past link 4, the class-level attributes, and what stops the down (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-13-14 (decision 2026-11-26-NNN), the analyst half of the clean
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINKS-13-14 (decision 2026-11-26-53), the analyst half of the clean
 room: **another lane implements this note.** Raw output stays under ignored `local/analysis/l1314/`. This note is in
 our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
