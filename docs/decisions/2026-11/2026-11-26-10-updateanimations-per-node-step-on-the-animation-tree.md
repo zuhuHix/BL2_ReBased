@@ -48,5 +48,5 @@ implemented from docs/verification/NATIVE_UPDATEANIMATIONS_TREE_TICKS.md alone (
   which anim sets her list holds in the game. **UNVERIFIED (fitted)** names: the `InitTag` field; the fields the note
   places past `CachedNumDesiredBones` by a 4-byte shift (`bIsIssuingNotifies`, `bReverseAnimSeqSearchOrder`,
   `bAutoGenerateAdditiveSeqName`, `AddAnimSeqName`); and the list names `AnimSets` and `Sequences` (review of #751,
-  LOW 1, edited by decision 2026-11-26-NNN).
+  LOW 1, edited by decision 2026-11-26-13).
 - **Sensitive files:** none.
