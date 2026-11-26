@@ -582,26 +582,11 @@ pub fn set_owner_is_noop(vm: &Vm, actor: ObjRef, owner: Option<ObjRef>) -> Resul
 /// [`set_owner`], answering whether it ran to its end (the owner set, and neither event changed it again); `false` for
 /// every early stop (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 3.7: the native's further steps run only then).
 pub fn set_owner_completed(vm: &mut Vm, actor: ObjRef, owner: Option<ObjRef>) -> Result<bool, VmError> {
-    let old = object(&vm.space, actor, "Owner")?;
-    if old == owner || is_destroyed(&vm.space, actor)? {
+    // An unchanged owner, a destroyed actor or an ownership loop (refused): nothing (review r1 of #789: one walk).
+    if set_owner_is_noop(vm, actor, owner)? {
         return Ok(false);
     }
-    if let Some(new) = owner {
-        let mut seen = FixedHashSet::default();
-        let mut cursor = Some(new);
-        while let Some(c) = cursor {
-            if c == actor {
-                return Ok(false); // an ownership loop: refused
-            }
-            if !seen.insert(c) {
-                return Err(rule_error(
-                    "SetOwner",
-                    "the new owner's owner chain loops without reaching the actor".to_string(),
-                ));
-            }
-            cursor = object(&vm.space, c, "Owner")?;
-        }
-    }
+    let old = object(&vm.space, actor, "Owner")?;
     if let Some(o) = old {
         send_event(vm, o, "LostChild", vec![Value::Object(Some(actor))])?;
         if object(&vm.space, actor, "Owner")? != old {

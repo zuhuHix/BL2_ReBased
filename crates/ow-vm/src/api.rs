@@ -354,6 +354,8 @@ impl std::fmt::Debug for IteratorResult {
     }
 }
 
+/// Compares the parameter and the items; any two guards count as equal (a closure has no equality), so only whether
+/// each result has one is compared.
 impl PartialEq for IteratorResult {
     fn eq(&self, other: &Self) -> bool {
         self.out_param == other.out_param && self.items == other.items && self.guard.is_none() == other.guard.is_none()

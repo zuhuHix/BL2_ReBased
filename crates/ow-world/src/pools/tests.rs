@@ -1671,6 +1671,62 @@ fn the_controller_lookup_creates_from_the_resources_default_definition() {
     });
 }
 
+/// Review r1 of #789: `controller_pool_preflight` mirrors `controller_pool`'s pre-write refusals, reading only. A
+/// vehicle pawn whose controller's manager already holds the pool is not refused (the lookup finds it first); one with
+/// no such pool is the vehicle `NotRead`, as the lookup itself refuses; a pawn on foot, or a None resource, is clear.
+#[test]
+fn the_controller_lookup_preflight_mirrors_its_pre_write_refusals() {
+    run(|| {
+        let mut x = fx();
+        let (controller, m) = x.controller_with_manager("Controller");
+        let (held, def) = x.resource();
+        x.create(Some(m), Some(controller), Some(def), false);
+        let (other, _) = x.resource();
+        let car = x.new_obj("Vehicle");
+        x.set(controller, "Pawn", Value::Object(Some(car)));
+        let marks = |x: &Fx| (x.w.vm.space.heap.committed_writes(), x.w.vm.defs.load_transitions(), x.w.vm.space.names.len());
+        let before = marks(&x);
+        controller_pool_preflight(&x.w.vm, controller, Some(held)).unwrap();
+        let e = controller_pool_preflight(&x.w.vm, controller, Some(other)).unwrap_err();
+        assert!(matches!(&e, VmError::NotYet(n) if n.missing == Missing::NotRead && n.what == VEHICLE_POOL_LOOKUP), "{e:?}");
+        controller_pool_preflight(&x.w.vm, controller, None).unwrap();
+        assert_eq!(marks(&x), before, "the preflight reads only");
+        // The lookup agrees: the held pool is found, the other refused.
+        let found = controller_pool(x.vm(), controller, Some(held), true).unwrap();
+        assert_eq!(found.manager, Some(m));
+        assert!(matches!(vm_missing(controller_pool(x.vm(), controller, Some(other), true).unwrap_err()), Missing::NotRead));
+        // On foot: clear, whatever the manager holds.
+        let pawn = x.new_obj("Pawn");
+        x.set(controller, "Pawn", Value::Object(Some(pawn)));
+        controller_pool_preflight(&x.w.vm, controller, Some(other)).unwrap();
+    });
+}
+
+/// Review r1 of #789: `controller_pool_value` through the real lookup with creation: a missing pool is made (from the
+/// resource's default definition) and its `CurrentValue` read; an existing pool's value is read; without a manager and
+/// without `create`, 0 and nothing made.
+#[test]
+fn the_controller_pool_value_reads_the_pool_and_makes_a_missing_one() {
+    run(|| {
+        let mut x = fx();
+        let controller = x.new_obj("Controller");
+        let (resource, def) = x.resource();
+        assert_eq!(controller_pool_value(x.vm(), controller, resource, false).unwrap(), 0.0);
+        assert_eq!(x.get(controller, "ResourcePoolManager"), Value::Object(None), "nothing made");
+        let made = controller_pool_value(x.vm(), controller, resource, true).unwrap();
+        let Value::Object(Some(m)) = x.get(controller, "ResourcePoolManager") else { panic!("no manager") };
+        let pools = pools_of(&x.w.vm.space, m).unwrap();
+        assert_eq!(pools.len(), 1, "a missing pool is made");
+        let pool = pools[0].1;
+        assert_eq!(x.get(pool, "Definition"), Value::Object(Some(def)));
+        assert_eq!(made, x.f(pool, "CurrentValue"), "its CurrentValue");
+        assert_eq!(made, 0.0, "a new pool's value is 0 in this fixture");
+        x.setf(pool, "CurrentValue", 42.5);
+        assert_eq!(controller_pool_value(x.vm(), controller, resource, true).unwrap(), 42.5);
+        assert_eq!(pools_of(&x.w.vm.space, m).unwrap().len(), 1, "found, not made again");
+    });
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The pawn's health
 // ---------------------------------------------------------------------------------------------------------------
