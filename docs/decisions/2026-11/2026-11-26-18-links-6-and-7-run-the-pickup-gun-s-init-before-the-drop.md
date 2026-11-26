@@ -38,16 +38,19 @@ harness work, with no new native rule.
     the mesh layer answers its stored bounds, and its `Scale` 0.92 is a transform the bounding cylinder does not
     answer.
   - Link 8's row and every other row are unchanged.
-- **Tests:** the note's tests 1 to 5:
-  - the init runs after each gun is made and before its drop;
-  - its refusal is prefixed and nothing is dropped;
-  - the decoy's gun gets the same init. Its place after the first drop is `build`'s order; the toy world spawns
-    nothing, so no drop is run there;
-  - the mesh layer is installed once per world;
+- **Tests:** the note's tests 1 to 5, through the whole of `build` with a toy drop (`build_dropping`; review of #761):
+  - each gun is made, given its init, then dropped, and link 7's decoy takes the same steps after the first drop;
+  - the init's refusal is prefixed and nothing is dropped (the first gun's; the decoy's, after the first drop);
+  - `make`'s init is `pickup_gun_init` (`MAKE_INIT`, compared by address), and `pickup_gun_init`'s steps
+    (`GUN_INIT_STEPS`) are link 8's functions in the order above;
+  - the mesh layer is installed once per world: `equip_run_gestalt_tests::the_mesh_layer_is_installed_once_and_its_
+    answer_logged`, which the init reaches through `install_mesh_layer`;
   - the copied component's source f: the `LayerAbsent` with no layer, `WORLD_TRANSFORM` at `Scale` 0.92, the box at
     `Scale` 1.
 
-  The two route tests now pin the new rule: every route sets the inputs in Off.
+  Each new test was mutation-checked: `make` with a no-op init, the decoy made without its init, and two steps swapped
+  each fail a test. The two route tests now pin the new rule: every route sets the inputs in Off, and the decoy's
+  route and link 8's set none in Reference.
 - **The hub's call** (the note's open question 3): whether `skeletal_bounds` should answer a scaled world transform,
   the next stop of links 6 and 7.
 - **Verified:** the tests on invented data and the installed rows above. **Not verified:** everything in the running

@@ -683,7 +683,7 @@ pub(crate) fn pickup_game_info(world: &mut ow_world::world::World) -> Result<(),
 /// anything: the installed [`GLOBALS_DEFINITION`] found and loaded, then written into `globals`'
 /// `TheGlobalsDefinition`. The holder's declaration is checked first, with the preflight's own validator, so a
 /// malformed schema is the note's `VmError::Script`, not a failed write (review r2 of #476). The first load's
-/// challenge numbering is not run here or anywhere (section 6.1). Used by [`pickup_world`] (links 6 and 7) and by the
+/// challenge numbering is not run here or anywhere (section 6.1). Used by the
 /// Fire driver for link 12 (`cmd/slice.rs`, lane IMPL-LINK12-UNLOCK-ACHIEVEMENT).
 pub(crate) fn preload_globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
     let definition = find_object_t(vm, GLOBALS_DEFINITION)?;
@@ -795,13 +795,29 @@ fn equip_globals(vm: &mut Vm, globals: ObjRef) -> Result<(), VmError> {
 /// here is marked "stopped after partial writes" by the caller (link 8's threshold preload runs after its mark: the
 /// prefix differs there, as the note says).
 pub(crate) fn pickup_gun_init(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
-    preload_muzzle_flashes(vm, weapon)?;
-    preload_gestalt_mesh(vm, weapon)?;
-    preload_gestalt_skeletal_mesh(vm, weapon)?;
-    preload_material_part_material(vm, weapon)?;
-    preload_material_classes(vm, weapon)?;
-    install_mesh_layer(vm, weapon)?;
-    preload_threshold_attributes(vm, weapon)?;
+    for (_, step) in GUN_INIT_STEPS {
+        step(vm, weapon)?;
+    }
+    Ok(())
+}
+
+/// One step of [`pickup_gun_init`].
+pub(crate) type GunInitStep = fn(&mut Vm, ObjRef) -> Result<(), VmError>;
+
+/// [`pickup_gun_init`]'s steps, in order, named (review of #761: a test pins the order).
+pub(crate) const GUN_INIT_STEPS: [(&str, GunInitStep); 8] = [
+    ("muzzle flashes", preload_muzzle_flashes),
+    ("gestalt mesh", preload_gestalt_mesh),
+    ("gestalt skeletal mesh", preload_gestalt_skeletal_mesh),
+    ("material part material", preload_material_part_material),
+    ("material classes", preload_material_classes),
+    ("mesh layer", install_mesh_layer),
+    ("threshold attributes", preload_threshold_attributes),
+    ("init", init_phase),
+];
+
+/// The installed `WillowWeapon.InitializeInternal(false)` (the `init` phase), its error kept.
+pub(crate) fn init_phase(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
     match run_phase_typed(vm, "init", weapon) {
         Some(e) => Err(e),
         None => Ok(()),
@@ -1568,8 +1584,10 @@ mod tests {
         assert_eq!(manufacturer_fields(&mut vm), (true, 7), "link 8 sets both in Off");
         drop(vm);
         let _ = std::fs::remove_dir_all(&dir);
-        // Reference: no route sets them.
+        // Reference: no route sets them, link 7's decoy route included (review of #761).
         let (mut vm, dir) = toy_gun_vm(ParityMode::Reference);
+        let _ = prepare_unowned_typed(&mut vm, TOY_LINE, &mut false);
+        assert_eq!(manufacturer_fields(&mut vm), (false, 0), "Reference's decoy leaves them");
         let _ = prepare_link8_typed(&mut vm, TOY_LINE, &mut false);
         assert_eq!(manufacturer_fields(&mut vm), (false, 0), "Reference leaves them");
         drop(vm);

@@ -69,7 +69,17 @@ fn toy_touch(t: &mut ScriptToy, owner: i32, object: i32, flag: i32) {
 }
 
 fn package() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "Function", "State", "NameProperty", "BoolProperty", "ObjectProperty"]);
+    let mut t = ScriptToy::with_imports(&[
+        "Class",
+        "Function",
+        "State",
+        "NameProperty",
+        "BoolProperty",
+        "ObjectProperty",
+        "ScriptStruct",
+        "StructProperty",
+        "FloatProperty",
+    ]);
     let object = t.class("Object", 0);
     let mut goto = FunctionSpec::new(NATIVE, "GotoState");
     goto.native = 113;
@@ -97,6 +107,17 @@ fn package() -> Vec<u8> {
     let controller = t.class("ToyController", object);
     t.prop("Object", controller, "CurrentTouchedPickupable", 0, object);
     t.prop("Object", controller, "myHUD", 0, object);
+    // The fixture's gun and pawn (review of #761): what `build` reads and writes around the drop.
+    let vector = ow_package::testkit::reflect::toy_struct(&mut t, object, "Vector", None);
+    for axis in ["X", "Y", "Z"] {
+        t.prop("Float", vector, axis, 0, 0);
+    }
+    let gun = t.class("ToyGun", object);
+    t.prop("Object", gun, "Owner", 0, object);
+    t.prop("Object", gun, "Instigator", 0, object);
+    let pawn = t.class("ToyPawn", object);
+    t.prop("Object", pawn, "Controller", 0, object);
+    t.prop("Struct", pawn, "Location", 0, vector);
     t.build()
 }
 
@@ -254,56 +275,93 @@ fn the_globals_preflight_refuses_a_world_without_globals() {
     }
 }
 
-/// NATIVE_LINK67_PICKUP_GUN_INIT.md section 7 (lane IMPL-LINK67-PICKUP-GUN-INIT). A toy `prepare` that makes the gun
-/// (a real write), and a toy init recording what it is given.
-fn toy_gun(x: &mut Fx) -> (ObjRef, std::cell::RefCell<Vec<String>>) {
-    let target = x.pickup();
-    (target, std::cell::RefCell::new(Vec::new()))
+/// NATIVE_LINK67_PICKUP_GUN_INIT.md section 7 (lane IMPL-LINK67-PICKUP-GUN-INIT), through the whole of `build` with a
+/// toy drop (review of #761): Maya's toy pawn and controller, her gun and the decoy's, each step recorded in order.
+struct Gunshop {
+    class: ow_object::ids::ClassId,
+    owned: ObjRef,
+    decoy: ObjRef,
+    pawn: ObjRef,
+    events: std::cell::RefCell<Vec<String>>,
 }
 
-/// Test 1, the order: each gun's init runs right after the gun is made, before anything of its drop (the toy gun has
-/// no `Owner`, so the drop's first read is the error that follows the init).
-#[test]
-fn the_gun_s_init_runs_after_it_is_made_and_before_its_drop() {
-    let mut x = fx();
+fn gunshop(x: &mut Fx) -> Gunshop {
+    let make = |x: &mut Fx, path: &str| {
+        let c = x.vm.find_class(path).unwrap();
+        ow_vm::interp::instantiate_from_defaults(&mut x.vm, c).unwrap()
+    };
+    let (owned, decoy, pawn, controller) =
+        (make(x, "Engine.ToyGun"), make(x, "Engine.ToyGun"), make(x, "Engine.ToyPawn"), make(x, "Engine.ToyController"));
+    let set = |x: &mut Fx, o: ObjRef, name: &str, v: Value| {
+        let class = x.vm.space.heap.get(o).unwrap().class;
+        let p = x.vm.space.prop(class, name).unwrap();
+        x.vm.space.write(o, PropAddr::scalar(p), v).unwrap();
+    };
+    set(x, owned, "Owner", Value::Object(Some(pawn)));
+    set(x, pawn, "Controller", Value::Object(Some(controller)));
     let class = x.vm.find_class("Engine.ToyPickup").unwrap();
-    let (target, events) = toy_gun(&mut x);
-    let mut prepare = |vm: &mut Vm, _: &str, owned: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
-        let c = vm.space.heap.get(target)?.class;
-        let p = vm.space.prop(c, "bTouchedGlobal").unwrap();
-        vm.space.write(target, PropAddr::scalar(p), Value::Bool(true))?;
-        *wrote = true;
-        events.borrow_mut().push(format!("made owned={owned}"));
-        Ok(target)
-    };
-    let mut init = |_: &mut Vm, w: ObjRef| -> Result<(), VmError> {
-        events.borrow_mut().push(format!("init {}", w == target));
-        Ok(())
-    };
-    let e = build(&mut x.vm, class, "a line", false, &mut prepare, &mut init).unwrap_err();
-    assert_eq!(*events.borrow(), ["made owned=true", "init true"]);
-    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("declares no Owner")), "the drop comes after: {e}");
+    Gunshop { class, owned, decoy, pawn, events: std::cell::RefCell::new(Vec::new()) }
+}
+
+impl Gunshop {
+    fn name(&self, o: ObjRef) -> &'static str {
+        if o == self.owned { "gun" } else if o == self.decoy { "decoy" } else { "?" }
+    }
+
+    /// Runs `build_dropping` with toy steps that record themselves; `init` answers each gun's init.
+    fn run(
+        &self,
+        x: &mut Fx,
+        decoy: bool,
+        init_answer: &dyn Fn(ObjRef) -> Result<(), VmError>,
+    ) -> Result<Pickup, VmError> {
+        let mut prepare = |_: &mut Vm, _: &str, owned: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
+            *wrote = true;
+            let g = if owned { self.owned } else { self.decoy };
+            self.events.borrow_mut().push(format!("make {}", self.name(g)));
+            Ok(g)
+        };
+        let mut init = |_: &mut Vm, g: ObjRef| -> Result<(), VmError> {
+            self.events.borrow_mut().push(format!("init {}", self.name(g)));
+            init_answer(g)
+        };
+        let mut drop = |vm: &mut Vm, class: ow_object::ids::ClassId, g: ObjRef, _: ObjRef, at: [f32; 3]| -> Result<ObjRef, VmError> {
+            self.events.borrow_mut().push(format!("drop {} at {at:?}", self.name(g)));
+            ow_vm::interp::instantiate_from_defaults(vm, class)
+        };
+        build_dropping(&mut x.vm, self.class, "a line", decoy, &mut prepare, &mut init, &mut drop)
+    }
+}
+
+/// Tests 1 and 3, the order through `build`: each gun is made, then given its init, then dropped; link 7's decoy
+/// takes the same steps after the first gun's drop.
+#[test]
+fn each_gun_is_made_then_initialised_then_dropped_the_decoy_after_the_first() {
+    let mut x = fx();
+    let shop = gunshop(&mut x);
+    let p = shop.run(&mut x, true, &|_| Ok(())).unwrap();
+    assert_eq!(p.pawn, shop.pawn);
+    assert_eq!(
+        *shop.events.borrow(),
+        [
+            "make gun",
+            "init gun",
+            "drop gun at [150.0, 0.0, 0.0]",
+            "make decoy",
+            "init decoy",
+            "drop decoy at [0.0, 45.0, 0.0]",
+        ]
+    );
 }
 
 /// Test 2, the init's refusal: a `NotYet { NotRead }` after the gun was made is answered with the partial-writes
-/// prefix, its kind kept, and the drop never starts.
+/// prefix, its kind and record kept, and nothing is dropped.
 #[test]
 fn the_init_s_refusal_is_marked_and_nothing_is_dropped() {
     let mut x = fx();
-    let class = x.vm.find_class("Engine.ToyPickup").unwrap();
-    let (target, events) = toy_gun(&mut x);
-    let mut prepare = |vm: &mut Vm, _: &str, _: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
-        let c = vm.space.heap.get(target)?.class;
-        let p = vm.space.prop(c, "bTouchedGlobal").unwrap();
-        vm.space.write(target, PropAddr::scalar(p), Value::Bool(true))?;
-        *wrote = true;
-        Ok(target)
-    };
-    let mut init = |_: &mut Vm, _: ObjRef| -> Result<(), VmError> {
-        events.borrow_mut().push("init".to_string());
-        Err(NotYet::not_read("a toy init refusal", "TOY.md").into())
-    };
-    match build(&mut x.vm, class, "a line", true, &mut prepare, &mut init).unwrap_err() {
+    let shop = gunshop(&mut x);
+    let refuse = |_: ObjRef| -> Result<(), VmError> { Err(NotYet::not_read("a toy init refusal", "TOY.md").into()) };
+    match shop.run(&mut x, true, &refuse).unwrap_err() {
         VmError::NotYet(n) => {
             assert_eq!(n.missing, Missing::NotRead);
             assert_eq!(&*n.what, format!("{PARTIAL_WRITES}: a toy init refusal"));
@@ -311,36 +369,46 @@ fn the_init_s_refusal_is_marked_and_nothing_is_dropped() {
         }
         e => panic!("{e}"),
     }
-    assert_eq!(*events.borrow(), ["init"], "one init, the first gun's; no decoy and no drop after it");
+    assert_eq!(*shop.events.borrow(), ["make gun", "init gun"], "no drop, and no decoy");
+    // The decoy's init refusing: the first gun is dropped, the decoy is not.
+    let mut x = fx();
+    let shop = gunshop(&mut x);
+    let decoy = shop.decoy;
+    let refuse_decoy = move |g: ObjRef| -> Result<(), VmError> {
+        if g == decoy { Err(NotYet::not_read("the decoy's toy init", "TOY.md").into()) } else { Ok(()) }
+    };
+    assert!(shop.run(&mut x, true, &refuse_decoy).is_err());
+    assert_eq!(*shop.events.borrow(), ["make gun", "init gun", "drop gun at [150.0, 0.0, 0.0]", "make decoy", "init decoy"]);
 }
 
-/// Test 3, the decoy: link 7's second gun takes the same steps, made with no owner and then given the same init.
-/// (Its place after the first gun's drop is `build`'s order; the toy world has no spawn, so the drop is not run here.)
+/// Review of #761: `make` hands each gun `equip_run::pickup_gun_init`.
 #[test]
-fn the_decoy_gets_the_same_init() {
-    let mut x = fx();
-    let (target, events) = toy_gun(&mut x);
-    let mut prepare = |_: &mut Vm, _: &str, owned: bool, _: &mut bool| -> Result<ObjRef, VmError> {
-        events.borrow_mut().push(format!("made owned={owned}"));
-        Ok(target)
-    };
-    let mut init = |_: &mut Vm, w: ObjRef| -> Result<(), VmError> {
-        events.borrow_mut().push(format!("init {}", w == target));
-        Ok(())
-    };
-    let mut wrote = false;
-    assert_eq!(gun(&mut x.vm, "a line", false, &mut prepare, &mut init, &mut wrote).unwrap(), target);
-    assert_eq!(*events.borrow(), ["made owned=false", "init true"]);
+fn make_s_init_is_the_pickup_gun_init() {
+    let real: fn(&mut Vm, ObjRef) -> Result<(), VmError> = crate::cmd::inventory::equip_run::pickup_gun_init;
+    assert!(std::ptr::fn_addr_eq(MAKE_INIT, real));
 }
 
-/// Test 4, the mesh layer: a world that already has it gets no second install (its log line once), whichever gun asks.
+/// Review of #761: the order inside `pickup_gun_init`: link 8's five preloads, then the mesh layer, then the
+/// threshold preload, then the init phase, each the function link 8's driver calls.
 #[test]
-fn the_mesh_layer_is_installed_once_per_world() {
-    let mut x = fx();
-    let (a, b) = (x.pickup(), x.pickup());
-    crate::cmd::inventory::equip_run::install_mesh_layer(&mut x.vm, a).unwrap();
-    crate::cmd::inventory::equip_run::install_mesh_layer(&mut x.vm, b).unwrap();
-    let line = crate::cmd::inventory::equip_run::LOD_LAYER_LINE;
-    assert_eq!(x.vm.log.iter().filter(|l| l.as_str() == line).count(), 1, "{:?}", x.vm.log);
-    assert!(x.vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_some());
+fn the_pickup_gun_init_runs_its_steps_in_link_8_s_order() {
+    use crate::cmd::inventory::equip_run as e;
+    let expected: [(&str, e::GunInitStep); 8] = [
+        ("muzzle flashes", e::preload_muzzle_flashes),
+        ("gestalt mesh", e::preload_gestalt_mesh),
+        ("gestalt skeletal mesh", e::preload_gestalt_skeletal_mesh),
+        ("material part material", e::preload_material_part_material),
+        ("material classes", e::preload_material_classes),
+        ("mesh layer", e::install_mesh_layer),
+        ("threshold attributes", e::preload_threshold_attributes),
+        ("init", e::init_phase),
+    ];
+    for ((name, step), (want_name, want)) in e::GUN_INIT_STEPS.iter().zip(expected.iter()) {
+        assert_eq!(name, want_name);
+        assert!(std::ptr::fn_addr_eq(*step, *want), "{name}");
+    }
+    assert_eq!(e::GUN_INIT_STEPS.len(), expected.len());
 }
+
+// Test 4 (the mesh layer installed once per world) is `equip_run_gestalt_tests::
+// the_mesh_layer_is_installed_once_and_its_answer_logged`, which `pickup_gun_init` calls through `install_mesh_layer`.
