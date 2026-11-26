@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-UPDATEAMMOCOUNTS (2026-11-26, pc-hummer, docs only, on docs/native-updateammocounts from main 5dd2906b):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md reads `UpdateAmmoCounts`. It walks the
+globals definition's eight ammo kinds through the controller's pools (created if missing), compares each with its
+`LastKnownAmmoCount_*`, and raises `ScriptAnnounceAmmoGain` on a non-silent rise. It then reads link 6's take to the
+end, measured by a local probe on #778's head (an installed Off strict `--slice-gate` with each stop stubbed and a call
+trace, reverted and not committed). Eight natives are read. Two gaps sit outside them: the pickup world's controller
+has no `WorldInfo`, so `PickupQuery` fails into `FailedPickup`, and `EvaluateExpressions` is not bound. The predicted
+next stop is `Actor.SetBase` in `WillowInventory.GivenTo`. No code changed, so no measured number moved. UNVERIFIED in
+game.
+
 **ANALYST-TARGETABLE-RESOLVER (2026-11-26, pc-hummer, docs only, on docs/native-targetable-resolver from main 5dd2906):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_TARGETABLE_RESOLVER.md: the resolver answers 1.0 only for a native
 `ITargetable` whose `IsChampion` is true (an AI pawn's balance `Champion`). A local probe (Off `--combat-run`, links 3's
