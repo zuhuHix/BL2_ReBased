@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-TARGETABLE-RESOLVER (2026-11-26, pc-hummer, docs only, on docs/native-targetable-resolver from main 5dd2906):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_TARGETABLE_RESOLVER.md: the resolver answers 1.0 only for a native
+`ITargetable` whose `IsChampion` is true (an AI pawn's balance `Champion`). A local probe (Off `--combat-run`, links 3's
+and 4's steps after a player step, under the machine lock, reverted) shows the context is the enemy's `WillowMind`, so
+0.0, and the spawn's next stop `WillowPawn.SetDefaultPhysics` past its gates (NATIVE_MIND_ROUTE.md section 1). No code
+changed, so no measured number moved. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, on fix/rust-behavior-kernel-pass2 from main c345fdb0):**
 AI-assisted (Claude Code, Opus 5.5). Off pass 2 of `IntializeBehaviorProviderForConsumer`
 (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4): link, register, react, behind `ow-vm`'s mission-condition service; the
