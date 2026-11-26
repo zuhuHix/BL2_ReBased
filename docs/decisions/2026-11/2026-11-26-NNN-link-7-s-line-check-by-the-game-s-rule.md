@@ -1,9 +1,10 @@
 ## 2026-11-26: Link 7's line check by the game's rule
 
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-LINK7-LINE-CHECK, the implementer half of the clean room, from
-`docs/verification/NATIVE_LINK7_LINE_CHECK.md` (#814 at 09dd27fe, with the hub's ruling in decision 2026-11-26-71:
-section 5 replaces ruling 4's three-actor list) and the hub's points (a) to (g) for the note's review fix, on main
-f80b68e7. **Every rule is UNVERIFIED in the running game.** Reference is unchanged.
+`docs/verification/NATIVE_LINK7_LINE_CHECK.md` as landed (#814 with its review r1 fix, main c876a397; the hub's ruling
+in decision 2026-11-26-71: section 5 replaces ruling 4's three-actor list). **Stacked on #816** (lane
+IMPL-FLOOR-TRACE-RULINGS), whose `trace_filter::owner_chains` gives the `Owner` chain both ways that the note's
+source exclusion needs; on main c876a397. **Every rule is UNVERIFIED in the running game.** Reference is unchanged.
 
 - **What was decided (Off only, under `pickup_targeting::NoLevelLineCheck` and a collision service with no
   geometry):**
@@ -27,19 +28,24 @@ f80b68e7. **Every rule is UNVERIFIED in the running game.** Reference is unchang
     named `NotRead`; reads only, resident objects only;
   - a service holding geometry with the setting on keeps `LINE_GEOMETRY`'s `NotRead`; the setting off, or no service,
     the headless `LayerAbsent`;
+  - each primitive's owner is `trace_filter::owner_of`'s (the component's own `Owner` when set, else the walked actor),
+    as the note's step 1a says;
   - `ow_world::trace_filter::part_class` and `PartClass` are now public, for this walk.
 - **Verified (host only):**
-  - `ow-inventory` hud_harness, 4 new tests on invented fixtures: the settings and services; pickups (a cylinder and a
+  - `ow-inventory` hud_harness, 5 new tests on invented fixtures: the settings and services; pickups (a cylinder and a
     skeletal mesh decoy, the target) and pawns (`Pawn`, a stationary one, a `WillowPlayerPawn`) never block; a
     world-geometry pickup, a mover (and one with disjoint bounds), a world-geometry `Base` (kept) and the same actor
     not the `Base`, the HUD's controller, a `bPawnsOnly` volume, and a pickup subclass with no read row; a primitive
-    only in `Components`, a negative radius, a NaN endpoint and an unloaded part. Each call leaves #518's counters and
+    only in `Components`, a negative radius, a NaN endpoint and an unloaded part; the note's 4a cases (a mover whose
+    only primitive is in `Components`, a NaN bounds centre, an unloaded `Owner` link, a mistyped `bWorldGeometry`, a
+    terrain, a `Pawn` subclass); the HUD's controller passed over only as the HUD's `Owner`. Each call leaves #518's counters and
     the class-code loads unchanged. Dropping the Willow pawn row, or the target-or-`Base` step, fails a test (checked by
     hand);
-  - `cargo test --workspace -j 8 --no-fail-fast` 4,081 passed / 0 failed / 59 ignored;
-  - the installed Off strict `--slice-gate` under the machine lock, base f80b68e7 against this head: **link 7 passes,
-    9 ok / 14, X = 9.0/14 = 64.3%** (main: 8 ok, 60.7%, link 7 at the decoy `WillowPickup`'s skeletal mesh). Link 6
-    still passes; every other row is unchanged.
-- **The note's fix:** the hub's points (a) to (g) are built in. The lane re-reads the note when the hub says F's fix is
-  in, and follows it where it differs.
+  - `cargo test --workspace -j 8 --no-fail-fast` 4,089 passed / 0 failed / 59 ignored;
+  - the installed Off strict `--slice-gate` under the machine lock, base #816's head 056260f1 against this change on
+    it (9254be78; the rebase onto main c876a397 brought only #814's docs): **link 7 passes, 9 ok / 14, X = 9.0/14 =
+    64.3%** (base: 8 ok, 60.7%, link 7 at the decoy `WillowPickup`'s skeletal mesh). Link 6 still passes; every other
+    row is unchanged. The first version, on main f80b68e7 alone, gave the same rows.
+- **The note's fix:** the lane built in the hub's points (a) to (g) first, then followed the note as landed: owners by
+  `owner_of`, the malformed text, and section 6's 4a tests.
 - **UNVERIFIED:** every rule; the primitives' own line tests are not ported.
