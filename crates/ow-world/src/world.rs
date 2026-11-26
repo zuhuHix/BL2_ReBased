@@ -551,6 +551,9 @@ impl NativePack for Pack {
             // collision setters; keep-existing by key, Off only.
             blend_setters::register(vm)?;
             collision_setters::register(vm)?;
+            // maya:8 after the collision setters (NATIVE_LINK1_RBPHYSICS_AND_AFTER.md, UNVERIFIED; lane
+            // IMPL-LINK1-RBPHYSICS): InitializeRBPhysics and the player pawn's natives; keep-existing by key, Off only.
+            player_pawn_tail::register(vm)?;
         }
         Ok(())
     }
@@ -660,6 +663,7 @@ pub mod online;
 /// `UpdateURL`, `SaveConfig` and `UpdateInputContext` after the login check (lane IMPL-LINK1-AFTER-LOGIN).
 pub mod after_login;
 pub mod aim_offset;
+pub mod player_pawn_tail;
 pub mod aim_profiles;
 pub mod blend_setters;
 pub mod collision_setters;

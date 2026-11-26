@@ -324,8 +324,8 @@ fn item_actors_iterator() -> IteratorFn {
     })
 }
 
-/// Binds `ItemActors` and [`inventory_actors`]'s `InventoryActors` in `ParityMode::Off` under its declaration's own native key (a VM without the declaration binds
-/// nothing); Reference binds nothing (module documentation).
+/// Binds `ItemActors` and [`inventory_actors`]'s `InventoryActors` in `ParityMode::Off`, each under its declaration's
+/// own native key (a VM without the declaration binds nothing); Reference binds nothing (module documentation).
 pub fn register_iterators(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());

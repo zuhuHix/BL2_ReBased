@@ -84,10 +84,11 @@ fn readied(vm: &Vm, entry: ObjRef) -> Result<bool, VmError> {
     }
 }
 
-/// A store handle not loaded yet, or a slotless stand-in: [`NOT_LOADED`]. Reads the heap and the store only.
+/// A store handle not loaded yet, or a slotless stand-in: [`NOT_LOADED`]. Reads the heap and the store only. The
+/// stand-in test is `ow-attr`'s `slotless_refusal` one (review of #736): an `Origin::Resource` object with no slots.
 fn loaded(vm: &Vm, entry: ObjRef) -> Result<(), VmError> {
     let o = vm.space.heap.get(entry)?;
-    let slotless = vm.space.classes.get_layout(o.class).is_some_and(|l| o.slots.len() < l.slot_count() as usize);
+    let slotless = matches!(o.origin, ow_object::heap::Origin::Resource { .. }) && o.slots.is_empty();
     if vm.defs.is_unloaded(&vm.space, entry) || slotless {
         return Err(NotYet::not_read(NOT_LOADED, RECORD).into());
     }

@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK1-RBPHYSICS (2026-11-26, pc-hummer, on main 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). From
+NATIVE_LINK1_RBPHYSICS_AND_AFTER.md: `InitializeRBPhysics` (attach-record test, physics `LayerAbsent`, never a write),
+`GetFirstPersonWeaponHoldDef`, `GetLinearColor`, the falling-damage hook, and 2.B / 2.E `NotRead`; #736's two LOWs.
+`cargo test --workspace -j 8` 3,714 passed / 0 failed / 58 ignored; `crate_edges_test.py` OK. Installed Off strict
+`--slice-gate` (under the machine lock), before and after: 6 ok / 8 NotYet / 0 errors, 47.0%; link 1 still at the
+aim-offset rebuild's `NotRead`. No real-game run.
+
 **ANALYST-AIMOFFSET-REBUILD (2026-11-26, pc-hummer, docs only, on docs/native-aimoffset-required-bones-rebuild from main
 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). NATIVE_AIMOFFSET_REBUILD.md: the aim-offset node's required-bones
 rebuild, read whole (the gate, the lookup table, the component match, the sort, the parent pass), with a load-free Off

@@ -20,6 +20,9 @@ use super::*;
 struct Fx {
     vm: Vm,
     f: FuncId,
+    /// The fields `body` fills: the third-person pair, or with `first_person` the first-person pair (lane
+    /// IMPL-LINK1-RBPHYSICS, 2.C).
+    fields: (&'static str, &'static str),
     body: ClassId,
     hold: ClassId,
     tag: ClassId,
@@ -35,6 +38,11 @@ fn param(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
 
 /// The classes, the declared native and the binding, in `mode`.
 fn fx_in(mode: ParityMode) -> Fx {
+    fx_with(mode, false)
+}
+
+/// [`fx_in`], with `first_person` the `GetFirstPersonWeaponHoldDef` native and its fields.
+fn fx_with(mode: ParityMode, first_person: bool) -> Fx {
     let mut space = ObjectSpace::new();
     let object = space.classes.define("Core.Object", None, vec![]).unwrap();
     let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), mode);
@@ -46,6 +54,8 @@ fn fx_in(mode: ParityMode) -> Fx {
         decl(&mut vm, "WeaponActionParentClass", o.clone()),
         decl(&mut vm, "DefaultWeaponHoldDef", PropKind::Object { class: hold }),
         decl(&mut vm, "WeaponHoldDefs", PropKind::Array(Box::new(PropKind::Object { class: hold }))),
+        decl(&mut vm, "DefaultFirstPersonWeaponHoldDef", PropKind::Object { class: hold }),
+        decl(&mut vm, "FirstPersonWeaponHoldDefs", PropKind::Array(Box::new(PropKind::Object { class: hold }))),
     ];
     let body = vm.space.classes.define("WillowGame.BodyClassDefinition", Some(object), props).unwrap();
     let params = vec![
@@ -54,12 +64,17 @@ fn fx_in(mode: ParityMode) -> Fx {
         param(&mut vm, "bSearchParentClass", PropKind::Bool),
         param(&mut vm, "bFallbackToDefaultDef", PropKind::Bool),
     ];
-    let path = ObjectPath::parse("WillowGame.BodyClassDefinition.GetWeaponHoldDef").unwrap();
-    let f = vm.declare_function(FunctionDecl::native(path, KEY).with_owner(body).with_params(params)).unwrap();
+    let (name, key, fields) = if first_person {
+        ("GetFirstPersonWeaponHoldDef", FIRST_PERSON_KEY, ("FirstPersonWeaponHoldDefs", "DefaultFirstPersonWeaponHoldDef"))
+    } else {
+        ("GetWeaponHoldDef", KEY, ("WeaponHoldDefs", "DefaultWeaponHoldDef"))
+    };
+    let path = ObjectPath::parse(&format!("WillowGame.BodyClassDefinition.{name}")).unwrap();
+    let f = vm.declare_function(FunctionDecl::native(path, key).with_owner(body).with_params(params)).unwrap();
     if mode != ParityMode::Reference {
         register(&mut vm).unwrap();
     }
-    Fx { vm, f, body, hold, tag }
+    Fx { vm, f, fields, body, hold, tag }
 }
 
 fn fx() -> Fx {
@@ -89,8 +104,9 @@ impl Fx {
     /// A body class with `holds` (None entries allowed), a default and a parent.
     fn body(&mut self, label: &str, holds: &[Option<ObjRef>], default: Option<ObjRef>, parent: Option<ObjRef>) -> ObjRef {
         let b = self.vm.space.alloc(self.body, label, None, Origin::Runtime).unwrap();
-        self.set(b, "WeaponHoldDefs", Value::array(holds.iter().map(|h| Value::Object(*h)).collect()));
-        self.set(b, "DefaultWeaponHoldDef", Value::Object(default));
+        let (list, default_field) = self.fields;
+        self.set(b, list, Value::array(holds.iter().map(|h| Value::Object(*h)).collect()));
+        self.set(b, default_field, Value::Object(default));
         self.set(b, "WeaponActionParentClass", Value::Object(parent));
         b
     }
@@ -336,4 +352,49 @@ fn off_binds_the_key_and_reference_does_not() {
     let mut r = fx_in(ParityMode::Reference);
     ow_vm::api::NativePack::register(&crate::world::Pack, &mut r.vm).unwrap();
     assert!(!r.vm.has_native(KEY));
+}
+
+/// NATIVE_LINK1_RBPHYSICS_AND_AFTER.md 2.C (lane IMPL-LINK1-RBPHYSICS): `GetFirstPersonWeaponHoldDef` is the same rule
+/// on `FirstPersonWeaponHoldDefs` and `DefaultFirstPersonWeaponHoldDef` (#728's cases, on the first-person fields), with
+/// the same `WeaponActionParentClass`; the third-person fields are not read.
+#[test]
+fn the_first_person_lookup_is_the_same_rule_on_the_first_person_fields() {
+    let mut x = fx_with(ParityMode::Off, true);
+    // Maya's shape: the shared parent holds the first-person `Unarmed` and a default; her own class has none.
+    let unarmed = x.hold("WeaponHold_Player_Unarmed", "Unarmed", None);
+    let shared_default = x.hold("WeaponHold_Player_Default", "None", None);
+    let shared = x.body("BodyClass_PlayerShared", &[Some(unarmed)], Some(shared_default), None);
+    let own = x.body("BodyClass_Toy", &[], None, Some(shared));
+    assert_eq!(x.ask(shared, "Unarmed", None, false, true).unwrap(), Some(unarmed));
+    assert_eq!(x.ask(own, "Unarmed", None, false, true).unwrap(), None, "no entries, no default");
+    assert_eq!(x.ask(own, "Unarmed", None, true, true).unwrap(), Some(unarmed), "the parent's");
+    // A third-person entry is not read by the first-person lookup.
+    let third = x.hold("ThirdPersonUnarmed", "Unarmed", None);
+    let b = x.body("Mixed", &[], None, None);
+    x.set(b, "WeaponHoldDefs", Value::array(vec![Value::Object(Some(third))]));
+    assert_eq!(x.ask(b, "Unarmed", None, false, true).unwrap(), None);
+    // The candidate rule and the re-read quirk.
+    let [tx, tz] = ["X", "Z"].map(|n| x.tag(n));
+    let ax = x.hold("AX", "A", Some(tx));
+    let a_none = x.hold("ANone", "A", None);
+    let b = x.body("Candidates", &[Some(ax), Some(a_none)], None, None);
+    assert_eq!(x.ask(b, "A", Some(tz), false, true).unwrap(), Some(a_none));
+    let look_alike = x.hold("ParentDefaultAZ", "A", Some(tz));
+    let parent = x.body("Parent", &[], Some(look_alike), None);
+    let child = x.body("Child", &[Some(ax)], None, Some(parent));
+    assert_eq!(x.ask(child, "A", Some(tz), true, true).unwrap(), Some(look_alike), "the re-read");
+    // The lazy refusals name the first-person native.
+    let lazy = x.vm.space.alloc_stand_in(x.hold, "LazyHold", Origin::Default { class: x.hold }).unwrap();
+    let b = x.body("WithLazy", &[Some(lazy)], None, None);
+    match x.ask(b, "A", None, false, true) {
+        Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, FIRST_PERSON_HOLD_NOT_LOADED)),
+        other => panic!("{other:?}"),
+    }
+    let lazy_body = x.vm.space.alloc_stand_in(x.body, "LazyBody", Origin::Default { class: x.body }).unwrap();
+    match x.ask(lazy_body, "A", None, false, true) {
+        Err(VmError::NotYet(n)) => assert_eq!(&*n.what, FIRST_PERSON_NOT_LOADED),
+        other => panic!("{other:?}"),
+    }
+    let r = fx_with(ParityMode::Reference, true);
+    assert!(!r.vm.has_native(FIRST_PERSON_KEY), "Reference binds nothing");
 }

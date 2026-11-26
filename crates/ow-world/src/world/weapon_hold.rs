@@ -46,6 +46,9 @@ use ow_vm::error::VmError;
 pub const RECORD: &str = "docs/verification/NATIVE_GET_WEAPON_HOLD_DEF.md";
 /// The native key.
 pub const KEY: &str = "BodyClassDefinition.GetWeaponHoldDef(name,object,bool,bool)";
+/// `GetFirstPersonWeaponHoldDef`'s key: the same rule on the first-person fields (NATIVE_LINK1_RBPHYSICS_AND_AFTER.md
+/// 2.C; lane IMPL-LINK1-RBPHYSICS).
+pub const FIRST_PERSON_KEY: &str = "BodyClassDefinition.GetFirstPersonWeaponHoldDef(name,object,bool,bool)";
 /// A body class the store has not loaded.
 pub const NOT_LOADED: &str = "GetWeaponHoldDef on a body class not loaded at set-up (a load is a write)";
 /// A weapon hold definition the store has not loaded.
@@ -90,8 +93,8 @@ fn object(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
 }
 
 /// A hold definition's `HoldName` and `EnvironmentTag`, after its residency check.
-fn hold_key(vm: &Vm, hold: ObjRef) -> Result<(NameId, Option<ObjRef>), VmError> {
-    resident(vm, hold, HOLD_NOT_LOADED)?;
+fn hold_key(vm: &Vm, hold: ObjRef, not_loaded: &'static str) -> Result<(NameId, Option<ObjRef>), VmError> {
+    resident(vm, hold, not_loaded)?;
     let name = match field(vm, hold, "HoldName", "a name", |k| matches!(k, PropKind::Name))? {
         Value::Name(n) => *n,
         other => return Err(script(format!("HoldName holds {}, not a name", other.kind_name()))),
@@ -99,9 +102,36 @@ fn hold_key(vm: &Vm, hold: ObjRef) -> Result<(NameId, Option<ObjRef>), VmError> 
     Ok((name, object(vm, hold, "EnvironmentTag")?))
 }
 
-/// The lookup on `body` (module documentation); `visited` is the port's loop guard.
+/// The two fields a lookup reads (the parent is `WeaponActionParentClass` for both) and its refusal texts.
+#[derive(Clone, Copy)]
+struct Lists {
+    holds: &'static str,
+    default: &'static str,
+    not_loaded: &'static str,
+    hold_not_loaded: &'static str,
+}
+
+/// `GetWeaponHoldDef`'s fields.
+const THIRD_PERSON: Lists =
+    Lists { holds: "WeaponHoldDefs", default: "DefaultWeaponHoldDef", not_loaded: NOT_LOADED, hold_not_loaded: HOLD_NOT_LOADED };
+/// `GetFirstPersonWeaponHoldDef`'s fields (2.C: the two swapped, the parent the same).
+const FIRST_PERSON: Lists = Lists {
+    holds: "FirstPersonWeaponHoldDefs",
+    default: "DefaultFirstPersonWeaponHoldDef",
+    not_loaded: FIRST_PERSON_NOT_LOADED,
+    hold_not_loaded: FIRST_PERSON_HOLD_NOT_LOADED,
+};
+/// 2.C's refusal texts.
+pub const FIRST_PERSON_NOT_LOADED: &str =
+    "GetFirstPersonWeaponHoldDef on a body class not loaded at set-up (a load is a write)";
+pub const FIRST_PERSON_HOLD_NOT_LOADED: &str =
+    "GetFirstPersonWeaponHoldDef over a weapon hold definition not loaded at set-up (a load is a write)";
+
+/// The lookup on `body` over `lists` (module documentation); `visited` is the port's loop guard.
+#[allow(clippy::too_many_arguments)]
 fn lookup(
     vm: &Vm,
+    lists: Lists,
     body: ObjRef,
     name: NameId,
     tag: Option<ObjRef>,
@@ -113,24 +143,24 @@ fn lookup(
         return Err(script("the WeaponActionParentClass chain comes back to a class it already visited".to_string()));
     }
     visited.push(body);
-    resident(vm, body, NOT_LOADED)?;
-    let list = field(vm, body, "WeaponHoldDefs", "an array of object references", |k| {
+    resident(vm, body, lists.not_loaded)?;
+    let list = field(vm, body, lists.holds, "an array of object references", |k| {
         matches!(k, PropKind::Array(inner) if is_object(inner))
     })?;
     let holds = list
         .elements()
         .map(<[Value]>::to_vec)
-        .ok_or_else(|| script(format!("WeaponHoldDefs holds {}, not an array", list.kind_name())))?;
-    let default = object(vm, body, "DefaultWeaponHoldDef")?;
+        .ok_or_else(|| script(format!("{} holds {}, not an array", lists.holds, list.kind_name())))?;
+    let default = object(vm, body, lists.default)?;
     let parent = object(vm, body, "WeaponActionParentClass")?;
     let mut candidate = None;
     for entry in holds.iter() {
         let hold = match entry {
             Value::Object(Some(h)) => *h,
             Value::Object(None) => continue,
-            other => return Err(script(format!("a WeaponHoldDefs entry holds {}, not an object", other.kind_name()))),
+            other => return Err(script(format!("a {} entry holds {}, not an object", lists.holds, other.kind_name()))),
         };
-        let (n, t) = hold_key(vm, hold)?;
+        let (n, t) = hold_key(vm, hold, lists.hold_not_loaded)?;
         if n != name {
             continue;
         }
@@ -142,10 +172,10 @@ fn lookup(
         }
     }
     if parent_search && let Some(parent) = parent {
-        let answer = lookup(vm, parent, name, tag, parent_search, fallback && default.is_none(), visited)?;
+        let answer = lookup(vm, lists, parent, name, tag, parent_search, fallback && default.is_none(), visited)?;
         match (candidate, answer) {
             // The re-read: the returned hold's own name and tag (residency checked first by `hold_key`).
-            (Some(c), Some(a)) => return Ok(Some(if hold_key(vm, a)? == (name, tag) { a } else { c })),
+            (Some(c), Some(a)) => return Ok(Some(if hold_key(vm, a, lists.hold_not_loaded)? == (name, tag) { a } else { c })),
             (Some(c), None) => return Ok(Some(c)),
             (None, Some(a)) => return Ok(Some(a)),
             (None, None) => {}
@@ -159,6 +189,15 @@ fn lookup(
 
 /// The native (module documentation).
 pub fn get_weapon_hold_def(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    hold_def(c, THIRD_PERSON)
+}
+
+/// `GetFirstPersonWeaponHoldDef` (2.C): the same rule on the first-person fields.
+pub fn get_first_person_weapon_hold_def(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    hold_def(c, FIRST_PERSON)
+}
+
+fn hold_def(c: &mut NativeCall<'_>, lists: Lists) -> Result<Value, VmError> {
     let body = c.this.ok_or_else(|| script("called without a body class".to_string()))?;
     let name = match c.arg(0)? {
         Value::Name(n) => *n,
@@ -175,7 +214,7 @@ pub fn get_weapon_hold_def(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     };
     let parent_search = flag(c, 2, "bSearchParentClass")?;
     let fallback = flag(c, 3, "bFallbackToDefaultDef")?;
-    let answer = lookup(c.vm, body, name, tag, parent_search, fallback, &mut Vec::new())?;
+    let answer = lookup(c.vm, lists, body, name, tag, parent_search, fallback, &mut Vec::new())?;
     Ok(Value::Object(answer))
 }
 
@@ -183,6 +222,9 @@ pub fn get_weapon_hold_def(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     if !vm.has_native(KEY) {
         vm.register_native(KEY, Rc::new(get_weapon_hold_def))?;
+    }
+    if !vm.has_native(FIRST_PERSON_KEY) {
+        vm.register_native(FIRST_PERSON_KEY, Rc::new(get_first_person_weapon_hold_def))?;
     }
     Ok(())
 }
