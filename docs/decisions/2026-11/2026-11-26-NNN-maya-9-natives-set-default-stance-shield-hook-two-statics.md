@@ -43,6 +43,12 @@ UNVERIFIED in the running game.
   `RegisterBehaviorConsumer` without the stance's provider (Maya's case). Test 4 calls the set-stance directly: the
   pick only ever selects one of the five, so an override cannot come from `SetDefaultStance` itself. Tests 10 and 11
   are the key-binding branch's (fix/is-player-pawn-and-unbound-keys).
-- **The slice gate:** see the GATES row of this lane.
+- **The slice gate** (installed, Off, strict, release build, under the machine lock): 6 ok / 8 not ok, 51.2%, both on
+  this branch alone and merged locally with fix/is-player-pawn-and-unbound-keys and fix/preload-bodyclass-definitions.
+  - Alone: links 1, 3, 4, 5, 13 and 14 stop at the unbound `Pawn.IsPlayerPawn()`, as on main.
+  - Merged: they stop earlier in `maya:8`, at pass 2 of `InitializeBehaviorProviders` (row 5 of the note's table): the
+    sequence `Ep10_MordecaiChatter` of the Siren's player-events provider has a `CustomEnableCondition` whose owner (the
+    mission tracker's observers) is not built (`LayerAbsent`). This is the note's caveat 1: its probe skipped pass 2's
+    conditions. **So none of these natives is reached in the installed run yet**; the next lane is that condition owner.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.
