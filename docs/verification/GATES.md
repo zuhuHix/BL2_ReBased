@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**MAYA9-SKIPPED-FLAG-LAYERABSENT (2026-11-26, pc-hummer, on fix/maya9-skipped-flag-layerabsent, stacked on #781 @
+9c41966):** AI-assisted (Claude Code, Opus 5.5). `FlagDefinition.ApplyFlagInitializationData` answers `LayerAbsent`
+when its `const out` argument aliases a property the store skipped (new read-only `NativeCall::arg_property`).
+`cargo test -p ow-combat -p ow-vm -j 8` 542 passed / 0 failed / 3 ignored; `crate_edges_test.py` OK. No slice-gate
+run: Maya's `DesignerFlagStartingValues` decodes, and link 1 stops before row 12. UNVERIFIED in game. Decision
+2026-11-26-NNN.
+
 **IMPL-UPDATEAMMOCOUNTS (2026-11-26, pc-hummer, on fix/rust-updateammocounts, rebased onto main d3be3e5):**
 AI-assisted (Claude Code, Opus 5.5). Link 6's take in Off (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md 3.1, 3.3-3.8, 4.1,
 4.2; NATIVE_PICKUP_SAVE_ROTATION.md section 5 with the hub's at-rest ruling behind a harness setting; the eight ammo
