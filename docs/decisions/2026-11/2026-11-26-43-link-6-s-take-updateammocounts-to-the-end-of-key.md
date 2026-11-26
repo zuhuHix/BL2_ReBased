@@ -22,8 +22,9 @@ check changed.
 - **Findings** (UNVERIFIED in game):
   - `UpdateAmmoCounts` walks the eight ammo kinds, creating missing pools, and announces a rise only when not silent.
     The second call is silent exactly when the take added an item;
-  - read with Off answers: `GetSaveRotation`, `ComponentList`, `MakeNoise` (a no-op in this build), `IsUsingVehicle`,
-    `IsDLCRequirementMet`, `SetOwner` (two steps beyond the port's `set_owner`) and `GetResourcePoolContext`;
+  - read with Off answers: `ComponentList`, `MakeNoise` (a no-op in this build), `IsUsingVehicle`,
+    `IsDLCRequirementMet`, `SetOwner` (two steps beyond the port's `set_owner`) and `GetResourcePoolContext`.
+    `GetSaveRotation` agrees with NATIVE_PICKUP_SAVE_ROTATION.md, which keeps its rule;
   - two gaps:
     - the pickup world's controller has no `WorldInfo`, so `PickupQuery` reads through None and the take fails into
       `FailedPickup`;
@@ -31,5 +32,13 @@ check changed.
 - **Next** (from the probe): `Actor.SetBase` in `WillowInventory.GivenTo`, an existing `NotRead`.
 - **Needs the hub:**
   - the controller and pawn `WorldInfo` harness input;
-  - `GetSaveRotation`'s at-rest answer.
+  - `GetSaveRotation`'s ruling (NATIVE_PICKUP_SAVE_ROTATION.md section 5).
+- **Review r1 (#785):**
+  - 3.2 points at NATIVE_PICKUP_SAVE_ROTATION.md and keeps only the probe's slice facts; the duplicate index row is
+    gone;
+  - `ComponentList` follows the game's live re-read, or compares the array after each body, a change being a prefixed
+    refusal;
+  - the eight lookup preflights are checked against the pre-call state;
+  - `SetOwner`'s refresh is planned up front and applied after the events, a difference being a prefixed refusal;
+  - the `IsDLCRequirementMet` declarations are listed.
 - **Clean room:** a different lane implements this note.

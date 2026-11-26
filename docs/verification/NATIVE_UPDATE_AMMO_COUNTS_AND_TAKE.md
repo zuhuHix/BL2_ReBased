@@ -96,10 +96,12 @@ The exec calls the controller's virtual, which does this:
 
 **Proposed Off answer:**
 - **preflight**, write-free and load-free:
-  - the globals definition resident (else `NotYet { NotRead }`). With no globals object: nothing;
+  - the globals definition resident (else `NotRead`). With no globals object: nothing;
   - the eight definition fields declared as objects, and the eight caches as floats, else `VmError::Script`;
   - each set definition resident;
-  - `GetResourcePoolForResourceDefinition`'s own preflight for each;
+  - `GetResourcePoolForResourceDefinition`'s own preflight for all eight, each checked against the state before the
+    call (review r1 of #785). A lookup's creation can change what a later lookup meets, so a later lookup's refusal
+    in the commit carries the partial-writes prefix;
 - **commit**, in the table's order:
   - the lookup with creation (the existing rule; a creation is a write);
   - the compare;
@@ -109,19 +111,15 @@ The exec calls the controller's virtual, which does this:
   A refusal after the first write (a creation, a cache, or the event's script) carries the "stopped after partial
   writes: " prefix.
 
-### 3.2 `WillowPickup.GetSaveRotation()`
+### 3.2 `WillowPickup.GetSaveRotation()`: see NATIVE_PICKUP_SAVE_ROTATION.md
 
-The exec calls the pickup's virtual:
-- **with `Physics` `PHYS_RigidBody` and a `CollisionComponent` whose rigid body exists:** the body's orientation as a
-  rotator (the engine's quaternion-to-rotator conversion);
-- **otherwise:** the actor's `Rotation`.
+The rule and its Off answer are NATIVE_PICKUP_SAVE_ROTATION.md section 5 (decision 2026-11-26-05), which this lane's
+reading agrees with. That section's default for a rigid-body pickup is the physics `LayerAbsent`. The actor's
+`Rotation` is the answer only under the hub's ruling, with its stand-in log line (review r1 of #785).
 
-**The slice's pickup** has `Physics` `PHYS_RigidBody` and a `CollisionComponent` (probe). Under the hub's at-rest ruling
-on #574 (NATIVE_PICKUP_RB_MINIMAL.md section 3) no rigid body is made, and the pickup rests where it was spawned.
-
-**Proposed Off answer:** the actor's `Rotation`, read-only. That is the game's no-body branch, and it is the body's
-orientation for a body at rest where it was made. UNVERIFIED; the hub's call, as an extension of the at-rest ruling.
-`Physics` is declared as a byte and `Rotation` as a rotator, else `VmError::Script`.
+**What is new here** (the probe): the slice's pickup does reach the rigid-body case. Its `Physics` is `PHYS_RigidBody`
+and its `CollisionComponent` is set. So under that note's default, link 6 stops here with the physics `LayerAbsent`.
+Section 5's order below assumes the ruling.
 
 ### 3.3 `Actor.ComponentList(class BaseClass, out ActorComponent)` (iterator)
 
@@ -132,9 +130,14 @@ orientation for a body at rest where it was made. UNVERIFIED; the hub's call, as
 **Proposed Off answer:** an iterator in Off:
 - `Components` declared as an array of objects, else `VmError::Script`;
 - the class test by the entry's class chain, with no load. A lazy entry is judged by the class its handle carries;
-- the VM's iterators hand over a list. Because the game re-reads, a loop body that changes `Components` would differ.
-  So the iterator answers `NotYet { NotRead }` when the body is a script that writes `Components`. On the slice the body
-  is `RemoveWaypoint`, and the pickup has no `WaypointComponent` (probe), so nothing runs.
+- **the game's behaviour is a live re-read by index** (review r1 of #785). Each step reads `Components` at the next
+  index as it is then, so a body that adds or removes entries moves what the loop sees. That is the rule to follow:
+  - an iterator that can step (one entry per step, reading the live array at the loop's index) reproduces it exactly;
+  - the VM's iterator interface today hands over a list up front, so it cannot re-read. With that interface, the
+    iterator keeps a copy of `Components` and compares it with the live array after each body. Any difference is a
+    `NotRead` ("ComponentList: the loop body changed Components"), with the partial-writes prefix, since the body
+    ran. Equal arrays give the game's answer exactly;
+- on the slice, the body is `RemoveWaypoint` and the pickup has no `WaypointComponent` (probe), so no body runs.
 
 ### 3.4 `Actor.MakeNoise(float Loudness, optional name NoiseType)`
 
@@ -152,8 +155,8 @@ this build.** **Off answer:** nothing.
 **Proposed Off answer:**
 - no pawn: false;
 - a pawn of those three first native classes: false, unless the flag is set with a `DrivenVehicle`, which is
-  `NotYet { NotRead }`;
-- any other first native class: `NotYet { NotRead }`;
+  `NotRead`;
+- any other first native class: `NotRead`;
 - `DrivenVehicle` declared as an object, else `VmError::Script`.
 
 It replaces NATIVE_GO_DOWN_PATH.md's `NotRead` for this key.
@@ -166,8 +169,11 @@ The exec calls the inventory's virtual. For a `WillowWeapon`:
 
 **Maya:** `AR_Bandit` has no `DlcItemSet`, so true.
 
-**Proposed Off answer:** true for those two cases; a set `DlcItemSet` is `NotYet { NotRead }`. Other inventory classes'
-bodies were not read: `NotYet { NotRead }` naming the class.
+**Proposed Off answer:**
+- `DefinitionData` declared as a struct with an object `BalanceDefinition`, and `DlcItemSet` declared as an object on
+  the balance's class; each else `VmError::Script` (review r1 of #785);
+- true for those two cases; a set `DlcItemSet` is `NotRead`;
+- other inventory classes' bodies were not read: `NotRead` naming the class.
 
 ### 3.7 `Actor.SetOwner(Actor NewOwner)`
 
@@ -182,10 +188,15 @@ The rule `ow-world`'s `actors::set_owner` already implements, with **two steps i
   flags land exactly under the primitive component's usual shift; the "marked" flag is by fit `bNeedsReattach`;
 - **then `bNetDirty`** is set.
 
-**Proposed Off answer:** bind the script native `Actor.SetOwner(object)` in Off to `set_owner`, then:
-- the refresh through the existing deferred-reattach planner (`component_setters`), planned before the first write;
-  where that planner refuses, its refusal stands;
-- `bNetDirty`.
+**Proposed Off answer:** bind the script native `Actor.SetOwner(object)` in Off to `set_owner`, then the refresh and
+`bNetDirty` (review r1 of #785):
+- **up front**, before any write: the deferred-reattach planner's preflight (`component_setters`) over the components
+  as they are. Its refusal stands, with no prefix;
+- `LostChild` and `GainedChild` are script events. They run before the refresh and can change the components, their
+  flags or the owner the plan was built from. So the refresh is applied to the state **after** the events: the planner
+  runs again then. Any difference from the up-front plan (a refusal it did not have, or a component set that changed)
+  is a refusal with the partial-writes prefix;
+- then `bNetDirty`.
 
 ### 3.8 `WillowWeapon.GetResourcePoolContext()`
 
@@ -221,7 +232,8 @@ is true. It is used inside ow-attr but not bound as the static script native
 
 Link 6, after `UpdateAmmoCounts` (3.1) is answered, meets in order:
 1. 4.1 (a harness gap);
-2. 3.2;
+2. 3.2 (under the hub's ruling; by NATIVE_PICKUP_SAVE_ROTATION.md's default, its physics `LayerAbsent` stops link 6
+   here);
 3. 3.3;
 4. 3.4;
 5. 3.5;
@@ -252,8 +264,7 @@ Link 7 is unchanged (the HUD `LayerAbsent` in `look`).
    - a missing pool: made by the lookup's rule, value 0;
    - the order of the eight kinds, by a recording event.
 2. `UpdateAmmoCounts` with no globals: nothing. A mistyped cache: `VmError::Script`, nothing written.
-3. `GetSaveRotation`: `Physics` other than rigid body: `Rotation`. Rigid body with a `CollisionComponent` (no body in
-   the port): `Rotation`.
+3. `GetSaveRotation`: NATIVE_PICKUP_SAVE_ROTATION.md section 6's tests.
 4. `ComponentList`:
    - a None class: no iteration;
    - two waypoint components among three entries: those two, in order;
@@ -287,7 +298,7 @@ Link 7 is unchanged (the HUD `LayerAbsent` in `look`).
 3. **Fitted:** 3.7's reattach mark (by fit `bNeedsReattach`).
 4. **The hub's calls:**
    - the controller and pawn `WorldInfo` harness input (4.1);
-   - 3.2's at-rest answer.
+   - 3.2's ruling (NATIVE_PICKUP_SAVE_ROTATION.md section 5).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
