@@ -96,11 +96,7 @@ fn script(message: String) -> VmError {
 }
 
 /// Whether `o` is resident: neither a handle the store has not loaded (or failed) nor a slotless stand-in.
-fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
-    let x = vm.space.heap.get(o)?;
-    let slotless = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
-    Ok(!(vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || slotless))
-}
+use super::additive_override::resident;
 
 /// `o`'s field `name`, whose declaration must satisfy `ok` (else `VmError::Script` naming it), with its property.
 fn field<'a>(

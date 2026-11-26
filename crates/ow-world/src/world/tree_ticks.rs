@@ -49,7 +49,7 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::skeletal;
+use super::additive_override::{self, Reads, resident};
 
 /// The analyst note.
 pub const RECORD: &str = "docs/verification/NATIVE_UPDATEANIMATIONS_TREE_TICKS.md";
@@ -180,12 +180,16 @@ fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
 }
 
 /// `o` resident, else [`not_loaded`] naming `role` and its handle path.
-fn resident(vm: &Vm, o: ObjRef, role: &str) -> Result<(), VmError> {
-    if !skeletal::resident(vm, o)? || vm.defs.is_failed(&vm.space, o) {
-        let path = vm.defs.handle_path(o).unwrap_or_default();
-        return Err(not_read(not_loaded(role, &path)));
+fn require(vm: &Vm, o: ObjRef, role: &str) -> Result<(), VmError> {
+    if !resident(vm, o)? {
+        return Err(refuse_not_loaded(vm, o, role));
     }
     Ok(())
+}
+
+fn refuse_not_loaded(vm: &Vm, o: ObjRef, role: &str) -> VmError {
+    let path = vm.defs.handle_path(o).unwrap_or_default();
+    not_read(not_loaded(role, &path))
 }
 
 /// One sequence node's planned writes.
@@ -206,27 +210,15 @@ pub struct Plan {
     steps: Vec<SequenceStep>,
 }
 
-/// The component's sequence lookup of the name `text` for the asking `node` (the note's section 4), read only: the
-/// component's `AnimSets` last to first (first to last with the node's `bReverseAnimSeqSearchOrder` set), None entries
-/// skipped; in each set, its `Sequences` in order, None skipped, each resident, matched by `SequenceName` text as names
-/// compare (case-insensitively). The set's native name map is replaced by this walk (**UNVERIFIED**: the map's
-/// agreement with the list is a fit). The first set that answers gives the answer.
-fn lookup(vm: &Vm, component: ObjRef, reverse: bool, text: &str) -> Result<Option<ObjRef>, VmError> {
-    let mut sets = elements(&declared(vm, component, "AnimSets", Want::Array)?, "AnimSets")?;
-    if !reverse {
-        sets.reverse();
-    }
-    for set in sets.iter().filter_map(object) {
-        resident(vm, set, "the anim set")?;
-        for sequence in elements(&declared(vm, set, "Sequences", Want::Array)?, "Sequences")?.iter().filter_map(object) {
-            resident(vm, sequence, "the anim sequence")?;
-            let name = name_of(&declared(vm, sequence, "SequenceName", Want::Name)?);
-            if name != NameId::NONE && vm.space.names.text(name).eq_ignore_ascii_case(text) {
-                return Ok(Some(sequence));
-            }
-        }
-    }
-    Ok(None)
+/// The component's sequence lookup of the name `text` over its anim sets `sets` (the note's section 4), read only:
+/// [`additive_override::find_sequence`] with this module's field checks and refusal texts.
+fn lookup(vm: &Vm, sets: Vec<Value>, reverse: bool, text: &str) -> Result<Option<ObjRef>, VmError> {
+    let reads = Reads {
+        array: &|vm, o, name| elements(&declared(vm, o, name, Want::Array)?, name),
+        name: &|vm, o, name| Ok(name_of(&declared(vm, o, name, Want::Name)?)),
+        not_loaded: &refuse_not_loaded,
+    };
+    additive_override::find_sequence(vm, &reads, sets, reverse, text)
 }
 
 /// The additive override's preflight (module documentation, step 5).
@@ -250,14 +242,15 @@ fn additive(vm: &Vm, node: ObjRef, guard: bool) -> Result<bool, VmError> {
     let Some(component) = object(&declared(vm, node, "SkelComponent", Want::Object)?) else {
         return Ok(auto);
     };
-    resident(vm, component, "the node's SkelComponent")?;
+    require(vm, component, "the node's SkelComponent")?;
     if object(&declared(vm, component, "SkeletalMesh", Want::Object)?).is_none() {
         return Ok(auto);
     }
-    if elements(&declared(vm, component, "AnimSets", Want::Array)?, "AnimSets")?.is_empty() {
+    let sets = elements(&declared(vm, component, "AnimSets", Want::Array)?, "AnimSets")?;
+    if sets.is_empty() {
         return Ok(auto);
     }
-    if lookup(vm, component, reverse, &text)?.is_some() {
+    if lookup(vm, sets, reverse, &text)?.is_some() {
         return Err(not_read(LINKUP));
     }
     Ok(auto)
@@ -268,13 +261,13 @@ pub fn plan(vm: &Vm, component: ObjRef) -> Result<Option<Plan>, VmError> {
     let Some(root) = object(&declared(vm, component, "Animations", Want::Object)?) else {
         return Ok(None);
     };
-    resident(vm, root, "the tree root")?;
+    require(vm, root, "the tree root")?;
     let tag = int_of(&declared(vm, root, "NodeInitTag", Want::Int)?);
     declared(vm, component, "InitTag", Want::Int)?;
     let ticks = elements(&declared(vm, component, "AnimTickArray", Want::Array)?, "AnimTickArray")?;
     let mut steps = Vec::new();
     for node in ticks.iter().filter_map(object) {
-        if !skeletal::resident(vm, node)? || vm.defs.is_failed(&vm.space, node) {
+        if !resident(vm, node)? {
             return Err(not_read(TICK_NODE_NOT_LOADED));
         }
         let path = class_path(vm, node)?;
@@ -318,14 +311,10 @@ pub fn commit(vm: &mut Vm, component: ObjRef, plan: Plan) -> Result<(), VmError>
             write(vm, node, "AnimLinkupIndex", Value::Int(-1))?;
         }
         if let Some(auto) = step.additive {
-            if auto {
-                let name = vm.space.names.intern(AUTO_NAME);
-                write(vm, node, "AddAnimSeqName", Value::Name(name))?;
-            }
-            let name = vm.space.read(node, PropAddr::scalar(prop(vm, node, "AddAnimSeqName")?))?.clone();
-            write(vm, node, "AddAnimSeqName", name)?;
-            write(vm, node, "AddAnimSeq", Value::Object(None))?;
-            write(vm, node, "AddAnimLinkupIndex", Value::Int(-1))?;
+            let read = |vm: &Vm, o: ObjRef, name: &str| -> Result<Value, VmError> {
+                Ok(vm.space.read(o, PropAddr::scalar(prop(vm, o, name)?))?.clone())
+            };
+            additive_override::write_override(vm, node, auto, AUTO_NAME, &read, &write)?;
         }
         write(vm, node, "AnimSeqName", step.kept)?;
         write(vm, node, "CachedNumDesiredBones", Value::Byte(0))?;
