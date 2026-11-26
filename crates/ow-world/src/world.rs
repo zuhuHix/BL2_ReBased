@@ -554,6 +554,9 @@ impl NativePack for Pack {
             // maya:8 after the collision setters (NATIVE_LINK1_RBPHYSICS_AND_AFTER.md, UNVERIFIED; lane
             // IMPL-LINK1-RBPHYSICS): InitializeRBPhysics and the player pawn's natives; keep-existing by key, Off only.
             player_pawn_tail::register(vm)?;
+            // maya:8 after InitializeRBPhysics (NATIVE_GETPHYSXLEVEL_AND_AFTER.md, UNVERIFIED; lane
+            // SOCKETS-PUBLISH-AND-PHYSX-LEVEL): GetPhysXLevel, SetHasPhysicsAssetInstance and DoInitRBPhys, Off only.
+            physx_level::register(vm)?;
         }
         Ok(())
     }
@@ -669,6 +672,7 @@ pub mod online;
 pub mod after_login;
 pub mod aim_offset;
 pub mod player_pawn_tail;
+pub mod physx_level;
 pub mod aim_profiles;
 pub mod blend_setters;
 pub mod collision_setters;
