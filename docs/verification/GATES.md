@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-RESOLVER-CHAIN-LOADS (2026-11-26, pc-hummer, on fix/rust-resolver-chain-loads from main d3be3e5):**
+AI-assisted (Claude Code, Opus 5.5). `ow-attr`'s chain walks (`resolve_context`, `fold_chain`, `preflight_read`) load
+each non-None entry before they dispatch it (NATIVE_TARGETABLE_RESOLVER.md section 5.1); load-free scopes unchanged; a
+failed load is `BadData` where the walk reaches it. `cargo test --workspace -j 8 --no-fail-fast` 3,933 passed / 0
+failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine
+lock), main d3be3e5 and this branch: 7 ok / 7 not ok, X 58.3% on both. Links 3, 4, 5, 13 and 14 move from step 0's
+"a resolver the store has not loaded" to `WillowPawn.SetDefaultPhysics` "past its gates" (NATIVE_MIND_ROUTE.md section
+1; no partial-writes prefix), not to `WillowMind.RecalculateAttributeInitializedState` as #788's probe expected.
+Links 6 (`UpdateAmmoCounts`) and 7 (the HUD's pickup targeting) are unchanged; 1, 2 and 8 to 12 stay ok. UNVERIFIED in
+game. Decision 2026-11-26-NNN.
+
 **MAYA9-SKIPPED-FLAG-LAYERABSENT + queue 0an (2026-11-26, pc-hummer, on fix/followups-0an from main d3be3e5):**
 AI-assisted (Claude Code, Opus 5.5). `FlagDefinition.ApplyFlagInitializationData` answers `LayerAbsent` when its `const
 out` argument aliases a property the store skipped (new read-only `NativeCall::arg_property`); the #781 r2 and #786
