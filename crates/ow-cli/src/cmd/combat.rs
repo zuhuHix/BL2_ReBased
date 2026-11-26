@@ -938,6 +938,9 @@ pub(crate) fn walk_templates(vm: &mut Vm, walk: &mut BodyWalk, templates: &[ObjR
 /// 5. **Socket preload:** the mesh's unloaded socket objects loaded through the store
 ///    (`crate::cmd::mesh_sockets::preload_mesh_sockets`), an UNVERIFIED stand-in for the same streaming load (hub
 ///    ruling).
+/// 5a. **Body-class preload:** the body class's definitions `InitializeBehaviorProviders`' preflight reads
+///    ([`body_class_preload`], lane IMPL-BODYCLASS-PRELOAD), an UNVERIFIED stand-in for their streaming with the
+///    character.
 /// 6. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
@@ -987,6 +990,9 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
                                     // Her mesh component's anim sets and their sequences (lane
                                     // PRELOAD-MAYA-ANIMSETS, hub ruling).
                                     preload_mesh_anim_sets(vm, archetype)?;
+                                    // The body class's referenced definitions that InitializeBehaviorProviders'
+                                    // preflight reads (lane IMPL-BODYCLASS-PRELOAD, hub ruling).
+                                    body_class_preload::preload_body_class_definitions(vm, archetype)?;
                                 }
                             }
                             Err(e) => {
@@ -1086,6 +1092,7 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
     ow_combat::run::combat_run_with(world, steps, bridge).map_err(vm_failure)
 }
 
+pub mod body_class_preload;
 pub mod map_route;
 pub mod owner_setup;
 
