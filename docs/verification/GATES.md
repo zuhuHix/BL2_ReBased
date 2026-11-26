@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-UPDATEANIMATIONS-TREE-TICKS (2026-11-26, pc-hummer, docs only, on docs/native-updateanimations-tree-ticks from
+main 1709b8a8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATEANIMATIONS_TREE_TICKS.md: `UpdateAnimations`' per-node
+step takes no time argument and is empty on 28 node classes; the sequence family drops its resolved sequence and keeps
+the name; Maya's one auto-name additive node builds `Add_None` and looks it up. A narrow Off answer for her tree, and a
+correction to NATIVE_ANIM_NODE_INIT.md D (the additive override also runs at init). No code changed, so no measured
+number moved; the slice gate was not run for this lane. UNVERIFIED in game.
+
 **NEW-FIVE-OPERANDS (2026-11-26, pc-hummer, on fix/new-five-operands from main 1709b8a8):** AI-assisted (Claude
 Code, Opus 5.5). `New` decodes with five operands in `research/script_disasm.py` and `ow-script`. Off `new_object`
 evaluates all five and refuses a template by NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.3; Reference keeps the C++
