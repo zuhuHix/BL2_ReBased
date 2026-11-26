@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-combat-music, stacked on #804 @ bad2c3c on main
+21a668a):** AI-assisted (Claude Code, Opus 5.5). `ApplyGradeCustomizations`, `UpdatePlayThroughMaterial`,
+`GetCombatMusicManager`'s lazy creation and `PlayerDamagedByEnemy`'s gates, with the threat model's Off no-op stand-in
+(hub ruling on review of #801), Off. `cargo test --workspace` 4,023 passed / 0 failed / 59 ignored;
+`crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 7 not ok,
+8.167/14 = 58.3%, unchanged: links 3, 4, 5, 13 and 14 at "the base search's floor trace" (the combat world installs no
+collision service), so these natives are not reached; link 6 at `Actor.SetBase` (#800 is not on this base); link 7 at
+the HUD's pickup targeting; 1, 2 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **ANALYST-COMBAT-TAIL-LINKS-3-4 (2026-11-26, pc-hummer, docs only, on docs/native-links-3-4-tail from main
 d118d2bb, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_3_4_TAIL.md reads links 3
 and 4 past the spawn's

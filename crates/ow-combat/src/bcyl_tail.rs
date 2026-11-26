@@ -25,7 +25,8 @@
 //!   is set and its `bUsingGamepad` clear, or when `ForceFeedbackManager` or `PlayerReplicationInfo` is None; else
 //!   [`FEEDBACK_PLAY`], decided before the `Scale` write. Reads only.
 //! - **`WillowGameInfo.GetCombatMusicManager()`** (section 7): `GlobalCombatMusicManager` when set; None is
-//!   [`MUSIC_LAZY`] (the lazy creation is F's #801).
+//!   [`MUSIC_LAZY`]. Since lane IMPL-COMBAT-MUSIC-AND-AFTER the key is bound to `crate::combat_music`'s lazy creation
+//!   (registered first); this read stays for callers that must not create.
 
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::ObjRef;
