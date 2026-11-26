@@ -142,9 +142,10 @@ pub trait Host {
     fn bounds_height(&mut self, vm: &Vm, pickup: ObjRef) -> Result<f32, VmError>;
     /// The first actor the world line check from `from` to `to` hits, None when it hits nothing.
     fn line_blocker(&mut self, vm: &Vm, from: [f32; 3], to: [f32; 3]) -> Result<Option<ObjRef>, VmError>;
-    /// [`Host::line_blocker`] for the line check of section 5, told the check's `source` actor (the HUD, the pass's
-    /// receiver) and the `target` pickup (lanes IMPL-LINK7-HUD-TARGETING and IMPL-LINK7-LINE-CHECK,
-    /// NATIVE_LINK7_LINE_CHECK.md section 2). By default the plain line check.
+    /// [`Host::line_blocker`] for the line check of section 5, told an actor and the `target` pickup (lanes
+    /// IMPL-LINK7-HUD-TARGETING and IMPL-LINK7-LINE-CHECK): under the Off [`NoLevelLineCheck`] setting the check's
+    /// `source` (the HUD, the pass's receiver, NATIVE_LINK7_LINE_CHECK.md section 2), otherwise the owner's pawn. By
+    /// default the plain line check.
     fn line_blocker_for(
         &mut self,
         vm: &Vm,
@@ -850,10 +851,14 @@ fn checked_winner(
     }
     let to_w = sub(location(vm, w)?, v);
     if length(horizontal(to_w)) > range * 0.25 {
-        // From the view point to 25 short of W, with the HUD as the source (NATIVE_LINK7_LINE_CHECK.md section 2, which
-        // corrects the direction of NATIVE_PICKUP_TARGETING.md section 5, step 3).
+        // Under the Off harness setting: from the view point to 25 short of W, with the HUD as the source
+        // (NATIVE_LINK7_LINE_CHECK.md section 2, which corrects the direction of NATIVE_PICKUP_TARGETING.md section 5,
+        // step 3). Otherwise, and in Reference, the call as before: from 25 short of W to the view point, the pawn
+        // passed (review of #818, item 7).
         let short = sub(add(v, to_w), scale(unit_or_as_is(to_w), 25.0));
-        if let Some(hit) = host.line_blocker_for(vm, v, short, hud, w)?
+        let harness = vm.parity == ow_core::ParityMode::Off && vm.service::<NoLevelLineCheck>().is_some();
+        let (from, to, actor) = if harness { (v, short, hud) } else { (short, v, pawn) };
+        if let Some(hit) = host.line_blocker_for(vm, from, to, actor, w)?
             && hit != w
             && Some(hit) != object_field(vm, w, "Base")?
         {

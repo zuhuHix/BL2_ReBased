@@ -334,7 +334,7 @@ pub const RECORD_LINE: &str = "NATIVE_LINK7_LINE_CHECK.md";
 /// The actor part of the line check (module documentation, item 4): Ok when nothing it could hit is left but the
 /// target and its `Base`. Reads only.
 fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjRef) -> Result<(), VmError> {
-    use ow_world::trace_filter::{self as tf, Candidate, PartClass, Query, Unread};
+    use ow_world::trace_filter::{self as tf, Candidate, PartClass, Query};
     let space = &vm.space;
     if !from.iter().chain(to.iter()).all(|v| v.is_finite()) {
         return Err(NotYet::not_read(LINE_MALFORMED, RECORD_LINE).into());
@@ -363,13 +363,15 @@ fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjR
         if ow_world::actors::is_destroyed(space, walked)? {
             continue;
         }
-        let class = space.heap.get(walked)?.class;
+        // Both fields declared with their kinds, else a data error (review of #818, item 5): `CollisionComponent` an
+        // object, `Components` an array of objects.
         let mut parts: Vec<ObjRef> = Vec::new();
-        if space.prop(class, "CollisionComponent").is_some() {
-            parts.extend(object(vm, walked, "CollisionComponent")?);
+        parts.extend(object(vm, walked, "CollisionComponent")?);
+        let (list, kind) = read(vm, walked, "Components")?;
+        if !matches!(&kind, PropKind::Array(inner) if matches!(**inner, PropKind::Object { .. })) {
+            return Err(bad(format!("Components is declared as {kind:?}, not an array of objects")));
         }
-        if space.prop(class, "Components").is_some() {
-            let (list, _) = read(vm, walked, "Components")?;
+        {
             let Some(items) = list.elements() else { return Err(bad("Components is not an array")) };
             for item in items {
                 match item {
@@ -387,9 +389,8 @@ fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjR
                     ow_attr::eval::class_path(space, part)
                 )
             };
-            if !resident(vm, part) {
-                return Err(unloaded_named(who()));
-            }
+            // The registered class first (review of #818, item 6): a slotless entry of a class known not to be a
+            // primitive is skipped, not refused.
             match tf::part_class(space, space.heap.get(part)?.class, primitive) {
                 PartClass::Primitive => {}
                 PartClass::Other => continue,
@@ -404,18 +405,20 @@ fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjR
                     .into());
                 }
             }
+            if !resident(vm, part) {
+                return Err(unloaded_named(who()));
+            }
             // Steps 3 and 6's rule: the touch trace's point-line filter with the HUD as the source.
             let rule = match tf::tested_from(space, part, walked, Query::PointLine, Some(&s))? {
                 Candidate::NotTested => continue,
                 Candidate::Unsupported(rule) => rule,
             };
             let owner = tf::owner_of(space, part, walked)?;
-            // The three Willow pawn classes keep the Pawn row for this query: not tested (no bit 1 or 16).
-            if matches!(rule, Unread::OwnerClass(_)) {
-                let owner_class = space.heap.get(owner)?.class;
-                if WILLOW_PAWN_ROWS.iter().any(|p| space.classes.by_path(p) == Some(owner_class)) {
-                    continue;
-                }
+            // The three Willow pawn classes keep the Pawn row for this query, by their exact class alone, whatever the
+            // rule the filter met first (an Owner-chain link included; review of #818, item 4): not tested.
+            let owner_class = space.heap.get(owner)?.class;
+            if WILLOW_PAWN_ROWS.iter().any(|p| space.classes.by_path(p) == Some(owner_class)) {
+                continue;
             }
             // Step 5: a hit on the target or its Base keeps the target.
             if owner == target || Some(owner) == base {
@@ -425,19 +428,34 @@ fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjR
             if !resident(vm, owner) {
                 return Err(unloaded_named(who()));
             }
-            let (centre, extent) = ow_world::world::bounding_cylinder::entry_box(vm, owner, part)?;
+            // Step 6's refusal: the first unread rule on its path.
+            let refusal = || -> VmError {
+                NotYet::not_read(format!("{LINE_ACTOR}: {} ({})", rule.rule(), who()), rule.record()).into()
+            };
+            // Bounds the rule does not answer prove no miss, so the candidate's own refusal stands (review of #818,
+            // item 3); a data error still passes through.
+            let (centre, extent) = match ow_world::world::bounding_cylinder::entry_box(vm, owner, part) {
+                Ok(b) => b,
+                Err(VmError::NotYet(_)) => return Err(refusal()),
+                Err(e) => return Err(e),
+            };
             if !(centre.iter().chain(extent.iter()).all(|v| v.is_finite()) && extent.iter().all(|v| *v >= 0.0)) {
+                return Err(NotYet::not_read(format!("{LINE_MALFORMED} ({})", who()), RECORD_LINE).into());
+            }
+            // The box's limits must be finite and ordered too (review of #818, item 1): a finite centre and extent can
+            // still overflow.
+            let limits = [0, 1, 2].map(|i| (centre[i] - extent[i], centre[i] + extent[i]));
+            if !limits.iter().all(|(lo, hi)| lo.is_finite() && hi.is_finite() && lo <= hi) {
                 return Err(NotYet::not_read(format!("{LINE_MALFORMED} ({})", who()), RECORD_LINE).into());
             }
             let disjoint = (0..3).any(|i| {
                 let (lo, hi) = (from[i].min(to[i]), from[i].max(to[i]));
-                hi < centre[i] - extent[i] || lo > centre[i] + extent[i]
+                hi < limits[i].0 || lo > limits[i].1
             });
             if disjoint {
                 continue;
             }
-            // Step 6: the first unread rule on its path.
-            return Err(NotYet::not_read(format!("{LINE_ACTOR}: {} ({})", rule.rule(), who()), rule.record()).into());
+            return Err(refusal());
         }
     }
     Ok(())

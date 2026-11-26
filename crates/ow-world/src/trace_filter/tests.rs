@@ -338,31 +338,34 @@ fn the_game_framework_controller_path_takes_the_actor_row() {
     assert_eq!(tested(&w.space, live, geometry, box_test).unwrap(), Candidate::Unsupported(Unread::HashAdmission));
 }
 
-/// Review r1 of #514, item 2: the walked terrain refuses before any owner is resolved, so a controller set as the
-/// component's owner cannot discard it; and a terrain set as the owner of a controller's primitive refuses too.
+/// The hub's ruling on review of #818 (replacing review r1 of #514, item 2): the owner is resolved first and its filter
+/// applies. A primitive a terrain lists but a controller owns takes the controller's (`Actor`) row, which the box test
+/// (no bit 16) does not test; a terrain set as the owner of a controller's primitive refuses on the terrain.
 #[test]
-fn a_terrain_on_either_side_of_the_owner_refuses() {
+fn the_owner_decides_the_terrain_refusal() {
     let mut w = world();
     let prim = w.primitive;
     let terrain = w.actor("Engine.Terrain", &["bCollideActors"]);
     let controller = w.actor("WillowGame.WillowPlayerController", &[]);
     let field = w.space.prop(prim, "Owner").unwrap();
     let box_test = Query::BoxTest { zero_extent: false, complex: false };
-    // The walked actor is the terrain; the component names the controller as its owner.
+    // The walked actor is the terrain; the component names the controller as its owner: the controller's row.
     let p = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
     w.space.write(p, PropAddr::scalar(field), Value::Object(Some(controller))).unwrap();
-    assert_eq!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
+    assert_ne!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
+    // With no Owner set, the walked terrain is the owner: the terrain refusal.
+    let unowned = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    assert_eq!(tested(&w.space, unowned, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
     // The walked actor is the controller; the component names the terrain as its owner.
     let q = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
     w.space.write(q, PropAddr::scalar(field), Value::Object(Some(terrain))).unwrap();
     assert_eq!(tested(&w.space, q, controller, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
 }
 
-/// Review r2 of #514: a walked `Terrain` actor whose primitive names a stale explicit `Owner` (a handle that no longer
-/// resolves) refuses on the terrain, not with a lookup error: the walked actor is checked before the owner is resolved.
-/// The same stale owner on a non-terrain walked actor shows the lookup does fail once it is reached.
+/// Review r2 of #514, under the hub's ruling on review of #818: the owner is resolved first, so a stale explicit
+/// `Owner` (a handle that no longer resolves) is the lookup error on a walked terrain too, as on any other actor.
 #[test]
-fn a_walked_terrain_refuses_before_a_stale_owner_is_resolved() {
+fn a_stale_owner_is_a_lookup_error_whatever_the_walked_actor() {
     let mut w = world();
     let prim = w.primitive;
     let terrain = w.actor("Engine.Terrain", &["bCollideActors"]);
@@ -374,7 +377,7 @@ fn a_walked_terrain_refuses_before_a_stale_owner_is_resolved() {
     w.space.free(stale).unwrap();
     *w.space.slot_mut(p, PropAddr::scalar(field)).unwrap() = Value::Object(Some(stale));
     let box_test = Query::BoxTest { zero_extent: false, complex: false };
-    assert_eq!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
+    assert!(tested(&w.space, p, terrain, box_test).is_err(), "the stale owner is resolved first");
     let walked = w.actor("Engine.StaticMeshActor", &["bWorldGeometry", "bCollideActors"]);
     assert!(tested(&w.space, p, walked, box_test).is_err(), "the stale owner fails its lookup once reached");
 }

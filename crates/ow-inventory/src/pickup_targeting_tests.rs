@@ -169,6 +169,8 @@ struct Fixed {
     blocker: Option<ObjRef>,
     traced: u32,
     bounded: Vec<ObjRef>,
+    /// Each line check's endpoints, actor and target (review of #818, item 8).
+    calls: Vec<([f32; 3], [f32; 3], ObjRef, ObjRef)>,
 }
 
 impl Host for Fixed {
@@ -182,6 +184,17 @@ impl Host for Fixed {
     fn line_blocker(&mut self, _: &Vm, _: [f32; 3], _: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
         self.traced += 1;
         Ok(self.blocker)
+    }
+    fn line_blocker_for(
+        &mut self,
+        vm: &Vm,
+        from: [f32; 3],
+        to: [f32; 3],
+        actor: ObjRef,
+        target: ObjRef,
+    ) -> Result<Option<ObjRef>, VmError> {
+        self.calls.push((from, to, actor, target));
+        self.line_blocker(vm, from, to)
     }
 }
 
@@ -326,6 +339,7 @@ fn fx_with(warm_player_pawn: bool) -> Fx {
             blocker: None,
             traced: 0,
             bounded: Vec::new(),
+            calls: Vec::new(),
         },
         provider: ToyGlobals { globals, definition: gd, resolved: std::cell::Cell::new(0) },
     };
@@ -500,6 +514,24 @@ fn the_range_gates_scoring_without_a_hover_particle_and_the_event_always() {
     assert_eq!(x.slots(), (Some(far), Some(earlier)));
     assert_eq!(x.slot("SavedLookAtInventory"), None);
     assert_eq!(x.seen().len(), 1, "no ClearSeenPickupable out of range");
+}
+
+/// Review of #818, items 7 and 8: under the Off `NoLevelLineCheck` setting the line check runs from the view point to
+/// 25 units short of the pickup, with the HUD as the actor; without it, the call as before (from the short point to the
+/// view point, the owner's pawn).
+#[test]
+fn the_line_check_s_endpoints_and_actor_follow_the_setting() {
+    let mut x = fx();
+    let far = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    x.tick().unwrap();
+    let pawn = x.pawn;
+    assert_eq!(x.host.calls, [([125.0, 0.0, 0.0], [0.0, 0.0, 0.0], pawn, far)], "the call as before");
+    let mut x = fx();
+    let far = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    crate::pickup_targeting::enable_no_level_line_check(&mut x.vm).unwrap();
+    x.tick().unwrap();
+    let hud = x.hud;
+    assert_eq!(x.host.calls, [([0.0, 0.0, 0.0], [125.0, 0.0, 0.0], hud, far)], "view point to 25 short, the HUD");
 }
 
 /// The line check runs only beyond a quarter of PickupRange (75) horizontally; a hit other than the winner or its
