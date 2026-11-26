@@ -11,7 +11,7 @@ at "the base search's floor trace", link 7 at the HUD's pickup targeting, and 1,
 (never pushed): this branch merged with #803 (fix/rust-links-13-14 @ dc0e9ef), with lane E's deferred
 `PlayerPawnDuringSetUp` forced on in the combat set-up. It also gave 8 ok / 14, 60.7%, with **link 1 spawn_maya ok,
 steps 2/2**. The stand-in's line was logged once on link 1, so the trade proxy's `SetCollisionSize`, `SetHardAttach`
-and `SetBase` ran. Every other row was as above. UNVERIFIED in game. Decision 2026-11-26-NNN.
+and `SetBase` ran. Every other row was as above. UNVERIFIED in game. Decision 2026-11-26-62.
 **IMPL-COMBAT-WORLD-COLLISION (2026-11-26, pc-hummer, on fix/rust-combat-world-collision, stacked on #804 153ac950,
 on main baa414fd):** AI-assisted (Claude Code, Opus 5.5). In Off, the slice's combat world without
 `--map` gets three settings, each logged as a set-up harness input: link 9's `NoLevel` collision service, #798's
