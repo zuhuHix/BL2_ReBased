@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**PLACEHOLDER-SHADOWS (2026-11-26, pc-hummer, on fix/placeholder-shadows from main 64f070fa):** AI-assisted (Claude
+Code, Opus 5.5). ow-vm records each native key's registering file and, under an opt-in audit, every keep-existing check
+from another file (a silent shadow). The ignored installed census over the five slice worlds found four keys: two
+placeholders removed (ow-world's `GetInstancedMaterialInstanceConstant`, ow-combat go_down's `UpdateInputContext`),
+two shared wrappers kept by design (`ResolveContext`, `AddAttributeModifier`); after the change, 0 shadows besides
+those. `cargo test --workspace -j 8 --no-fail-fast` 3,774 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock), base 64f070fa and this change: 6 ok / 8
+NotYet, 47.0% on both, no row moved. Decision 2026-11-26-NNN.
+
 **ANALYST-UPDATEANIMATIONS-TREE-TICKS (2026-11-26, pc-hummer, docs only, on docs/native-updateanimations-tree-ticks from
 main 1709b8a8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATEANIMATIONS_TREE_TICKS.md: `UpdateAnimations`' per-node
 step takes no time argument and is empty on 28 node classes; the sequence family drops its resolved sequence and keeps
