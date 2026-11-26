@@ -34,9 +34,10 @@
 //!
 //!    **The native** (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS, decision 2026-11-26-NNN): `Pawn.IsPlayerPawn()` itself
 //!    ([`IS_PLAYER_PAWN`], [`is_player_pawn`]) answers by this same pawn test, bound in Off only and keep-existing:
-//!    a pass is true, a decided failure false, an undecided test its `NotYet` (a lazy `Controller` the test must read
-//!    is [`NOT_LOADED`]). A receiver the store has not loaded is [`PAWN_NOT_LOADED`] (`NotRead`). Nothing is
-//!    written, loaded or interned. `ApplyBodyClassStartingValues` reaches it for `bAlwaysRelevant`.
+//!    a pass is true, a decided failure false. The rule body is one ([`PawnRule`]); the native names its own refusals
+//!    under [`IS_PLAYER_PAWN_RECORD`] (review r1 of #776, item 5): a lazy `Controller` the test must read is
+//!    [`PAWN_CONTROLLER_NOT_LOADED`], an unlisted class [`PAWN_UNLISTED`], a receiver the store has not loaded
+//!    [`PAWN_NOT_LOADED`] (each `NotRead`). Nothing is written, loaded or interned. `ApplyBodyClassStartingValues` reaches it for `bAlwaysRelevant`.
 //! 3. **The light environment** ([`light_environment`]): the pawn's `LightEnvironment` (declared as an object) None,
 //!    or a made class that is not a `MeshComponent`: nothing. Then the template must be settled, and its
 //!    `bAcceptsLights` (fitted) clear is nothing. Section 7.1 (lane IMPL-HOOK3-ARRAY-CHECK): a made
@@ -74,8 +75,16 @@ pub const CAMERA_TEST: &str = "the owner-no-see gate's camera test (UsingFirstPe
 pub const NOT_LOADED: &str = "the rendering hooks: an object the store has not loaded (a load is a write)";
 /// `Pawn.IsPlayerPawn()`'s native key (module documentation, hook 2).
 pub const IS_PLAYER_PAWN: &str = "Pawn.IsPlayerPawn()";
+/// The native's own record and refusals (review r1 of #776, item 5): one rule body ([`pawn_rule`]), hook 2 and the
+/// native each naming their own refusal.
+pub const IS_PLAYER_PAWN_RECORD: &str = "docs/verification/NATIVE_BODYCOMP_RENDER_HOOKS.md (section 6, the native)";
 /// `Pawn.IsPlayerPawn()` on a receiver the store has not loaded.
 pub const PAWN_NOT_LOADED: &str = "Pawn.IsPlayerPawn on a pawn the store has not loaded (a load is a write)";
+/// `Pawn.IsPlayerPawn()` needing a `Controller` the store has not loaded.
+pub const PAWN_CONTROLLER_NOT_LOADED: &str =
+    "Pawn.IsPlayerPawn: the pawn's Controller, which the store has not loaded (a load is a write)";
+/// `Pawn.IsPlayerPawn()` on a pawn of an unlisted first native class (followed by " on <class>").
+pub const PAWN_UNLISTED: &str = "Pawn.IsPlayerPawn: the class's own answer is not read";
 pub const ARRAY_CHECK: &str = "the light-environment step's array check (not identified)";
 /// Hook 3 on a made `StaticMeshComponent` (section 7.1 step 2): its first LOD's lightmap, in `LODData`, not decoded.
 pub const STATIC_LIGHTMAP: &str = "the light-environment step on a static mesh component (its first LOD's lightmap)";
@@ -228,12 +237,17 @@ fn not_loaded() -> VmError {
 /// `Pawn.IsPlayerPawn()` on `pawn` (module documentation, hook 2's native): the pawn test's answer, read only.
 pub fn is_player_pawn(vm: &Vm, pawn: ObjRef) -> Result<bool, VmError> {
     if vm.defs.is_unloaded(&vm.space, pawn) {
-        return Err(NotYet::not_read(PAWN_NOT_LOADED, RECORD).into());
+        return Err(NotYet::not_read(PAWN_NOT_LOADED, IS_PLAYER_PAWN_RECORD).into());
     }
-    match pawn_test(vm, pawn)? {
-        Test::Pass => Ok(true),
-        Test::Fail => Ok(false),
-        Test::Undecided(e) => Err(e),
+    match pawn_rule(vm, pawn)? {
+        PawnRule::Pass => Ok(true),
+        PawnRule::Fail => Ok(false),
+        PawnRule::ControllerNotLoaded => {
+            Err(NotYet::not_read(PAWN_CONTROLLER_NOT_LOADED, IS_PLAYER_PAWN_RECORD).into())
+        }
+        PawnRule::Unlisted(named) => {
+            Err(NotYet::not_read(format!("{PAWN_UNLISTED} on {named}"), IS_PLAYER_PAWN_RECORD).into())
+        }
     }
 }
 
@@ -254,23 +268,42 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     )
 }
 
-/// The pawn test, `Pawn.IsPlayerPawn` (module documentation).
-fn pawn_test(vm: &Vm, pawn: ObjRef) -> Result<Test, VmError> {
+/// The one rule of `Pawn.IsPlayerPawn` (module documentation): its outcome, which hook 2 ([`pawn_test`]) and the
+/// native ([`is_player_pawn`]) each turn into their own answer or refusal.
+enum PawnRule {
+    Pass,
+    Fail,
+    /// The `Controller` the test must read is a store handle not loaded yet.
+    ControllerNotLoaded,
+    /// An unlisted first native class (its path), whose own answer is not read.
+    Unlisted(String),
+}
+
+fn pawn_rule(vm: &Vm, pawn: ObjRef) -> Result<PawnRule, VmError> {
     let class = vm.space.heap.get(pawn)?.class;
     let native = first_native(vm, class);
     match native.as_deref() {
-        Some(p) if p.eq_ignore_ascii_case(WILLOW_PLAYER_PAWN) => Ok(Test::Pass),
+        Some(p) if p.eq_ignore_ascii_case(WILLOW_PLAYER_PAWN) => Ok(PawnRule::Pass),
         Some(p) if is_one_of(p, &PAWN_BODY) => Ok(match controller(vm, pawn)? {
-            Controller::None => Test::Fail,
-            Controller::NotLoaded => Test::Undecided(not_loaded()),
-            Controller::Resident(c) if bool_field(vm, c, "bIsPlayer")? => Test::Pass,
-            Controller::Resident(_) => Test::Fail,
+            Controller::None => PawnRule::Fail,
+            Controller::NotLoaded => PawnRule::ControllerNotLoaded,
+            Controller::Resident(c) if bool_field(vm, c, "bIsPlayer")? => PawnRule::Pass,
+            Controller::Resident(_) => PawnRule::Fail,
         }),
-        other => {
-            let named = other.map_or_else(|| path_of(vm, class), str::to_string);
-            Ok(Test::Undecided(NotYet::not_read(format!("{PAWN_TEST} on {named}"), RECORD).into()))
-        }
+        other => Ok(PawnRule::Unlisted(other.map_or_else(|| path_of(vm, class), str::to_string))),
     }
+}
+
+/// Hook 2's pawn test (module documentation): [`pawn_rule`] with hook 2's own refusals.
+fn pawn_test(vm: &Vm, pawn: ObjRef) -> Result<Test, VmError> {
+    Ok(match pawn_rule(vm, pawn)? {
+        PawnRule::Pass => Test::Pass,
+        PawnRule::Fail => Test::Fail,
+        PawnRule::ControllerNotLoaded => Test::Undecided(not_loaded()),
+        PawnRule::Unlisted(named) => {
+            Test::Undecided(NotYet::not_read(format!("{PAWN_TEST} on {named}"), RECORD).into())
+        }
+    })
 }
 
 /// The controller test, `PlayerController.UsingFirstPersonCamera` (module documentation), on a `PlayerController`

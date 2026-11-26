@@ -2810,7 +2810,14 @@ fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
 /// only, keep-existing; nothing written.
 #[test]
 fn is_player_pawn_answers_by_the_pawn_test() {
-    use crate::world::render_hooks::{IS_PLAYER_PAWN, PAWN_NOT_LOADED, is_player_pawn};
+    use crate::world::render_hooks::{
+        IS_PLAYER_PAWN, IS_PLAYER_PAWN_RECORD, PAWN_CONTROLLER_NOT_LOADED, PAWN_NOT_LOADED, PAWN_UNLISTED, is_player_pawn,
+    };
+    let native_not_read = |r: Result<bool, VmError>| {
+        let VmError::NotYet(n) = r.unwrap_err() else { panic!() };
+        assert_eq!((n.missing, n.record), (Missing::NotRead, IS_PLAYER_PAWN_RECORD), "the native's own record");
+        n.what.to_string()
+    };
     let mut e = env();
     let player = e.player_pawn;
     let p = make(&mut e.vm, player, "Pawn_Player");
@@ -2824,12 +2831,12 @@ fn is_player_pawn_answers_by_the_pawn_test() {
     controller_of(&mut e, w, wpc, true);
     assert!(is_player_pawn(&e.vm, w).unwrap(), "a player's controller");
     let u = unlisted_pawn(&mut e);
-    assert_eq!(not_read_text(is_player_pawn(&e.vm, u).map(|_| ())), format!("{PAWN_TEST} on Test.ToyNativePawn"));
+    assert_eq!(native_not_read(is_player_pawn(&e.vm, u)), format!("{PAWN_UNLISTED} on Test.ToyNativePawn"));
     let (pc, _) = store_controllers(&mut e);
     put(&mut e.vm, w, "Controller", Value::Object(Some(pc)));
-    assert_eq!(not_read_text(is_player_pawn(&e.vm, w).map(|_| ())), NOT_LOADED);
+    assert_eq!(native_not_read(is_player_pawn(&e.vm, w)), PAWN_CONTROLLER_NOT_LOADED);
     assert!(e.vm.defs.is_unloaded(&e.vm.space, pc), "nothing loaded");
-    assert_eq!(not_read_text(is_player_pawn(&e.vm, pc).map(|_| ())), PAWN_NOT_LOADED);
+    assert_eq!(native_not_read(is_player_pawn(&e.vm, pc)), PAWN_NOT_LOADED);
     // The registration: Off binds the key once (a second call keeps it); Reference binds nothing.
     crate::world::render_hooks::register(&mut e.vm).unwrap();
     crate::world::render_hooks::register(&mut e.vm).unwrap();

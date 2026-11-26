@@ -7,8 +7,9 @@ did not read the executable, and no session was run.
 - **What was done:**
   - **`Pawn.IsPlayerPawn()`** (`ow-world` `render_hooks`): the native answers by hook 2's pawn test, the rule of
     NATIVE_BODYCOMP_RENDER_HOOKS.md section 6 that `owner_no_see` already uses. A pass is true, a decided failure is
-    false, and an undecided test is its `NotYet`. A receiver the store has not loaded is a `NotRead`. Off only,
-    keep-existing, registered with the world's Off natives;
+    false. One rule body serves both. The native names its own refusals under its own record (review r1 of #776, item
+    5): an unlisted class, a lazy `Controller` the test must read, and a receiver the store has not loaded are each a
+    `NotRead`. Off only, keep-existing, registered with the world's Off natives;
   - **`Actor.AttachComponent` in the combat world** (`ow-cli` `combat::world`): `ow-inventory`'s rule
     (NATIVE_ATTACH_MESH_TO_PICKUP.md part 1), bound through `bind_engine_attach` as the cast's worlds bind it. The
     world's empty scene layer was already installed. Off only;
