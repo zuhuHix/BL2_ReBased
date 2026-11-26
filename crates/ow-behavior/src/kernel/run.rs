@@ -624,7 +624,7 @@ fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<
             .function(f)
             .filter(|d| d.is_native())
             .is_some_and(|d| READ_ONLY_QUERIES.iter().any(|q| d.path.as_str().eq_ignore_ascii_case(q)))
-            && vm.is_bound(f);
+            && vm.is_bound_unaudited(f);
         if !bound {
             return Err(NotYet::not_read(
                 format!(

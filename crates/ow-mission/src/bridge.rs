@@ -874,7 +874,7 @@ impl MissionScript {
         })?;
         for path in GLOBALS_NATIVES {
             if let Ok(f) = native_at(vm, path)
-                && !vm.is_bound(f)
+                && !vm.is_bound_unaudited(f)
             {
                 return Err(VmError::NotYet(NotYet::layer_absent(
                     format!("{path} on the map route"),
