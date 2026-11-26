@@ -8,7 +8,7 @@ under the pawn, after the writes (the hub's ruling). `cargo test --workspace -j 
 failed / 59 ignored (3,849 / 0 / 59 merged with #768); `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
 (release build, under the machine lock), #766 + #768 merged locally, then plus this change: 6 ok / 8 not ok, 51.2% on
 both. Links 1, 3, 4, 5, 13 and 14 pass `InitializeRBPhysics` and stop at the unbound `Engine.GetPhysXLevel()` (before:
-its refusal L); every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+its refusal L); every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-27.
 
 **ANALYST-LINK67-KEY-AND-LOOK (2026-11-26, pc-hummer, docs only, on docs/native-link67-key-and-look from main
 78a88b72):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_KEY_AND_LOOK.md: `CanAffordToPickUpPickupable` /
