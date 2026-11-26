@@ -12,8 +12,9 @@
 //! 3. after each of those, its `BehaviorProviderDefinition`;
 //! 4. **pass 2's objects** (lane IMPL-PASS2-CONDITION-PRELOAD, the same ruling; NATIVE_BEHAVIOR_KERNEL_PASS2.md section
 //!    4): after each definition, each `BehaviorSequences` entry's `CustomEnableCondition`, in sequence order, then that
-//!    condition's `LinkedObjective` when it is set (step 7 reads its `bRememberItemsWithinObjective` when the world has
-//!    a tracker). Exactly what pass 2 needs resident: its `LinkedMission` is identified by path, and read only when that
+//!    condition's `LinkedObjective` when it is set (step 7 reads its `bRememberItemsWithinObjective`, but only on the
+//!    register path: with a tracker, the authority's role and a `LinkedMission`). What pass 2 may read, so the objective
+//!    is loaded whenever it is set (review of #784). Its `LinkedMission` is identified by path, and read only when that
 //!    mission is Complete (only the bridge's own mission can be), so it is not loaded; neither is anything the
 //!    condition or the objective references in turn.
 //!

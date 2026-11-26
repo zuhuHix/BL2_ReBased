@@ -314,7 +314,7 @@ fn store_decision(vm: &Vm, mission: ObjRef) -> Result<bool, VmError> {
         return Ok(true);
     }
     if !resident(vm, mission)? {
-        return Err(not_read(MISSION_NOT_LOADED));
+        return Err(not_read(naming(vm, MISSION_NOT_LOADED, mission)));
     }
     Ok(boolean(vm, mission, "bRepeatable")?)
 }

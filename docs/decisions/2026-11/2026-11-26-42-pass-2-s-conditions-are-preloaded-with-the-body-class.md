@@ -8,7 +8,8 @@ game.
   - **the preload** (`ow-cli` `combat::body_class_preload`, the maya step's Off harness, #779's walk): after each
     provider definition it loads, it now also loads that definition's `BehaviorSequences` entries'
     `CustomEnableCondition` objects. They go in sequence order, each once, then each condition's `LinkedObjective` when
-    it is set. That is exactly what pass 2 needs resident (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4, steps 1 and 7);
+    it is set. That is what pass 2 may read (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4, steps 1 and 7): it reads the
+    objective only on the register path, so a set objective may be loaded that this run does not read (review of #784);
   - **what is not loaded:**
     - the `LinkedMission`, which pass 2 identifies by path and reads only when it is Complete (only the bridge's own
       mission can be);
@@ -19,6 +20,7 @@ game.
   - **the refusal's text:** pass 2's not-loaded refusals, for the condition (preflight and re-evaluation) and the
     `LinkedObjective`, now name the object: "<text>: <store path>". With no path (a run-time object) the text is as
     before. The kind (`NotRead`) and the record are unchanged.
+- **Review of #784:** pass 2's Complete-mission refusal names the mission too, with a test.
 - **Reference:** unchanged.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock; main 785c2a4 and this change): 6
   ok / 8 `NotYet`, 51.2% on both.
