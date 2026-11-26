@@ -628,8 +628,23 @@ impl Provider {
                 continue;
             }
             found = true;
-            if self.enabled[s] == enabled {
-                continue;
+            self.set_index_enabled(vm, s, enabled)?;
+        }
+        Ok(found)
+    }
+
+    /// Whether sequence `s` (by index) is enabled; false past the end.
+    pub fn index_enabled(&self, s: usize) -> bool {
+        self.enabled.get(s).copied().unwrap_or(false)
+    }
+
+    /// Enables or disables sequence `s` (by index) as [`Provider::set_sequence_enabled`] does for each sequence of a
+    /// name: nothing when it is already so; the events fire only on a change (lane IMPL-BEHAVIOR-KERNEL-PASS2, whose
+    /// records are per sequence). Nothing past the end.
+    pub fn set_index_enabled(&mut self, vm: &mut Vm, s: usize, enabled: bool) -> Result<(), BehaviorError> {
+        {
+            if s >= self.data.sequences.len() || self.enabled[s] == enabled {
+                return Ok(());
             }
             self.call(vm, |p, vm| {
                 if enabled {
@@ -653,7 +668,7 @@ impl Provider {
                 }
             })?;
         }
-        Ok(found)
+        Ok(())
     }
 
     /// Registering the provider on a consumer (`IntializeBehaviorProviderForConsumer` pass 1, section C): every

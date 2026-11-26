@@ -78,9 +78,15 @@ use ow_vm::error::VmError;
 use crate::kernel::{PayloadElement, Provider};
 use crate::provider::{self, BehaviorError, stock_path};
 
+mod pass2;
 mod pawn_providers;
 #[cfg(test)]
 mod tests;
+
+pub use pass2::{
+    CONDITION_CLASS, CONDITION_NOT_LOADED, MISSION_NOT_LOADED, NO_ANSWERS, NO_ANSWERS_LAYER, OBJECTIVE_NOT_LOADED,
+    PER_INSTANCE, RECORD_PASS2, TRACKER_NOT_LOADED, WAYPOINT, other_condition, reevaluate_conditions,
+};
 
 pub use pawn_providers::{
     AI_PAWN, APPLY_REPLICATED, INITIALIZE_BEHAVIOR_PROVIDERS, NOT_LOADED as PROVIDERS_NOT_LOADED,
@@ -175,6 +181,10 @@ pub struct Kernel {
     /// native path -> the crates' Reference bodies for a handle nobody owns, by owner.
     fallbacks: DetMap<&'static str, DetMap<&'static str, NativeFn>>,
     processes: DetMap<i32, Process>,
+    /// Pass 2's links (lane IMPL-BEHAVIOR-KERNEL-PASS2): per `CustomEnableCondition` object, the state records linked
+    /// to it, in link order. Native state, shared by every consumer of the condition's definition; one kernel per
+    /// world plays the instance tag's part (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4, commit step A).
+    condition_links: DetMap<ObjRef, Vec<pass2::Record>>,
 }
 
 impl std::fmt::Debug for Kernel {
@@ -755,33 +765,45 @@ fn provider_twice() -> VmError {
     NotYet::not_read("a provider registered twice on one consumer", RECORD_SECTION_C).into()
 }
 
-/// The kernel rule's pass-2 refusal of sequence `sequence` of provider `path`, which has a `CustomEnableCondition`.
-fn conditioned(sequence: &str, path: &str) -> VmError {
-    NotYet::layer_absent(
-        format!(
-            "pass 2 of IntializeBehaviorProviderForConsumer: sequence {sequence} of {path} has a CustomEnableCondition"
-        ),
-        "the condition's owner (the mission tracker's observers)",
-        RECORD_SECTION_C,
-    )
-    .into()
-}
-
 // IntializeBehaviorProviderForConsumer(ConsumerHandle, ProviderDefinition), on a kernel process (section C).
+/// A None definition does nothing, as the game's gate does (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 5, lane
+/// IMPL-BEHAVIOR-KERNEL-PASS2; it was a `NotRead` before). A refusal after a write is marked "stopped after partial
+/// writes" by #518's counters, its kind kept.
 fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmError> {
     let Some(definition) = provider_arg(c)? else {
-        return Err(NotYet::not_read(
-            "IntializeBehaviorProviderForConsumer with a None provider",
-            RECORD_SECTION_C,
-        )
-        .into());
+        return Ok(Value::None);
     };
-    provider_into(c.vm, pid, definition)
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions());
+    let before = marks(c.vm);
+    match provider_into(c.vm, pid, definition) {
+        Err(VmError::NotYet(n)) if marks(c.vm) != before => Err(n.after_partial_writes().into()),
+        other => other,
+    }
+}
+
+/// Whether `definition` is resident (not a store handle still unloaded or failed, its slots built).
+fn definition_resident(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+    let x = vm.space.heap.get(definition)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    Ok(!(vm.defs.is_unloaded(&vm.space, definition) || vm.defs.is_failed(&vm.space, definition) || short))
+}
+
+/// Whether resident `definition`'s `BehaviorSequences` is empty or undeclared (the game's gate, a plain read).
+fn no_sequences(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(definition)?.class;
+    Ok(match vm.space.prop(class, "BehaviorSequences") {
+        Some(p) => vm.space.read(definition, PropAddr::scalar(p))?.elements().is_none_or(|e| e.is_empty()),
+        None => true,
+    })
 }
 
 /// The kernel rule of `IntializeBehaviorProviderForConsumer` for the loaded or unloaded `definition` on process `pid`
-/// (section C): the repeat refusal, then decode, the pass-2 condition refusal and pass 1. Nothing for a `pid` the
-/// kernel holds no process for. `WillowPawn.InitializeBehaviorProviders` runs it once per definition.
+/// (section C, and NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4): the repeat refusal; the game's gate (no sequences:
+/// nothing); pass 2's plan (`pass2::plan`, read only); then decode, pass 1, and pass 2's commit once the provider is
+/// in its slot. A resident definition is gated and planned before the decode. One the store has not loaded yet is
+/// decoded first (the decode loads it, as before), then gated and planned before pass 1, so a refusal there comes
+/// after that load. Nothing for a `pid` the kernel holds no process for. `WillowPawn.InitializeBehaviorProviders` runs
+/// it once per definition.
 fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmError> {
     let path = stock_path(vm, definition).map_err(to_vm)?;
     let k = kernel(vm)?;
@@ -798,10 +820,21 @@ fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmE
     if known {
         return Err(provider_twice());
     }
-    let mut p = Provider::new(vm, definition).map_err(to_vm)?;
-    if let Some(s) = p.data().sequences.iter().find(|s| s.condition.is_some()) {
-        return Err(conditioned(&s.name, &path));
+    let mut planned = None;
+    if definition_resident(vm, definition)? {
+        if no_sequences(vm, definition)? {
+            return Ok(Value::None);
+        }
+        planned = Some(pass2::plan(vm, consumer, definition)?);
     }
+    let mut p = Provider::new(vm, definition).map_err(to_vm)?;
+    if p.data().sequences.is_empty() {
+        return Ok(Value::None);
+    }
+    let planned = match planned {
+        Some(planned) => planned,
+        None => pass2::plan(vm, consumer, definition)?,
+    };
     p.set_consumer(Some(consumer));
     // Pass 1 runs with the provider in its slot, lent out, so a behavior that reaches its own provider is refused
     // (module documentation) instead of finding it missing.
@@ -813,8 +846,8 @@ fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmE
         .get(&pid)
         .map_or(0, |p| p.providers.len().saturating_sub(1));
     let result = p.register_consumer(vm).map_err(to_vm);
-    let mut k = borrow(&k)?;
-    if let Some(process) = k.processes.get_mut(&pid) {
+    let mut held = borrow(&k)?;
+    if let Some(process) = held.processes.get_mut(&pid) {
         match &result {
             // Registered: the provider goes into its slot.
             Ok(()) => {
@@ -834,7 +867,11 @@ fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmE
             }
         }
     }
-    result.map(|()| Value::None)
+    drop(held);
+    result?;
+    // Pass 2, after all of pass 1 (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 2.1), with the provider in its slot.
+    pass2::commit(vm, pid, &path, &planned)?;
+    Ok(Value::None)
 }
 
 // ChangeBehaviorSequenceActivationStatus(ConsumerHandle, Provider, SequenceName, Action), on a kernel process.

@@ -479,6 +479,11 @@ pub fn provider_path_leaf(space: &ObjectSpace, components: Option<&Value>) -> St
 /// The object an object-valued field names, loaded (`None` for a null reference or a value that is not an object).
 fn loaded(vm: &mut Vm, v: Option<&Value>) -> Result<Option<ObjRef>, BehaviorError> {
     match v {
+        // A run-time object the store did not make (a resident object, not one of its handles) is kept as it is
+        // (lane IMPL-BEHAVIOR-KERNEL-PASS2: pass 2's plan has checked it resident). The store's objects load as before.
+        Some(Value::Object(Some(o))) if matches!(vm.space.heap.get(*o)?.origin, ow_object::heap::Origin::Runtime) => {
+            Ok(Some(*o))
+        }
         Some(Value::Object(Some(o))) => Ok(Some(vm.defs.load(&mut vm.space, *o)?)),
         _ => Ok(None),
     }

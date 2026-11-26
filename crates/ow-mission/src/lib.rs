@@ -9,6 +9,7 @@
 //! own files and never edit this `lib.rs` (architecture section 2.3).
 
 pub mod bridge;
+pub mod conditions;
 pub mod dialog;
 pub mod interactive;
 pub mod kismet;

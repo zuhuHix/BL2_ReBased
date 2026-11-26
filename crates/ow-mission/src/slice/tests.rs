@@ -1085,15 +1085,17 @@ fn a_restriction_needs_a_listed_set_active() {
     assert!(!enabled.contains(&"RestrictB".to_string()));
 }
 
-/// A mission other than the slice's is Complete when the completed set names it, else NotStarted.
+/// A mission other than the slice's is NotStarted, whether or not the completed set names it: the one verdict follows
+/// `GetMissionStatus` (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 3; before, the completed set counted as
+/// Complete here).
 #[test]
-fn another_mission_is_complete_from_the_completed_set() {
+fn another_mission_is_not_started_even_in_the_completed_set() {
     let mut env = Env::off();
     let mut completed = DetSet::new();
     completed.insert("Other".to_string());
     env.accept(&completed);
     env.spawn();
-    assert!(env.slice.dummy_enabled_sequences().unwrap().contains(&"OtherDone".to_string()));
+    assert!(!env.slice.dummy_enabled_sequences().unwrap().contains(&"OtherDone".to_string()));
     let mut env = Env::off();
     env.accept(&none_completed());
     env.spawn();

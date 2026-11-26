@@ -179,6 +179,24 @@ fn failing() -> Spec {
     )
 }
 
+/// One conditioned sequence `Gated`, `bEnabledOnSpawn` = `on`, whose enabled and disabled events run `En` and `Dis`
+/// (lane IMPL-BEHAVIOR-KERNEL-PASS2).
+fn pass2_spec(provider: &'static str, on: bool) -> Spec {
+    Spec::new(
+        provider,
+        vec![Seq {
+            name: "Gated",
+            enabled_on_spawn: Some(on),
+            condition: true,
+            events: vec![ev("OnBehaviorSequenceEnabled", (0, 1)), ev("OnBehaviorSequenceDisabled", (1, 1))],
+            behaviors: vec![beh("En", "Behavior_ToySame", (0, 0)), beh("Dis", "Behavior_ToySame", (0, 0))],
+            links: vec![(0, -1, 0.0), (1, -1, 0.0)],
+            ..Seq::default()
+        }],
+        vec![],
+    )
+}
+
 fn conditional() -> Spec {
     Spec::new(
         CONDITIONAL,
@@ -235,6 +253,9 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         // WillowPawn.InitializeBehaviorProviders' pass-1 providers (lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
         ("TestPassOk", provider_package(&on_create_spec(PASS_OK, "PO", "Behavior_ToySame", Some("OnBehaviorSequenceEnabled")))),
         ("TestPassRefuse", provider_package(&on_create_spec(PASS_REFUSE, "PR", "Behavior_ToyRefuse", Some("OnBehaviorSequenceEnabled")))),
+        // Pass 2's providers (lane IMPL-BEHAVIOR-KERNEL-PASS2): one conditioned sequence, off and on at spawn.
+        ("TestPass2", provider_package(&pass2_spec("ToyPass2", false))),
+        ("TestPass2Spawn", provider_package(&pass2_spec("ToyPass2Spawn", true))),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -688,9 +709,11 @@ fn what_section_c_does_not_read_is_not_yet() {
     Pack.register(&mut t.vm).unwrap();
     let skill = t.object(t.bare, "Skill_0");
     let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
-    assert_eq!(not_yet(t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), Value::Object(None)])), Missing::NotRead);
+    // A None provider does nothing, as the game's gate (lane IMPL-BEHAVIOR-KERNEL-PASS2,
+    // NATIVE_BEHAVIOR_KERNEL_PASS2.md section 5); a condition of a class pass 2 does not read is its NotRead.
+    assert_eq!(t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), Value::Object(None)]).unwrap(), Value::None);
     let gated = Value::Object(Some(t.definition("TestCond", CONDITIONAL)));
-    assert!(matches!(not_yet(t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), gated])), Missing::LayerAbsent(_)));
+    assert_eq!(not_yet(t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), gated])), Missing::NotRead);
     let p = Value::Object(Some(t.definition("TestBpd", PROVIDER)));
     t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
     assert_eq!(not_yet(t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()])), Missing::NotRead);
@@ -1334,4 +1357,5 @@ fn reference_does_not_bind_on_create() {
 }
 
 // WillowPawn.InitializeBehaviorProviders (lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
+mod pass2;
 mod pawn_providers;
