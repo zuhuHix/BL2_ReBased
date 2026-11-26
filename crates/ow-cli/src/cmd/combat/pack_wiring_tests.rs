@@ -85,6 +85,8 @@ fn engine() -> Vec<u8> {
         ("Bool", "bTraceBulletListeners", CPF_OPT, 0),
         ("Object", "BulletListenerSource", CPF_OPT, object),
     ]);
+    // Lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS: the arms' attach, which the combat world now binds itself.
+    native_with(&mut t, actor, "AttachComponent", &[("Object", "NewComponent", 0, object)]);
     let effect = t.class("AttributeEffect", object);
     script_function(&mut t, effect, "ApplyAttributeEffects");
     let attribute = t.class("AttributeDefinitionBase", object);
@@ -139,4 +141,33 @@ fn the_slice_gate_s_packs_register_together_with_no_duplicate_key() {
     }
     drop(world);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS: link 1's combat world binds `Actor.AttachComponent` (ow-inventory's
+/// rule, through `bind_engine_attach`), `Pawn.IsPlayerPawn()` and the two `MaterialInstanceConstant` keys in Off, and
+/// none of them in Reference. The inventory pack registered after it reuses the binding (no shadow: the test above).
+#[test]
+fn the_combat_world_binds_the_three_once_unbound_keys_in_off_only() {
+    use ow_inventory::equip::material_instances::{MIC_SET_PARENT, MIC_SET_VECTOR_PARAMETER_VALUE};
+    use ow_world::world::render_hooks::IS_PLAYER_PAWN;
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-cli-pack-wiring-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("WillowGame.upk"), willow_game()).unwrap();
+        std::fs::write(dir.join("Engine.upk"), engine()).unwrap();
+        let mut world = world(&dir, mode).expect("the combat-run world");
+        let off = mode == ParityMode::Off;
+        let attach = world.vm.find_function("Engine.Actor.AttachComponent").unwrap();
+        assert_eq!(world.vm.is_bound(attach), off, "Actor.AttachComponent in {mode:?}");
+        for key in [IS_PLAYER_PAWN, MIC_SET_PARENT, MIC_SET_VECTOR_PARAMETER_VALUE] {
+            assert_eq!(world.vm.has_native(key), off, "{key} in {mode:?}");
+        }
+        drop(world);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

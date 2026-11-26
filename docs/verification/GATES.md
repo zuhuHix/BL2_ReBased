@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS (2026-11-26, pc-hummer, on fix/is-player-pawn-and-unbound-keys from main
+08472592):** AI-assisted (Claude Code, Opus 5.5). It binds three existing rules where their keys were unbound, in Off
+only: `Pawn.IsPlayerPawn()` (render_hooks' pawn test), `Actor.AttachComponent` in the combat world, and the two
+`MaterialInstanceConstant` keys. `cargo test --workspace -j 8` 3,863 passed / 0 failed / 59 ignored; `crate_edges_test.py`
+OK; installed shadow census 0 in all five worlds. Installed Off strict `--slice-gate` (release build, under the machine
+lock): 6 ok / 14, X = 7.167/14 = 51.2%, the same on base 08472592. Links 1, 3, 4, 5, 13 and 14 move from the
+`IsPlayerPawn` unbound-native error to `InitializeBehaviorProviders`' "a definition the store has not loaded"
+(`NotRead`, maya:8); the other rows are unchanged. UNVERIFIED in game.
+
 **ANALYST-MAYA9-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-maya9-and-after from main 3b8df87a):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA9_AND_AFTER.md lists what link 1 meets after its predicted
 `InitializeBehaviorProviders` stop, measured by a local probe: an installed Off strict `--slice-gate` with each earlier

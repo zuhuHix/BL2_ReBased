@@ -50,6 +50,8 @@ const INSTANCED_PATH: &str = "Engine.MeshComponent.GetInstancedMaterialInstanceC
 const PARENT_PATH: &str = "Engine.MaterialInstance.SetParent";
 const VECTOR_PATH: &str = "Engine.MaterialInstance.SetVectorParameterValue";
 const MIC: &str = "Engine.MaterialInstanceConstant";
+const MIC_PARENT_PATH: &str = "Engine.MaterialInstanceConstant.SetParent";
+const MIC_VECTOR_PATH: &str = "Engine.MaterialInstanceConstant.SetVectorParameterValue";
 
 fn engine() -> Vec<u8> {
     engine_with(true)
@@ -96,6 +98,12 @@ fn engine_with(mic_native: bool) -> Vec<u8> {
     t.function(instance, "SetParent", &parent, None, &[], &FunctionSpec::new(NATIVE, "SetParent"), |_| None);
     let vector = [Param::new("Name", "ParameterName"), Param { type_ref: color, ..Param::new("Struct", "Value") }];
     t.function(instance, "SetVectorParameterValue", &vector, None, &[], &FunctionSpec::new(NATIVE, "SetVectorParameterValue"), |_| None);
+    // MaterialInstanceConstant's own declarations of both, as the installed Engine declares them (lane
+    // FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS): separate native keys with the same exec.
+    if mic_native {
+        t.function(mic, "SetParent", &parent, None, &[], &FunctionSpec::new(NATIVE, "SetParent"), |_| None);
+        t.function(mic, "SetVectorParameterValue", &vector, None, &[], &FunctionSpec::new(NATIVE, "SetVectorParameterValue"), |_| None);
+    }
     let scene = toy_struct(&mut t, object, "ToyScenePointer", None);
     t.prop("Int", scene, "Ptr", 0, 0);
     let mesh = t.class("MeshComponent", object);
@@ -574,4 +582,35 @@ fn a_non_native_instance_class_is_refused_before_the_instance_is_made() {
     let mut x = fx_over(engine_with(false), ParityMode::Off, true);
     let c = x.component("Engine.SkeletalMeshComponent", &[], None);
     refused(&mut x, |x| x.instanced(c, 0), &set_parent_for("Engine.MaterialInstance"));
+}
+
+// ---- MaterialInstanceConstant's own keys (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS) --------------------------------
+
+/// `MaterialInstanceConstant.SetParent(object)` and `.SetVectorParameterValue(name,linearcolor)`: their own keys, bound
+/// in Off to the `MaterialInstance` rules (one exec in the game's native table), so a call through either declaration
+/// writes the same; Reference binds neither.
+#[test]
+fn the_material_instance_constant_keys_answer_by_the_material_instance_rules() {
+    let mut x = fx();
+    for (path, key) in [(MIC_PARENT_PATH, MIC_SET_PARENT), (MIC_VECTOR_PATH, MIC_SET_VECTOR_PARAMETER_VALUE)] {
+        let f = x.vm.find_function(path).unwrap();
+        assert_eq!(x.vm.function(f).unwrap().native_key.as_deref(), Some(key), "{path}");
+        assert!(x.vm.has_native(key), "{key}");
+    }
+    let (m, p) = (x.obj(MIC), x.obj("Engine.Material"));
+    let before = x.marks();
+    x.call(MIC_PARENT_PATH, m, vec![Value::Object(Some(p))]).unwrap();
+    assert_eq!(x.get(m, "Parent"), Value::Object(Some(p)));
+    assert_eq!(x.marks().0, before.0 + 1, "one write");
+    let before = x.marks();
+    x.call(MIC_PARENT_PATH, m, vec![Value::Object(Some(p))]).unwrap();
+    assert_eq!(x.marks(), before, "the same parent writes nothing");
+    let name = x.name("PrimaryColor");
+    let color = x.color([0.1, 0.2, 0.3, 1.0]);
+    x.call(MIC_VECTOR_PATH, m, vec![name, color]).unwrap();
+    assert_eq!(x.vectors(m), vec![("PrimaryColor".to_string(), [0.1, 0.2, 0.3, 1.0])]);
+    let x = fx_with(ParityMode::Reference, false);
+    for key in [MIC_SET_PARENT, MIC_SET_VECTOR_PARAMETER_VALUE] {
+        assert!(!x.vm.has_native(key), "{key}");
+    }
 }

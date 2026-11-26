@@ -2801,3 +2801,41 @@ fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
     not_settled(light_environment(&e.vm, p, cycle, skeletal).map(|_| ()));
     assert_eq!((Counters::read(&e.vm), e.vm.space.names.len()), (before, names), "read only");
 }
+
+// ---- Pawn.IsPlayerPawn() as the native (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS) -----------------------------------
+
+/// The native answers by hook 2's pawn test (NATIVE_BODYCOMP_RENDER_HOOKS.md section 6): a `WillowPlayerPawn` true by
+/// its class, a `WillowPawn` by its controller's `bIsPlayer` (no controller: false), an unlisted native class the
+/// test's `NotRead`, a lazy controller the not-loaded `NotRead`, an unloaded receiver its own `NotRead`. Bound in Off
+/// only, keep-existing; nothing written.
+#[test]
+fn is_player_pawn_answers_by_the_pawn_test() {
+    use crate::world::render_hooks::{IS_PLAYER_PAWN, PAWN_NOT_LOADED, is_player_pawn};
+    let mut e = env();
+    let player = e.player_pawn;
+    let p = make(&mut e.vm, player, "Pawn_Player");
+    assert!(is_player_pawn(&e.vm, p).unwrap(), "a WillowPlayerPawn by its class");
+    let pawn = e.pawn;
+    let w = make(&mut e.vm, pawn, "Pawn_Willow");
+    assert!(!is_player_pawn(&e.vm, w).unwrap(), "no controller");
+    let wpc = e.willow_pc;
+    controller_of(&mut e, w, wpc, false);
+    assert!(!is_player_pawn(&e.vm, w).unwrap(), "a controller that is not a player's");
+    controller_of(&mut e, w, wpc, true);
+    assert!(is_player_pawn(&e.vm, w).unwrap(), "a player's controller");
+    let u = unlisted_pawn(&mut e);
+    assert_eq!(not_read_text(is_player_pawn(&e.vm, u).map(|_| ())), format!("{PAWN_TEST} on Test.ToyNativePawn"));
+    let (pc, _) = store_controllers(&mut e);
+    put(&mut e.vm, w, "Controller", Value::Object(Some(pc)));
+    assert_eq!(not_read_text(is_player_pawn(&e.vm, w).map(|_| ())), NOT_LOADED);
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, pc), "nothing loaded");
+    assert_eq!(not_read_text(is_player_pawn(&e.vm, pc).map(|_| ())), PAWN_NOT_LOADED);
+    // The registration: Off binds the key once (a second call keeps it); Reference binds nothing.
+    crate::world::render_hooks::register(&mut e.vm).unwrap();
+    crate::world::render_hooks::register(&mut e.vm).unwrap();
+    assert!(e.vm.has_native(IS_PLAYER_PAWN));
+    let mut r = env();
+    r.vm.parity = ParityMode::Reference;
+    crate::world::render_hooks::register(&mut r.vm).unwrap();
+    assert!(!r.vm.has_native(IS_PLAYER_PAWN));
+}

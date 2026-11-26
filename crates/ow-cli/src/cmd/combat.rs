@@ -148,6 +148,11 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
         // maya:8's player part reaches; ow-world's placeholder for the last left (lane PLACEHOLDER-SHADOWS).
         // Keep-existing, Off only.
         ow_inventory::equip::material_instances::register(&mut world.vm)?;
+        // Actor.AttachComponent (NATIVE_ATTACH_MESH_TO_PICKUP.md part 1, UNVERIFIED; lane
+        // FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS): the player part's arms attach. The one rule is ow-inventory's,
+        // bound as the cast's worlds bind it (Engine's function only, keep-existing); it needs the scene layer the
+        // combat run installs. Off only.
+        ow_inventory::attach_mesh::bind_engine_attach(&mut world.vm)?;
     }
     Ok(world)
 }

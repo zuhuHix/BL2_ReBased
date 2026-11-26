@@ -557,6 +557,9 @@ impl NativePack for Pack {
             // maya:8 after InitializeRBPhysics (NATIVE_GETPHYSXLEVEL_AND_AFTER.md, UNVERIFIED; lane
             // SOCKETS-PUBLISH-AND-PHYSX-LEVEL): GetPhysXLevel, SetHasPhysicsAssetInstance and DoInitRBPhys, Off only.
             physx_level::register(vm)?;
+            // Pawn.IsPlayerPawn() (NATIVE_BODYCOMP_RENDER_HOOKS.md section 6, UNVERIFIED; lane
+            // FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS): hook 2's pawn test as the native; keep-existing by key, Off only.
+            render_hooks::register(vm)?;
         }
         Ok(())
     }

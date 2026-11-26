@@ -1,7 +1,9 @@
 //! Owner: lane IMPL-INITIALIZE-BEHAVIOR-PROVIDERS. The material natives the player part of
 //! `ApplyBodyClassStartingValues` reaches, in `ParityMode::Off`: `MeshComponent.GetMaterial`,
 //! `MaterialInstance.SetParent`, `MaterialInstance.SetVectorParameterValue` and
-//! `MeshComponent.GetInstancedMaterialInstanceConstant`. AI-assisted (Claude Code).
+//! `MeshComponent.GetInstancedMaterialInstanceConstant`. AI-assisted (Claude Code). `MaterialInstanceConstant`'s own
+//! `SetParent` and `SetVectorParameterValue` keys share `MaterialInstance`'s exec and are bound to the same rules
+//! ([`MIC_SET_PARENT`], [`MIC_SET_VECTOR_PARAMETER_VALUE`]; lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md section 3 alone (#740
 //! with its review r1, lane ANALYST-INITIALIZE-BEHAVIOR-PROVIDERS, decision 2026-11-25-75); this lane did not read the
@@ -62,6 +64,11 @@ pub const RECORD: &str = "docs/verification/NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS
 pub const GET_MATERIAL: &str = "MeshComponent.GetMaterial(int)";
 pub const SET_PARENT: &str = "MaterialInstance.SetParent(object)";
 pub const SET_VECTOR_PARAMETER_VALUE: &str = "MaterialInstance.SetVectorParameterValue(name,linearcolor)";
+/// `MaterialInstanceConstant`'s own declarations of the two (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS): separate native
+/// keys whose exec is `MaterialInstance`'s (one body for the three classes' keys in the game's native table), so they
+/// are bound to the same rules. `MaterialInstanceTimeVarying`'s keys stay unbound until something reaches them.
+pub const MIC_SET_PARENT: &str = "MaterialInstanceConstant.SetParent(object)";
+pub const MIC_SET_VECTOR_PARAMETER_VALUE: &str = "MaterialInstanceConstant.SetVectorParameterValue(name,linearcolor)";
 pub const GET_INSTANCED: &str = "MeshComponent.GetInstancedMaterialInstanceConstant(int)";
 
 const GET_WHAT: &str = "MeshComponent.GetMaterial";
@@ -454,11 +461,13 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, fn(&mut NativeCall<'_>) -> Result<Value, VmError>); 4] = [
+    let natives: [(&str, fn(&mut NativeCall<'_>) -> Result<Value, VmError>); 6] = [
         (GET_MATERIAL, get_material_native),
         (SET_PARENT, set_parent_native),
         (SET_VECTOR_PARAMETER_VALUE, set_vector_parameter_value),
         (GET_INSTANCED, get_instanced),
+        (MIC_SET_PARENT, set_parent_native),
+        (MIC_SET_VECTOR_PARAMETER_VALUE, set_vector_parameter_value),
     ];
     for (key, f) in natives {
         if !vm.has_native(key) {

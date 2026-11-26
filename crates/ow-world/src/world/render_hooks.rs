@@ -31,6 +31,12 @@
 //!    section 2.1.1, lane IMPL-DEFERRED-REATTACH-OWNER): a static or tick-disabled pawn is `REATTACH_OWNER`; an
 //!    ordinary one passes, and hook 2's plan (`bOwnerNoSee`, then `bNeedsReattach`) is applied in the body
 //!    composition's write phase, after the custom head and before hook 3.
+//!
+//!    **The native** (lane FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS, decision 2026-11-26-NNN): `Pawn.IsPlayerPawn()` itself
+//!    ([`IS_PLAYER_PAWN`], [`is_player_pawn`]) answers by this same pawn test, bound in Off only and keep-existing:
+//!    a pass is true, a decided failure false, an undecided test its `NotYet` (a lazy `Controller` the test must read
+//!    is [`NOT_LOADED`]). A receiver the store has not loaded is [`PAWN_NOT_LOADED`] (`NotRead`). Nothing is
+//!    written, loaded or interned. `ApplyBodyClassStartingValues` reaches it for `bAlwaysRelevant`.
 //! 3. **The light environment** ([`light_environment`]): the pawn's `LightEnvironment` (declared as an object) None,
 //!    or a made class that is not a `MeshComponent`: nothing. Then the template must be settled, and its
 //!    `bAcceptsLights` (fitted) clear is nothing. Section 7.1 (lane IMPL-HOOK3-ARRAY-CHECK): a made
@@ -38,11 +44,13 @@
 //!    to `SetLightEnvironment`'s planner with the pawn's `LightEnvironment`, on the slots the attach produces. The plan
 //!    is applied in the body composition's write phase, after hook 2's. [`ARRAY_CHECK`] is no longer raised.
 
-use ow_core::NotYet;
+use std::rc::Rc;
+
+use ow_core::{NotYet, ParityMode};
 use ow_object::ids::{ClassId, ObjRef};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
-use ow_vm::api::Vm;
+use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
 use crate::world::component_setters::{self, LightPlan, Slots};
@@ -64,6 +72,10 @@ pub const PAWN_TEST: &str = "the owner-no-see gate's pawn test (IsPlayerPawn)";
 pub const CAMERA_TEST: &str = "the owner-no-see gate's camera test (UsingFirstPersonCamera of ";
 /// Hook 2 reaching a `Controller` that is a store handle not loaded yet.
 pub const NOT_LOADED: &str = "the rendering hooks: an object the store has not loaded (a load is a write)";
+/// `Pawn.IsPlayerPawn()`'s native key (module documentation, hook 2).
+pub const IS_PLAYER_PAWN: &str = "Pawn.IsPlayerPawn()";
+/// `Pawn.IsPlayerPawn()` on a receiver the store has not loaded.
+pub const PAWN_NOT_LOADED: &str = "Pawn.IsPlayerPawn on a pawn the store has not loaded (a load is a write)";
 pub const ARRAY_CHECK: &str = "the light-environment step's array check (not identified)";
 /// Hook 3 on a made `StaticMeshComponent` (section 7.1 step 2): its first LOD's lightmap, in `LODData`, not decoded.
 pub const STATIC_LIGHTMAP: &str = "the light-environment step on a static mesh component (its first LOD's lightmap)";
@@ -211,6 +223,35 @@ fn controller(vm: &Vm, pawn: ObjRef) -> Result<Controller, VmError> {
 
 fn not_loaded() -> VmError {
     NotYet::not_read(NOT_LOADED, RECORD).into()
+}
+
+/// `Pawn.IsPlayerPawn()` on `pawn` (module documentation, hook 2's native): the pawn test's answer, read only.
+pub fn is_player_pawn(vm: &Vm, pawn: ObjRef) -> Result<bool, VmError> {
+    if vm.defs.is_unloaded(&vm.space, pawn) {
+        return Err(NotYet::not_read(PAWN_NOT_LOADED, RECORD).into());
+    }
+    match pawn_test(vm, pawn)? {
+        Test::Pass => Ok(true),
+        Test::Fail => Ok(false),
+        Test::Undecided(e) => Err(e),
+    }
+}
+
+/// Binds [`IS_PLAYER_PAWN`] in `ParityMode::Off`, keep-existing (module documentation, hook 2's native).
+pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off || vm.has_native(IS_PLAYER_PAWN) {
+        return Ok(());
+    }
+    vm.register_native(
+        IS_PLAYER_PAWN,
+        Rc::new(|c: &mut NativeCall<'_>| {
+            let pawn = c.this.ok_or_else(|| VmError::Script {
+                function: "Pawn.IsPlayerPawn".into(),
+                message: "called without a pawn".into(),
+            })?;
+            Ok(Value::Bool(is_player_pawn(c.vm, pawn)?))
+        }),
+    )
 }
 
 /// The pawn test, `Pawn.IsPlayerPawn` (module documentation).
