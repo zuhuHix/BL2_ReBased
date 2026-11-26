@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SPAWN-SETBASEVALUE (decision 2026-11-26-NNN). The combat world's set-up preload of the attribute
+//! Owner: lane IMPL-SPAWN-SETBASEVALUE (decision 2026-11-26-72). The combat world's set-up preload of the attribute
 //! starting values' definitions, in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811, fixed at 0b0a1e6) alone;

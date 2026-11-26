@@ -1260,7 +1260,7 @@ pub(crate) fn preflight_set_base_value(
 }
 
 /// The walk of [`preflight_set_base_value`] with `visit` in place of its refusal of an unloaded handle (decision
-/// 2026-11-26-NNN, NATIVE_SPAWN_SETBASEVALUE.md section 3, step 5): the same objects in the same order, so a preload
+/// 2026-11-26-72, NATIVE_SPAWN_SETBASEVALUE.md section 3, step 5): the same objects in the same order, so a preload
 /// built on it cannot drift from the preflight. `visit` sees each object the preflight would check before its fields
 /// are read (it may load it) and answers whether its fields can be read; `false` leaves that object's dependants.
 /// The preflight's class checks (multi-context, implemented resolver classes, a None read-chain entry, the depth

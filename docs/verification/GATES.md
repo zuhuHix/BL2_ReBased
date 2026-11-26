@@ -72,7 +72,7 @@ Installed Off strict `--slice-gate` (release build, under the machine lock, on 0
 stops at its hit, link 4 (`enemy_attacks_maya`) passes its spawn step (1/2) and stops at its first swing, both at the
 unbound `DamagePipeline.GetBarrelSourceTime()` (the note's section 5, first item). Link 5 is blocked by link 3, link 13
 stops at the same native on link 4's world (0/4), and link 14 is blocked by 13. Link 7 is at the line check's decoy
-`NotRead` (ruling 4); 1, 2, 6 and 8 to 12 ok, 8 ok as before. UNVERIFIED in game. Decision 2026-11-26-NNN.
+`NotRead` (ruling 4); 1, 2, 6 and 8 to 12 ok, 8 ok as before. UNVERIFIED in game. Decision 2026-11-26-72.
 
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
