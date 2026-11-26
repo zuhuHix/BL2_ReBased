@@ -239,7 +239,9 @@ play's effect on link 6 (section 4) was not measured.
   - the per-call log line: "harness input: the pickup targeting's line check hit nothing (a world with no level
     geometry; the owner's pawn, the target pickup and its Base passed over; UNVERIFIED stand-in, the hub's ruling on
     review of #806)";
-  - so the aimed gun's line is clear, as in the probe.
+  - so the aimed gun's line is clear, as in the probe;
+  - **read since** (NATIVE_LINK7_LINE_CHECK.md): the game's check never tests pawns or pickups (their owner filters
+    reject them with its flags), so the three-actor list can become that rule (its open question 2).
 - **With the four rulings in** (a harness HUD, begun play, the eye-point view, the line check), the bounds from the
   port's rule, and section 7's rule: **`look` passes, and on main eef4f83 (SetBase bound) link 7 passes** (the
   probe). No further stop on link 7's path.

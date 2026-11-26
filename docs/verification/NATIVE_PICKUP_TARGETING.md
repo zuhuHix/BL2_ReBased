@@ -133,7 +133,8 @@ When there is a winner `W` (the pass runs these only in a game world, which the 
 2. **The trace exemption:** the trace runs only when the horizontal distance from `V` to `W` is strictly more than
    `HUDDefinition.PickupRange × 0.25`. Within that distance no trace runs and `W` stays the winner.
 3. **The trace:** a world line check from a point 25 units back from `W` toward `V` (along the direction from `V` to
-   `W`, pitch and yaw) to `V`. A hit on `W` itself or on `W`'s `Base` is allowed. A hit on anything else means no
+   `W`, pitch and yaw) to `V` (corrected since: from `V` to that point, a point line with the HUD as source;
+   NATIVE_LINK7_LINE_CHECK.md section 2). A hit on `W` itself or on `W`'s `Base` is allowed. A hit on anything else means no
    winner. No hit keeps `W`.
 
 ## 6. No winner

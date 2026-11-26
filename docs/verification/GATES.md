@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK7-LINE-CHECK (2026-11-26, pc-hummer, docs only, on docs/native-link7-line-check from main c1058de6,
+rebased onto f80b68e7):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK7_LINE_CHECK.md reads the HUD targeting's line check: a point line
+from the view to 25 units short of the pickup (correcting NATIVE_PICKUP_TARGETING.md's direction), flags 134357638
+(movers, the BSP, world geometry, stop at the first hit, terrain, complex collision, the game bit; no pawns, volumes or
+other actors), the HUD as source. With those flags the owner filters never test a pawn or a pickup (`WillowPickup`
+keeps `Actor`'s body, `bWorldGeometry` false), so the decoy whose bounds meet the line is passed over by the game's
+rule. An Off answer replacing ruling 4's three-actor list is proposed for the hub. No probe; no code changed, so no
+measured number moved. UNVERIFIED in game.
+
 **IMPL-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, on fix/rust-link7-hud from main d118d2b, which has the note
 #806):** AI-assisted (Claude Code, Opus 5.5). The hub's four rulings on #806
 as Off harness inputs (the harness HUD, the `AddPickup` registration, the eye-point view, the no-hit line check under
