@@ -219,7 +219,7 @@ fn the_touch_trace_without_a_collision_service_is_layer_absent() {
     }
 }
 
-/// `AddToNavigation` does nothing. `RemovePickup` is bound since IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-NNN; its
+/// `AddToNavigation` does nothing. `RemovePickup` is bound since IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-57; its
 /// removal is tested in `link6_tests.rs`); this fixture's globals declare no `PickupList`, so it is a `Script` error
 /// before it changes anything (the pickup keeps its inventory).
 #[test]

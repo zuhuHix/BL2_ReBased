@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-NNN). `Actor.SetBase(NewBase, optional NewFloor, optional
+//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-57). `Actor.SetBase(NewBase, optional NewFloor, optional
 //! SkelComp, optional AttachName)` in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_ACTOR_SETBASE.md section 3 (#795 as landed) alone; this
