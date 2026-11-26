@@ -60,6 +60,14 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK7-LINE-CHECK (2026-11-26, pc-hummer, on fix/rust-link7-line-check, on main f80b68e7):** AI-assisted (Claude
+Code, Opus 5.5). NATIVE_LINK7_LINE_CHECK.md section 5 in Off (the hub's ruling in decision 2026-11-26-71): the HUD
+targeting's line check from the view point with the HUD as the source, every primitive through the point-line filter,
+the target and its `Base` kept, the bounds step with well-formed values. `cargo test --workspace -j 8 --no-fail-fast`
+4,081 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under
+the machine lock), base f80b68e7 against this head: **9 ok / 14, X = 9.0/14 = 64.3%** (main 8 ok, 60.7%). Link 7
+passes; link 6 still passes; every other row as on main. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue, rebased onto main f80b68e, which has
 #808 and #810):** AI-assisted (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting
 values' definitions, Off, in the note's three phases (#811 as landed): discovery (each spawn kind's archetype copied
