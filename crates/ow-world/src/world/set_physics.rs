@@ -312,6 +312,13 @@ fn preflight(vm: &Vm, actor: ObjRef, mode: u8) -> Result<Option<Plan>, VmError> 
     Ok(Some(Plan { actor, mode, volume, events }))
 }
 
+/// The preflight alone (module documentation), for a caller that must decide `SetPhysics`' refusals before its own
+/// first write (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC: `WillowPawn.SetDefaultPhysics`). Reads only; `Ok(())`
+/// also when nothing would change.
+pub fn preflight_check(vm: &Vm, actor: ObjRef, mode: u8) -> Result<(), VmError> {
+    preflight(vm, actor, mode).map(|_| ())
+}
+
 /// #518's counters.
 fn marks(vm: &Vm) -> (u64, u64, u64) {
     (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())

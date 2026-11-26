@@ -718,9 +718,8 @@ pub const RECORD_ROUTE: &str = "NATIVE_MIND_ROUTE.md";
 /// or its class default object, both pawns (UNVERIFIED; the port does not model `ObjectArchetype`).
 ///
 /// Past the gates the native sets the default physics, copies `bCollideWorld` and, unless two pawn queries both answer
-/// true, the collision flags from the archetype. Those two queries are not named (the note's "Not read"), and an AI
-/// pawn's default physics also hangs on an unnamed navigation-handle query in its last case. No branch is picked: this
-/// is `NotYet { NotRead }`, decided before anything changes. UNVERIFIED in the running game.
+/// true, the collision flags from the archetype: [`crate::default_physics::past_the_gates`] (the queries named by
+/// NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 2). UNVERIFIED in the running game.
 pub fn set_default_physics(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
     let flag = |vm: &mut Vm, name: &str| -> Result<bool, VmError> {
         Ok(matches!(get(vm, pawn, name)?, Some(Value::Bool(true))))
@@ -745,13 +744,9 @@ pub fn set_default_physics(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
             return Ok(());
         }
     }
-    Err(NotYet::not_read(
-        "WillowPawn.SetDefaultPhysics past its gates: the two pawn queries that decide whether the collision flags are \
-         copied, and the navigation-handle query of an AI pawn's default physics, are not named (NATIVE_MIND_ROUTE.md \
-         section 1, not read)",
-        RECORD_ROUTE,
-    )
-    .into())
+    // Past the gates: the three queries, named by NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 2
+    // (`crate::default_physics`, lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC).
+    crate::default_physics::past_the_gates(vm, pawn)
 }
 
 /// A field of a struct value by name.

@@ -117,6 +117,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     // The stance rules first, so either pack order binds the same functions (lane IMPL-MAYA9-NATIVES).
     crate::stance::register(vm)?;
     crate::maya9::register(vm)?;
+    crate::default_physics::register(vm)?;
     for path in UNRESOLVED {
         let (class, function) = class_and_function(path);
         let what = format!("{class}.{function}: the class's own implementation is not resolved");

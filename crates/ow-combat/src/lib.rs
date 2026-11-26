@@ -10,6 +10,7 @@
 
 pub mod damage;
 pub mod death;
+pub mod default_physics;
 pub mod down;
 pub mod firing;
 pub mod go_down;
@@ -19,5 +20,6 @@ pub mod loot;
 pub mod maya9;
 pub mod pawn_interface;
 pub mod run;
+pub mod spawn_balance;
 pub mod stance;
 pub mod xp;
