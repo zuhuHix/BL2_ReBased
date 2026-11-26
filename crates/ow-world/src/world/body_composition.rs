@@ -1030,15 +1030,26 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 // The pawn's PostInitBodyComposition (section 4.5), mode 0.
                 let mut post = PostInit::default();
                 // A pawn field the hook releases first (a detach and a global list): the hub's release ruling (lane
-                // IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6.3, following the game):
-                // the release detaches only an attached component, so an old component the attach record does not
-                // hold under the pawn is released with nothing to detach, and the new one is written as usual. One
-                // the record holds keeps the refusal (the detach and the global list are not read). UNVERIFIED.
+                // IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6.3, following the game;
+                // narrowed by review of #766, item 1, after NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5's "or
+                // the port cannot tell"). The release detaches only an attached component. It keeps the refusal
+                // (the detach and the global list are not read) wherever the port cannot tell the old component is
+                // unattached:
+                // - the world has no scene layer, so no attach record;
+                // - the record holds it under the pawn;
+                // - its `Owner` already names the pawn: an attach path that does not publish to the record (this
+                //   build's own actor attach is one) may have attached it.
+                // Only an old component with a layer present, neither recorded under the pawn nor owned by it, is
+                // released with nothing to detach, and the new one is written as usual. UNVERIFIED.
                 let old_set = |name: &str| -> Result<bool, VmError> {
-                    match read_prop(vm, owner, name)?.and_then(|v| object_of(&v)) {
-                        Some(old) => crate::actors::attached_to(vm, old, owner),
-                        None => Ok(false),
+                    let Some(old) = read_prop(vm, owner, name)?.and_then(|v| object_of(&v)) else {
+                        return Ok(false);
+                    };
+                    let no_layer = vm.service::<crate::actors::SceneLayer>().is_none();
+                    if no_layer || crate::actors::attached_to(vm, old, owner)? {
+                        return Ok(true);
                     }
+                    Ok(read_prop(vm, old, "Owner")?.and_then(|v| object_of(&v)) == Some(owner))
                 };
                 // Section 4.5.1: the old Pawn.Mesh is released before the new one is set (review r1 of #542, item 2).
                 if name_is(vm, &a.parent_id, MESH_ID) {

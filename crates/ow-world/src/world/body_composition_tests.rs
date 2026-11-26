@@ -995,11 +995,13 @@ fn releasing_the_old_cylinder_or_mesh_is_not_read() {
     assert_eq!(what, releasing_old("Mesh"));
 }
 
-/// The release ruling's other half (test 5): an old `CylinderComponent` or `Mesh` that is set but not in the attach
-/// record is released with nothing to detach: the build goes on and writes the new component in its place.
+/// The release ruling's other half (test 5): with a scene layer present, an old `CylinderComponent` or `Mesh` that is
+/// set, not in the attach record and not owned by the pawn is released with nothing to detach: the build goes on and
+/// writes the new component in its place.
 #[test]
 fn an_old_component_not_in_the_attach_record_is_replaced() {
     let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
@@ -1010,6 +1012,7 @@ fn an_old_component_not_in_the_attach_record_is_replaced() {
     assert!(matches!(now, Value::Object(Some(c)) if c != old && c != cyl), "the new component is written: {now:?}");
 
     let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
     let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
     let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
     let p = pawn_with(&mut e, vec![a0]);
@@ -1018,6 +1021,38 @@ fn an_old_component_not_in_the_attach_record_is_replaced() {
     run(&mut e, p).unwrap();
     let now = prop(&e.vm, p, "Mesh");
     assert!(matches!(now, Value::Object(Some(m)) if m != old && m != skel), "the new mesh is written: {now:?}");
+}
+
+/// Review of #766, item 1 (NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5, "or the port cannot tell"): the release
+/// keeps its `NotRead` where the port cannot tell the old component is unattached. With no scene layer there is no
+/// attach record; with one, an old component whose `Owner` names the pawn but that no record entry holds may have
+/// been attached by a path that does not publish (this build's own actor attach is one). Nothing is written.
+#[test]
+fn the_release_is_refused_where_the_port_cannot_tell() {
+    // No scene layer.
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let old = make(&mut e.vm, e.cylinder, "OldCylinder");
+    put(&mut e.vm, p, "CylinderComponent", Value::Object(Some(old)));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what), (Missing::NotRead, releasing_old("CylinderComponent")));
+    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(Some(old)), "untouched");
+
+    // A layer, the old Mesh owned by the pawn but in no record entry.
+    let mut e = env();
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0]);
+    let old = make(&mut e.vm, e.skeletal, "OldMesh");
+    put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    put(&mut e.vm, old, "Owner", Value::Object(Some(p)));
+    assert!(!crate::actors::attached_to(&e.vm, old, p).unwrap(), "not in the record");
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what), (Missing::NotRead, releasing_old("Mesh")));
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(Some(old)), "untouched");
 }
 
 /// Review r1 of #542, item 4: a second `CylinderComponent` attachment would release the first one's component, so it

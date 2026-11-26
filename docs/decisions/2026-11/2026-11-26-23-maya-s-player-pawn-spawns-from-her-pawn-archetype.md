@@ -18,12 +18,25 @@ was granted. **Every rule is UNVERIFIED in the running game.**
   heap's archetype field (decision 2026-11-26-14) is set to the archetype. `Controller` is set afterwards, as before,
   and `ensure_off`'s `ApplyCharacterClassDefaults` is unchanged. With no `PlayerClass` the pawn stays the
   class-default one (decisions 2026-11-26-16 and -17).
-- **The hub's release ruling** (the note's section 6.3, following the game). In `InitializeBodyComposition`'s
-  `PostInitBodyComposition` step, an old `Mesh` or `CylinderComponent` that the attach record does not hold under the
-  pawn is released with nothing to detach, and the new one is written. One the record holds keeps "releasing the old
-  Mesh" / "... CylinderComponent" (`NotYet { NotRead }`; the detach and the global list are not read). The ruling names
-  `Mesh`. It is applied to `CylinderComponent` too: the note's 6.3 covers both, and the archetype pawn arrives with
-  both set. A second attachment of either in one build keeps the refusal.
+- **What route B skips** (review of #766, item 2): `SetPlayerDefaults`' `ApplyGlobalPlayerMovementSettings`, and the
+  rest of `RestartPlayer` (`Possess`, `AddDefaultInventory`, the level's player-spawned events,
+  `SpawningProcessComplete`). Only `ApplyCharacterClassDefaults`, which `ensure_off` already calls, is kept.
+- **The note's open question 4** stays open: `Default__WillowPlayerPawn.CylinderComponent` decodes None, and
+  `Components[0]` is None on both the archetype and the class default, while NATIVE_INITIALIZE_BODY_COMPOSITION.md
+  section 4.5 says stock `Pawn` defaults give the pawn a cylinder. Either the decoder misses an inherited value, or
+  that line is wrong for this class. This lane does not settle it.
+- **A refusal after the spawn's insertion ends the run** (review of #766, item 3): the actor stays in the level list,
+  as for every spawned actor, and is not cached, so a retry would spawn a second pawn. The harness makes no retry: a
+  partial-writes `NotYet` is terminal.
+- **The hub's release ruling** (the note's section 6.3, following the game; narrowed by review of #766, item 1, after
+  NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5's "or the port cannot tell"). In `InitializeBodyComposition`'s
+  `PostInitBodyComposition` step, an old `Mesh` or `CylinderComponent` is released with nothing to detach, and the
+  new one written, only when the world has a scene layer and the component is neither in the attach record under the
+  pawn nor owned by it (its `Owner` naming the pawn). With no layer, or either of those, the refusal stays: an attach
+  path that does not publish to the record (body composition's own actor attach) may have attached it. A kept refusal
+  is "releasing the old Mesh" / "... CylinderComponent" (`NotYet { NotRead }`; the detach and the global list are not
+  read). The ruling names `Mesh`. It is applied to `CylinderComponent` too: the note's 6.3 covers both, and the
+  archetype pawn arrives with both set. A second attachment of either in one build keeps the refusal.
 
 **Tests** (the note's section 8):
 1. a toy player class whose archetype holds `ToyEye` 7: the spawned pawn has 7, its archetype on the heap, a place in
