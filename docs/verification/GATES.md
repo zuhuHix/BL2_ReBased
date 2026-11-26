@@ -9,7 +9,7 @@ correction; the `holds_no_geometry` guard kept. `cargo test --workspace -j 8 --n
 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock), base
 f80b68e7 against this head: both **8 ok / 14, X = 8.5/14 = 60.7%**, every row's stop the same. Links 6 and 7 have the
 same steps. Links 3, 4, 5, 13 and 14 stay past the floor trace and stop at the spawn's `SetBaseValue`. UNVERIFIED in
-game. Decision 2026-11-26-NNN.
+game. Decision 2026-11-26-73.
 
 **ANALYST-LINK7-LINE-CHECK (2026-11-26, pc-hummer, docs only, on docs/native-link7-line-check from main c1058de6,
 rebased onto f80b68e7):**
