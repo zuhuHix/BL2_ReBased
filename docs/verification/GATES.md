@@ -12,7 +12,7 @@ under the machine lock): this branch alone 6 ok / 8 not ok, 51.2%, links 1, 3, 4
 fix/preload-bodyclass-definitions (before they landed as #780 and #779), 6 ok / 8 not ok, 51.2%, the same links stop earlier in `maya:8`, at pass 2 of
 `InitializeBehaviorProviders`: a sequence's `CustomEnableCondition` needs its owner (the mission tracker's observers,
 `LayerAbsent`; the note's caveat 1), so none of this lane's natives is reached in the installed run yet. Every other
-row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+row is unchanged. UNVERIFIED in game. Decision 2026-11-26-39.
 
 **GATE-SETUP-HARNESS-LINES (2026-11-26, pc-hummer, on fix/gate-setup-harness-lines, rebased onto main 37a1f3e):** AI-assisted
 (Claude Code, Opus 5.5). The gate's combat rows carry the world set-up's harness lines, marked `world set-up: `;
