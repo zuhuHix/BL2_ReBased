@@ -1327,7 +1327,8 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     // at-rest ruling's set-up line, when the set-up logged them.
     let at_rest = crate::cmd::inventory::equip_run::AT_REST_INPUT;
     let ammo = |l: &String| l.starts_with("harness input: set-up preload: ") && l.ends_with(crate::cmd::inventory::equip_run::AMMO_PRELOAD_TAIL);
-    r.harness.extend(world.vm.log.iter().filter(|l| ammo(l) || *l == at_rest).cloned());
+    let audio = ow_inventory::link6::AUDIO_INPUT;
+    r.harness.extend(world.vm.log.iter().filter(|l| ammo(l) || *l == at_rest || *l == audio).cloned());
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The card's preflight before the weapon is made, as link 8's driver runs it (NATIVE_LINK67_PICKUP_GUN_INIT.md

@@ -786,6 +786,41 @@ fn package() -> Vec<u8> {
     let mut broken_comp = ow_package::testkit::Export::new(toy_component, "ToyComponent0", broken_comp_payload);
     broken_comp.outer = broken_ref;
     t.p.add_export_with(broken_comp);
+    // Lane IMPL-LINK6-AFTER-TAKE: SetBase's fields and events (notes 50 Detach, 51 Attach, 52 BaseChange), a collection
+    // actor, AllControllers, and actors in states for the destroy's empty-EndState lift (notes 40 a busy EndState, 41
+    // Destroyed).
+    for b in ["bMovable", "bHardAttach"] {
+        t.prop("Bool", actor, b, 0, 0);
+    }
+    t.prop("Object", actor, "BaseSkelComponent", 0, object);
+    t.prop("Name", actor, "BaseBoneName", 0, 0);
+    t.prop("Struct", actor, "RelativeLocation", 0, vector);
+    t.prop("Struct", actor, "RelativeRotation", 0, rotator);
+    native(
+        &mut t,
+        actor,
+        "SetBase",
+        &[opt("Object", "NewBase", actor), opt("Struct", "NewFloor", vector), opt("Object", "SkelComp", object), opt("Name", "AttachName", 0)],
+        None,
+        NATIVE,
+    );
+    void(&mut t, actor, "Detach", &[opt("Object", "Other", actor)], |_, a| note(a, &ids, 50));
+    void(&mut t, actor, "Attach", &[opt("Object", "Other", actor)], |_, a| note(a, &ids, 51));
+    void(&mut t, actor, "BaseChange", &[], |_, a| note(a, &ids, 52));
+    t.class("StaticMeshCollectionActor", actor);
+    let stated = t.class("StatedActor", actor);
+    void(&mut t, stated, "EndState", &[], |_, _| {});
+    void(&mut t, stated, "Destroyed", &[], |_, a| note(a, &ids, 41));
+    let bare = toy_state(&mut t, stated, "Bare");
+    void(&mut t, bare, "EndState", &[], |_, _| {});
+    let busy = toy_state(&mut t, stated, "Busy");
+    void(&mut t, busy, "EndState", &[], |_, a| note(a, &ids, 40));
+    toy_state(&mut t, stated, "Fallback");
+    let native_state = toy_state(&mut t, stated, "NativeEnd");
+    native(&mut t, native_state, "EndState", &[], None, NATIVE);
+    let busy_class = t.class("BusyStatedActor", actor);
+    void(&mut t, busy_class, "EndState", &[], |_, a| note(a, &ids, 40));
+    toy_state(&mut t, busy_class, "Fallback");
     t.p.build()
 }
 
@@ -927,7 +962,7 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
         "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
 
         "Probe", "Dud", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
-        "ListedPawn", "ListedOwner", "CollidingPawn",
+        "ListedPawn", "ListedOwner", "CollidingPawn", "StatedActor", "BusyStatedActor",
     ] {
         let cdo =
             w.vm.defs
@@ -4184,4 +4219,244 @@ fn set_scale_is_bound_outside_reference_only() {
         let x = fx_in(true, ParityMode::Reference);
         assert!(!x.w.vm.has_native(crate::world::primitive_scale::SET_SCALE), "unbound under Reference");
     });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lane IMPL-LINK6-AFTER-TAKE: Actor.SetBase, WorldInfo.AllControllers and the destroy's empty-EndState lift
+// (NATIVE_ACTOR_SETBASE.md section 6; NATIVE_LINK6_AFTER_TAKE.md section 6). Invented actors and values.
+// ---------------------------------------------------------------------------------------------------------------
+
+mod link6 {
+    use super::*;
+    use ow_object::ids::PropAddr;
+
+    fn vector(x: &mut Fx, o: ObjRef, name: &str, v: [f32; 3]) {
+        let vm = &mut x.w.vm;
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        let mut s = vm.space.read(o, PropAddr::scalar(p)).unwrap().clone();
+        for (f, val) in s.struct_mut().unwrap().fields.iter_mut().zip(v) {
+            *f = Value::Float(val);
+        }
+        *vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = s;
+    }
+    fn floats(x: &Fx, o: ObjRef, name: &str) -> Vec<Value> {
+        let vm = &x.w.vm;
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        vm.space.read(o, PropAddr::scalar(p)).unwrap().as_struct().unwrap().fields.clone()
+    }
+    fn movable(x: &mut Fx, class: &str) -> ObjRef {
+        let a = x.spawn(class);
+        set_field(&mut x.w.vm.space, a, "bMovable", Value::Bool(true)).unwrap();
+        a
+    }
+    fn counters(x: &Fx) -> (u64, u64, u64, u64, usize) {
+        let vm = &x.w.vm;
+        (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.class_code_loads(), vm.space.names.len())
+    }
+    fn set_base(x: &mut Fx, receiver: ObjRef, base: Option<ObjRef>) -> Result<(), VmError> {
+        let f = x.w.vm.find_function("Engine.Actor.SetBase").unwrap();
+        x.w.vm.call(f, Some(receiver), vec![Value::Object(base)]).map(|_| ())
+    }
+    fn events(x: &Fx, from: usize) -> Vec<(ObjRef, i32)> {
+        x.notes.borrow()[from..].iter().copied().filter(|(_, k)| (50..=52).contains(k)).collect()
+    }
+    fn attached(x: &Fx, o: ObjRef) -> Vec<Option<ObjRef>> {
+        crate::actors::objects(&x.w.vm.space, o, "Attached").unwrap()
+    }
+
+    // Test 1: no change, nothing at all.
+    #[test]
+    fn set_base_with_no_change_does_nothing() {
+        run(|| {
+            let mut x = fx();
+            let a = movable(&mut x, "Actor");
+            let before = (counters(&x), x.notes.borrow().len());
+            set_base(&mut x, a, None).unwrap();
+            assert_eq!((counters(&x), x.notes.borrow().len()), before);
+        });
+    }
+
+    // Tests 2 and 3: onto a base, then changing bases.
+    #[test]
+    fn set_base_onto_a_base_then_onto_another() {
+        run(|| {
+            let mut x = fx();
+            let (a, b) = (movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+            let r = movable(&mut x, "Actor");
+            vector(&mut x, a, "Location", [10.0, 0.0, 0.0]);
+            vector(&mut x, r, "Location", [12.0, 3.0, 4.0]);
+            let from = x.notes.borrow().len();
+            set_base(&mut x, r, Some(a)).unwrap();
+            assert_eq!(obj(&x, r, "Base"), Some(a));
+            assert_eq!(floats(&x, r, "RelativeLocation"), [Value::Float(2.0), Value::Float(3.0), Value::Float(4.0)]);
+            assert_eq!(attached(&x, a), [Some(r)]);
+            assert_eq!(events(&x, from), [(a, 51), (r, 52)], "Attach on the base, then BaseChange");
+            let from = x.notes.borrow().len();
+            set_base(&mut x, r, Some(b)).unwrap();
+            assert!(attached(&x, a).is_empty(), "A loses the receiver");
+            assert_eq!(events(&x, from), [(a, 50), (b, 51), (r, 52)], "Detach on A before Attach on B");
+            let from = x.notes.borrow().len();
+            set_base(&mut x, r, None).unwrap();
+            assert_eq!(events(&x, from), [(b, 50), (r, 52)], "no Attach with no base");
+        });
+    }
+
+    // Test 4: a world-geometry base.
+    #[test]
+    fn a_world_geometry_base_gets_no_pose_and_no_attach() {
+        run(|| {
+            let mut x = fx();
+            let (g, r) = (movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+            set_field(&mut x.w.vm.space, g, "bWorldGeometry", Value::Bool(true)).unwrap();
+            vector(&mut x, r, "Location", [5.0, 0.0, 0.0]);
+            let from = x.notes.borrow().len();
+            set_base(&mut x, r, Some(g)).unwrap();
+            assert_eq!(obj(&x, r, "Base"), Some(g));
+            assert!(attached(&x, g).is_empty());
+            assert_eq!(floats(&x, r, "RelativeLocation"), [Value::Float(0.0), Value::Float(0.0), Value::Float(0.0)]);
+            assert_eq!(events(&x, from), [(r, 52)], "BaseChange only");
+        });
+    }
+
+    // Test 5: the refusals that do nothing.
+    #[test]
+    fn set_base_refusals_do_nothing() {
+        run(|| {
+            let mut x = fx();
+            // A base loop.
+            let (a, r) = (movable(&mut x, "Actor"), movable(&mut x, "Actor"));
+            set_field(&mut x.w.vm.space, a, "Base", Value::Object(Some(r))).unwrap();
+            let before = counters(&x);
+            set_base(&mut x, r, Some(a)).unwrap();
+            assert_eq!(counters(&x), before, "a loop");
+            // A static receiver onto a movable base; a fixed receiver onto a deleted base.
+            let (fixed, moving) = (x.spawn("Actor"), movable(&mut x, "Actor"));
+            set_field(&mut x.w.vm.space, fixed, "bStatic", Value::Bool(true)).unwrap();
+            let before = counters(&x);
+            set_base(&mut x, fixed, Some(moving)).unwrap();
+            assert_eq!(counters(&x), before, "a fixed receiver onto a moving base");
+            let deleted = x.spawn("Actor");
+            set_field(&mut x.w.vm.space, deleted, "bDeleteMe", Value::Bool(true)).unwrap();
+            let before = counters(&x);
+            set_base(&mut x, fixed, Some(deleted)).unwrap();
+            assert_eq!(counters(&x), before, "a deleted base");
+        });
+    }
+
+    // Test 6: the NotReads raised before any write.
+    #[test]
+    fn set_base_not_reads_come_before_any_write() {
+        run(|| {
+            let mut x = fx();
+            let refused = |x: &mut Fx, r: ObjRef, base: Option<ObjRef>| -> String {
+                let before = counters(x);
+                let e = set_base(x, r, base).unwrap_err();
+                assert_eq!(counters(x), before, "nothing written");
+                match e {
+                    VmError::NotYet(n) => {
+                        assert_eq!(n.missing, Missing::NotRead, "{n}");
+                        n.what.to_string()
+                    }
+                    other => panic!("{other:?}"),
+                }
+            };
+            let r = movable(&mut x, "Actor");
+            let collection = movable(&mut x, "StaticMeshCollectionActor");
+            assert_eq!(refused(&mut x, r, Some(collection)), crate::world::set_base::COLLECTION);
+            let turned = movable(&mut x, "Actor");
+            let class = x.w.vm.space.heap.get(turned).unwrap().class;
+            let p = x.w.vm.space.prop(class, "Rotation").unwrap();
+            let mut rot = x.w.vm.space.read(turned, PropAddr::scalar(p)).unwrap().clone();
+            rot.struct_mut().unwrap().fields[1] = Value::Int(100);
+            *x.w.vm.space.slot_mut(turned, PropAddr::scalar(p)).unwrap() = rot;
+            assert_eq!(refused(&mut x, r, Some(turned)), crate::world::set_base::TURNED);
+            let probe = x.spawn("Probe");
+            assert_eq!(refused(&mut x, probe, None), crate::world::set_base::NOT_RESOLVED, "not one of the seven");
+        });
+    }
+
+    // NATIVE_LINK6_AFTER_TAKE.md tests 5 to 7: AllControllers over C1 -> C2 -> C3.
+    fn iterate(x: &mut Fx, class: Option<&str>) -> Result<Vec<Value>, VmError> {
+        let base = class.map(|c| x.class(c));
+        let vm = &mut x.w.vm;
+        // Declared by hand with the iterator's key, as `actor_take_tests` declares `ComponentList`.
+        let path = "Engine.WorldInfo.AllControllers";
+        let f = match vm.find_function(path) {
+            Ok(f) => f,
+            Err(_) => {
+                let wi_class = vm.find_class("Engine.WorldInfo").unwrap();
+                let decl = FunctionDecl::native(ow_core::ObjectPath::parse(path).unwrap(), crate::world::all_controllers::KEY)
+                    .with_owner(wi_class);
+                vm.declare_function(decl).unwrap()
+            }
+        };
+        let it = vm.iterator_for(f).unwrap();
+        let wi = x.wi;
+        let args = vec![Arg::new(Value::Class(base), false, true), Arg::new(Value::Object(None), true, true)];
+        let mut call = NativeCall::new(&mut x.w.vm, f, Some(wi), args);
+        it(&mut call).map(|r| r.items)
+    }
+
+    #[test]
+    fn all_controllers_walks_the_list_by_class() {
+        run(|| {
+            let mut x = fx();
+            let (c1, c2, c3) = (x.spawn("Controller"), x.spawn("PlayerController"), x.spawn("Controller"));
+            let wi = x.wi;
+            assert!(iterate(&mut x, None).unwrap().is_empty() || obj(&x, wi, "ControllerList").is_some());
+            set_field(&mut x.w.vm.space, wi, "ControllerList", Value::Object(Some(c1))).unwrap();
+            set_field(&mut x.w.vm.space, c1, "NextController", Value::Object(Some(c2))).unwrap();
+            set_field(&mut x.w.vm.space, c2, "NextController", Value::Object(Some(c3))).unwrap();
+            set_field(&mut x.w.vm.space, c3, "NextController", Value::Object(None)).unwrap();
+            let all = [c1, c2, c3].map(|c| Value::Object(Some(c))).to_vec();
+            assert_eq!(iterate(&mut x, None).unwrap(), all, "a None class");
+            assert_eq!(iterate(&mut x, Some("Controller")).unwrap(), all, "Controller");
+            assert_eq!(iterate(&mut x, Some("PlayerController")).unwrap(), [Value::Object(Some(c2))], "a subclass");
+            set_field(&mut x.w.vm.space, c3, "NextController", Value::Object(Some(c1))).unwrap();
+            assert!(matches!(iterate(&mut x, None), Err(VmError::Script { .. })), "a loop");
+        });
+    }
+
+    // NATIVE_ACTOR_SETBASE.md test 11: the destroy's empty-EndState lift.
+    fn in_state(x: &mut Fx, class: &str, state: &str) -> ObjRef {
+        let a = x.spawn(class);
+        let s = x.name(state);
+        x.w.vm.space.heap.get_mut(a).unwrap().state = Some(s);
+        a
+    }
+
+    #[test]
+    fn a_bare_end_state_is_lifted_and_any_other_is_refused() {
+        run(|| {
+            let mut x = fx();
+            for (class, state, lifted) in [
+                ("StatedActor", "Bare", true),
+                ("StatedActor", "Fallback", true),
+                ("StatedActor", "Busy", false),
+                ("StatedActor", "NativeEnd", false),
+                ("BusyStatedActor", "Fallback", false),
+            ] {
+                let a = in_state(&mut x, class, state);
+                let from = x.notes.borrow().len();
+                let before = counters(&x);
+                let r = crate::actors::destroy(&mut x.w.vm, a);
+                if lifted {
+                    assert_eq!(r.unwrap(), true, "{class} {state}");
+                    let notes: Vec<i32> = x.notes.borrow()[from..].iter().map(|(_, k)| *k).collect();
+                    assert!(notes.contains(&41) && !notes.contains(&40), "{class} {state}: Destroyed, no EndState: {notes:?}");
+                    let line = crate::actors::lifted_destroy_line(state);
+                    assert!(x.w.vm.log.iter().any(|l| *l == line), "{state}: logged");
+                } else {
+                    assert!(matches!(missing(WorldError::Vm(r.unwrap_err())), Missing::LayerAbsent(_)), "{class} {state}");
+                    assert_eq!(counters(&x), before, "{class} {state}: nothing written");
+                }
+            }
+            // Reference keeps the refusal for a bare EndState too.
+            let mut r = fx_in(true, ParityMode::Reference);
+            let a = in_state(&mut r, "StatedActor", "Bare");
+            assert!(matches!(missing(WorldError::Vm(crate::actors::destroy(&mut r.w.vm, a).unwrap_err())), Missing::LayerAbsent(_)));
+        });
+    }
 }

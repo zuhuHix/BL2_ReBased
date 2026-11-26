@@ -344,18 +344,13 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 7] = [
+    let natives: [(&str, NativeFn); 6] = [
         (GET_INVENTORY_PAWN, Rc::new(get_inventory_pawn)),
         (GET_PAWN_INVENTORY_MANAGER, Rc::new(get_pawn_inventory_manager)),
         (GET_PICKUPABLE_INVENTORY, Rc::new(get_pickupable_inventory)),
         (GET_PICKUPABLE_INVENTORY_DEFINITION, Rc::new(get_pickupable_inventory_definition)),
         (ADD_TO_NAVIGATION, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::None))),
-        (
-            REMOVE_PICKUP,
-            Rc::new(|_: &mut NativeCall<'_>| {
-                Err(NotYet::not_read("the pickup events of RemovePickup", crate::globals::RECORD).into())
-            }),
-        ),
+        // `REMOVE_PICKUP`'s `NotRead` gave way to its rule (lane IMPL-LINK6-AFTER-TAKE, `crate::link6`).
         (TOUCH_PICKUP_TRACE, Rc::new(touch_pickup_trace)),
     ];
     for (key, f) in natives {
@@ -368,6 +363,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     crate::pickup_cost::register(vm)?;
     // Link 6's take after affordability (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md; lane IMPL-UPDATEAMMOCOUNTS).
     crate::pickup_take::register(vm)?;
+    // Link 6 after SetBase (NATIVE_ACTOR_SETBASE.md section 4, NATIVE_LINK6_AFTER_TAKE.md; lane IMPL-LINK6-AFTER-TAKE).
+    crate::link6::register(vm)?;
     // The touch trace refuses a script None in place of a vector (step 3), so the interpreter hands it over.
     vm.keep_struct_none(TOUCH_PICKUP_TRACE);
     Ok(())

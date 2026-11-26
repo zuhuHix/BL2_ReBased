@@ -665,6 +665,31 @@ impl Vm {
         Ok(None)
     }
 
+    /// Whether `f` is a script function whose body is exactly a bare return (a `Return` of `Nothing`, then the end of
+    /// the script, and no other statement): `Some(true)` or `Some(false)` for a package script function, `None` for a
+    /// native, a function with no package export behind it, or a script that does not decode. Decodes without caching
+    /// (writes nothing, loads nothing; lane IMPL-LINK6-AFTER-TAKE, the destroy's empty-`EndState` lift).
+    pub fn script_is_bare_return(&self, f: FuncId) -> Option<bool> {
+        if self.function(f).is_some_and(|d| d.is_native()) {
+            return None;
+        }
+        let code = code_of(self, f)?;
+        if code.info.flags & FUNC_NATIVE != 0 {
+            return None;
+        }
+        let package = self.defs.packages().shared(code.package);
+        let script = ow_script::decode::decode(&package, &code.info).ok()?;
+        use ow_script::ops::op;
+        Some(match script.statements.as_slice() {
+            [ret, end] => {
+                ret.op == op::RETURN
+                    && matches!(ret.kids.as_slice(), [k] if k.op == op::NOTHING)
+                    && end.op == op::END_OF_SCRIPT
+            }
+            _ => false,
+        })
+    }
+
     /// [`Vm::find_method`] without loading anything, for a write-free preflight (lane IMPL-MESH-REST): the same answer,
     /// state first, or `None` when a class of the chain has package code that is not loaded yet (the answer would need
     /// a load). A class with no package code (one the VM declared) adds nothing, as `find_method` finds nothing there.

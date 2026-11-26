@@ -60,7 +60,7 @@ pub const COLLISION_LAYER: &str = "the world's collision";
 /// The natives of section 3.2 whose class implementation is not resolved: `NotRead` at entry.
 /// `WillowPlayerController.UpdateInputContext` left the list (lane PLACEHOLDER-SHADOWS): `ow_world::world::after_login`
 /// binds the native's own rule (its section 3.2), and in every world this entry was the binding given up.
-pub const UNRESOLVED: [&str; 13] = [
+pub const UNRESOLVED: [&str; 12] = [
     "Engine.Controller.IsLocalController",
     "Engine.PlayerController.IsLocalController",
     "WillowGame.WillowPawn.GetParent",
@@ -70,7 +70,8 @@ pub const UNRESOLVED: [&str; 13] = [
     "WillowGame.WillowAIPawn.SetDefaultStance",
     "Engine.Actor.SetHidden",
     "Engine.Actor.SetHardAttach",
-    "Engine.Actor.SetBase",
+    // `Actor.SetBase` left the list (lane IMPL-LINK6-AFTER-TAKE): `ow_world::world::set_base` binds its rule, and its
+    // own refusal for a receiver outside the seven read classes.
     "Engine.Pawn.TermRagdoll",
     "WillowGame.WillowPlayerController.PlayCameraAnim",
     "WillowGame.WillowPlayerController.StopCameraAnim",
