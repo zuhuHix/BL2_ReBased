@@ -6,7 +6,8 @@
 //! UNVERIFIED in the running game.** Reference binds nothing (the stub policy answers). `WillowAIPawn`'s own body was
 //! not read and keeps go_down's `NotRead`.
 //!
-//! **`WillowPawn`'s body:** nothing. **`WillowPlayerPawn`'s** (the note's section 3.1):
+//! **`WillowPawn`'s body**, dispatched on the receiver (the hub's ruling on review of #781): a `WillowPlayerPawn` gets
+//! the player body's rule below, a `WillowAIPawn` [`AI_PAWN`] (`NotRead`), any other pawn nothing. **`WillowPlayerPawn`'s** (the note's section 3.1):
 //! 1. the stance source: `BodyClass`, then `AnimationParentBody` while the source has `bUseParentStances` and a parent.
 //!    No `BodyClass`: nothing;
 //! 2. the pick: `bIsInjured` the `InjuredStance`; else `bIsCrouched` the `CrouchStance`; else `bIsSprinting` not 0 the
@@ -27,7 +28,8 @@
 //! **The events** go through the kernel's event rule on the pawn's consumer handle: a kernel-owned handle fires the
 //! event on the stance's provider when the consumer registered it, and **nothing when it did not** (the hub's ruling,
 //! UNVERIFIED by fit: no consumer to dispatch to); a handle no one owns, nothing; a crate-owned one is [`CRATE_OWNED`]
-//! (`NotRead`).
+//! (`NotRead`). Each event's route (the handle's owner, the provider's path) is worked out in the preflight, so the
+//! crate-owned refusal and an undeclared `ConsumerHandle` come before any write (review of #781, item 1).
 //!
 //! **`SetSkelControlActive(bool)`** (stock engine): `StrengthTarget` := 1 or 0; `BlendTimeToGo` := |`StrengthTarget`
 //! − `ControlStrength`| × `BlendInTime` (activating) or `BlendOutTime`; not above 0: `BlendTimeToGo` := 0 and
@@ -53,6 +55,7 @@ pub const PAWN_SET_DEFAULT_STANCE: &str = "WillowGame.WillowPawn.SetDefaultStanc
 pub const PLAYER_SET_DEFAULT_STANCE: &str = "WillowGame.WillowPlayerPawn.SetDefaultStance";
 pub const ROTATION: &str = "WillowPlayerPawn.SetDefaultStance: the controller's rotation set";
 pub const NOT_LOADED: &str = "WillowPlayerPawn.SetDefaultStance: an object the store has not loaded (a load is a write)";
+pub const AI_PAWN: &str = "WillowPawn.SetDefaultStance on a WillowAIPawn: its own body is not read";
 pub const CRATE_OWNED: &str = "WillowPlayerPawn.SetDefaultStance: a stance event on a consumer another crate owns";
 /// The stance events.
 pub const ENTER: &str = "OnEnterStance";
@@ -197,11 +200,21 @@ fn aim_test(vm: &Vm, pawn: ObjRef, current: Option<ObjRef>, aim_offset: Option<O
     }
 }
 
+/// Where one stance event goes, worked out in the preflight (review of #781, item 1): the kernel process `pid` and
+/// the provider's stock path, or nowhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Route {
+    pid: i32,
+    path: String,
+}
+
 /// The plan of a set-stance that changes something.
 struct Plan {
     stance: ObjRef,
-    current: Option<ObjRef>,
     is_override: bool,
+    /// `OnExitStance` on the current stance's provider, and `OnEnterStance` on the new one's.
+    exit: Option<Route>,
+    enter: Option<Route>,
     can_crouch: bool,
     aim_offset: Option<Option<ObjRef>>,
     controls: Vec<ControlWrite>,
@@ -356,7 +369,34 @@ fn plan_set(vm: &Vm, pawn: ObjRef, source: ObjRef, stance: Option<ObjRef>) -> Re
             controls = plan_skel_control_active(vm, ik, wanted)?;
         }
     }
-    Ok(Some(Plan { stance, current, is_override, can_crouch, aim_offset: aim, controls }))
+    // The events' routes, last of the preflight: a crate-owned consumer refuses here, before any write.
+    let exit = match current {
+        Some(c) => route(vm, pawn, c)?,
+        None => None,
+    };
+    let enter = route(vm, pawn, stance)?;
+    Ok(Some(Plan { stance, is_override, exit, enter, can_crouch, aim_offset: aim, controls }))
+}
+
+/// Where a stance event on `stance`'s provider goes through the pawn's consumer (module documentation), read only:
+/// no provider, a handle no one owns or a released one, nowhere; a kernel process, its provider path (a provider it
+/// never registered then answers nothing, the hub's ruling); a crate-owned handle, [`CRATE_OWNED`].
+fn route(vm: &Vm, pawn: ObjRef, stance: ObjRef) -> Result<Option<Route>, VmError> {
+    let Some(provider) = object(vm, stance, "BehaviorProviderDefinition")? else {
+        return Ok(None);
+    };
+    let (handle, _) = read(vm, pawn, "ConsumerHandle")?;
+    let Some(pid) = ow_behavior::kernel::natives::consumer_pid(vm, &handle) else {
+        return Ok(None);
+    };
+    match ow_behavior::kernel::natives::owner_of(vm, pid)? {
+        Some(ow_behavior::kernel::natives::Owner::Kernel) => {
+            let path = ow_behavior::provider::stock_path(vm, provider).map_err(|e| bad(e.to_string()))?;
+            Ok(Some(Route { pid, path }))
+        }
+        Some(ow_behavior::kernel::natives::Owner::Crate(_)) => Err(NotYet::not_read(CRATE_OWNED, RECORD).into()),
+        _ => Ok(None),
+    }
 }
 
 fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
@@ -366,31 +406,21 @@ fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
     Ok(())
 }
 
-/// `event` on `stance`'s provider through the pawn's consumer (module documentation).
-fn fire(vm: &mut Vm, pawn: ObjRef, stance: ObjRef, event: &str) -> Result<(), VmError> {
-    let Some(provider) = object(vm, stance, "BehaviorProviderDefinition")? else {
-        return Ok(());
-    };
-    let (handle, _) = read(vm, pawn, "ConsumerHandle")?;
-    let Some(pid) = ow_behavior::kernel::natives::consumer_pid(vm, &handle) else {
-        return Ok(());
-    };
-    match ow_behavior::kernel::natives::owner_of(vm, pid)? {
-        Some(ow_behavior::kernel::natives::Owner::Kernel) => {
-            let path = ow_behavior::provider::stock_path(vm, provider).map_err(|e| bad(e.to_string()))?;
-            let fired = ow_behavior::kernel::natives::with_provider(vm, pid, &path, |vm, p| {
-                p.fire_event(vm, event, &DetMap::new(), -1, &[])
-            })?;
-            match fired {
-                Some(r) => r.map_err(|e| match e {
-                    ow_behavior::provider::BehaviorError::Vm(v) => v,
-                    other => bad(other.to_string()),
-                }),
-                None => Ok(()),
-            }
-        }
-        Some(ow_behavior::kernel::natives::Owner::Crate(_)) => Err(NotYet::not_read(CRATE_OWNED, RECORD).into()),
-        _ => Ok(()),
+/// `event` along a planned route (module documentation): the provider's `fire_event` on the kernel process, nothing
+/// when the process never registered it. Its refusals are the kernel's or a behavior's.
+fn fire(vm: &mut Vm, route: &Option<Route>, event: &str) -> Result<(), VmError> {
+    let Some(Route { pid, path }) = route else { return Ok(()) };
+    #[cfg(test)]
+    tests::FIRED.with(|f| f.borrow_mut().push((event.to_string(), path.clone())));
+    let fired = ow_behavior::kernel::natives::with_provider(vm, *pid, path, |vm, p| {
+        p.fire_event(vm, event, &DetMap::new(), -1, &[])
+    })?;
+    match fired {
+        Some(r) => r.map_err(|e| match e {
+            ow_behavior::provider::BehaviorError::Vm(v) => v,
+            other => bad(other.to_string()),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -419,19 +449,18 @@ fn set_stance(vm: &mut Vm, pawn: ObjRef, source: ObjRef, stance: ObjRef) -> Resu
     }
 }
 
-/// The plan's writes and events, in order; a refusal after a write carries the partial-writes prefix.
+/// The plan's writes and events, in order. Every refusal of the native's own comes in the plan; one from the kernel or
+/// a behavior an event runs comes here, after writes, and carries the partial-writes prefix.
 fn apply(vm: &mut Vm, pawn: ObjRef, plan: Plan) -> Result<(), VmError> {
     let before = marks(vm);
     let result = (|| -> Result<(), VmError> {
         if plan.is_override {
             write(vm, pawn, "OverrideStance", Value::Object(Some(plan.stance)))?;
         }
-        if let Some(current) = plan.current {
-            fire(vm, pawn, current, EXIT)?;
-        }
+        fire(vm, &plan.exit, EXIT)?;
         write(vm, pawn, "bNetDirty", Value::Bool(true))?;
         write(vm, pawn, "CurrentStance", Value::Object(Some(plan.stance)))?;
-        fire(vm, pawn, plan.stance, ENTER)?;
+        fire(vm, &plan.enter, ENTER)?;
         write(vm, pawn, "bCanCrouch", Value::Bool(plan.can_crouch))?;
         if let Some(aim) = plan.aim_offset {
             write(vm, pawn, "AimOffset", Value::Object(aim))?;
@@ -452,8 +481,16 @@ fn apply(vm: &mut Vm, pawn: ObjRef, plan: Plan) -> Result<(), VmError> {
     }
 }
 
-/// `WillowPawn.SetDefaultStance()`: nothing (module documentation).
-pub fn pawn_set_default_stance(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+/// `WillowPawn.SetDefaultStance()`, dispatched on the receiver's class (the hub's ruling on review of #781, item 3):
+/// a `WillowPlayerPawn` gets the player body's rule, a `WillowAIPawn` [`AI_PAWN`] (`NotRead`), any other pawn nothing.
+pub fn pawn_set_default_stance(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let pawn = c.this.ok_or_else(|| bad("called without a pawn"))?;
+    if is_a(c.vm, pawn, "WillowGame.WillowPlayerPawn")? {
+        return set_default_stance(c);
+    }
+    if is_a(c.vm, pawn, "WillowGame.WillowAIPawn")? {
+        return Err(NotYet::not_read(AI_PAWN, RECORD).into());
+    }
     Ok(Value::None)
 }
 

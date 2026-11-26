@@ -14,15 +14,19 @@ UNVERIFIED in the running game.
       `LeftHandIK` with its propagation;
     - `OnExitStance` / `OnEnterStance` go through the kernel's event rule on the pawn's consumer handle. **The hub's
       ruling: an event on a provider the consumer never registered answers nothing** (UNVERIFIED, by fit; the kernel's
-      own routine for it was not read). A handle no one owns: nothing. A crate-owned handle: `NotRead`;
+      own routine for it was not read). A handle no one owns: nothing. A crate-owned handle: `NotRead`. **Each
+      event's route** (the handle's owner, the provider's path) **is worked out in the preflight** (review of #781,
+      item 1), so the crate-owned refusal and an undeclared `ConsumerHandle` come before any write; only a refusal
+      from the kernel or a behavior the event runs comes after writes, prefixed;
     - the rotation branch (a `Controller`, the aim test passing before and failing after) is `NotRead`, before any
       write;
     - the preflight reads only: declarations (`VmError::Script`), residency (`NotRead`), the node lookup and the
       controls' plan come before the first write. A refusal after a write carries the partial-writes prefix;
     - **fitted, UNVERIFIED:** the current and override stance fields are named by their use, `CurrentStance` and
       `OverrideStance`;
-  - **`WillowPawn.SetDefaultStance()`:** nothing. Both left go_down's placeholder list; `WillowAIPawn`'s stays
-    `NotRead`;
+  - **`WillowPawn.SetDefaultStance()`**, dispatched on the receiver's class (the hub's ruling on review of #781, item
+    3): a `WillowPlayerPawn` gets the player body's rule, a `WillowAIPawn` `NotRead` (its body not read), any other
+    pawn nothing. Both left go_down's placeholder list; `WillowAIPawn`'s own key stays `NotRead`;
   - **the `ShieldResourcePool` idle-reset hook** (`hit::pools`), section 3.2: the shield (the provider controller's
     pawn's first equipped item, a `WillowShield`) is planned before the stamp; after it, a changed `bPrimed` is written
     and `ShieldPrimedStateChanged` runs. The six mechanisms' table uses ordered float compares, so a NaN fails each.
@@ -38,7 +42,10 @@ UNVERIFIED in the running game.
     argument, no `WorldInfo`, no GRI or a GRI of another class, or `CurrentPlaythrough` 1 or below: nothing. Above 1:
     `NotRead` (the level table and the effect applier). No world: the world layer's `LayerAbsent`. Reads only;
   - no other pack bound any of these keys (checked by grep).
-- **Tests** (invented classes): `stance_tests.rs` covers the note's tests 1 to 6, 8 (first two cases) and 9; the
+- **Tests** (invented classes; review of #781 added the crate-owned refusal with nothing written, the events' order
+  and count at the kernel hand-off, an archetype with `bCanCrouch` false, the aim-offset lookup found, found of
+  another class and absent, and the `WillowPawn` dispatch): `stance_tests.rs` covers the note's tests 1 to 6, 8 (first
+  two cases) and 9; the
   shield's four tests in `hit/pools/tests.rs` cover test 7. Test 1 makes a kernel-registered consumer through
   `RegisterBehaviorConsumer` without the stance's provider (Maya's case). Test 4 calls the set-stance directly: the
   pick only ever selects one of the five, so an override cannot come from `SetDefaultStance` itself. Tests 10 and 11
