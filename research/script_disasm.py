@@ -29,8 +29,14 @@ The opcode table is the public UE3 expression-token set written from the general
 format, NOT copied from UE Explorer or any GPL tool. Each opcode's operand layout is UNVERIFIED
 until `--check` reports zero failures for that opcode; the report lists what failed and why.
 
+`New` takes five operands (outer, name, flags, class, template), decision 2026-11-26 (NEW-FIVE-OPERANDS, from
+docs/verification/NATIVE_TOUCH_COMPONENT_TEMPLATE.md). The structural check cannot tell four from five: a bare
+expression is a valid statement, so with four the template decodes as the next statement. `--arg-check` is the oracle
+that can: it compares each resolvable call's argument count with the callee's declared parameters.
+
 Usage:
     python research/script_disasm.py --check [Package.upk ...]     # structural validation
+    python research/script_disasm.py --arg-check                   # argument counts against declarations (counts only)
     python research/script_disasm.py Package.upk Class.Function    # disassemble one function
 Set OPENWILLOW_BL2 (game folder) or pass --game <CookedPCConsole dir>.
 """
@@ -62,7 +68,7 @@ SIMPLE = {
     0x04: ("Return", "E"), 0x05: ("Switch", "rbE"),  # property reference of the switched value, u8, then the value (trial-fitted)
     0x06: ("Jump", "w"), 0x07: ("JumpIfNot", "wE"), 0x08: ("Stop", ""), 0x09: ("Assert", "wbE"),
     0x0B: ("Nothing", ""), 0x0D: ("GotoLabel", "E"), 0x0E: ("EatReturnValue", "r"),
-    0x0F: ("Let", "EE"), 0x10: ("DynArrayElement", "EE"), 0x11: ("New", "EEEE"),
+    0x0F: ("Let", "EE"), 0x10: ("DynArrayElement", "EE"), 0x11: ("New", "EEEEE"),
     0x13: ("MetaCast", "rE"), 0x14: ("LetBool", "EE"), 0x15: ("EndParmValue", ""),
     0x16: ("EndFunctionParms", ""), 0x17: ("Self", ""), 0x18: ("Skip", "wE"),
     0x1A: ("ArrayElement", "EE"), 0x1D: ("IntConst", "i"), 0x1E: ("FloatConst", "f"),
@@ -106,6 +112,10 @@ class Decoder:
         self.statement_starts = set()  # in-memory offsets (what Jump/Case/Skip operands are measured in)
         self.jump_targets = []
         self.ops = collections.Counter()
+        self.last_ref = 0  # the raw value of the last object reference read
+        # (kind, callee, argument count, a New among the arguments) of each VirtualFunction / FinalFunction call;
+        # the callee is the name for a virtual call and the raw object reference for a final call.
+        self.calls = []
 
     def take(self, n):
         if self.p + n > len(self.d):
@@ -133,7 +143,8 @@ class Decoder:
     def operand(self, letter, op_name):
         if letter == "r":
             self.refs += 1
-            return self.ref(self.i32())
+            self.last_ref = self.i32()
+            return self.ref(self.last_ref)
         if letter == "n": return self.fname()
         if letter == "i": return str(self.i32())
         if letter == "f": return repr(round(self.f32(), 6))
@@ -186,11 +197,16 @@ class Decoder:
             raise DecodeError(f"unknown opcode 0x{op:02x} at {start}")
         name, layout = entry
         parts = []
+        callee = None
         for letter in layout:
             if letter == "P":
-                parts.append("(" + ", ".join(self.params()) + ")")
+                args = self.params()
+                if name in ("VirtualFunction", "FinalFunction"):
+                    self.calls.append((name, callee, len(args), any(a.startswith("New(") for a in args)))
+                parts.append("(" + ", ".join(args) + ")")
             else:
                 value = self.operand(letter, name)
+                callee = self.last_ref if letter == "r" else value
                 if name in ("Jump", "JumpIfNot") and letter == "w":
                     self.jump_targets.append(int(value))
                 parts.append(value)
@@ -267,6 +283,23 @@ class Package:
         memory_size = struct.unpack_from("<i", self.b, size_at - 4)[0]
         return memory_size, self.b[size_at + 4:tail_start]
 
+    def stem(self):
+        return os.path.splitext(self.name)[0]
+
+    def parameter_counts(self):
+        """{function export index: its declared parameters}: the property exports in the function whose
+        PropertyFlags have CPF_Parm (0x80) and not CPF_ReturnParm (0x400). The flags are the u64 at export offset 20,
+        where the project's reflector reads them (`ow_object::reflect`, `read_property`)."""
+        counts = {}
+        for i, e in enumerate(self.exports):
+            if e["outer"] <= 0 or e["size"] < 28: continue
+            if not self.qualified(e["class"]).endswith("Property"): continue
+            lo, hi = struct.unpack_from("<II", self.b, e["off"] + 20)
+            flags = lo | (hi << 32)
+            if flags & 0x80 and not flags & 0x400:
+                counts[e["outer"]] = counts.get(e["outer"], 0) + 1
+        return counts
+
     def native_table(self):
         table = {}
         for _, e, flags in self.functions():
@@ -308,15 +341,70 @@ def check(pkg, natives, show):
     return total, ok, ops
 
 
+# The census of NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 2: script functions, and those that decode exactly.
+EXPECTED_DECODE = (12978, 12968)
+
+
+def arg_check(pkgs, natives):
+    """Every VirtualFunction / FinalFunction call whose callee's parameters resolve, against its argument count.
+    A final call resolves by its object reference; a virtual call by a name whose declarations all have one count.
+    Prints counts only. 0 when no call passes more arguments than declared and the decode totals are EXPECTED_DECODE."""
+    by_path, by_name = {}, collections.defaultdict(set)
+    for p in pkgs:
+        counts = p.parameter_counts()
+        for index, e, _ in p.functions():
+            n = counts.get(index, 0)
+            by_path[f"{p.stem()}.{p.qualified(index)}".lower()] = n
+            by_name[e["name"].lower()].add(n)
+    total = ok = calls = resolved = extra = extra_new = fewer = 0
+    for p in pkgs:
+        for _, e, flags in p.functions():
+            if flags & nc.FUNC_NATIVE: continue
+            total += 1
+            try:
+                d, _ = decode_function(p, e, flags, natives)
+            except (DecodeError, struct.error, ValueError, IndexError):
+                continue
+            ok += 1
+            for kind, callee, n, has_new in d.calls:
+                calls += 1
+                if kind == "FinalFunction":
+                    try:
+                        path = p.qualified(callee)
+                    except DecodeError:
+                        continue
+                    declared = by_path.get((f"{p.stem()}.{path}" if callee > 0 else path).lower())
+                else:
+                    found = by_name.get(str(callee).lower(), set())
+                    declared = next(iter(found)) if len(found) == 1 else None
+                if declared is None: continue
+                resolved += 1
+                if n > declared:
+                    extra += 1
+                    extra_new += has_new
+                elif n < declared:
+                    fewer += 1
+    print(f"script functions {total}, decode exactly {ok}")
+    print(f"calls {calls}, resolved {resolved}, more arguments than declared {extra} ({extra_new} with a New among them), "
+          f"fewer {fewer}")
+    return 0 if extra == 0 and (total, ok) == EXPECTED_DECODE else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--arg-check", action="store_true", help="argument counts against declared parameters")
     parser.add_argument("--game", default=None)
     parser.add_argument("--show", type=int, default=6, help="failure reasons listed per package")
     parser.add_argument("items", nargs="*")
     args = parser.parse_args()
     game = args.game or (os.path.join(os.environ["OPENWILLOW_BL2"], "WillowGame", "CookedPCConsole")
                          if os.environ.get("OPENWILLOW_BL2") else nc.GAME)
+    if args.arg_check:
+        pkgs = [Package(os.path.join(game, n)) for n in ALL_PACKAGES]
+        native = {}
+        for p in pkgs: native.update(p.native_table())
+        return arg_check(pkgs, native)
     if args.check:
         names = args.items or ALL_PACKAGES
         native = {}

@@ -467,7 +467,7 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     def add_mod(stack_ref):
         def build(ids):
             a = Asm()
-            a.stmt(); a.raw(0x0F); local(a, ids, 'M'); a.raw(0x11, 0x2A, 0x25, 0x25, 0x20); a.ref(mod)        # M = new class'Mod'
+            a.stmt(); a.raw(0x0F); local(a, ids, 'M'); a.raw(0x11, 0x2A, 0x25, 0x25, 0x20); a.ref(mod); a.raw(0x0B)  # M = new class'Mod', template Nothing (five operands)
             for prop_ref, param in ((mod_type, 'Kind'), (mod_value, 'Amount')):
                 a.stmt(); a.raw(0x0F, 0x19); local(a, ids, 'M'); a.w(0); a.ref(0); a.raw(0); a.raw(0x01); a.ref(prop_ref); local(a, ids, param)
             a.stmt(); a.raw(0x55, 0x01); a.ref(stack_ref); a.w(0); local(a, ids, 'M'); a.raw(0x16)              # stack.AddItem(M)

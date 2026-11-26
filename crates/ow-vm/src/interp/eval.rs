@@ -1055,18 +1055,128 @@ fn meta_cast(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, Vm
     })
 }
 
-/// `New`: the class operand first, then (for a class) the object and the outer operand, as the C++ evaluates them.
+/// The record of `New`'s operands and its template rule (decision 2026-11-26, NEW-FIVE-OPERANDS).
+pub const RECORD_NEW: &str = "docs/verification/NATIVE_TOUCH_COMPONENT_TEMPLATE.md (section 3)";
+/// `New`'s template refusals (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.3), in the order they are checked.
+pub const NEW_TEMPLATE_NOT_LOADED: &str = "new: a template the store has not loaded (a load is a write)";
+pub const NEW_DEFAULT_NOT_BUILT: &str = "new: a class default the store has not built (building it is a write)";
+pub const NEW_TEMPLATE_OTHER_CLASS: &str = "new: a template of another class";
+pub const NEW_INSTANCING: &str = "new: instancing a template's components";
+pub const NEW_CONFIG: &str = "new: a per-object configuration read";
+/// A template every check above passes: the copy (option B) is not ported yet.
+pub const NEW_TEMPLATE_COPY: &str =
+    "new: copying a template's values (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, option B)";
+/// The class flag bits the construction tests (by fit: "has components", per-object config).
+const CLASS_HAS_COMPONENTS: u32 = 0x0080_0000;
+const CLASS_PER_OBJECT_CONFIG: u32 = 0x0000_0400;
+
+/// `New(outer, name, flags, class, template)`. **UNVERIFIED in the running game**; the operand count is the
+/// handler's read and the argument-count census (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 2).
+///
+/// **Off** (section 3.1): all five operands are evaluated first, in that order, so outer, name, flags and the
+/// template are evaluated even with no class. Then:
+/// 1. no class: None, as before;
+/// 2. a class whose chain reaches `Engine.Actor` (by name, no load): None, with the script error logged and no
+///    object made;
+/// 3. a template (an object): a typed refusal before anything is made, the first of section 3.3's checks that
+///    fails ([`template_refusal`]); a template all of them pass is [`NEW_TEMPLATE_COPY`] (`NotPorted`);
+/// 4. otherwise the class defaults' values and the VM's generated name, the outer set as before. **The name and flags
+///    operands are evaluated and not applied** (today's naming; flags are not modelled).
+///
+/// **Reference** keeps the C++ evaluation: the C++ decoder reads four operands, so its template operand is the next
+/// statement or the call's next argument. So: the class first, then (for a class) the object and the outer, and then
+/// the template, its value dropped. The name and flags are not evaluated, as before.
 fn new_object(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, VmError> {
+    if vm.parity == ParityMode::Reference {
+        let class = eval(vm, f, &e.kids[3], ctx)?;
+        let mut made = None;
+        if let Value::Class(Some(class)) = class {
+            let object = instantiate_from_defaults(vm, class)?;
+            if let Value::Object(outer) = eval(vm, f, &e.kids[0], ctx)? {
+                vm.space.heap.get_mut(object)?.outer = outer;
+                vm.space.heap.note_write();
+            }
+            made = Some(object);
+        }
+        eval(vm, f, &e.kids[4], ctx)?;
+        return Ok(Value::Object(made));
+    }
+    let outer = eval(vm, f, &e.kids[0], ctx)?;
+    eval(vm, f, &e.kids[1], ctx)?;
+    eval(vm, f, &e.kids[2], ctx)?;
     let class = eval(vm, f, &e.kids[3], ctx)?;
+    let template = eval(vm, f, &e.kids[4], ctx)?;
     let Value::Class(Some(class)) = class else {
         return Ok(Value::Object(None));
     };
+    if class_named(vm, class, "Engine.Actor") {
+        vm.log.push(format!("{}: new of the Actor class {} (use Spawn): None", f.path(), class_label(vm, class)));
+        return Ok(Value::Object(None));
+    }
+    if let Value::Object(Some(template)) | Value::Interface(Some(template)) = template {
+        return Err(template_refusal(vm, class, template).into());
+    }
     let object = instantiate_from_defaults(vm, class)?;
-    if let Value::Object(outer) = eval(vm, f, &e.kids[0], ctx)? {
+    if let Value::Object(outer) = outer {
         vm.space.heap.get_mut(object)?.outer = outer;
         vm.space.heap.note_write();
     }
     Ok(Value::Object(Some(object)))
+}
+
+fn class_label(vm: &Vm, class: ClassId) -> String {
+    vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string())
+}
+
+/// Whether `class` or a loaded super class has the path `path` (case-insensitive). Loads nothing.
+fn class_named(vm: &Vm, class: ClassId, path: &str) -> bool {
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        let Some(layout) = vm.space.classes.get_layout(c) else {
+            return false;
+        };
+        if layout.path().as_str().eq_ignore_ascii_case(path) {
+            return true;
+        }
+        cursor = layout.super_class();
+    }
+    false
+}
+
+/// Section 3.3's preflight for `New` with a template, read only: the first check that fails, in order. The class
+/// flags are the store's `ClassBody.class_flags`; a class with no code index entry (one defined by hand) has none set,
+/// and one whose body did not decode is refused with [`NEW_INSTANCING`] (its flags cannot rule the step out).
+fn template_refusal(vm: &Vm, class: ClassId, template: ObjRef) -> NotYet {
+    let not_read = |what: &'static str| NotYet::not_read(what, RECORD_NEW);
+    let short = vm.space.heap.get(template).is_ok_and(|t| {
+        vm.space.classes.get_layout(t.class).is_some_and(|l| t.slots.len() < l.slot_count() as usize)
+    });
+    if vm.defs.is_unloaded(&vm.space, template) || vm.defs.is_failed(&vm.space, template) || short {
+        return not_read(NEW_TEMPLATE_NOT_LOADED);
+    }
+    let built = vm.space.heap.handles().into_iter().any(|o| {
+        vm.space
+            .heap
+            .get(o)
+            .is_ok_and(|x| x.class == class && matches!(x.origin, ow_object::heap::Origin::Default { .. }))
+    });
+    if !built {
+        return not_read(NEW_DEFAULT_NOT_BUILT);
+    }
+    if vm.space.heap.get(template).map(|t| t.class).ok() != Some(class) {
+        return not_read(NEW_TEMPLATE_OTHER_CLASS);
+    }
+    let code = vm.defs.code();
+    let flags = match code.key_of(class) {
+        None => Some(0),
+        Some(k) => code.class(k).body.as_ref().ok().map(|b| b.class_flags),
+    };
+    match flags {
+        None => not_read(NEW_INSTANCING),
+        Some(f) if f & CLASS_HAS_COMPONENTS != 0 => not_read(NEW_INSTANCING),
+        Some(f) if f & CLASS_PER_OBJECT_CONFIG != 0 => not_read(NEW_CONFIG),
+        Some(_) => NotYet::not_ported(NEW_TEMPLATE_COPY, RECORD_NEW),
+    }
 }
 
 fn assert(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, VmError> {

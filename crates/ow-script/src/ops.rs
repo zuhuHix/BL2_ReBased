@@ -162,7 +162,10 @@ const fn l(name: &'static str, operands: &'static str) -> Option<Layout> {
     Some(Layout { name, operands })
 }
 
-/// The table of `layoutFor` in `src/script.cpp`, entry for entry.
+/// The table of `layoutFor` in `src/script.cpp`, entry for entry, except `New`: five operands here (outer, name,
+/// flags, class, template), four in the C++ (decision 2026-11-26, NEW-FIVE-OPERANDS, from
+/// docs/verification/NATIVE_TOUCH_COMPONENT_TEMPLATE.md: the handler read takes five, and with four, 5 calls pass one
+/// argument more than their callee declares; with five, none. The structural oracles cannot tell the two apart).
 static LAYOUTS: [Option<Layout>; 256] = {
     let mut t: [Option<Layout>; 256] = [None; 256];
     t[0x00] = l("LocalVariable", "r");
@@ -181,7 +184,7 @@ static LAYOUTS: [Option<Layout>; 256] = {
     t[0x0E] = l("EatReturnValue", "r");
     t[0x0F] = l("Let", "EE");
     t[0x10] = l("DynArrayElement", "EE");
-    t[0x11] = l("New", "EEEE");
+    t[0x11] = l("New", "EEEEE");
     t[0x13] = l("MetaCast", "rE");
     t[0x14] = l("LetBool", "EE");
     t[0x15] = l("EndParmValue", "");

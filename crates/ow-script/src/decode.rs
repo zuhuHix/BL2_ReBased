@@ -636,6 +636,28 @@ mod tests {
 
     // The other C++ checks, one by one.
 
+    /// `New` has five operands (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 6, test 11): `Let(x, New(o, Nothing,
+    /// Nothing, C, T)); Return(x)` is two statements and an end, its memory size meets the header, and a call taking
+    /// a `New` counts it as one argument.
+    #[test]
+    fn new_takes_five_operands() {
+        let mut a = raw(&[0x0F]);
+        a.local(1).raw(&[0x11, 0x2A, 0x0B, 0x0B, 0x20]).reference(2).local(3);
+        a.raw(&[0x04]).local(1).raw(&[0x53]);
+        let (_, code) = decoded(a, Some(27 + 16)).unwrap();
+        assert_eq!(code.statements.len(), 3);
+        let new = &code.statements[0].kids[1];
+        assert_eq!(new.op, op::NEW);
+        assert_eq!(new.kids.len(), 5);
+        assert_eq!(new.kids[4].op, 0x00, "the template is the fifth operand");
+        // A final call with one argument, a New whose template is Nothing.
+        let mut a = raw(&[0x1C]);
+        a.reference(4).raw(&[0x11, 0x2A, 0x0B, 0x0B, 0x20]).reference(2).raw(&[0x0B, 0x16, 0x53]);
+        let (_, code) = decoded(a, None).unwrap();
+        assert_eq!(code.statements.len(), 2);
+        assert_eq!(code.statements[0].kids.len(), 1, "one argument");
+    }
+
     #[test]
     fn the_end_of_the_script_is_checked() {
         assert_eq!(error(raw(&[0x1D, 1, 2]), None), DecodeError::PastEnd); // IntConst cut short

@@ -1251,7 +1251,8 @@ fn fixture() -> Fixture {
         &[],
         |_, a| {
             returns(a, |a| {
-                a.raw(&[0x11, 0x2A, 0x25, 0x25, 0x20]).reference(mod_class);
+                // New(NoObject, IntZero, IntZero, ObjectConst Mod, Nothing): five operands.
+                a.raw(&[0x11, 0x2A, 0x25, 0x25, 0x20]).reference(mod_class).raw(&[0x0B]);
             })
         },
     );
@@ -2761,3 +2762,6 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
         }
     }
 }
+
+// `New` with five operands (lane NEW-FIVE-OPERANDS).
+mod new_tests;

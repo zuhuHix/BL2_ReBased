@@ -42,6 +42,32 @@ class Expressions(unittest.TestCase):
             decode(b"\x2b\x53")
 
 
+class NewOperands(unittest.TestCase):
+    """`New` takes five operands: outer, name, flags, class, template (decision 2026-11-26, NEW-FIVE-OPERANDS)."""
+
+    NEW = b"\x11\x2a\x0b\x0b\x20" + I32(2)  # New(NoObject, Nothing, Nothing, ObjectConst(ref2), ...
+
+    def test_new_with_a_template_is_one_expression(self):
+        script = b"\x0f\x00" + I32(1) + self.NEW + b"\x00" + I32(3) + b"\x04\x00" + I32(1) + b"\x53"
+        _, lines = decode(script, memory_size=len(script) + 16)
+        self.assertEqual([text for _, text in lines], [
+            "Let(LocalVariable(ref1), New(NoObject, Nothing, Nothing, ObjectConst(ref2), LocalVariable(ref3)))",
+            "Return(LocalVariable(ref1))",
+            "EndOfScript",
+        ])
+
+    def test_a_call_counts_the_new_as_one_argument(self):
+        # FinalFunction(ref9)(New(..., Nothing)): one argument, a New among them.
+        script = b"\x1c" + I32(9) + self.NEW + b"\x0b" + b"\x16" + b"\x53"
+        d, _ = decode(script, memory_size=len(script) + 8)
+        self.assertEqual(d.calls, [("FinalFunction", 9, 1, True)])
+
+    def test_virtual_calls_record_their_name(self):
+        script = b"\x1b" + I32(4) + I32(0) + b"\x25\x26\x16" + b"\x53"
+        d, _ = decode(script)
+        self.assertEqual(d.calls, [("VirtualFunction", "name4", 2, False)])
+
+
 class MemoryOffsets(unittest.TestCase):
     """Object references are 4 bytes in the file but 8 in the in-memory script that jumps count in."""
 
