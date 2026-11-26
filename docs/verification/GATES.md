@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK67-KEY-AND-LOOK (2026-11-26, pc-hummer, docs only, on docs/native-link67-key-and-look from main
+78a88b72):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_KEY_AND_LOOK.md: `CanAffordToPickUpPickupable` /
+`PayForPickupable` with an Off answer (the slice's free gun: true). The HUD's targeting pass reads no drawing state;
+`HUDDef`'s source is not read, so the HUD `LayerAbsent` stays. Predicted next stop on link 6: `UpdateAmmoCounts`'
+`NotRead`. No code changed, so no measured number moved; the slice gate was not run for this lane. UNVERIFIED in
+game.
+
 **ANALYST-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, docs only, on docs/native-behavior-kernel-pass2 from main
 0147a0b9):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BEHAVIOR_KERNEL_PASS2.md reads the kernel's pass 2 for a
 conditioned sequence. The condition is linked, then registered with the world's mission tracker, whose immediate
