@@ -18,7 +18,7 @@ changes a rule of the game. Each removed placeholder was a `NotRead` for a nativ
     - Off by default; nothing else changes. The test is "another file", which had one known blind spot:
       `ow_combat::hit::bind` is a helper that ow-combat and ow-skills both bind through. A shadow between two users of
       that helper was checked and registered from the same file (`hit.rs`), so the audit could not see it. Every other
-      keep-existing guard calls the VM from its own module. *Closed by decision 2026-11-26-NNN: the helper is
+      keep-existing guard calls the VM from its own module. *Closed by decision 2026-11-26-12: the helper is
       `#[track_caller]`, so the audit records its callers' files.*
   - **The sweep** is an ignored installed census (`ow-cli` `slice_gate_shadow_tests`). It covers the five worlds the
     slice gate builds: combat-run, equip, pickup, phaselock and mission. It found four keys:
@@ -32,7 +32,7 @@ changes a rule of the game. Each removed placeholder was a `NotRead` for a nativ
 
     After the change, the census finds no shadow outside those two allowed keys.
 
-    *Added by decision 2026-11-26-NNN:* the phaselock and mission worlds register no inventory pack, so they leave
+    *Added by decision 2026-11-26-12:* the phaselock and mission worlds register no inventory pack, so they leave
     `GetInstancedMaterialInstanceConstant` unbound. There it is an unbound-native refusal, not #744's rule.
   - **The test** (#744's all-packs test, `ow-cli` `combat/pack_wiring_tests.rs`):
     - it now also registers the inventory pack: its invented packages declare the two script functions that pack
