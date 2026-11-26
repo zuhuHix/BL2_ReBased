@@ -2206,7 +2206,7 @@ fn the_balance_refresh_waits_for_the_globals_lookup() {
     assert_eq!(format!("{:?}", env.vm().space.heap), before, "no write");
 }
 
-/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-NNN): the player's pawn, made from the class
+/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-16): the player's pawn, made from the class
 /// defaults, gets its own copy of the component its class default owns, as a spawned actor does: `Components` names a
 /// resident copy outered to the pawn with the default's values (`ToyLevel` 4), not the class default's sub-object.
 /// Reference keeps the shared reference.
