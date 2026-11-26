@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK1-RBPHYSICS-UNLOADED-COMPONENT (2026-11-26, pc-hummer, on fix/link1-rbphysics-component from main 5ce85058,
+rebased onto a5fb1a18):** AI-assisted (Claude Code, Opus 5.5). The `InitializeRBPhysics` not-loaded stop was the class
+default's `SpecialMoveComponent0` (one of five shared class-default sub-objects in the bridge pawn's `Components`). In
+Off, the bridge's player pawn now gets its own copies through the spawn's instancing plan, and the refusal names its
+entry. `cargo test --workspace -j 8 --no-fail-fast` (on a5fb1a18) 3,799 passed / 0 failed / 59 ignored;
+`crate_edges_test.py` OK. Installed Off strict `--slice-gate` on the local merge of 5ce85058 with #754 (under the
+machine lock): 6 ok / 8 NotYet, 42.9%. Links 1, 3, 4, 5, 13 and 14 now stop at `GetBoundingCylinder`'s
+component-bounds `LayerAbsent` (the copies are not in the attach record), not the predicted rigid-body `LayerAbsent`.
+No real-game run.
+
 **SHADOW-AUDIT-FOLLOWUPS-2 (2026-11-26, pc-hummer, code, on fix/shadow-audit-followups-2, stacked on #753's head
 0df0617d):** AI-assisted (Claude Code, Opus 5.5). The all-packs host test declares `ResolveContext`,
 `AddAttributeModifier` and `Actor.Trace`, and asserts it meets exactly the three allowed shadows. ow-ai's local `bind` is

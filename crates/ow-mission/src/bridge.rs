@@ -445,6 +445,36 @@ fn find_class(vm: &mut Vm, path: &str) -> Result<ow_object::ids::ClassId, Missio
 /// A new object of `class_path` starting from its class default object's values, as the C++ `Runtime::instantiate`
 /// copies `defaults->props` (lane W6-COMBAT-RUN2, decision 2026-11-16-54: the controller's damage modifiers, the
 /// pawn's and the replication info's defaults were zero before).
+/// The player's pawn class (decision 2026-11-16-54: the bridge's player from class defaults, no map spawn).
+pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
+
+/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-NNN): the bridge's player pawn from the class
+/// defaults, with its own copy of each component the class default owns, as the world's spawn gives every actor
+/// (`ow_world::actors::plan_components` / `apply_plan`, decision 2026-11-19-44; the target dummy's placement does the
+/// same). Without it the pawn's `Components` shared the class default's own sub-objects, store handles nothing loads.
+/// The plan, and its loads of those sub-objects, run before the pawn is made; each copy whose class declares `Owner`
+/// gets the pawn there, as the dummy's copies do. A refusal after a write (a plan load, the pawn) is marked "stopped
+/// after partial writes" by #518's counters. UNVERIFIED in the running game (public UE3 component instancing).
+fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
+    let before = ow_world::pools::Counters::read(vm);
+    let made = (|| -> Result<ObjRef, VmError> {
+        let class = vm.find_class(class_path)?;
+        let default = vm.defs.class_default(&mut vm.space, class_path);
+        vm.log.extend(vm.defs.take_log());
+        let default = default.map_err(VmError::Def)?;
+        let plan = ow_world::actors::plan_components(vm, default)?;
+        let pawn = ow_vm::interp::instantiate_from_defaults(vm, class)?;
+        for (_, copy) in ow_world::actors::apply_plan(vm, &plan, pawn)? {
+            let c = vm.space.heap.get(copy)?.class;
+            if let Some(owner) = vm.space.prop(c, "Owner") {
+                vm.space.write(copy, PropAddr::scalar(owner), Value::Object(Some(pawn)))?;
+            }
+        }
+        Ok(pawn)
+    })();
+    Ok(made.map_err(|e| ow_world::pools::after_counted_writes(vm, before, e))?)
+}
+
 fn new_object(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
     let c = vm.find_class(class_path)?;
     Ok(ow_vm::interp::instantiate_from_defaults(vm, c)?)
@@ -1434,7 +1464,11 @@ impl MissionScript {
         }
         let pawn = match who {
             Toucher::Player => {
-                let p = new_object(vm, "WillowGame.WillowPlayerPawn")?;
+                let p = if vm.parity == ParityMode::Off {
+                    player_pawn_with_components(vm, PLAYER_PAWN_CLASS)?
+                } else {
+                    new_object(vm, PLAYER_PAWN_CLASS)?
+                };
                 // The player's pawn is controlled by the player's controller; Marcus has no player controller.
                 set(&mut vm.space, p, "Controller", Value::Object(Some(self.inner.o.controller)))?;
                 p

@@ -204,7 +204,11 @@ fn a_lazy_component_and_a_template_receiver() {
     let lazy = x.vm.space.alloc_stand_in(class, "Lazy", Origin::Default { class }).unwrap();
     let p = x.pawn(&[Some(lazy)]);
     match x.rb(p) {
-        Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, NOT_LOADED)),
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.starts_with(&format!("{NOT_LOADED}: ")), "{}", n.what);
+            assert!(n.what.ends_with("Lazy"), "names the component: {}", n.what);
+        }
         other => panic!("{other:?}"),
     }
     let player = x.player;
