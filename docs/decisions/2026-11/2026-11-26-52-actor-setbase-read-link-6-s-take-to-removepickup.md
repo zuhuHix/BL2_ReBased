@@ -1,6 +1,6 @@
 ## 2026-11-26: Actor.SetBase is read, and link 6's take to RemovePickup
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE, docs only, rebased onto main 969d7a3 (from d3be3e5; #789, #790 and #791 landed in between). The analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE, docs only, rebased onto main 54c9cf0 (from d3be3e5; #789 to #793 landed in between). The analyst half of the
 clean room: another lane implements NATIVE_ACTOR_SETBASE.md. No session was run. Raw output stays under ignored
 `local/analysis/setbase/`. UNVERIFIED in the running game.
 
@@ -34,6 +34,13 @@ clean room: another lane implements NATIVE_ACTOR_SETBASE.md. No session was run.
   - the stateful destroy: lifted only when the `EndState` that the method lookup resolves for the actor's current
     state is a script function whose body is a bare return, read with no load. Every other case keeps the W5-STATES
     `LayerAbsent`. The rule checks the body, not a state name.
+- **Review r1 of #795:**
+  - the binding is gated to the seven tables read: any other receiver, such as the pawns of links 13 and 14, keeps
+    NATIVE_GO_DOWN_PATH.md 3.2's `NotRead`;
+  - the native callers (`SetPhysics`' base search, the base clear) were not read, so LINK34's `NotRead` stands;
+  - the walk's residency, the base and component declarations, the class test by name, and a recheck after
+    `Detach` were added;
+  - the destroy lift is Off only, applies to every Off destroy, and logs each lift.
 - **Paperwork:**
   - `NATIVE_INDEX.md`:
     - new rows for `SetBase`, and for `SelectAkEvent` with `PlayAkEvent`;

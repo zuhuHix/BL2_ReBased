@@ -68,7 +68,9 @@ is always true from script. `NewFloor` is passed on but the implementation never
 return with no write and no event:
 1. **A collection actor as the new base.** A `NewBase` whose class is `StaticMeshCollectionActor` or
    `BlockingMeshCollectionActor` (or below them) is replaced by another actor that the world supplies. By fit that
-   actor is the world's info. Its lookup was not read.
+   actor is the world's info. Its lookup was not read. The port tests this by comparing class names along the base's
+   loaded class chain (the class table only). A name that is not in the name table means no match, and nothing is
+   interned.
 2. **A base loop.** Walk from `NewBase` along each actor's `Base`. If the walk reaches the receiver: nothing.
 3. **A fixed receiver.** When the receiver is `bStatic`, or not `bMovable`:
    - a `NewBase` that is not `bStatic` and is `bMovable` (a moving base): nothing;
@@ -126,13 +128,24 @@ Bind the script native `Actor.SetBase(object,vector,object,name)` in Off. It rep
 `NotRead`, which is a placeholder under `ow-combat`'s `go_down` unresolved list. Check for existing bindings and
 placeholders first.
 
+**Only for the inventory and pickup chain** (review r1 of #795). Section 1 read seven class tables: `Engine.Actor`,
+`Engine.Inventory`, `Engine.Weapon`, `WillowGame.WillowWeapon`, `Engine.WillowInventory`, `Engine.DroppedPickup` and
+`WillowGame.WillowPickup`. The rule applies to a receiver whose first native class (by the class table, nothing loaded)
+is one of those seven. Any other receiver keeps NATIVE_GO_DOWN_PATH.md 3.2's `NotRead`, "SetBase: the class's own
+implementation is not resolved", decided first in the preflight. That covers the pawns links 13 and 14 reach, whose
+tables were not read here.
+
 **The preflight** writes and loads nothing. It checks:
+- the receiver's first native class, as above;
 - the declarations, each else `VmError::Script`:
   - on the receiver: `Base`, `BaseSkelComponent`, `BaseBoneName`, `Attached` (an array of objects), the flags
     `bStatic`, `bMovable`, `bDeleteMe`, `bWorldGeometry` and `bHardAttach`, `Role`, and `Location`, `Rotation`,
     `RelativeLocation` and `RelativeRotation`;
-  - on `NewBase` and the old base, the subset each step reads;
-- a `NewBase` or old base the store has not loaded: `NotRead` (a load is a write);
+  - on `NewBase` and on the old base: `Base`, `bStatic`, `bMovable`, `bDeleteMe`, `bWorldGeometry`, `Location`,
+    `Rotation` and `Attached`;
+  - on a given `SkelComp`: `ActorComponent.Owner` (an object);
+- a `NewBase`, an old base, or any actor that step 2's walk reaches, that the store has not loaded: `NotRead` (a load is
+  a write);
 - the walk of step 2 is bounded: a `Base` chain that loops without reaching the receiver is `VmError::Script`;
 - steps 1 to 5 in order. Step 1's replacement is `NotRead` ("SetBase: a collection actor as the base"). A `SkelComp`
   that passes step 4 is `NotRead` ("SetBase: the bone and socket placement"), because 3.6 needs the skeleton's bone
@@ -158,8 +171,25 @@ no probe masks; record that as a gap.
 
 A refusal after the first write carries the "stopped after partial writes" prefix (#518's counters).
 
+**After `Detach`** (review r1 of #795). Step 6's `Detach` runs script before steps 7 to 9, and that script can change
+the receiver, the new base or their fields. So once it returns, the commit runs the preflight's checks again on the
+state it left: the declarations, the residency, and step 8's math cases. A refusal there carries the partial-writes
+prefix. When the checks pass, the commit goes on with steps 7 to 10 as read, on the state as it is then. The game does
+the same, with no second check.
+
 **The slice needs only step 5** (nothing). An implementer may bind steps 1 to 5 and step 7's no-base cases first, and
 answer the rest `NotRead` as named above.
+
+### 3.9 Native callers (not read here)
+
+The implementation is also called from native code. One caller is `Actor.SetPhysics`' base search, which passes the
+floor it found and the hit normal (NATIVE_LINK34_AFTER_MIND.md section 2). Another is the transition that clears the
+base (NATIVE_ACTOR_SET_PHYSICS.md section 2). This note read only the script exec. **Not read:**
+- the "notify" value those callers pass;
+- which class table a pawn's call goes through (section 1 did not read the pawn tables).
+
+So LINK34's `NotRead`, "Actor.SetPhysics: the base search's base setter", stands until those are read. Binding 3.8
+does not lift it.
 
 ## 4. Link 6 after SetBase
 
@@ -271,6 +301,13 @@ against the script, not against a state name:
 The check is part of the destroy's write-free preflight. NATIVE_ENGINE_CORE.md's own condition for sending
 `EndState` stays an open point: under this rule it makes no difference, because the body is empty.
 
+**Scope** (review r1 of #795):
+- **Off only.** Reference keeps the W5-STATES `LayerAbsent`; on main the port's destroy refuses a stateful actor in
+  every mode;
+- **every Off caller of `Destroy`.** The rule is part of the port's destroy itself, not of the pickup path;
+- **every lifted destroy is logged:** "hub ruling: destroy in state <State>, its EndState a bare return; EndState not
+  sent (UNVERIFIED)", with the state's name.
+
 ### 4.4 The next stop
 
 The probe lifted 4.3 for the pickup only, which is the case the hub's ruling covers. Link 6 then stops at `WillowGlobals.RemovePickup`'s existing `NotRead`
@@ -317,8 +354,11 @@ The probe answered 1 to 3 and lifted 4 to reach 5. Link 7 is unchanged: the HUD 
    - a `SkelComp` from the base;
    - a hard-attached receiver that is not a simulated proxy;
    - a turned base;
-   - an unloaded base.
-7. A refusal after the old base's `Detach` (a toy `Detach` that writes) carries the prefix.
+   - an unloaded base, and an unloaded actor reached by step 2's walk;
+   - a receiver whose first native class is not one of the seven (a toy pawn class): "SetBase: the class's own
+     implementation is not resolved";
+7. A refusal after the old base's `Detach` (a toy `Detach` that writes) carries the prefix. A toy `Detach` that turns
+   the new base (a non-zero `Rotation`) makes the recheck refuse "the relative rotation to a turned base", prefixed.
 8. `GetAmmoCount`:
    - infinite ammo: `ClipSize`;
    - a pool at 42.9: 42;
@@ -343,6 +383,9 @@ The probe answered 1 to 3 and lifted 4 to reach 5. Link 7 is unchanged: the HUD 
       lifted; a fallback with a statement is not;
     - a native `EndState`, or a lookup that would load: the `LayerAbsent`;
     - an actor in no state: unchanged;
+    - each lifted destroy logs the ruling's line with its state's name;
+    - Reference keeps the `LayerAbsent` for the bare-`EndState` case too;
+    - the lift is not tied to the pickup: a toy non-pickup actor in a bare-`EndState` state is lifted the same way;
     - each refusal leaves the counters, `class_code_loads` and the name table unchanged.
 12. Reference binds none of the keys.
 

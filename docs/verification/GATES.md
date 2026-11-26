@@ -2,7 +2,7 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**ANALYST-ACTOR-SETBASE (2026-11-26, pc-hummer, docs only, on docs/native-actor-setbase, rebased onto main 969d7a3):**
+**ANALYST-ACTOR-SETBASE (2026-11-26, pc-hummer, docs only, on docs/native-actor-setbase, rebased onto main 54c9cf0):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_ACTOR_SETBASE.md resolves and reads `Actor.SetBase`'s implementation (the
 same one in every class table of the slice's chain). On the slice, `SetBase(None)` reaches a weapon with no base, so
 it does nothing. The note then reads link 6's `key` on, measured by a local probe on #789's head a9f7187a (an
