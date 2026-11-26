@@ -10,7 +10,7 @@ workspace 4,023 / 0 / 59 before the move); `crate_edges_test.py` OK. Installed O
 under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%, as on main: links 3, 4, 5, 13 and 14 at the spawn's
 `AttributeInitializationDefinition.SetBaseValue` ("a definition it names is not loaded"), so these natives are still
 not reached; link 7 at the HUD's pickup targeting; 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision
-2026-11-26-NNN.
+2026-11-26-65.
 
 (hub ruling on review of #801), Off. `cargo test --workspace` 4,023 passed / 0 failed / 59 ignored;
 `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 7 not ok,
