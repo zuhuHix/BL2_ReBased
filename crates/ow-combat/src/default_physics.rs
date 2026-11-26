@@ -122,7 +122,7 @@ fn is_a(vm: &Vm, o: ObjRef, wanted: &str) -> Result<bool, VmError> {
 }
 
 /// The value of `EPhysics` entry `name`, by its place in the enum `Physics` is declared with on `o`.
-fn physics_mode(vm: &Vm, o: ObjRef, name: &str) -> Result<u8, VmError> {
+pub(crate) fn physics_mode(vm: &Vm, o: ObjRef, name: &str) -> Result<u8, VmError> {
     let (_, kind) = read(vm, o, "Physics")?;
     let PropKind::Byte { enum_: Some(e) } = kind else {
         return Err(bad("Physics is not declared as a byte of an enum"));

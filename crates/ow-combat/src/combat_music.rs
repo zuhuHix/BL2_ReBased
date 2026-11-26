@@ -81,36 +81,36 @@ pub fn enable_threat_model_no_op(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-fn bad(what: &str, message: impl Into<String>) -> VmError {
+pub(crate) fn bad(what: &str, message: impl Into<String>) -> VmError {
     VmError::Script { function: what.to_string(), message: message.into() }
 }
 
-fn path(vm: &Vm, o: ObjRef) -> String {
+pub(crate) fn path(vm: &Vm, o: ObjRef) -> String {
     vm.space.heap.get(o).ok().and_then(|x| vm.space.classes.get_layout(x.class)).map_or_else(String::new, |l| l.path().to_string())
 }
 
-fn read(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<(Value, PropKind), VmError> {
+pub(crate) fn read(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<(Value, PropKind), VmError> {
     let class = vm.space.heap.get(o)?.class;
     let p = vm.space.prop(class, name).ok_or_else(|| bad(what, format!("{} declares no {name}", path(vm, o))))?;
     let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| bad(what, format!("{name} undeclared")))?;
     Ok((vm.space.read(o, PropAddr::scalar(p))?.clone(), kind))
 }
 
-fn object(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Option<ObjRef>, VmError> {
+pub(crate) fn object(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Option<ObjRef>, VmError> {
     match read(vm, o, name, what)? {
         (Value::Object(x), PropKind::Object { .. }) => Ok(x),
         _ => Err(bad(what, format!("{name} is not declared as an object"))),
     }
 }
 
-fn array(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Vec<Value>, VmError> {
+pub(crate) fn array(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<Vec<Value>, VmError> {
     match read(vm, o, name, what)? {
         (Value::Array(items), PropKind::Array(_)) => Ok((*items).clone()),
         _ => Err(bad(what, format!("{name} is not declared as an array"))),
     }
 }
 
-fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+pub(crate) fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     let x = vm.space.heap.get(o)?;
     let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
     if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
@@ -120,7 +120,7 @@ fn resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-fn is_a(vm: &Vm, o: ObjRef, wanted: &str) -> Result<bool, VmError> {
+pub(crate) fn is_a(vm: &Vm, o: ObjRef, wanted: &str) -> Result<bool, VmError> {
     let mut cursor = Some(vm.space.heap.get(o)?.class);
     let mut steps = 0;
     while let Some(c) = cursor.filter(|_| steps < 256) {
@@ -135,7 +135,7 @@ fn is_a(vm: &Vm, o: ObjRef, wanted: &str) -> Result<bool, VmError> {
 }
 
 /// Field `name` of the struct value `v`, with its declared kind.
-fn member(vm: &Vm, v: &Value, name: &str, what: &str) -> Result<(Value, PropKind), VmError> {
+pub(crate) fn member(vm: &Vm, v: &Value, name: &str, what: &str) -> Result<(Value, PropKind), VmError> {
     let s = v.as_struct().ok_or_else(|| bad(what, format!("a {name} holder is not a struct")))?;
     let id = vm.space.names.find(name).ok_or_else(|| bad(what, format!("the struct declares no {name}")))?;
     let (i, d) = vm
@@ -148,18 +148,18 @@ fn member(vm: &Vm, v: &Value, name: &str, what: &str) -> Result<(Value, PropKind
     Ok((v, d))
 }
 
-fn member_object(vm: &Vm, v: &Value, name: &str, what: &str) -> Result<Option<ObjRef>, VmError> {
+pub(crate) fn member_object(vm: &Vm, v: &Value, name: &str, what: &str) -> Result<Option<ObjRef>, VmError> {
     match member(vm, v, name, what)? {
         (Value::Object(x), PropKind::Object { .. }) => Ok(x),
         _ => Err(bad(what, format!("{name} is not declared as an object"))),
     }
 }
 
-fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
+pub(crate) fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
     c.this.ok_or_else(|| bad(what, "called without a receiver"))
 }
 
-fn arg_object(c: &NativeCall<'_>, i: usize, what: &str) -> Result<Option<ObjRef>, VmError> {
+pub(crate) fn arg_object(c: &NativeCall<'_>, i: usize, what: &str) -> Result<Option<ObjRef>, VmError> {
     if i >= c.arg_count() {
         return Ok(None);
     }

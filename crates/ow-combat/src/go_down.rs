@@ -121,6 +121,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     crate::maya9::register(vm)?;
     crate::default_physics::register(vm)?;
     crate::link34::register(vm)?;
+    crate::links34_tail::register(vm)?;
     crate::links1314::register(vm)?;
     // The lazy creation of `GetCombatMusicManager` before `bcyl_tail`'s read (lane IMPL-COMBAT-MUSIC-AND-AFTER).
     crate::combat_music::register(vm)?;

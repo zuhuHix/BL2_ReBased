@@ -19,6 +19,7 @@ pub mod holds;
 pub mod bcyl_tail;
 pub mod combat_music;
 pub mod link34;
+pub mod links34_tail;
 pub mod links1314;
 pub mod loot;
 pub mod maya9;
