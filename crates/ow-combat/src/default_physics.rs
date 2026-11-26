@@ -171,6 +171,10 @@ fn shield(vm: &Vm, pawn: ObjRef) -> Result<(f32, f32), VmError> {
     let (reference, _) = read(vm, pawn, "ShieldArmor")?;
     // A mistyped reference is an error, not a fall-back to the plain fields (review of #792, item 7).
     let r = ow_world::pools::read_ref(&vm.space, &reference)?;
+    // The manager resident before its slots are read (review of #798, finding 8).
+    if let Some(manager) = r.manager {
+        resident(vm, manager)?;
+    }
     if let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)? {
         resident(vm, pool)?;
         return Ok((float(vm, pool, "CurrentValue")?, float(vm, pool, "MaxValue")?));

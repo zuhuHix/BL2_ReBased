@@ -15,7 +15,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_package::testkit::reflect::{toy_array_of, toy_struct};
+use ow_package::testkit::reflect::{property_payload, toy_array_of, toy_struct};
 use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
 use ow_package::testkit::{Export, ints};
 use ow_vm::api::{StubPolicy, Vm};
@@ -149,6 +149,44 @@ fn willow() -> Vec<u8> {
     t.prop("Object", material, "PhysicalMaterialProperty", 0, object);
     let property = t.class("WillowPhysicalMaterialProperty", object);
     t.prop("Byte", property, "DamageSurfaceType", 0, 0);
+    // Review of #798: a live shield pool (a manager of 16 pool slots, a pool with a GUID and a value), an
+    // initialization definition whose formula reaches a nested attribute, and that attribute as an export the store
+    // has not loaded.
+    let shield_pool = t.class("ToyShieldPool", object);
+    t.prop("Byte", shield_pool, "PoolGUID", 0, 0);
+    t.prop("Float", shield_pool, "CurrentValue", 0, 0);
+    let manager = t.class("ToyPoolManager", object);
+    let payload = property_payload(&t.none, 16, 0, &ints(&[shield_pool]));
+    let mut slots = Export::new(t.import("ObjectProperty"), "ResourcePools", payload);
+    slots.outer = manager;
+    t.p.add_export_with(slots);
+    let definition = t.class("ToyInitDefinition", object);
+    let formula = toy_struct(&mut t, definition, "ToyFormula", None);
+    t.prop("Bool", formula, "bEnabled", 0, 0);
+    for f in ["Multiplier", "Level", "Power", "Offset"] {
+        t.prop("Struct", formula, f, 0, init);
+    }
+    let off = toy_struct(&mut t, definition, "ToyOff", None);
+    for f in ["bEnabled", "bEnableMinValueRestriction", "bEnableMaxValueRestriction"] {
+        t.prop("Bool", off, f, 0, 0);
+    }
+    t.prop("Struct", definition, "ValueFormula", 0, formula);
+    for f in ["ConditionalInitialization", "RandomVariance", "RangeRestriction"] {
+        t.prop("Struct", definition, f, 0, off);
+    }
+    for f in ["BaseValueMode", "RoundingMode"] {
+        t.prop("Byte", definition, f, 0, 0);
+    }
+    let mut cold = ints(&[0]);
+    cold.extend_from_slice(&t.none);
+    let stored = t.p.add_export(body, "ToyColdAttribute", cold);
+    // Its holder: a loaded holder's field is a store handle not yet loaded.
+    let holder = t.class("ToyHolder", object);
+    t.prop("Object", holder, "Cold", 0, object);
+    let mut h = ints(&[0]);
+    h.extend(t.p.object_tag("Cold", stored));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "ToyHolderObject", h);
     t.build()
 }
 
@@ -255,6 +293,14 @@ fn is_friendly_fire_is_false_but_on_a_coop_game_info() {
     }
     let coop = x.make("WillowGame.WillowCoopGameInfo");
     assert_eq!(not_read(x.call("WillowGame.WillowCoopGameInfo.IsFriendlyFire", Some(coop), args())), COOP_FRIENDLY_FIRE);
+    // A mistyped argument (review of #798, finding 6): VmError::Script.
+    let game = x.make("Engine.GameInfo");
+    for bad in [vec![Value::Int(3), Value::Interface(None)], vec![Value::Object(Some(victim)), Value::Int(3)]] {
+        match x.call("Engine.GameInfo.IsFriendlyFire", Some(game), bad) {
+            Err(VmError::Script { .. }) => {}
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 // Test 4.
@@ -305,6 +351,11 @@ fn in_god_mode_by_controller_class() {
     let p = x.make("Engine.Pawn");
     x.set(p, "Controller", Value::Object(Some(lazy)));
     assert_eq!(not_read(x.call("Engine.Pawn.InGodMode", Some(p), vec![])), GOD_NOT_LOADED);
+    // A driven vehicle the store has not loaded (review of #798, finding 5).
+    let lazy_vehicle = x.lazy("Engine.Pawn");
+    let rider = x.make("Engine.Pawn");
+    x.set(rider, "DrivenVehicle", Value::Object(Some(lazy_vehicle)));
+    assert_eq!(not_read(x.call("Engine.Pawn.InGodMode", Some(rider), vec![])), GOD_NOT_LOADED);
     let lazy_component = x.lazy("GearboxFramework.AIComponent");
     x.set(mind, "AIComponent", Value::Object(Some(lazy_component)));
     assert_eq!(not_read(x.call("WillowGame.WillowMind.InGodMode", Some(mind), vec![])), GOD_NOT_LOADED);
@@ -418,4 +469,102 @@ fn is_vulnerable_to_friendly_fire() {
     assert_eq!(x.call(path, Some(player), vec![]).unwrap(), Value::Bool(true), "0.5");
     let ai = x.make("WillowGame.WillowAIPawn");
     assert_eq!(x.call("Engine.Pawn.IsVulnerableToFriendlyFire", Some(ai), vec![]).unwrap(), Value::Bool(false));
+}
+
+/// The momentum scale under review of #798: the HitInfo must be a struct (finding 7); a live shield pool with a value
+/// is surface 3 (finding 6), its manager checked resident first (finding 8); a nested attribute the store has not
+/// loaded answers `NotRead` and loads nothing (finding 1; [`Fx::call`] checks the counters).
+#[test]
+fn adjust_momentum_review_of_798() {
+    let mut x = fx();
+    let path = "WillowGame.WillowPawn.AdjustMomentumForSurfaceType";
+    let pawn = x.make("WillowGame.WillowAIPawn");
+    let instigator = x.make("Engine.Controller");
+    let d = x.make("WillowGame.WillowDamageTypeDefinition");
+    let set_fields = |x: &mut Fx, v: &mut Value, values: Vec<(&str, Value)>| {
+        let vm = x.vm();
+        let st = v.struct_mut().unwrap();
+        let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+        for (f, val) in values {
+            let (i, _) = layout.field(vm.space.names.find(f).unwrap()).unwrap();
+            st.fields[i as usize] = val;
+        }
+    };
+    let mut shield = x.get(d, "ShieldMomentumModifier");
+    set_fields(&mut x, &mut shield, vec![("BaseValueConstant", Value::Float(4.0)), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    x.set(d, "ShieldMomentumModifier", shield);
+    let hit = {
+        let vm = x.vm();
+        let ty = vm.space.classes.struct_by_path("WillowGame.WillowPawn.TraceHitInfo").unwrap();
+        let n = vm.space.names.intern("Head");
+        Value::structure(ty, vec![Value::Name(n)])
+    };
+    let args = |h: Value| vec![Value::Float(10.0), Value::Object(Some(instigator)), Value::Object(Some(d)), h];
+    // Finding 7: a HitInfo that is not a struct.
+    match x.call(path, Some(pawn), args(Value::Int(0))) {
+        Err(VmError::Script { .. }) => {}
+        other => panic!("{other:?}"),
+    }
+    // Finding 6: a live shield pool with a value, surface 3 (scale 4).
+    let manager = x.make("WillowGame.ToyPoolManager");
+    let pool = x.make("WillowGame.ToyShieldPool");
+    x.set(pool, "PoolGUID", Value::Byte(7));
+    x.set(pool, "CurrentValue", Value::Float(25.0));
+    {
+        let vm = x.vm();
+        let class = vm.space.heap.get(manager).unwrap().class;
+        let p = vm.space.prop(class, "ResourcePools").unwrap();
+        *vm.space.slot_mut(manager, PropAddr::element(p, 2)).unwrap() = Value::Object(Some(pool));
+    }
+    let point = |x: &mut Fx, m: ObjRef| {
+        let mut r = x.get(pawn, "ShieldArmor");
+        set_fields(x, &mut r, vec![("PoolManager", Value::Object(Some(m))), ("PoolIndexInManager", Value::Byte(2)), ("PoolGUID", Value::Byte(7))]);
+        x.set(pawn, "ShieldArmor", r);
+    };
+    point(&mut x, manager);
+    assert_eq!(x.call(path, Some(pawn), args(hit.clone())).unwrap(), Value::Float(40.0), "the shield's scale");
+    x.set(pool, "CurrentValue", Value::Float(0.0));
+    assert_eq!(x.call(path, Some(pawn), args(hit.clone())).unwrap(), Value::Float(10.0), "an empty pool: surface 0");
+    // Finding 8: a manager the store has not loaded.
+    let lazy_manager = x.lazy("WillowGame.ToyPoolManager");
+    point(&mut x, lazy_manager);
+    assert_eq!(not_read(x.call(path, Some(pawn), args(hit.clone()))), NOT_LOADED);
+    point(&mut x, manager);
+    // Finding 1: the flesh scale's definition is resident, its formula's multiplier names an attribute the store has
+    // not loaded. Surface 1 by a region's default.
+    let cold = {
+        let vm = x.vm();
+        let path = ow_core::ObjectPath::parse("WillowGame.ToyHolderObject").unwrap();
+        let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        match x.get(holder, "Cold") {
+            Value::Object(Some(o)) => o,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, cold), "the attribute starts unloaded");
+    let definition = x.make("WillowGame.ToyInitDefinition");
+    let mut formula = x.get(definition, "ValueFormula");
+    let mut multiplier = {
+        let vm = x.vm();
+        let st = formula.as_struct().unwrap();
+        let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+        let (i, _) = layout.field(vm.space.names.find("Multiplier").unwrap()).unwrap();
+        st.fields[i as usize].clone()
+    };
+    set_fields(&mut x, &mut multiplier, vec![("BaseValueAttribute", Value::Object(Some(cold)))]);
+    set_fields(&mut x, &mut formula, vec![("bEnabled", Value::Bool(true)), ("Multiplier", multiplier)]);
+    x.set(definition, "ValueFormula", formula);
+    let mut flesh = x.get(d, "FleshMomentumModifier");
+    set_fields(&mut x, &mut flesh, vec![("InitializationDefinition", Value::Object(Some(definition)))]);
+    x.set(d, "FleshMomentumModifier", flesh);
+    let helper = x.make("Engine.Object");
+    let body = x.make("WillowGame.BodyClassDefinition");
+    let region = x.make("WillowGame.HitRegionDefinition");
+    x.set(region, "DefaultDamageSurfaceType", Value::Byte(1));
+    x.set(body, "DefaultHitRegion", Value::Object(Some(region)));
+    x.set(pawn, "MyHitRegionHelper", Value::Object(Some(helper)));
+    x.set(pawn, "BodyClass", Value::Object(Some(body)));
+    let what = not_read(x.call(path, Some(pawn), args(hit)));
+    assert!(what.contains("is an unloaded handle (a load is a write)"), "{what}");
+    assert!(x.world.vm.defs.is_unloaded(&x.world.vm.space, cold), "nothing loaded");
 }

@@ -24,9 +24,13 @@
 //!    then the base setter when the floor differs from `Base`. No collision service is `LayerAbsent`
 //!    ([`BASE_TRACE`], [`BASE_TRACE_LAYER`]); a service with geometry, or a world where another live actor has a
 //!    `CollisionComponent`, is `NotRead` ([`BASE_TRACE_FLAGS`]: the trace's flags are not decoded). **The stand-in**
-//!    (the hub's ruling on #793): a service with no geometry ([`crate::placement::NoLevel`]) and no other actor with
-//!    collision gives no floor; with `Base` None that changes nothing (logged as a harness input at the commit), with
-//!    a `Base` set it is `NotRead` ([`BASE_SETTER`]) until the base setter is read. All decided here, before the mode
+//!    (the hub's ruling on #793, and on review of #798, R1): only with the Off-only harness setting
+//!    [`NoLevelBaseSearch`] on (the slice's worlds turn it on, as they do `PhysXLevel` and `AtRestBodyPose`;
+//!    [`enable_no_level_base_search`]), a service with no geometry ([`crate::placement::NoLevel`]) and no other actor
+//!    with collision gives no floor; with `Base` None that changes nothing (logged as a harness input at the commit),
+//!    with a `Base` set it is `NotRead` ([`BASE_SETTER`]) until the base setter is read. Without the setting the
+//!    `NoLevel` case keeps [`BASE_TRACE_FLAGS`]' `NotRead`. The actor's own `CollisionComponent` is skipped (R2,
+//!    UNVERIFIED: the common convention that an engine trace ignores its source). All decided here, before the mode
 //!    write. Then into any other mode but `PHYS_Interpolating`, with a `Base` set, is `NotRead`
 //!    ([`BASE_CLEAR`]); into or out of `PHYS_RigidBody` with a `CollisionComponent` set is `LayerAbsent`
 //!    ([`RIGID_BODY`], [`RIGID_LAYER`]);
@@ -79,6 +83,30 @@ pub const BASE_SETTER: &str = "Actor.SetPhysics: the base search's base setter";
 /// The harness-input line of the stand-in.
 pub const BASE_STAND_IN: &str = "harness input: Actor.SetPhysics' base search found no floor (a world with no level \
      geometry and no other actor with collision; UNVERIFIED stand-in, the hub's ruling on #793)";
+/// The set-up line of [`enable_no_level_base_search`].
+pub const BASE_STAND_IN_INPUT: &str = "harness input: the world turns on SetPhysics' no-floor base search for a world      with no level geometry (the hub's ruling on review of #798, R1; UNVERIFIED)";
+/// The registration key of [`NoLevelBaseSearch`].
+pub const BASE_STAND_IN_KEY: &str = "NoLevelBaseSearch";
+
+/// The Off-only harness setting of the base search's stand-in (a VM service; its presence turns it on; module
+/// documentation, step 3).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoLevelBaseSearch;
+
+/// Turns the base search's stand-in on for `vm`'s world (world set-up), logging [`BASE_STAND_IN_INPUT`]. Off only, else
+/// a registration refusal; turning it on twice is a registration refusal too.
+pub fn enable_no_level_base_search(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Err(VmError::Registration {
+            key: BASE_STAND_IN_KEY.to_string(),
+            reason: "the base search's stand-in is an Off harness setting; Reference keeps the refusal",
+        });
+    }
+    vm.add_service(NoLevelBaseSearch)?;
+    vm.log.push(BASE_STAND_IN_INPUT.to_string());
+    Ok(())
+}
+
 /// Step 3's base clearing.
 pub const BASE_CLEAR: &str = "Actor.SetPhysics: clearing the base (the base setter is not ported)";
 /// Step 3's rigid body, and its layer.
@@ -354,11 +382,14 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
     let Some(model) = crate::placement::collision_model(vm)? else {
         return Err(NotYet::layer_absent(BASE_TRACE, BASE_TRACE_LAYER, RECORD).into());
     };
-    if !model.holds_no_geometry() {
+    // The stand-in only under its harness setting (the hub's ruling on review of #798, R1).
+    if !model.holds_no_geometry() || vm.service::<NoLevelBaseSearch>().is_none() {
         return Err(NotYet::not_read(BASE_TRACE_FLAGS, RECORD).into());
     }
     let actors = crate::actors::actors_of(vm)?;
     let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
+    // The actor's own collision is skipped: UNVERIFIED, the common convention that an engine trace ignores its source
+    // (the hub's ruling on review of #798, R2).
     for other in list.into_iter().filter(|o| *o != actor) {
         let Ok(x) = vm.space.heap.get(other) else { continue };
         if let Some(p) = vm.space.prop(x.class, "CollisionComponent")
