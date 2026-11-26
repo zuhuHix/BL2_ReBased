@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINKS-13-14 (2026-11-26, pc-hummer, docs only, on docs/native-links-13-14, read and probed on main
+fc860b5c, rebased onto 54c9cf05):** AI-assisted
+(Claude Code, Opus 5.5). NATIVE_LINKS_13_14.md follows links 13 (`cash:3000`, three more swings of link 4's adult) and
+14 (`bleed:50`) in Off. It names the class-level part's thirteen pawn properties. It finds that the game sets a
+mind's `CharacterClass` in `WillowMind.Possess` and runs the player's recalculation with her pawn possessed, while the
+port does neither, so Maya's damage modifiers stay 0 and every swing refuses its resistance. It also reads the
+summary's tag-list reset, `GetController`, `UpdateTookDamageFromEnemyStats`, `GetAmmoTheftAmounts`, the two skill-event
+iterators and `PawnCheckPlayHitPreconditions`. A local probe (an installed Off `--combat-run` of the gate's steps,
+each stop stubbed, reverted and not committed) puts the swings' next stop at `GetBoundingCylinder`'s component
+transform, and finds three swings of about 13.9 each do not down Maya, so link 14 has no down to bleed. No code
+changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (2026-11-26, pc-hummer, on fix/rust-setdefaultphysics from main 7494393):**
 AI-assisted (Claude Code, Opus 5.5). `SetDefaultPhysics`' three queries, the `WillowMind` recalculation in the game's
 order with its own part, the spawn's balance input and archetype record, Off. `cargo test --workspace -j 8

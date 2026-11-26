@@ -43,6 +43,9 @@ links meet.
 
 ## 2. Link 13 (`go_down`): the three swings that take Maya down
 
+In Off, past link 4's stops: NATIVE_LINKS_13_14.md (the class-level modifiers, the damage path's natives, the predicted
+stop, and whether three swings down Maya).
+
 The three swings run the same damage path as link 4's one swing. **23 natives** that link 13 reaches are already on
 link 4's path, so link 4 meets them first. They are listed in section 5 and are not read here.
 
