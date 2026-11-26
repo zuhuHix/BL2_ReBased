@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-PAWN-INTERACTION-PROXY (2026-11-26, pc-hummer, on fix/rust-pawn-interaction-proxy from main 50114dc):**
+AI-assisted (Claude Code, Opus 5.5). `SetCollisionSize` with the touch update's nothing-touched stand-in (hub ruling on
+review of #802), `SetHardAttach` for four classes, and `SetBase`'s eighth class and identity case, Off. `cargo test
+--workspace` 4,020 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
+(release build, under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%, as on main. Links 3, 4, 5, 13 and 14 are
+at "the base search's floor trace", link 7 at the HUD's pickup targeting, and 1, 2, 6 and 8 to 12 are ok. **Local probe**
+(never pushed): this branch merged with #803 (fix/rust-links-13-14 @ dc0e9ef), with lane E's deferred
+`PlayerPawnDuringSetUp` forced on in the combat set-up. It also gave 8 ok / 14, 60.7%, with **link 1 spawn_maya ok,
+steps 2/2**. The stand-in's line was logged once on link 1, so the trade proxy's `SetCollisionSize`, `SetHardAttach`
+and `SetBase` ran. Every other row was as above. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **ANALYST-LINK7-HUD-TARGETING (2026-11-26, pc-hummer, docs only, on docs/native-link7-hud-targeting, probed on main 21a668a7,
 rebased onto eef4f83e):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK7_HUD_TARGETING.md finds the HUD's pickup targeting a pure query that
