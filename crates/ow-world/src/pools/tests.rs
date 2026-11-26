@@ -113,6 +113,7 @@ fn package() -> Vec<u8> {
         "ClassProperty",
         "ArrayProperty",
         "StructProperty",
+        "FloatAttributeProperty",
     ]);
     let object = t.class("Object", 0);
     let note_fn = {
@@ -233,6 +234,24 @@ fn package() -> Vec<u8> {
     t.class("PawnAttributeContextResolver", object);
     let class_def = t.class("CharacterClassDefinition", object);
     t.class("WillowCharacterClassDefinition", class_def);
+    // The mind part's init data (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC): on the class the mind's AIClass is.
+    let init = toy_struct(&mut t, class_def, "AttributeInitializationData", None);
+    t.prop("Float", init, "BaseValueConstant", 0, 0);
+    t.prop("Object", init, "BaseValueAttribute", 0, object);
+    t.prop("Object", init, "InitializationDefinition", 0, object);
+    t.prop("Float", init, "BaseValueScaleConstant", 0, 0);
+    t.prop("Struct", class_def, "BaseCommerceMarkup", 0, init);
+    for n in levelup::RESISTANCES {
+        t.prop("Struct", class_def, &format!("Base{n}ResistanceModifier"), 0, init);
+    }
+    // The status component: each resistance a stack attribute with its base and stack.
+    let status = t.class("StatusEffectsComponent", object);
+    for n in levelup::RESISTANCES {
+        let name = format!("{n}ResistanceModifier");
+        let stack = toy_array_of(&mut t, status, &format!("{name}ModifierStack"), "Object", object);
+        let base = t.prop("Float", status, &format!("{name}BaseValue"), 1 << 62, 0);
+        t.prop_tail("FloatAttribute", status, &name, 1 << 63, &ints(&[stack, base]));
+    }
 
     // The pool, its natives and invented script bodies.
     let pool = t.class("ResourcePool", object);
@@ -545,6 +564,17 @@ fn package() -> Vec<u8> {
     t.prop("Float", pawn, "HealthVar", 0, 0);
     t.prop("Float", pawn, "HealthMaxVar", 0, 0);
     t.prop("Object", pawn, "StatusEffectComp", 0, object);
+    t.prop("Float", pawn, "CommerceMarkup", 0, 0);
+    // The spawn's balance step (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC): the script the step runs, native here so
+    // a test can see the call.
+    native(
+        &mut t,
+        pawn,
+        "InitializeBalanceDefinitionState",
+        &[p("Object", "Balance", object), Param::new("Int", "GradeIndex")],
+        None,
+        NATIVE,
+    );
     native(
         &mut t,
         pawn,
@@ -618,6 +648,7 @@ fn package() -> Vec<u8> {
     let mind = t.class("WillowMind", controller);
     t.prop("Object", mind, "AIClass", 0, class_def);
     t.prop("Object", mind, "MyWillowPawn", 0, pawn);
+    native(&mut t, mind, "RecalculateAttributeInitializedState", &[], None, NATIVE);
     // A controller-like class without CharacterClass, Pawn or MyWillowPawn, as the C++ fixtures declare it.
     let bare = t.class("BareController", actor);
     t.prop("Object", bare, "ResourcePoolManager", 0, manager);
@@ -2042,9 +2073,10 @@ fn a_willow_minds_recalculation_runs_the_settled_parts() {
         let (class, pawn) = (x.new_obj("CharacterClassDefinition"), x.new_obj("Pawn"));
         x.set(mind, "AIClass", Value::Object(Some(class)));
         x.set(mind, "MyWillowPawn", Value::Object(Some(pawn)));
-        let e = recalc(&mut x, mind).unwrap_err();
-        assert!(matches!(vm_missing(e), Missing::NotRead));
-        assert_eq!(x.noted(pool), vec![10, 20, 21], "refused before the rebase");
+        // The mind part's rule (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC; it was this test's NotRead): the class's
+        // init data (all zero here) are evaluated after the rebase (`mind_part` tests the values).
+        recalc(&mut x, mind).unwrap();
+        assert_eq!(x.noted(pool), vec![10, 20, 21, 20, 21], "the controller part rebased the pool again");
         let mut r = fx_mode(ParityMode::Reference);
         let (mind, _) = r.controller_with_manager("WillowMind");
         let e = r.call("Controller.RecalculateAttributeInitializedState", Some(mind), vec![]).unwrap_err();
@@ -2587,4 +2619,168 @@ fn a_refused_controller_lookup_leaves_the_controller_as_it_was() {
         );
         assert_eq!(live_managers(&mut x), 0, "the spawned manager is destroyed");
     });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The WillowMind override's own part and the spawn's balance step (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC;
+// NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 6, tests 5, 6 and 8)
+// ---------------------------------------------------------------------------------------------------------------
+
+mod mind_part {
+    use super::*;
+
+    /// A mind with an `AIClass` whose init data are the constants `k` (commerce `k`, resistance i `k + i + 1`) and a
+    /// pawn, with a status component when `status`; the mind's pool made, so the controller part has a pool to rebase.
+    fn mind(x: &mut Fx, k: f32, status: bool) -> (ObjRef, ObjRef, Option<ObjRef>, ObjRef) {
+        let (mind, m) = x.controller_with_manager("WillowMind");
+        let (_, def) = x.resource();
+        let pool = x.create(Some(m), Some(mind), Some(def), false).0.data.unwrap();
+        let class = x.new_obj("CharacterClassDefinition");
+        let pawn = x.new_obj("Pawn");
+        let data = |x: &mut Fx, v: f32| {
+            let vm = x.vm();
+            let class_id = vm.space.heap.get(class).unwrap().class;
+            let p = vm.space.prop(class_id, "BaseCommerceMarkup").unwrap();
+            let mut s = vm.space.read(class, PropAddr::scalar(p)).unwrap().clone();
+            let st = s.struct_mut().unwrap();
+            let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+            for (f, val) in [("BaseValueConstant", v), ("BaseValueScaleConstant", 1.0)] {
+                let (i, _) = layout.field(vm.space.names.find(f).unwrap()).unwrap();
+                st.fields[i as usize] = Value::Float(val);
+            }
+            s
+        };
+        let commerce = data(x, k);
+        x.set(class, "BaseCommerceMarkup", commerce);
+        for (i, n) in levelup::RESISTANCES.iter().enumerate() {
+            let v = data(x, k + i as f32 + 1.0);
+            x.set(class, &format!("Base{n}ResistanceModifier"), v);
+        }
+        let component = status.then(|| x.new_obj("StatusEffectsComponent"));
+        x.set(pawn, "StatusEffectComp", Value::Object(component));
+        x.set(mind, "AIClass", Value::Object(Some(class)));
+        x.set(mind, "MyWillowPawn", Value::Object(Some(pawn)));
+        (mind, pawn, component, pool)
+    }
+
+    fn recalc(x: &mut Fx, mind: ObjRef) -> Result<(), VmError> {
+        x.call("WillowMind.RecalculateAttributeInitializedState", Some(mind), vec![]).map(|_| ())
+    }
+
+    // Tests 6 and 8: through the WillowMind key, the controller part's rebase and then the mind part: CommerceMarkup
+    // and the ten resistances (each base, its value recomputed from an empty stack) from constant init data.
+    #[test]
+    fn the_mind_part_writes_the_markup_and_the_resistances_after_the_rebase() {
+        run(|| {
+            let mut x = fx();
+            let (mind, pawn, component, pool) = mind(&mut x, 1.5, true);
+            recalc(&mut x, mind).unwrap();
+            assert_eq!(x.noted(pool), vec![10, 20, 21], "the controller part rebased the pool");
+            assert_eq!(x.get(pawn, "CommerceMarkup"), Value::Float(1.5));
+            let c = component.unwrap();
+            for (i, n) in levelup::RESISTANCES.iter().enumerate() {
+                let want = Value::Float(1.5 + i as f32 + 1.0);
+                assert_eq!(x.get(c, &format!("{n}ResistanceModifierBaseValue")), want, "{n} base");
+                assert_eq!(x.get(c, &format!("{n}ResistanceModifier")), want, "{n} value");
+            }
+        });
+    }
+
+    // Test 6: no StatusEffectComp, only CommerceMarkup.
+    #[test]
+    fn without_a_status_component_only_the_markup() {
+        run(|| {
+            let mut x = fx();
+            let (mind, pawn, _, _) = mind(&mut x, 2.0, false);
+            recalc(&mut x, mind).unwrap();
+            assert_eq!(x.get(pawn, "CommerceMarkup"), Value::Float(2.0));
+        });
+    }
+
+    // Test 6: an init-data definition the store has not loaded is NotRead, and a mistyped field a script error, both
+    // before any write (the pool not rebased).
+    #[test]
+    fn an_unloaded_definition_or_a_mistyped_field_refuses_before_any_write() {
+        run(|| {
+            let mut x = fx();
+            let (mind, pawn, _, pool) = mind(&mut x, 1.0, true);
+            let rebased = x.noted(pool);
+            let class = match x.get(mind, "AIClass") {
+                Value::Object(Some(c)) => c,
+                other => panic!("{other:?}"),
+            };
+            // A stand-in without its slots (a class with fields), as an unloaded definition reads.
+            let with_fields = x.vm().find_class("Engine.CharacterClassDefinition").unwrap();
+            let lazy = x
+                .vm()
+                .space
+                .alloc_stand_in(with_fields, "Lazy", ow_object::heap::Origin::Default { class: with_fields })
+                .unwrap();
+            let mut data = x.get(class, "BaseCommerceMarkup");
+            {
+                let vm = x.vm();
+                let st = data.struct_mut().unwrap();
+                let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+                let (i, _) = layout.field(vm.space.names.find("InitializationDefinition").unwrap()).unwrap();
+                st.fields[i as usize] = Value::Object(Some(lazy));
+            }
+            x.set(class, "BaseCommerceMarkup", data);
+            let before = x.vm().space.heap.committed_writes();
+            let e = recalc(&mut x, mind).unwrap_err();
+            match &e {
+                VmError::NotYet(n) => assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotRead, levelup::MIND_NOT_LOADED)),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(x.vm().space.heap.committed_writes(), before, "nothing written");
+            assert_eq!(x.noted(pool), rebased, "refused before the rebase");
+            assert_eq!(x.get(pawn, "CommerceMarkup"), Value::Float(0.0));
+            // A mistyped field: a pawn whose StatusEffectComp is a Thing (no resistance fields) is a script error.
+            let (mind2, pawn, _, pool) = super::mind_part::mind(&mut x, 1.0, true);
+            let mind = mind2;
+            let thing = x.new_obj("Thing");
+            x.set(pawn, "StatusEffectComp", Value::Object(Some(thing)));
+            let rebased = x.noted(pool);
+            let e = recalc(&mut x, mind).unwrap_err();
+            assert!(matches!(&e, VmError::Script { .. }), "{e:?}");
+            assert_eq!(x.noted(pool), rebased, "refused before the rebase");
+            assert_eq!(x.get(pawn, "CommerceMarkup"), Value::Float(0.0));
+        });
+    }
+
+    // Test 5: the spawn's balance step runs first, with the recorded balance and -1; a recorded refusal is NotRead with
+    // nothing written.
+    #[test]
+    fn the_balance_step_runs_before_the_recalculation() {
+        run(|| {
+            let mut x = fx();
+            let calls: Rc<RefCell<Vec<(Value, Value)>>> = Rc::new(RefCell::new(Vec::new()));
+            let seen = calls.clone();
+            x.vm()
+                .register_native(
+                    "Pawn.InitializeBalanceDefinitionState(object,int)",
+                    Rc::new(move |c: &mut NativeCall<'_>| {
+                        seen.borrow_mut().push((c.arg(0)?.clone(), c.arg(1)?.clone()));
+                        Ok(Value::None)
+                    }),
+                )
+                .unwrap();
+            let (mind, pawn, _, pool) = mind(&mut x, 1.0, false);
+            let rebased = x.noted(pool);
+            crate::spawn_balance::record(x.vm(), pawn, Err("the spawn's pawn balance: none (an invented refusal)".into()))
+                .unwrap();
+            let before = x.vm().space.heap.committed_writes();
+            let e = recalc(&mut x, mind).unwrap_err();
+            let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+            assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotRead, "the spawn's pawn balance: none (an invented refusal)"));
+            assert_eq!(x.vm().space.heap.committed_writes(), before);
+            assert_eq!(x.noted(pool), rebased);
+            let balance = x.new_obj("Thing");
+            crate::spawn_balance::record(x.vm(), pawn, Ok(balance)).unwrap();
+            recalc(&mut x, mind).unwrap();
+            assert_eq!(*calls.borrow(), vec![(Value::Object(Some(balance)), Value::Int(-1))]);
+            assert_eq!(crate::spawn_balance::pending(x.vm(), pawn).unwrap(), None, "the record is spent");
+            recalc(&mut x, mind).unwrap();
+            assert_eq!(calls.borrow().len(), 1, "once");
+        });
+    }
 }
