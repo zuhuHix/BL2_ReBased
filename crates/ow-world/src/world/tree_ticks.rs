@@ -180,7 +180,6 @@ fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
     v.elements().map(<[Value]>::to_vec).ok_or_else(|| script(format!("{what} holds {}, not an array", v.kind_name())))
 }
 
-/// `o` resident, else [`not_loaded`] naming `role` and its handle path.
 /// This module's residency test, as it was before the shared helper (review r1 of #758): not a handle the store has
 /// not loaded, not a stand-in with **no** slots (`skeletal::resident`), and not a failed load. An object with some but
 /// not all of its slots counts as resident here, unlike `additive_override::resident`.
@@ -188,6 +187,7 @@ fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
     Ok(skeletal::resident(vm, o)? && !vm.defs.is_failed(&vm.space, o))
 }
 
+/// `o` resident, else [`not_loaded`] naming `role` and its handle path.
 fn require(vm: &Vm, o: ObjRef, role: &str) -> Result<(), VmError> {
     if !resident(vm, o)? {
         return Err(refuse_not_loaded(vm, o, role));

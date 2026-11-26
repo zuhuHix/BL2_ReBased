@@ -12,7 +12,7 @@
 //! ANALYST-LINK1-RBPHYSICS-AND-AFTER, #738 with its r1 fix, on main); this lane did not read the executable. **Every
 //! rule is UNVERIFIED in the running game.** Reference keeps the stub policy.
 //!
-//! **2.A `InitializeRBPhysics`**, write-free and load-free. The pawn declares `bDeleteMe`, `Physics` (a byte),
+//! **2.A `InitializeRBPhysics`**, load-free. The pawn declares `bDeleteMe`, `Physics` (a byte),
 //! `Components` (an array of object references), `CollisionComponent` and `bPushesRigidBodies`, else
 //! `VmError::Script`. With `bDeleteMe` set: nothing. Else the walk over `Components` in order, after the `Physics`
 //! filter (with `PHYS_RigidBody`, 10, only the `CollisionComponent`), None entries skipped. **The entry checks run
@@ -22,12 +22,40 @@
 //! template receiver, `Owner` an object on a live one), else `VmError::Script`. Then, in order, whether an entry is
 //! **attached**: on a template receiver (`Origin::Default`), its `bAttached`; on a live one, **the attach record under
 //! the pawn only** (`actors::attached_to`; NATIVE_COMPONENT_BOUNDS.md section 7 A, as `bounding_cylinder`'s live path
-//! reads it): a live entry's own `bAttached` is not read. Attached is [`RIGID_BODY`] (`LayerAbsent`,
-//! [`RIGID_LAYER`]); a live entry not in the record follows refusal L's convention (`bounding_cylinder::REFUSAL_L`
-//! and its layer, `LayerAbsent`): attachment is unknown. This takes every such entry, colliding or not, as the
-//! conservative side. Then `SetPushesRigidBodies(bPushesRigidBodies)`: clear (the port makes no pushing body) is
-//! nothing, and the same-value write is skipped, so the native never writes; set, with a `CollisionComponent`, the
-//! same attached test and answers. No entry and no pushing body: nothing.
+//! reads it): a live entry's own `bAttached` is not read. A live entry not in the record follows refusal L's
+//! convention (`bounding_cylinder::REFUSAL_L` and its layer, `LayerAbsent`): attachment is unknown.
+//!
+//! **A template receiver** (review r1 of #763, the hub's ruling): an attached entry is [`RIGID_BODY`] (`LayerAbsent`,
+//! [`RIGID_LAYER`]), as before, and a template is never written.
+//!
+//! **A live receiver: the class table** (lane IMPL-LINK1-RIGID-BODY-CLASS-TABLE, decision 2026-11-26-NNN), coded from
+//! docs/verification/NATIVE_LINK1_RIGID_BODY_LAYER.md section 3.1 alone (lane ANALYST-LINK1-RIGID-BODY-LAYER, #763
+//! with its r1 fix; clean room: this lane did not read the executable). It replaces the attached entry's
+//! `LayerAbsent`: the game makes no body for these cases. The visit is **fixed** unless the pawn's `Physics` is
+//! `PHYS_RigidBody` (10). Each attached entry is answered by its **first native class**
+//! (`render_hooks::first_native`):
+//! - [`SET_UP_NOTHING`] (the non-primitive components Maya holds, and `PrimitiveComponent` and `CylinderComponent`,
+//!   which have no shape): nothing;
+//! - [`SET_UP_SKELETAL`] (`SkeletalMeshComponent` and three subclasses): the skeletal rule below;
+//! - any other: [`UNREAD_CLASS`] (`NotRead`), naming the class.
+//!
+//! **The skeletal rule.** With `bDisableAllRigidBody` set: nothing (its attachments are not visited). Else, in order:
+//! `bUseSingleBodyPhysics` not 0 is [`RIGID_BODY`] (one body from the asset); `bHasPhysicsAssetInstance` set with a
+//! `SkeletalMesh` is [`RIGID_BODY`] (the asset's bodies); `ClothSim` zero with the mesh's cloth bool set is [`CLOTH`]
+//! (`NotRead`; the bool is [`CLOTH_BOOL`] by place, **fitted, UNVERIFIED**, read only when `ClothSim` is zero and there
+//! is a mesh); `bEnableSoftBodySimulation` set is [`RIGID_BODY`] (the soft body). Otherwise the writes:
+//! `bSkelCompFixed` := fixed, and `ClothMeshIndexData` := empty when `ClothSim` is zero. Then each `Attachments`
+//! entry's `Component` in the attach record under the same owner gets the same table, recursively, in array order;
+//! one not in the record is not visited.
+//!
+//! **The preflight.** Every refusal comes **before the first write**, over the whole walk and its recursion: the
+//! declarations (each flag and field with its kind, else `VmError::Script`); every entry, attachment component and
+//! mesh resident (else [`NOT_LOADED`], `NotRead`); refusal L; the rows above; and `SetPushesRigidBodies`' own
+//! refusal, folded in (set, with a `CollisionComponent`: the same attached test, [`RIGID_BODY`] or refusal L). So no
+//! refusal follows a write, and none needs the partial-writes prefix (the game writes component by component; the
+//! ordering is the port's). The physics scene is treated as present, as the note rules. Then
+//! `SetPushesRigidBodies(bPushesRigidBodies)`: clear (the port makes no pushing body) is nothing, and the same-value
+//! write is skipped. No entry and no pushing body: nothing. **UNVERIFIED** in the running game.
 //!
 //! **2.D `GetLinearColor(C)`:** each of R, G, B and A as `byte as f32 * (1.0f32 / 255.0)` (an f32 multiply by the f32
 //! constant, not a divide). Nothing written.
@@ -58,6 +86,43 @@ pub const APPLY_HOOK: &str = "WillowPlayerPawn.OnNativeApplyBodyClassStartingVal
 pub const RIGID_BODY: &str = "WillowPawn.InitializeRBPhysics: a component's rigid body";
 pub const RIGID_LAYER: &str = "a physics layer (rigid bodies)";
 pub const NOT_LOADED: &str = "WillowPawn.InitializeRBPhysics: a component the store has not loaded (a load is a write)";
+/// The class table's record.
+pub const RECORD_LAYER: &str = "docs/verification/NATIVE_LINK1_RIGID_BODY_LAYER.md";
+/// First native classes whose component set-up does nothing (section 3.1's table, its first two rows).
+pub const SET_UP_NOTHING: [&str; 7] = [
+    "Engine.ActorComponent",
+    "Engine.DynamicLightEnvironmentComponent",
+    "GearboxFramework.SpecialMoveComponent",
+    "GearboxFramework.GearboxDialogComponent",
+    "WillowGame.StatusEffectsComponent",
+    "Engine.PrimitiveComponent",
+    "Engine.CylinderComponent",
+];
+/// First native classes that take the skeletal rule (section 3.1's table, its third row).
+pub const SET_UP_SKELETAL: [&str; 4] = [
+    "Engine.SkeletalMeshComponent",
+    "GearboxFramework.GearboxSkeletalMeshComponent",
+    "WillowGame.CustomSkeletalMeshComponent",
+    "WillowGame.GearLikenessMeshComponent",
+];
+/// Any other first native class: `"<UNREAD_CLASS> <class>"` (`NotRead`).
+pub const UNREAD_CLASS: &str = "WillowPawn.InitializeRBPhysics: the rigid-body set-up of";
+/// The cloth step (`NotRead`).
+pub const CLOTH: &str = "InitializeRBPhysics: the cloth set-up";
+/// The mesh's cloth bool, by place (fitted, UNVERIFIED).
+pub const CLOTH_BOOL: &str = "bClothMetal";
+/// The skeletal fields the rule reads, with their kinds (the two arrays' element kinds are checked apart).
+const SKELETAL_FIELDS: [(&str, Want); 9] = [
+    ("bDisableAllRigidBody", Want::Bool),
+    ("bHasPhysicsAssetInstance", Want::Bool),
+    ("bSkelCompFixed", Want::Bool),
+    ("bEnableSoftBodySimulation", Want::Bool),
+    ("bUseSingleBodyPhysics", Want::Int),
+    ("ClothSim", Want::Struct),
+    ("ClothMeshIndexData", Want::Array),
+    ("SkeletalMesh", Want::Object),
+    ("Attachments", Want::Array),
+];
 
 /// [`NOT_LOADED`] naming the entry: `"<NOT_LOADED>: <class> <path>"`, the path the store's handle records (else the
 /// object's path), as `tree_ticks::not_loaded` names its object.
@@ -116,7 +181,120 @@ fn answer(state: Option<bool>) -> Result<(), VmError> {
     }
 }
 
-/// `WillowPawn.InitializeRBPhysics()` in Off (module documentation). Writes nothing.
+/// One skeletal entry's writes (module documentation): `bSkelCompFixed`, and `ClothMeshIndexData` emptied when
+/// `ClothSim` is zero.
+struct SkeletalWrite {
+    component: ObjRef,
+    empty_cloth: bool,
+}
+
+/// `o` resident, else [`NOT_LOADED`] naming it.
+fn require_resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    if resident(vm, o)? { Ok(()) } else { Err(NotYet::not_read(not_loaded(vm, o), RECORD).into()) }
+}
+
+/// The element kind of the array `name` on `o` (declared as an array, else a data error).
+fn element_kind(vm: &Vm, o: ObjRef, name: &str) -> Result<PropKind, VmError> {
+    match super::component_setters::declared(vm, o, name, RB)? {
+        PropKind::Array(inner) => Ok(*inner),
+        other => Err(bad(RB, format!("{name} is declared as {}, not an array", other.kind_name()))),
+    }
+}
+
+/// Whether the pointer struct `v` is zero: every field an int 0, at any depth.
+fn pointer_zero(v: &Value, name: &str) -> Result<bool, VmError> {
+    match v {
+        Value::Int(i) => Ok(*i == 0),
+        Value::Struct(s) => {
+            for f in &s.fields {
+                if !pointer_zero(f, name)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        other => Err(bad(RB, format!("{name} holds {}, not a pointer struct of ints", other.kind_name()))),
+    }
+}
+
+fn flag(vm: &Vm, o: ObjRef, name: &str) -> Result<bool, VmError> {
+    bool_of(&read(vm, o, name, RB)?, name, RB)
+}
+
+/// The class table on the attached, resident `entry` (module documentation): reads only. A skeletal entry that
+/// passes adds its writes to `writes`, then its attachments in the record under `owner` are planned the same way.
+/// `seen` stops a component met twice (a data error: the attach record gives a component one parent).
+fn plan(
+    vm: &Vm,
+    owner: ObjRef,
+    entry: ObjRef,
+    seen: &mut Vec<ObjRef>,
+    writes: &mut Vec<SkeletalWrite>,
+) -> Result<(), VmError> {
+    if seen.contains(&entry) {
+        return Err(bad(RB, "a component met twice in the walk"));
+    }
+    seen.push(entry);
+    let class = vm.space.heap.get(entry)?.class;
+    let native = super::render_hooks::first_native(vm, class);
+    let is = |list: &[&str]| native.as_deref().is_some_and(|n| list.iter().any(|p| n.eq_ignore_ascii_case(p)));
+    if is(&SET_UP_NOTHING) {
+        return Ok(());
+    }
+    if !is(&SET_UP_SKELETAL) {
+        let named = native.unwrap_or_else(|| ow_attr::eval::class_path(&vm.space, entry));
+        return Err(NotYet::not_read(format!("{UNREAD_CLASS} {named}"), RECORD_LAYER).into());
+    }
+    schemas(vm, entry, &SKELETAL_FIELDS, RB)?;
+    if !matches!(element_kind(vm, entry, "ClothMeshIndexData")?, PropKind::Int) {
+        return Err(bad(RB, "ClothMeshIndexData is not declared as an array of ints"));
+    }
+    let PropKind::Struct(attachment) = element_kind(vm, entry, "Attachments")? else {
+        return Err(bad(RB, "Attachments is not declared as an array of structs"));
+    };
+    let member = vm.space.names.find("Component").and_then(|n| vm.space.classes.struct_layout(attachment)?.field(n));
+    if !matches!(member, Some((_, d)) if matches!(d.kind, PropKind::Object { .. })) {
+        return Err(bad(RB, "an Attachments entry declares no Component object"));
+    }
+    if flag(vm, entry, "bDisableAllRigidBody")? {
+        return Ok(());
+    }
+    let single = match read(vm, entry, "bUseSingleBodyPhysics", RB)? {
+        Value::Int(i) => i,
+        other => return Err(bad(RB, format!("bUseSingleBodyPhysics holds {}, not an int", other.kind_name()))),
+    };
+    if single != 0 {
+        return Err(NotYet::layer_absent(RIGID_BODY, RIGID_LAYER, RECORD).into());
+    }
+    let mesh = object_of(&read(vm, entry, "SkeletalMesh", RB)?, RB)?;
+    if flag(vm, entry, "bHasPhysicsAssetInstance")? && mesh.is_some() {
+        return Err(NotYet::layer_absent(RIGID_BODY, RIGID_LAYER, RECORD).into());
+    }
+    let empty_cloth = pointer_zero(&read(vm, entry, "ClothSim", RB)?, "ClothSim")?;
+    if empty_cloth && let Some(mesh) = mesh {
+        require_resident(vm, mesh)?;
+        schemas(vm, mesh, &[(CLOTH_BOOL, Want::Bool)], RB)?;
+        if flag(vm, mesh, CLOTH_BOOL)? {
+            return Err(NotYet::not_read(CLOTH, RECORD_LAYER).into());
+        }
+    }
+    if flag(vm, entry, "bEnableSoftBodySimulation")? {
+        return Err(NotYet::layer_absent(RIGID_BODY, RIGID_LAYER, RECORD).into());
+    }
+    writes.push(SkeletalWrite { component: entry, empty_cloth });
+    let list = read(vm, entry, "Attachments", RB)?;
+    for item in list.elements().unwrap_or(&[]) {
+        let component = super::body_composition::field(vm, item, "Component", "an Attachments entry")?;
+        let Some(component) = object_of(&component, RB)? else { continue };
+        require_resident(vm, component)?;
+        if crate::actors::attached_to(vm, component, owner)? {
+            plan(vm, owner, component, seen, writes)?;
+        }
+    }
+    Ok(())
+}
+
+/// `WillowPawn.InitializeRBPhysics()` in Off (module documentation). Every refusal comes before the first write.
 pub fn initialize_rb_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let pawn = c.this.ok_or_else(|| bad(RB, "called without a pawn"))?;
     let vm: &Vm = c.vm;
@@ -157,8 +335,31 @@ pub fn initialize_rb_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     for &entry in walk.iter().chain(pushing.iter()) {
         check_entry(vm, template, entry)?;
     }
-    for &entry in walk.iter().chain(pushing.iter()) {
-        answer(attached(vm, pawn, template, entry)?)?;
+    if template {
+        // Review r1 of #763: a template receiver keeps the physics `LayerAbsent` and is never written.
+        for &entry in walk.iter().chain(pushing.iter()) {
+            answer(attached(vm, pawn, template, entry)?)?;
+        }
+        return Ok(Value::None);
+    }
+    // A live receiver: the class table, every refusal before the first write.
+    let fixed = physics != PHYS_RIGID_BODY;
+    let (mut seen, mut writes) = (Vec::new(), Vec::new());
+    for &entry in &walk {
+        match attached(vm, pawn, false, entry)? {
+            Some(_) => plan(vm, pawn, entry, &mut seen, &mut writes)?,
+            None => answer(None)?,
+        }
+    }
+    // `SetPushesRigidBodies`' own refusal, folded into the preflight (the hub's ruling).
+    if let Some(entry) = pushing {
+        answer(attached(vm, pawn, false, entry)?)?;
+    }
+    for w in writes {
+        write(c.vm, w.component, "bSkelCompFixed", Value::Bool(fixed), RB)?;
+        if w.empty_cloth {
+            write(c.vm, w.component, "ClothMeshIndexData", Value::array(Vec::new()), RB)?;
+        }
     }
     Ok(Value::None)
 }
