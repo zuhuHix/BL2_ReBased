@@ -149,6 +149,16 @@ fn engine(categories: bool) -> Vec<u8> {
     pawn.extend(t.p.object_tag("AIClass", broken_class));
     pawn.extend_from_slice(&none);
     t.p.add_export(archetype, "ToyPawn_BrokenArch", pawn);
+    // An AI class whose AttributeStartingValuesNew tag is an int's (review r2 of #815, item 4): with the categories
+    // declared, the decoder skips it and leaves the default.
+    let mut c = ints(&[0]);
+    c.extend(t.p.int_tag("AttributeStartingValuesNew", 3));
+    c.extend_from_slice(&none);
+    let bad_tag = t.p.add_export(class, "AIClass_BadTag", c);
+    let mut pawn = ints(&[0]);
+    pawn.extend(t.p.object_tag("AIClass", bad_tag));
+    pawn.extend_from_slice(&none);
+    t.p.add_export(archetype, "ToyPawn_BadTagArch", pawn);
     let mut h = ints(&[0]);
     let targets = [a, base_attr, def, parent_attr, own_attr, broken].into_iter().chain(nested);
     for (f, r) in HELD.into_iter().zip(targets) {
@@ -514,7 +524,9 @@ fn a_self_referential_formula_is_walked_once_and_the_depth_bound_stops_the_walk(
         visits += 1;
         Ok(true)
     };
-    attrs.walk_set_base_value(None, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm), &mut count).unwrap();
+    // A cycle refuses with the depth bound's error at its first repeat, as the preflight does (review r2 of #815).
+    let e = attrs.walk_set_base_value(None, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm), &mut count).unwrap_err();
+    assert!(e.to_string().contains("nested deeper than"), "{e}");
     assert_eq!(visits, 1, "the definition once");
     // A chain of 40 distinct definitions, each one's Multiplier naming the next: the bound stops the walk.
     let chain: Vec<ObjRef> = (0..40).map(|_| x.make("Engine.AttributeInitializationDefinition")).collect();
@@ -616,4 +628,64 @@ fn an_unloaded_ai_class_and_its_parent_are_loaded_in_order() {
     assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 2);
     let lines = x.lines();
     assert!(lines[0].contains("AIClass_Child") && lines[1].contains("AIClass_Parent"), "{lines:?}");
+}
+
+/// Review r2 of #815, item 1: 20 definitions, each formula naming the next in all four terms (4^19 paths, all within
+/// the depth bound). The preload's walk and the native's preflight check each definition once: a visit count of the
+/// order of 20, and the same answer as a walk of every path (the preflight passes).
+#[test]
+fn a_fan_out_chain_is_checked_once_per_definition() {
+    let mut x = fx();
+    let chain: Vec<ObjRef> = (0..20).map(|_| x.make("Engine.AttributeInitializationDefinition")).collect();
+    let mut formula = {
+        let c = x.vm.space.heap.get(chain[0]).unwrap().class;
+        let p = x.vm.space.prop(c, "ValueFormula").unwrap();
+        x.vm.space.read(chain[0], PropAddr::scalar(p)).unwrap().clone()
+    };
+    put(&x.vm, &mut formula, "bEnabled", Value::Bool(true));
+    for w in chain.windows(2) {
+        let mut f = formula.clone();
+        for term in ["Multiplier", "Level", "Power", "Offset"] {
+            put(&x.vm, &mut f, &format!("{term}.InitializationDefinition"), Value::Object(Some(w[1])));
+        }
+        x.set(w[0], "ValueFormula", f);
+    }
+    let data = init_of(&x, Some(chain[0]));
+    let attrs = x.vm.attrs.clone();
+    let mut visits = 0;
+    let mut count = |_: &mut ow_attr::api::EvalCx<'_>, _: ObjRef| -> Result<bool, ow_attr::api::AttrError> {
+        visits += 1;
+        Ok(true)
+    };
+    attrs.walk_set_base_value(None, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm), &mut count).unwrap();
+    assert_eq!(visits, 20, "the preload: each definition once");
+    let own = x.held[4];
+    x.vm.defs.ensure_loaded(&mut x.vm.space, own).unwrap();
+    let (r, checked) = attrs.preflight_set_base_value_counted(own, &data, &mut ow_attr::api::EvalCx::new(&mut x.vm));
+    r.unwrap();
+    assert!(checked <= 25, "the preflight: each definition once ({checked} objects checked)");
+}
+
+/// Review r2 of #815, items 2 to 4: an archetype not in the named package is logged and left (the export is resolved in
+/// that package, not through the path's holder); a slotless stand-in in the class chain is skipped, logged; a skipped
+/// `AttributeStartingValuesNew` tag is malformed, before any definition loads.
+#[test]
+fn discovery_s_named_package_stand_ins_and_skipped_tags() {
+    let mut x = fx();
+    assert_eq!(preload_archetype(&mut x.vm, "Engine", "Engine.NoSuchPawn").unwrap(), None);
+    assert!(x.vm.log.iter().any(|l| l.contains("no such export in Engine")), "{:?}", x.vm.log);
+    // A slotless stand-in as the AI class: skipped, logged, no error.
+    let class = x.vm.space.classes.by_path("Engine.AIClassDefinition").unwrap();
+    let stand_in = x.vm.space.alloc_stand_in(class, "Missing", ow_object::heap::Origin::Default { class }).unwrap();
+    let archetype = x.make("Engine.ToyPawn");
+    x.set(archetype, "AIClass", Value::Object(Some(stand_in)));
+    assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 0);
+    assert!(x.vm.log.iter().any(|l| l.contains("skipped (a stand-in without its slots")), "{:?}", x.vm.log);
+    // A skipped categories tag: a data error, nothing loaded past the class.
+    let mut x = fx_with(ParityMode::Off, true);
+    let before = x.vm.defs.load_transitions();
+    let r = preload_archetype(&mut x.vm, "Engine", "Engine.ToyPawn_BadTagArch");
+    assert!(matches!(r, Err(VmError::Script { .. })), "{r:?}");
+    assert!(x.vm.defs.load_transitions() - before <= 2, "the archetype and its class only");
+    assert!(x.unloaded(x.held[0]));
 }

@@ -208,6 +208,11 @@ impl AttributeSystem {
         eval::preflight_set_base_value(self, dest, data, cx)
     }
 
+    /// [`AttributeSystem::preflight_set_base_value`] with the number of objects it checked (review r2 of #815).
+    pub fn preflight_set_base_value_counted(&self, dest: ObjRef, data: &InitData, cx: &mut EvalCx<'_>) -> (Result<(), AttrError>, usize) {
+        eval::preflight_set_base_value_counted(self, dest, data, cx)
+    }
+
     /// The objects [`AttributeSystem::preflight_set_base_value`] checks, in its order, each given to `visit` before its
     /// fields are read (`visit` may load it; `false` leaves its dependants), without the preflight's class checks. A
     /// definition already followed is not followed again; past the preflight's depth bound the walk stops with the

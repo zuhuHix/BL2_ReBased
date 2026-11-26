@@ -95,10 +95,22 @@ fn object(v: &Value) -> Option<ObjRef> {
 /// Loads `o` when it is an unloaded handle, logging the harness input and its outcome into `lines`; whether `o` is
 /// readable after.
 fn preload_in(space: &mut ObjectSpace, defs: &mut DefStore, o: ObjRef, lines: &mut Vec<String>, loaded: &mut usize) -> bool {
-    if !defs.is_unloaded(space, o) {
-        return !defs.is_failed(space, o);
-    }
     let path = defs.handle_path(o).unwrap_or_else(|| ow_attr::eval::class_path(space, o).to_string() + " object");
+    if !defs.is_unloaded(space, o) {
+        if defs.is_failed(space, o) {
+            return false;
+        }
+        // A stand-in short of its class's slots (a missing import's) is not readable either (review r2 of #815, item
+        // 3): skipped, logged, so the native's own refusal shows it.
+        let short = space.heap.get(o).is_ok_and(|x| {
+            space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize)
+        });
+        if short {
+            lines.push(format!("harness input: preload {path}: skipped (a stand-in without its slots; the native refuses it)"));
+            return false;
+        }
+        return true;
+    }
     lines.push(format!("harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"));
     let r = defs.ensure_loaded(space, o);
     lines.extend(defs.take_log());
@@ -171,7 +183,12 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
     // Step 2: the categories, before any definition loads.
     for &c in &chain {
         let class = vm.space.heap.get(c)?.class;
-        if vm.space.prop(class, "AttributeStartingValuesNew").is_some() {
+        if let Some(p) = vm.space.prop(class, "AttributeStartingValuesNew") {
+            // A tag the decoder skipped left the default in the slot: malformed, not an empty list (review r2 of #815,
+            // item 4).
+            if vm.defs.is_skipped(&vm.space, c, p) {
+                return Err(bad("AttributeStartingValuesNew's tag did not decode (the decoder skipped it)"));
+            }
             // Declared: an array, else a data error, before any definition loads (review of #815, item 4).
             match (declared(vm, class, "AttributeStartingValuesNew"), read(vm, c, "AttributeStartingValuesNew")?) {
                 (Some(PropKind::Array(_)), Value::Array(items)) => {
@@ -234,16 +251,22 @@ pub fn preload_archetype(vm: &mut Vm, package: &str, archetype_path: &str) -> Re
     // The archetype as the store loads it (review of #815, items 2 and 3): its references stay handles, so the walk
     // below loads and logs each of them; nothing is copied, so nothing is left to free, and a second discovery finds it
     // loaded. A failed load is logged and left: the spawn's own copy and the native's refusal show it.
-    let Ok(path) = ow_core::ObjectPath::parse(archetype_path) else { return Ok(None) };
+    // The export in the named package, as the spawn finds it (review r2 of #815, item 2), not the path's holder under
+    // the identity policy: another package's copy of the path may name another AIClass. The store gives that export's
+    // object only when it is the path's object; otherwise its refusal is logged and left.
+    let found = {
+        let (_, store) = vm.defs.code_mut();
+        store.load(&name).ok().and_then(|id| store.get(id).find_export(archetype_path).ok().flatten().filter(|i| *i > 0).map(|i| (id, i)))
+    };
+    let Some((id, index)) = found else {
+        vm.log.push(format!("harness input: preload {archetype_path}: no such export in {package}"));
+        return Ok(None);
+    };
     vm.log.push(archetype_line(archetype_path));
-    let found = vm.defs.find(&mut vm.space, &path);
+    let loaded = vm.defs.load_export(&mut vm.space, id, index, ow_object::prefix::PropertyPrefix::Ordinary);
     vm.log.extend(vm.defs.take_log());
-    let archetype = match found {
-        Ok(Some(o)) => o,
-        Ok(None) => {
-            vm.log.push(format!("harness input: preload {archetype_path}: no such object"));
-            return Ok(None);
-        }
+    let archetype = match loaded {
+        Ok(o) => o,
         Err(e) => {
             vm.log.push(format!("harness input: preload {archetype_path}: failed ({e})"));
             return Ok(None);
