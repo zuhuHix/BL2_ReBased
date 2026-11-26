@@ -11,7 +11,7 @@ pawn; an unrecorded attachment back-linked to its entry is `InitializeRBPhysics`
 part 1, then part 2: 6 ok / 8 not ok, 51.2% on all three. Part 1 changes no row; with part 2, links 1, 3, 4, 5, 13 and
 14 pass `GetPhysXLevel` and stop at the unbound `Pawn.IsPlayerPawn()` (the `bAlwaysRelevant` step), not at
 `InitializeBehaviorProviders` as predicted. With the guard (24f08965) every row is unchanged. UNVERIFIED in game.
-Decisions 2026-11-26-NNN (two).
+Decisions 2026-11-26-30 (sockets) and 2026-11-26-31 (PhysX level).
 
 **BODYCOMP-ATTACH-PUBLISHES (2026-11-26, pc-hummer, on fix/bodycomp-attach-publishes, on main 78a88b7):**
 AI-assisted (Claude Code, Opus 5.5). The body composition's actor attach publishes each component to the attach record
