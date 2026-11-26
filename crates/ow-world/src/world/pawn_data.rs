@@ -145,6 +145,13 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Object(lookup(c.vm, me, &path)?))
 }
 
+/// [`lookup`] for a caller outside the native (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, the mission bridge's player pawn,
+/// NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 6 B): `any` is any object whose class chain ends at the searched root
+/// (`Core.Object`); the manager itself is not needed, as the lookup reads only that root. Loads nothing.
+pub fn find_already_loaded(vm: &mut Vm, any: ObjRef, path: &str) -> Result<Option<ObjRef>, VmError> {
+    lookup(vm, any, path)
+}
+
 /// `FindAlreadyLoadedObject`'s lookup of a full `path` (module documentation), for the manager `me`: the object in
 /// memory, or None, or `NotYet` where the port cannot tell. `LoadPlayerPawnDataAsync` asks the same routine
 /// (NATIVE_PLAYER_CLASS.md section 3 step 2).

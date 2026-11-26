@@ -99,6 +99,34 @@ fn engine() -> Vec<u8> {
     t.prop("Byte", actor, "Role", 0, 0);
     t.prop("Object", actor, "WorldInfo", 0, object);
     t.prop("Object", actor, "Owner", 0, object);
+    // What the world's spawn reads and writes (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE: the player pawn's archetype spawn).
+    let vector = toy_struct(&mut t, object, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
+    let rotator = toy_struct(&mut t, object, "Rotator", None);
+    for f in ["Pitch", "Yaw", "Roll"] {
+        t.prop("Int", rotator, f, 0, 0);
+    }
+    t.prop("Struct", actor, "Location", 0, vector);
+    t.prop("Struct", actor, "Rotation", 0, rotator);
+    t.prop("Object", actor, "Instigator", 0, object);
+    t.prop("Object", actor, "Base", 0, object);
+    t.prop("Float", actor, "CreationTime", 0, 0);
+    t.prop("Byte", actor, "Physics", 0, 0);
+    let flags = [
+        "bDeleteMe",
+        "bPendingDelete",
+        "bStatic",
+        "bNoDelete",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "bCollideActors",
+    ];
+    for f in flags {
+        t.prop("Bool", actor, f, 0, 0);
+    }
+    toy_array_of(&mut t, actor, "Children", "Object", object);
     toy_array_of(&mut t, actor, "Touching", "Object", object);
     native(&mut t, actor, "IsPlayerOwned", &[], Some(("Bool", 0)), NATIVE);
     enum_export(&mut t, actor, "ENetRole", &ROLES);
@@ -110,6 +138,7 @@ fn engine() -> Vec<u8> {
     t.prop("Object", world, "GRI", 0, object);
     t.prop("Bool", world, "bIsMenuLevel", 0, 0);
     t.prop("Float", world, "TimeSeconds", 0, 0);
+    t.prop("Byte", world, "NetMode", 0, 0);
     native(&mut t, world, "IsMenuLevel", &[param("Str", "MapName", CPF_OPT, 0)], Some(("Bool", 0)), NATIVE | STATIC);
     let base = t.class("BehaviorBase", object);
     native(&mut t, base, "GetWorldInfo", &[], Some(("Object", object)), NATIVE);
@@ -453,6 +482,34 @@ fn willowgame() -> Vec<u8> {
     payload.extend_from_slice(&t.none);
     let default = t.p.add_export(player_pawn, "Default__WillowPlayerPawn", payload);
     t.p.set_outer(own, default);
+    // The archetype spawn (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 8): `Pawn_Toy`,
+    // a `WillowPlayerPawn` archetype with `ToyEye` 7 that does not tag `Components` (so it inherits the class
+    // default's list) and owns its own `ToyPawnComp0` (`ToyLevel` 9) made from the class default's; `Pawn_Lazy`, an
+    // archetype nothing loads. `ToyPlayerClass` holds a `PawnArchetypePath`: `PlayerClass_Toy` names `Pawn_Toy`,
+    // `PlayerClass_Lazy` names `Pawn_Lazy`.
+    t.prop("Int", player_pawn, "ToyEye", 0, 0);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(t.p.int_tag("ToyEye", 7));
+    payload.extend_from_slice(&t.none);
+    let archetype = t.p.add_export(player_pawn, "Pawn_Toy", payload);
+    let mut payload = [0i32, 0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    payload.extend(t.p.int_tag("ToyLevel", 9));
+    payload.extend_from_slice(&t.none);
+    let mut arch_own = Export::new(pawn_component, "ToyPawnComp0", payload);
+    arch_own.outer = archetype;
+    arch_own.archetype = own;
+    t.p.add_export_with(arch_own);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend_from_slice(&t.none);
+    t.p.add_export(player_pawn, "Pawn_Lazy", payload);
+    let toy_class = t.class("ToyPlayerClass", object);
+    t.prop("Str", toy_class, "PawnArchetypePath", 0, 0);
+    for (name, path) in [("PlayerClass_Toy", "WillowGame.Pawn_Toy"), ("PlayerClass_Lazy", "WillowGame.Pawn_Lazy")] {
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend(t.p.str_tag("PawnArchetypePath", path));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(toy_class, name, payload);
+    }
     let ai_pawn = t.class("WillowAIPawn", willow_pawn);
     t.prop("Object", ai_pawn, "BodyClass", 0, object);
     t.prop("Object", ai_pawn, "MissionDirectives", 0, object);
@@ -2286,4 +2343,60 @@ fn a_plan_refusal_makes_and_caches_no_player_pawn() {
         assert_eq!(s.inner.state.borrow().player_pawn, None, "no pawn cached");
         assert_eq!(pawns(vm), before, "no pawn made");
     }
+}
+
+/// A `WillowGame` object by its path, loaded through the store (test set-up).
+fn willow(vm: &mut Vm, path: &str) -> ObjRef {
+    let path = ObjectPath::parse(&format!("WillowGame.{path}")).unwrap();
+    vm.defs.find(&mut vm.space, &path).unwrap().expect("a WillowGame export")
+}
+
+/// NATIVE_MAYA_PAWN_SPAWN_SOURCE.md section 8, tests 1 and 4 (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, decision
+/// 2026-11-26-NNN): with a `PlayerClass` whose `PawnArchetypePath` names a loaded archetype, the bridge's player pawn
+/// is spawned from it: the archetype's value (`ToyEye` 7), the archetype on the heap, in the level list, with the
+/// controller set; its inherited `Components` entry is a copy of the archetype's own `ToyPawnComp0` (`ToyLevel` 9), not
+/// the class default's, outered to the pawn and in the attach record under it.
+#[test]
+fn a_player_class_spawns_the_pawn_from_its_archetype() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let controller = s.player_controller();
+    let vm = env.vm();
+    let class = willow(vm, "PlayerClass_Toy");
+    let archetype = willow(vm, "Pawn_Toy");
+    set(&mut vm.space, controller, "PlayerClass", Value::Object(Some(class))).unwrap();
+    let pawn = s.player_pawn(vm).unwrap();
+    assert_ne!(pawn, archetype);
+    assert_eq!(get(&vm.space, pawn, "ToyEye").unwrap(), Value::Int(7), "the archetype's value");
+    assert_eq!(vm.space.heap.get(pawn).unwrap().archetype, Some(archetype));
+    assert!(ow_world::actors::actors_of(vm).unwrap().borrow().list().contains(&pawn), "in the level list");
+    assert_eq!(get(&vm.space, pawn, "Controller").unwrap(), Value::Object(Some(controller)));
+    let items = get(&vm.space, pawn, "Components").unwrap().elements().unwrap().to_vec();
+    let Value::Object(Some(copy)) = items[0] else { panic!("{items:?}") };
+    assert_eq!(get(&vm.space, copy, "ToyLevel").unwrap(), Value::Int(9), "a copy of the archetype's own sub-object");
+    assert_eq!(vm.space.heap.get(copy).unwrap().outer, Some(pawn));
+    assert!(ow_world::actors::attached_to(vm, copy, pawn).unwrap(), "the spawn's component update attached it");
+    assert_eq!(s.player_pawn(vm).unwrap(), pawn, "made once");
+}
+
+/// Test 2: an archetype nothing has loaded is the not-loaded `NotRead`, with no pawn made and the store not asked to
+/// load it. Test 3 is the class-default pawn of the tests above (no `PlayerClass`).
+#[test]
+fn an_archetype_not_in_memory_is_refused_before_anything_is_made() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let controller = s.player_controller();
+    let vm = env.vm();
+    let class = willow(vm, "PlayerClass_Lazy");
+    set(&mut vm.space, controller, "PlayerClass", Value::Object(Some(class))).unwrap();
+    let (loads, objects) = (vm.defs.load_transitions(), vm.space.heap.handles().len());
+    match s.player_pawn(vm) {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert_eq!(n.what, crate::bridge::ARCHETYPE_NOT_LOADED);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!((vm.defs.load_transitions(), vm.space.heap.handles().len()), (loads, objects), "nothing loaded or made");
+    assert_eq!(s.inner.state.borrow().player_pawn, None);
 }

@@ -957,8 +957,17 @@ fn the_new_mesh_s_animation_nodes_are_layer_absent_and_write_free() {
     assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(None));
 }
 
-/// Hub, 20:03Z: a pawn that already holds a `CylinderComponent` (stock pawn defaults give one) meets the release of the
-/// old one, `NotRead`, before any write. With an old `Mesh` set, that release comes before attachment 0's
+/// `old` in the attach record under `pawn` (its `Owner` set first, then published), on a world with the empty scene.
+fn attach_old(e: &mut Env, pawn: ObjRef, old: ObjRef) {
+    crate::actors::add_empty_scene(&mut e.vm).unwrap();
+    put(&mut e.vm, old, "Owner", Value::Object(Some(pawn)));
+    crate::actors::publish_attach(&mut e.vm, old, pawn).unwrap();
+    assert!(crate::actors::attached_to(&e.vm, old, pawn).unwrap());
+}
+
+/// Hub, 20:03Z, narrowed by the release ruling (lane IMPL-MAYA-PAWN-FROM-ARCHETYPE, NATIVE_MAYA_PAWN_SPAWN_SOURCE.md
+/// section 6.3, test 5): a pawn whose old `CylinderComponent` is in the attach record under it meets the release of the
+/// old one, `NotRead`, before any write. With an old attached `Mesh`, that release comes before attachment 0's
 /// animation-node `LayerAbsent` (section 4.5.1, review r1 of #542, item 2).
 #[test]
 fn releasing_the_old_cylinder_or_mesh_is_not_read() {
@@ -968,6 +977,7 @@ fn releasing_the_old_cylinder_or_mesh_is_not_read() {
     let p = pawn_with(&mut e, vec![a]);
     let old = make(&mut e.vm, e.cylinder, "OldCylinder");
     put(&mut e.vm, p, "CylinderComponent", Value::Object(Some(old)));
+    attach_old(&mut e, p, old);
     let (missing, what) = refused(&mut e, p);
     assert_eq!(missing, Missing::NotRead);
     assert_eq!(what, releasing_old("CylinderComponent"));
@@ -979,9 +989,35 @@ fn releasing_the_old_cylinder_or_mesh_is_not_read() {
     let p = pawn_with(&mut e, vec![a0]);
     let old = make(&mut e.vm, e.skeletal, "OldMesh");
     put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    attach_old(&mut e, p, old);
     let (missing, what) = refused(&mut e, p);
     assert_eq!(missing, Missing::NotRead);
     assert_eq!(what, releasing_old("Mesh"));
+}
+
+/// The release ruling's other half (test 5): an old `CylinderComponent` or `Mesh` that is set but not in the attach
+/// record is released with nothing to detach: the build goes on and writes the new component in its place.
+#[test]
+fn an_old_component_not_in_the_attach_record_is_replaced() {
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let old = make(&mut e.vm, e.cylinder, "OldCylinder");
+    put(&mut e.vm, p, "CylinderComponent", Value::Object(Some(old)));
+    run(&mut e, p).unwrap();
+    let now = prop(&e.vm, p, "CylinderComponent");
+    assert!(matches!(now, Value::Object(Some(c)) if c != old && c != cyl), "the new component is written: {now:?}");
+
+    let mut e = env();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0]);
+    let old = make(&mut e.vm, e.skeletal, "OldMesh");
+    put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    run(&mut e, p).unwrap();
+    let now = prop(&e.vm, p, "Mesh");
+    assert!(matches!(now, Value::Object(Some(m)) if m != old && m != skel), "the new mesh is written: {now:?}");
 }
 
 /// Review r1 of #542, item 4: a second `CylinderComponent` attachment would release the first one's component, so it
@@ -1497,6 +1533,7 @@ fn the_old_mesh_release_comes_before_the_lookups() {
     let p = mesh_pawn(&mut e, skel);
     let old = make(&mut e.vm, e.skeletal, "OldMesh");
     put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    attach_old(&mut e, p, old);
     let (missing, what) = refused(&mut e, p);
     assert_eq!(missing, Missing::NotRead);
     assert_eq!(what, releasing_old("Mesh"));
