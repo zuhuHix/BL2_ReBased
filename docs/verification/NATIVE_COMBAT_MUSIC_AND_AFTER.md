@@ -61,8 +61,10 @@ is clear and a balance is set. It stores the answer in `bGradeCustomizationsAppl
 **Proposed Off answer:**
 - that rule. Every field must be declared with its kind, else `VmError::Script`, and each object read must be
   resident, else `NotRead`;
-- a non-empty `OnSpawnCustomizations` runs through the port's `RunBehaviors` rule. The behaviours' writes come after
-  the index read, so a refusal among them carries the partial-writes prefix;
+- the steps before the behaviours (the pawn query, the `GRI` cast and the playthrough read) are write-free and
+  load-free (review r1 of #801);
+- a non-empty `OnSpawnCustomizations` runs through the port's `RunBehaviors` rule. A refusal after the first
+  behaviour's write carries the partial-writes prefix; one before it carries none;
 - with no `WillowGameReplicationInfo`, the 0 case;
 - the pawn query: for a pawn argument the pawn itself; any other argument is `NotRead`, "ApplyGradeCustomizations: the
   actor's pawn query".
@@ -100,8 +102,10 @@ The installed globals definition (`GD_Globals.General.Globals`) names `GD_Global
 
 **Proposed Off answer:**
 - **preflight, write-free and load-free:**
-  - `WillowGame.CombatMusicManager` must be in the class table (no load);
-  - the globals definition and its `CombatMusicProperties` must be resident, else `NotRead`;
+  - `WillowGame.CombatMusicManager` must be in the class table (no load), else `NotRead`, "GetCombatMusicManager: the
+    manager class" (review r1 of #801);
+  - the Willow globals object, its globals definition and the definition's `CombatMusicProperties` must be resident,
+    else `NotRead`;
   - the fields must be declared, else `VmError::Script`;
 - **writes:**
   - the new object, from the class defaults (`bCombatMusicManagerEnabled` true, `CombatMusicManagerState` 2,
@@ -130,6 +134,9 @@ The exec calls the manager's virtual:
 
 **Proposed Off answer:**
 - the gates as read, write-free;
+- declared, else `VmError::Script` (review r1 of #801): the manager's `CombatMusicParams` (an object), the damage
+  type's default object's `bCausedByWorld` (a bool), and the parameters the gates and the threat call read
+  (`EnemyDamagesPlayerWeight`, a float);
 - past them: `NotRead`, "CombatMusicManager.PlayerDamagedByEnemy: the threat model";
 - **hub ruling (review of #801): a logged no-op stand-in, behind a setting.** Under an Off-only slice harness setting
   (like the audio stand-in), the threat model past the gates is a no-op: nothing written, one harness-input log line per
@@ -154,7 +161,11 @@ The exec calls the manager's virtual:
 - **Link 14:** with no down, `bleed:50` finds no injured state and does nothing; its `down.respawn_health.` row does not
   appear.
 - **Link 3** (by the way): past #799's `GetParent`, the kill stops at an unbound
-  `BaseBalanceDefinition.GetDisplayNameAtGrade(int)` (the kill's name text).
+  `BaseBalanceDefinition.GetDisplayNameAtGrade(int)` (the kill's name text). **This now comes before #799's
+  `NotifyKilledEnemy`** (review r1 of #801). `WillowAIPawn.GetTargetName` asks the balance's `GetDisplayNameAtGrade`
+  when `BalanceDefinitionState.BalanceDefinition` is set, and only then is the name passed to `NotifyKilledEnemy`.
+  #799's probe ran before main filled the balance state, so its name came from the AI class's `DefaultDisplayName`
+  and the kill reached `NotifyKilledEnemy` first.
 
 ## 8. Tests (synthetic fixtures)
 

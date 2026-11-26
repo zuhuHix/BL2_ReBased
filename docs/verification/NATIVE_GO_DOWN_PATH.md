@@ -278,7 +278,8 @@ Read since, for the getters, `IsHealingDamageType`, `IsFriendlyFire`, `InGodMode
 and `IsVulnerableToFriendlyFire`: NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 4.2 and
 NATIVE_LINK34_AFTER_MIND.md. For `GetAmmoTheftAmounts`, `PawnCheckPlayHitPreconditions` and the skill-event iterator:
 NATIVE_LINKS_13_14.md. For `TryFullBodyGib`, `GetMaxShieldStrength`, `ShakeView`, `DoForceFeedbackWaveform` and
-`GetCombatMusicManager`: NATIVE_BOUNDING_CYLINDER_AND_AFTER.md.
+`GetCombatMusicManager`: NATIVE_BOUNDING_CYLINDER_AND_AFTER.md (its creation read since:
+NATIVE_COMBAT_MUSIC_AND_AFTER.md section 5).
 
 `Controller.InGodMode`, `DamagePipeline.GetBarrelSourceTime`, `GetCanInflictFriendlyFire`, `GetPlantSourceTime`,
 `DamageTypeDefinition.IsHealingDamageType`, `GameInfo.IsFriendlyFire`, `Pawn.GetController`, `Pawn.InGodMode`,

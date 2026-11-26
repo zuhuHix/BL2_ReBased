@@ -32,4 +32,11 @@ bounds check changed.
 - **Hub ruling (review of #801):** the music manager's threat model may be a logged no-op stand-in, behind an Off-only
   slice harness setting like the audio stand-in. It is UNVERIFIED; without the setting it stays `NotRead`; Reference is
   unchanged.
+- **Review r1 (#801):**
+  - `GetCombatMusicManager` left this note's index row; #799's row names the creation here, confidence high;
+  - "read since" pointers in #799's note (section 7 and its open question) and NATIVE_GO_DOWN_PATH.md section 5;
+  - declared-field rules for `PlayerDamagedByEnemy`; a typed `NotRead` for a missing manager class, and the Willow
+    globals object in the residency check;
+  - `ApplyGradeCustomizations`' prefix from the first behaviour's write, the steps before it write-free and load-free;
+  - link 3's stop order explained (the balance's display name now comes before `NotifyKilledEnemy`).
 - **Clean room:** a different lane implements this note.

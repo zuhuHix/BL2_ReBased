@@ -191,7 +191,8 @@ maximum. Write-free. Declared, else `VmError::Script` (review r1 of #799): `Shie
   `PlayerInput`, its `bUsingGamepad`, `ForceFeedbackManager`, `PlayerReplicationInfo`, and the waveform's `Scale`.
   **On the slice:** `ForceFeedbackManager` is None in the port (also its class default), so nothing happens;
 - **`WillowGameInfo.GetCombatMusicManager()`:** it answers `GlobalCombatMusicManager`. When that is None, it first makes
-  a new manager on the game info and initialises it, a lazy creation that was not read further. **Off:** the field when
+  a new manager on the game info and initialises it, a lazy creation that was not read further (read since:
+  NATIVE_COMBAT_MUSIC_AND_AFTER.md section 5). **Off:** the field when
   set; when None, `NotRead`, "the combat music manager's lazy creation", as `GetVehicleLifetimeManager`'s answer in
   NATIVE_GO_DOWN_PATH.md 4.2. `GlobalCombatMusicManager` must be declared as an object, else `VmError::Script` (review
   r1 of #799). **On the slice:** it is None, so this is the stop.
@@ -246,7 +247,7 @@ so there is no down and `bleed:50` does nothing (#796 section 7, the hub's no-ca
    - the death definition's gib test and the gib;
    - the vehicle's two queries in `GetParent`;
    - the force-feedback manager's play;
-   - the combat music manager's creation;
+   - the combat music manager's creation (read since: NATIVE_COMBAT_MUSIC_AND_AFTER.md section 5);
    - `NotifyKilledEnemy`.
 3. **By fit:** `SpawnParent`'s place; the trace flags' meaning.
 4. **Ruled by the hub on #799:** `TraceComponent`'s miss stand-in, behind an Off-only harness setting (section 3).
