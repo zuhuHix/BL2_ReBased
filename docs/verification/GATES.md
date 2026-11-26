@@ -9,6 +9,8 @@ ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release 
 X 51.2%, every result unchanged. Link 1's row gains "world set-up: harness input: the engine object's PhysXLevel = 0
 …" and the empty scene layer's line. No real-game run.
 
+
+
 **ANALYST-UPDATEAMMOCOUNTS (2026-11-26, pc-hummer, docs only, on docs/native-updateammocounts from main 5dd2906b):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md reads `UpdateAmmoCounts`. It walks the
 globals definition's eight ammo kinds through the controller's pools (created if missing), compares each with its

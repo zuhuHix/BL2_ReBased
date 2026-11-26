@@ -8,7 +8,10 @@
 //! "driver":"combat-run"|"slice-run"|"none","steps":[..],"stop":null|{"step","native","record","text"},
 //! "blocked_by":null|<link>,"after_errors_in":null|<link>,"error_lines":[{"step","text"}..],"scope":<text>,
 //! "harness":[<text>..]}`, where `harness` lists the harness inputs the link's own steps logged (`harness input: ...`
-//! lines of the VM log, with their outcomes), so a row shows what the run supplied (rule 7; review of #431).
+//! lines of the VM log, with their outcomes), so a row shows what the run supplied (rule 7; review of #431). A combat
+//! row first carries its world's set-up inputs, the `harness input:` lines logged while the world was built, each
+//! prefixed `world set-up: ` ([`SETUP_MARK`], lane GATE-SETUP-HARNESS-LINES); on the `--map` route the route's own
+//! notes come before those, on the first combat row only ([`row_harness`]).
 //!
 //! `tools/check_slice_run_off.py` grades the rows; the gate is 14 ok, 0 notyet, 0 error.
 //!
@@ -642,15 +645,26 @@ fn bind(step: &str, bound: &[(String, usize)]) -> Result<String, String> {
     Ok(out)
 }
 
-/// The combat group (module documentation): what each of its links did, with the report rows each one added.
 /// The marker a world set-up harness line carries in a row (lane GATE-SETUP-HARNESS-LINES).
 pub const SETUP_MARK: &str = "world set-up: ";
 
-/// The `harness input:` lines of a world's log before any link ran, each marked with [`SETUP_MARK`].
-pub fn setup_harness(log: &[String]) -> Vec<String> {
-    log.iter().filter(|l| l.starts_with("harness input:")).map(|l| format!("{SETUP_MARK}{l}")).collect()
+/// The `harness input:` lines of a world's log before any link ran, each marked with [`SETUP_MARK`]. The map route's
+/// own notes (`route_notes`), which it also logs, are left out: the first combat row carries them already, unmarked
+/// (review of #777, item 1).
+pub fn setup_harness(log: &[String], route_notes: &[String]) -> Vec<String> {
+    log.iter()
+        .filter(|l| l.starts_with("harness input:") && !route_notes.contains(l))
+        .map(|l| format!("{SETUP_MARK}{l}"))
+        .collect()
 }
 
+/// One combat row's `harness` list, in order: the map route's notes (the first combat link only, `route_notes`
+/// `Some`), then the world's set-up lines, then the lines the link's own steps logged.
+pub fn row_harness(route_notes: Option<&[String]>, setup: &[String], steps: &[String]) -> Vec<String> {
+    route_notes.unwrap_or_default().iter().chain(setup).chain(steps).cloned().collect()
+}
+
+/// The combat group (module documentation): what each of its links did, with the report rows each one added.
 fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
     let mut route_notes: Vec<String> = Vec::new();
     let mut setup = || -> Result<Run, ow_vm::error::VmError> {
@@ -690,7 +704,7 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
     };
     // The world's own set-up harness lines (lane GATE-SETUP-HARNESS-LINES): every combat link runs on this one world,
     // so each combat row carries them, marked as set-up, before its own steps' lines (the PhysX level among them).
-    let setup_lines = setup_harness(&run.world().vm.log);
+    let setup_lines = setup_harness(&run.world().vm.log, &route_notes);
     let mut bound: Vec<(String, usize)> = Vec::new();
     for i in 0..LINKS.len() {
         if !should_run(i, Driver::Combat, ran) {
@@ -738,15 +752,13 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             }
         }
         let log = &run.world().vm.log;
-        r.harness = log[log_before.min(log.len())..]
+        let step_lines: Vec<String> = log[log_before.min(log.len())..]
             .iter()
             .filter(|l| l.starts_with("harness input:"))
             .cloned()
             .collect();
-        r.harness.splice(0..0, setup_lines.iter().cloned());
-        if Some(i) == first_combat {
-            r.harness.splice(0..0, route_notes.iter().cloned());
-        }
+        let route = (Some(i) == first_combat).then_some(route_notes.as_slice());
+        r.harness = row_harness(route, &setup_lines, &step_lines);
         r.new_rows = new_ids(&rows_before, run.row_ids());
         if LINKS[i].steps.is_empty()
             && let Some(need) = LINKS[i].needs.first().and_then(|n| LINKS.iter().position(|l| l.name == *n))
