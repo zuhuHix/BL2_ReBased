@@ -60,6 +60,17 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue from main c1058de):** AI-assisted
+(Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting values' definitions, Off.
+`cargo test --workspace` 4,057 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%. **Links 3, 4, 5, 13 and 14
+move past `SetBaseValue`**: both spawns now stop at the unbound `BaseBalanceDefinition.ApplyGradeCustomizations(object,int)`
+(graded error, as an unbound native is; #808 binds it), as the note's section 8 predicts. The preload loaded the AI
+classes' starting-value attributes (`Attribute_EnemyNonWeaponDamageMultiplier`,
+`Attribute_DamageToVehiclesOnCollisionMultiplier`, `Attribute_HealthMultiplier`, `Attribute_ExperienceMultiplier`),
+their resolvers and the XP multiplier definitions, each logged. Link 7 is at the HUD's pickup targeting (#810 is not on
+this base); 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
 flags, the swept-box test (well-formed values only) and the `Owner` chains both ways; the touch trace's `Owner`-chain
