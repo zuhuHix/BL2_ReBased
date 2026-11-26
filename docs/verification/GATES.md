@@ -10,7 +10,7 @@ rule per definition) and `GetMaterial`, `SetParent`, `SetVectorParameterValue` a
 `cargo test --workspace -j 8 --no-fail-fast` 3,749 passed / 0 failed / 58 ignored; `crate_edges_test.py` OK.
 Installed Off strict `--slice-gate` (release build, under the machine lock), base 4c01c9a1 and this change: 6 ok / 8
 NotYet, 47.0% on both, rows identical. Link 1 still stops at "AnimNodeAimOffset: the required-bones rebuild's sort and
-parent pass", before this native. No real-game run. UNVERIFIED in game. Decision 2026-11-26-NNN.
+parent pass", before this native. No real-game run. UNVERIFIED in game. Decision 2026-11-26-03.
 
 **ANALYST-LINK67-TOUCH-TEMPLATE (2026-11-26, pc-hummer, docs only, on docs/native-touch-component-template from main
 59f0d2ea):** AI-assisted (Claude Code, Opus 5.5). NATIVE_TOUCH_COMPONENT_TEMPLATE.md reads what the game's `new` does
