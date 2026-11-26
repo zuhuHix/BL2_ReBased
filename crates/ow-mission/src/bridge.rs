@@ -448,7 +448,7 @@ fn find_class(vm: &mut Vm, path: &str) -> Result<ow_object::ids::ClassId, Missio
 /// The player's pawn class (decision 2026-11-16-54: the bridge's player from class defaults, no map spawn).
 pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
 
-/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-NNN): the bridge's player pawn from the class
+/// Off (lane LINK1-RBPHYSICS-UNLOADED-COMPONENT, decision 2026-11-26-16): the bridge's player pawn from the class
 /// defaults, with its own copy of each component the class default owns, as the world's spawn gives every actor
 /// (`ow_world::actors::plan_components` / `apply_plan`, decision 2026-11-19-44; the target dummy's placement does the
 /// same). Without it the pawn's `Components` shared the class default's own sub-objects, store handles nothing loads.
