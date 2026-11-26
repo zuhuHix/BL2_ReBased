@@ -400,24 +400,27 @@ fn the_additive_override_re_sets_its_sequence() {
 /// `NotRead`.
 #[test]
 fn the_lookup_and_its_refusals() {
-    // A flag-clear node whose name is in the second set (searched first), and an auto-name node the same way.
+    // The search order (review of #751, LOW 2): the match in the slot searched first and a lazy set in the slot
+    // searched second. The order the node asks for meets the match first (the link-up); the other order meets the lazy
+    // set first (the not-loaded refusal). Both layouts, both flags, for a flag-clear node and an auto-name node.
     for (auto, add, looked) in [(false, Some("ToyAdd"), "ToyAdd"), (true, None, AUTO_NAME)] {
-        let mut x = fx();
-        let n = x.additive(auto, add);
-        let c = x.component(&[n]);
-        let first = x.anim_set(&["ToyOther"]);
-        let second = x.anim_set(&["ToyMore", looked]);
-        x.link(n, c, &[first, second]);
-        refused(&mut x, c, LINKUP);
-        // The match only in the first set, searched first with the flag.
-        let mut y = fx();
-        let n = y.additive(auto, add);
-        y.set(n, "bReverseAnimSeqSearchOrder", Value::Bool(true));
-        let c = y.component(&[n]);
-        let first = y.anim_set(&[looked]);
-        let second = y.anim_set(&["ToyOther"]);
-        y.link(n, c, &[first, second]);
-        refused(&mut y, c, LINKUP);
+        // `match_last`: the match in the second slot (searched first by default), else in the first slot.
+        for match_last in [true, false] {
+            for reverse in [false, true] {
+                let mut x = fx();
+                let n = x.additive(auto, add);
+                x.set(n, "bReverseAnimSeqSearchOrder", Value::Bool(reverse));
+                let c = x.component(&[n]);
+                let found = x.anim_set(&["ToyMore", looked]);
+                let lazy = x.holder("Set");
+                let sets = if match_last { [lazy, found] } else { [found, lazy] };
+                x.link(n, c, &sets);
+                // Default: last to first; with the flag: first to last.
+                let match_first = match_last != reverse;
+                refused(&mut x, c, if match_first { LINKUP } else { NOT_LOADED });
+                assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the lazy set is never loaded");
+            }
+        }
     }
     // No match anywhere: None.
     let mut x = fx();
@@ -491,4 +494,36 @@ fn malformed_declarations_are_script_errors() {
 fn reference_is_unchanged() {
     let x = fx_in(ParityMode::Reference);
     assert!(!x.vm.has_native(UPDATE_ANIMATIONS));
+}
+
+/// Review of #751, LOW 3: the auto-name flag while the guard holds (issuing notifies under a name) is
+/// `AUTO_NAME_ISSUING`, nothing written; a flag-clear additive node under the guard keeps its sequence and link-up but
+/// still re-sets its additive sequence, and still looks its name up.
+#[test]
+fn the_additive_override_under_the_guard() {
+    let mut x = fx();
+    let n = x.additive(true, None);
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    let c = x.component(&[n]);
+    refused(&mut x, c, AUTO_NAME_ISSUING);
+    // Flag clear, under the guard, no SkelComponent: the re-set, no reset of the plain step.
+    let mut x = fx();
+    let n = x.additive(false, Some("ToyAdd"));
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    let c = x.component(&[n]);
+    x.update(c).unwrap();
+    assert_eq!(x.get(n, "AnimLinkupIndex"), Value::Int(5), "no reset under the guard");
+    assert_eq!(x.text(&x.get(n, "AnimSeqName")), "ToyIdle");
+    assert_eq!(x.get(n, "CachedNumDesiredBones"), Value::Byte(0));
+    assert_eq!(x.text(&x.get(n, "AddAnimSeqName")), "ToyAdd");
+    assert_eq!(x.get(n, "AddAnimSeq"), Value::Object(None));
+    assert_eq!(x.get(n, "AddAnimLinkupIndex"), Value::Int(-1), "the re-set runs");
+    // The same with a set holding its name: the lookup runs, so the link-up refusal.
+    let mut x = fx();
+    let n = x.additive(false, Some("ToyAdd"));
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    let c = x.component(&[n]);
+    let set = x.anim_set(&["ToyAdd"]);
+    x.link(n, c, &[set]);
+    refused(&mut x, c, LINKUP);
 }
