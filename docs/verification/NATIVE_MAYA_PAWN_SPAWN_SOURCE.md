@@ -1,6 +1,6 @@
 # Maya's player pawn: what the game spawns it from, and what the bridge should (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-MAYA-PAWN-SPAWN-SOURCE (decision 2026-11-26-NNN), the analyst half
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-MAYA-PAWN-SPAWN-SOURCE (decision 2026-11-26-19), the analyst half
 of the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/pawnsrc/`.
 This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every
 rule here is UNVERIFIED in the running game.**
