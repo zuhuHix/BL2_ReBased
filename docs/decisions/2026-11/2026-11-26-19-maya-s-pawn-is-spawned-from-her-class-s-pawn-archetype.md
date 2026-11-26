@@ -23,11 +23,20 @@ bounds check changed.
     archetype as `ActorTemplate`; `SetPlayerDefaults` then applies the class defaults through
     `ApplyCharacterClassDefaults`;
   - in the port `RestartPlayer` makes no pawn (no start, by reading). The harness's health stand-in calls
-    `ApplyCharacterClassDefaults` on the bridge's class-default pawn;
+    `ApplyCharacterClassDefaults` on the bridge's class-default pawn (on e947919, `player_pawn_with_components`);
   - 19 properties differ. `Components` decodes the same on both (inherited), and the archetype's instancing remaps it.
 - **Proposed:** the bridge spawns from the archetype when the controller has a `PlayerClass` (route B), with a
   write-free and load-free preflight; route A, the game's own `RestartPlayer`, is the later step.
-- **Needs a hub ruling:** the old `Mesh` and `CylinderComponent` release in the body composition. The archetype pawn
-  has both set but not attached. Without a ruling link 1's stop moves earlier, to "releasing the old Mesh"; with it, the
-  stop is #738's physics `LayerAbsent`.
+- **The release** of the old `Mesh` and `CylinderComponent` in the body composition: the archetype pawn has both set
+  but not attached. The hub ruled (on #762) that the attach record decides, as the body-composition note already
+  says. Until the code follows, link 1's stop moves earlier, to "releasing the old Mesh"; after, it is #738's physics
+  `LayerAbsent`.
+- **Review r1 (#762):**
+  - "today" re-measured on main e947919: links 1, 3, 4, 5, 13 and 14 stop at `GetBoundingCylinder`'s colliding-bounds
+    `LayerAbsent` (6 ok / 8 NotYet); the 457c46e4 probe is marked as the older base; #760 moves that stop to 2.A;
+  - route B replaces `player_pawn_with_components` with `actors::spawn` and the archetype as template; the spawn
+    publishes the attach;
+  - the release step brings the code in line with NATIVE_INITIALIZE_BODY_COMPOSITION.md's own rule; the hub ruled yes;
+  - `RestartPlayer`'s and `SwitchPlayerClass`' missing steps added to route A's stops; route B skips
+    `ApplyGlobalPlayerMovementSettings`; which steps are script; the cylinder conflict flagged.
 - **Clean room:** a different lane implements this note.
