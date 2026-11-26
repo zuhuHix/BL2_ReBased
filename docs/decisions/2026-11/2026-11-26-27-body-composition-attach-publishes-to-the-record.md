@@ -1,7 +1,7 @@
 ## 2026-11-26: The body composition's actor attach publishes to the attach record
 
-AI-assisted (Claude Code, Opus 5.5). Lane BODYCOMP-ATTACH-PUBLISHES, on #766's branch (fix/maya-pawn-from-archetype @
-b6bd32ac). It implements the hub's ruling on decision 2026-11-26-25's open question: in the game these components are
+AI-assisted (Claude Code, Opus 5.5). Lane BODYCOMP-ATTACH-PUBLISHES, on main 78a88b7 (written on #766's branch at
+b6bd32ac and moved onto main by the hub). It implements the hub's ruling on decision 2026-11-26-25's open question: in the game these components are
 attached. This lane did not read the executable. No session was run. UNVERIFIED in the running game.
 
 - **What was decided**, in `ow-world`'s `body_composition` (Off only, as the whole build is):
@@ -24,7 +24,7 @@ attached. This lane did not read the executable. No session was run. UNVERIFIED 
 - **Reference:** unchanged.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock). The trees are local merges and
   are not pushed. Before: #766 (b6bd32ac) merged with #768 (de809eb). After: that tree plus this change. 6 ok / 8 not ok,
-  51.2% on both.
+  51.2% on both. The measured "before" tree differs from main 78a88b7 only by a comment.
   - Links 1, 3, 4, 5, 13 and 14 pass `InitializeRBPhysics`. They now stop at **the unbound `Engine.GetPhysXLevel()`**,
     graded an error. That is NATIVE_LINK1_RIGID_BODY_LAYER.md section 4's prediction.
   - Before, they stopped at its refusal L ("Actor.GetBoundingCylinder: the colliding components' bounds").
