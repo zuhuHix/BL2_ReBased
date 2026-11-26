@@ -211,7 +211,7 @@ Against main after #746:
   `TEMPLATE` `NotRead`, because the fixture's template has no mesh (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.4);
 - **with the gun's init as well:** source f's stored-bounds `LayerAbsent`.
 
-*Corrected 2026-11-26 in NATIVE_LINK67_PICKUP_GUN_INIT.md section 5 (decision 2026-11-26-NNN): that `LayerAbsent` holds
+*Corrected 2026-11-26 in NATIVE_LINK67_PICKUP_GUN_INIT.md section 5 (decision 2026-11-26-15): that `LayerAbsent` holds
 only while the pickup world lacks the mesh layer. With link 8's layer, the stop is the bounding cylinder's
 `WORLD_TRANSFORM` (the copied scale 0.92).*
 

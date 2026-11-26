@@ -1,6 +1,6 @@
 # Links 6 and 7: the pickup gun's init before `touch` (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK67-PICKUP-GUN-INIT (decision 2026-11-26-NNN), the analyst half
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK67-PICKUP-GUN-INIT (decision 2026-11-26-15), the analyst half
 of the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/gunin/`. This
 note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule
 here is UNVERIFIED in the running game.**
