@@ -24,8 +24,13 @@
 //! are the constants 0 and 1). A stand-in pinned by `tests/mission_script_test.py` (scenarios S7 and S7b, `--slice-run`)
 //! (W6 lanes). Every refusal is decided before the rebase, so a `NotYet` changes nothing.
 //!
-//! **The `WillowMind` override** (NATIVE_MIND_ROUTE.md section 3, Off only; Reference has no stand-in and stays
-//! `NotYet`): its own parts first ([`mind_override`]), then the shared controller part above.
+//! **The `WillowMind` override** (NATIVE_MIND_ROUTE.md section 3 and NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md
+//! section 4.1, lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC; Off only; Reference has no stand-in and stays `NotYet`),
+//! in the game's order: the skill refresh, then the shared controller part above, then the mind's own part
+//! ([`plan_mind_part`]). Every refusal of the controller part's class-level step and of the mind's own part is decided
+//! first, before the skill refresh writes; an evaluator refusal of the mind part after an earlier write is prefixed.
+//! Before all of it the spawn's balance step runs when the spawn recorded one ([`crate::spawn_balance::run_step`]).
+//! The `WillowMind` key is bound to this rule too ([`NATIVE_KEYS`]).
 //!
 //! **Not read:** the `WillowVehicle` thunk (its own native, not registered
 //! here). No change notification is sent and no script event fires (record section 1).
@@ -44,10 +49,12 @@ use crate::pools::{self, is_a};
 /// The record.
 pub const RECORD: &str = "NATIVE_LEVEL_UP_ATTRIBUTES.md sections 1-2";
 
-/// The two script-callable keys the installed packages declare (one shared thunk calls the class's virtual).
-pub const NATIVE_KEYS: [&str; 2] = [
+/// The script-callable keys the installed packages declare (one shared thunk calls the class's virtual); the
+/// `WillowMind` key since lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (the note's section 4.1).
+pub const NATIVE_KEYS: [&str; 3] = [
     "Controller.RecalculateAttributeInitializedState()",
     "WillowPlayerController.RecalculateAttributeInitializedState()",
+    "WillowMind.RecalculateAttributeInitializedState()",
 ];
 
 /// What [`recalculate_attribute_initialized_state`] ran.
@@ -65,59 +72,199 @@ pub fn recalculate_attribute_initialized_state(
     vm: &mut Vm,
     controller: ObjRef,
 ) -> Result<Recalculated, VmError> {
-    if is_a(&vm.space, controller, "WillowMind")? {
-        if vm.parity == ParityMode::Reference {
-            return Err(NotYet::not_read(
-                "the WillowMind override of RecalculateAttributeInitializedState (no C++ stand-in)",
-                RECORD,
-            )
-            .into());
+    let mind = is_a(&vm.space, controller, "WillowMind")?;
+    if mind && vm.parity == ParityMode::Reference {
+        return Err(NotYet::not_read(
+            "the WillowMind override of RecalculateAttributeInitializedState (no C++ stand-in)",
+            RECORD,
+        )
+        .into());
+    }
+    let entry = marks(vm);
+    let result = (|| -> Result<Recalculated, VmError> {
+        if mind {
+            crate::spawn_balance::run_step(vm, controller)?;
         }
-        mind_override(vm, controller)?;
+        let skipped = vm.parity == ParityMode::Reference;
+        // The refusals up front: the controller part's class-level step, then the mind's own part (its plan).
+        if !skipped {
+            refuse_class_parts(&vm.space, controller)?;
+        }
+        let part = if mind { plan_mind_part(vm, controller)? } else { None };
+        if mind {
+            skill_refresh(vm, controller)?;
+        }
+        let manager = object(&vm.space, controller, "ResourcePoolManager")?;
+        pools::recalculate_base_values(vm, manager)?;
+        if let Some(part) = part {
+            apply_mind_part(vm, controller, &part)?;
+        }
+        Ok(Recalculated { class_parts_skipped: skipped, manager })
+    })();
+    match result {
+        Err(e) if marks(vm) != entry => Err(pools::after_partial_writes(e)),
+        other => other,
     }
-    let skipped = vm.parity == ParityMode::Reference;
-    if !skipped {
-        refuse_class_parts(&vm.space, controller)?;
+}
+
+/// #518's counters.
+fn marks(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
+}
+
+/// The ten resistances of the mind's own part, in the note's order (section 4.1).
+pub const RESISTANCES: [&str; 10] = [
+    "IgniteChance",
+    "ShockChance",
+    "CorrosiveChance",
+    "SlowChance",
+    "AmpChance",
+    "IgniteDuration",
+    "ShockDuration",
+    "CorrosiveDuration",
+    "SlowDuration",
+    "AmpDuration",
+];
+/// A definition the mind part reads that the store has not loaded.
+pub const MIND_NOT_LOADED: &str =
+    "the WillowMind part of RecalculateAttributeInitializedState: an object the store has not loaded (a load is a write)";
+
+/// Where one value of the mind part lands: a stack attribute (written by its base, the value recomputed from its
+/// stack), or a plain float.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Stack(ObjRef, ow_object::layout::AttrCompanions),
+    Plain(ObjRef, ow_object::ids::PropId),
+}
+
+/// The mind part's plan: each value's init data and where it lands, in write order.
+#[derive(Debug, Clone)]
+pub struct MindPart {
+    writes: Vec<(ow_attr::api::InitData, Target)>,
+}
+
+fn mind_bad(message: impl Into<String>) -> VmError {
+    VmError::Script { function: "WillowMind.RecalculateAttributeInitializedState".to_string(), message: message.into() }
+}
+
+fn mind_resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        return Err(NotYet::not_read(MIND_NOT_LOADED, RECORD_MIND).into());
     }
-    let manager = object(&vm.space, controller, "ResourcePoolManager")?;
-    pools::recalculate_base_values(vm, manager)?;
-    Ok(Recalculated {
-        class_parts_skipped: skipped,
-        manager,
-    })
+    Ok(())
+}
+
+/// `o`'s `name`'s declaration.
+fn decl_of(vm: &Vm, o: ObjRef, name: &str) -> Result<(ow_object::ids::PropId, ow_object::layout::PropertyDecl), VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm.space.prop(class, name).ok_or_else(|| mind_bad(format!("no {name}")))?;
+    let d = vm.space.classes.decl(p).cloned().ok_or_else(|| mind_bad(format!("{name} undeclared")))?;
+    Ok((p, d))
+}
+
+/// The init data `field` of the AI class, and its definitions checked resident (with their chains' resolvers).
+fn init_data_of(vm: &mut Vm, class: ObjRef, field: &str) -> Result<ow_attr::api::InitData, VmError> {
+    let (p, d) = decl_of(vm, class, field)?;
+    if !matches!(d.kind, ow_object::layout::PropKind::Struct(_)) {
+        return Err(mind_bad(format!("{field} is not declared as a struct")));
+    }
+    let v = vm.space.read(class, ow_object::ids::PropAddr::scalar(p))?.clone();
+    let data = ow_attr::eval::init_data(&vm.space, &v)?;
+    if let Some(attr) = data.base_value_attribute {
+        mind_resident(vm, attr)?;
+        let attrs = vm.attrs.clone();
+        attrs.preflight_read_resident(attr, &mut ow_attr::api::EvalCx::new(vm))?;
+    }
+    if let Some(def) = data.initialization_definition {
+        mind_resident(vm, def)?;
+    }
+    Ok(data)
+}
+
+/// The stack attribute `name` of `o`, its companions named `<name>BaseValue` and `<name>ModifierStack`.
+fn stack_target(vm: &Vm, o: ObjRef, name: &str) -> Result<Target, VmError> {
+    let (p, d) = decl_of(vm, o, name)?;
+    let Some(c) = d.attr.filter(|c| c.value == p) else {
+        return Err(mind_bad(format!("{name} is not declared as a stack attribute")));
+    };
+    let (base, base_decl) = decl_of(vm, o, &format!("{name}BaseValue"))?;
+    let (stack, stack_decl) = decl_of(vm, o, &format!("{name}ModifierStack"))?;
+    let float = |k: &ow_object::layout::PropKind| {
+        matches!(k, ow_object::layout::PropKind::Float | ow_object::layout::PropKind::FloatAttribute)
+    };
+    if base != c.base || stack != c.stack || !float(&d.kind) || !float(&base_decl.kind)
+        || !matches!(stack_decl.kind, ow_object::layout::PropKind::Array(_))
+    {
+        return Err(mind_bad(format!("{name}'s base and stack are not declared as its float companions")));
+    }
+    Ok(Target::Stack(o, c))
+}
+
+/// The mind's own part, planned (module documentation): `None` without both `AIClass` and `MyWillowPawn`. Reads only,
+/// loads nothing.
+fn plan_mind_part(vm: &mut Vm, mind: ObjRef) -> Result<Option<MindPart>, VmError> {
+    let class = object(&vm.space, mind, "AIClass")?;
+    let pawn = object(&vm.space, mind, "MyWillowPawn")?;
+    let (Some(class), Some(pawn)) = (class, pawn) else { return Ok(None) };
+    mind_resident(vm, class)?;
+    mind_resident(vm, pawn)?;
+    let mut writes = Vec::new();
+    let data = init_data_of(vm, class, "BaseCommerceMarkup")?;
+    let target = match decl_of(vm, pawn, "CommerceMarkup")? {
+        (p, d) if d.attr.is_some_and(|c| c.value == p) => stack_target(vm, pawn, "CommerceMarkup")?,
+        (p, d) if matches!(d.kind, ow_object::layout::PropKind::Float | ow_object::layout::PropKind::FloatAttribute) => {
+            Target::Plain(pawn, p)
+        }
+        _ => return Err(mind_bad("CommerceMarkup is not declared as a float")),
+    };
+    writes.push((data, target));
+    let (p, d) = decl_of(vm, pawn, "StatusEffectComp")?;
+    if !matches!(d.kind, ow_object::layout::PropKind::Object { .. }) {
+        return Err(mind_bad("StatusEffectComp is not declared as an object"));
+    }
+    if let Value::Object(Some(component)) = vm.space.read(pawn, ow_object::ids::PropAddr::scalar(p))?.clone() {
+        mind_resident(vm, component)?;
+        for name in RESISTANCES {
+            let data = init_data_of(vm, class, &format!("Base{name}ResistanceModifier"))?;
+            let target = stack_target(vm, component, &format!("{name}ResistanceModifier"))?;
+            writes.push((data, target));
+        }
+    }
+    Ok(Some(MindPart { writes }))
+}
+
+/// The mind part's writes (module documentation): each value evaluated with the mind as the context source and no
+/// override, then written; a resistance by its base, the value recomputed from its modifier stack (`ow-attr`'s stack
+/// fold, the one-rounding form, UNVERIFIED).
+fn apply_mind_part(vm: &mut Vm, mind: ObjRef, part: &MindPart) -> Result<(), VmError> {
+    let attrs = vm.attrs.clone();
+    for (data, target) in &part.writes {
+        let v = attrs.evaluate_init(data, Some(mind), None, &mut ow_attr::api::EvalCx::new(vm))?;
+        match *target {
+            Target::Stack(owner, c) => ow_attr::registry::let_base(
+                &mut vm.space,
+                owner,
+                c,
+                Value::Float(v),
+                ow_attr::stack::CombineForm::WeaponGen,
+            )?,
+            Target::Plain(owner, p) => vm.space.write(owner, ow_object::ids::PropAddr::scalar(p), Value::Float(v))?,
+        }
+    }
+    Ok(())
 }
 
 /// The record of the mind's override (decision 2026-11-19-32).
 pub const RECORD_MIND: &str = "NATIVE_MIND_ROUTE.md section 3";
 
-/// `WillowMind`'s override, the parts before the shared controller part (NATIVE_MIND_ROUTE.md section 3), Off only.
-/// Every refusal of the mind's own part and of the controller part's class-level step is decided before anything
-/// changes; the skill refresh's own refusal comes after `GetSkillManager`, which may have made the manager by then:
-/// - **the mind's own part** (with both `AIClass` and `MyWillowPawn`) sets the pawn's `CommerceMarkup` and ten
-///   status-effect resistances from evaluations of the class's init data. The note does not name the context those are
-///   evaluated with, so it is `NotYet { NotRead }`;
-/// - **the skill refresh** (the world's game info a `WillowGameInfo`): its skill manager, through the script native
-///   `GetSkillManager` (made lazily, NATIVE_SKILL_MANAGER.md). Unless the manager's `bUpdatingSkills` is set, every
-///   `ActiveSkills` entry whose `SkillInstigator` is this mind is flagged and gets one call on the skill that is not
-///   read: a matching entry is `NotYet { NotRead }`; with none, the flag set and cleared again leaves nothing changed.
-///
-/// The shared controller part (steps 1 and 2 of the module documentation) then runs as for any controller. The note
-/// counts 13 writes in it where NATIVE_LEVEL_UP_ATTRIBUTES.md lists 12 (not reconciled); its class-level step stays
-/// `NotYet` either way.
-fn mind_override(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
-    let class = object(&vm.space, mind, "AIClass")?;
-    let pawn = object(&vm.space, mind, "MyWillowPawn")?;
-    if class.is_some() && pawn.is_some() {
-        return Err(NotYet::not_read(
-            "the WillowMind part of RecalculateAttributeInitializedState (CommerceMarkup and ten status-effect \
-             resistances from the AI class's init data: the context they are evaluated with is not named)",
-            RECORD_MIND,
-        )
-        .into());
-    }
-    // The shared controller part's class-level refusal comes first, so the skill refresh below (whose
-    // `GetSkillManager` can make the manager lazily) never runs ahead of a refusal (review r1 of #418).
-    refuse_class_parts(&vm.space, mind)?;
+/// The mind override's skill refresh (NATIVE_MIND_ROUTE.md section 3 step 1), Off only: the world's game info a
+/// `WillowGameInfo`, its skill manager through the script native `GetSkillManager` (made lazily,
+/// NATIVE_SKILL_MANAGER.md). Unless the manager's `bUpdatingSkills` is set, every `ActiveSkills` entry whose
+/// `SkillInstigator` is this mind is flagged and gets one call on the skill that is not read: a matching entry is
+/// `NotYet { NotRead }`; with none, the flag set and cleared again leaves nothing changed.
+fn skill_refresh(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
     let world_info = object(&vm.space, mind, "WorldInfo")?;
     let game = match world_info {
         Some(w) => object(&vm.space, w, "Game")?,

@@ -13,6 +13,7 @@ pub mod levelup;
 pub mod placement;
 pub mod pools;
 pub mod query;
+pub mod spawn_balance;
 pub mod timers;
 pub mod touch_trace;
 pub mod trace_filter;

@@ -133,6 +133,26 @@ pub struct CombatState {
     pub on_take_damage: Option<TakeDamageFn>,
     pub on_behavior_event: Option<BehaviorEventFn>,
     pub injured_definition: Option<ObjectFn>,
+    /// Spawned pawn -> the untouched copy of the archetype its spawn copied (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC;
+    /// the port does not model `ObjectArchetype`, so `SetDefaultPhysics` reads this record). Kept for the pawn's life.
+    pub(crate) archetypes: DetMap<ObjRef, ObjRef>,
+    /// `WillowPawn`'s process-wide can-cloak flag (`StaticCanCloak`), `None` until set: true.
+    can_cloak: Option<bool>,
+}
+
+impl CombatState {
+    /// The can-cloak flag (initially true).
+    pub fn can_cloak(&self) -> bool {
+        self.can_cloak.unwrap_or(true)
+    }
+    pub fn set_can_cloak(&mut self, on: bool) {
+        self.can_cloak = Some(on);
+    }
+}
+
+/// The archetype record of `pawn` (`CombatState::archetypes`), if its spawn made one.
+pub fn archetype_of(vm: &Vm, pawn: ObjRef) -> Result<Option<ObjRef>, VmError> {
+    with_state(vm, |s| s.archetypes.get(&pawn).copied())
 }
 
 impl std::fmt::Debug for CombatState {
@@ -1414,6 +1434,14 @@ pub fn spawn_enemy(
             "combat: no such pawn archetype: {archetype_path}"
         )));
     };
+    if vm.parity == ParityMode::Off {
+        // The archetype record (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC): a second copy, never written, stands for
+        // the archetype object the spawn copied (the store does not load pawn archetypes; `instantiate_copy`).
+        if let Some(archetype) = instantiate_copy(vm, package, archetype_path)? {
+            with_state(vm, |s| s.archetypes.insert(pawn, archetype))?;
+        }
+        crate::spawn_balance::pick(vm, pawn, package, archetype_path)?;
+    }
     adopt(vm, pawn, level, game_stage)
 }
 
