@@ -1,7 +1,7 @@
 ## 2026-11-26: The combat world's NoLevel collision, base-search setting and spawn positions
 
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-COMBAT-WORLD-COLLISION, a harness lane on the hub's rulings. The branch
-is stacked on #804 @ 88191026, itself on #803 @ dc0e9ef9 and main 21a668a7. No native code was read. **Every setting
+is stacked on #804 @ 153ac950, itself on main baa414fd (with #800 and #803). No native code was read. **Every setting
 here is an UNVERIFIED stand-in.** Reference is unchanged.
 
 - **What was decided (Off only, the slice gate's combat set-up without `--map`):**
@@ -36,7 +36,7 @@ here is an UNVERIFIED stand-in.** Reference is unchanged.
     and Reference refused; a class without `Location` a script error;
   - `ow-cli` (2): the three settings in order with their lines, refused twice and in Reference; single-spaced lines;
   - the installed Off strict `--slice-gate` (release build, under the machine lock), base 7b9daea9 against this head:
-    both **7 ok / 14, X = 8.167/14 = 58.3%**. Links 3, 4, 5, 13 and 14 now get past the floor trace (each spawn placed,
+    both 7 ok / 14, X = 8.167/14 = 58.3%, before the rebase onto main; on main with #800 this head scores **8 ok / 14, X = 8.5/14 = 60.7%** (link 6 passes). Links 3, 4, 5, 13 and 14 now get past the floor trace (each spawn placed,
     at 1000 and 2000, and the stand-in logged) and stop at the spawn's
     `AttributeInitializationDefinition.SetBaseValue`: "a definition it names is not loaded (a load is a write)".
     Every other row is as on the base;
