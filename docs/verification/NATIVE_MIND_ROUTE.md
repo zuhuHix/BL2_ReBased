@@ -27,7 +27,8 @@ are named the same way (a fit). Correcting the tool is a separate lane; the evid
 
 ## 1. `WillowPawn.SetDefaultPhysics()`
 
-No arguments, no result. In order:
+No arguments, no result. In order (the two queries and the navigation handle's query are named in
+NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 2, with the slice's `SetPhysics` refusal):
 
 1. **Gates.** It does nothing when the pawn's `bDeleteMe` or `bIsDead` is set, when the pawn's
    `ObjectArchetype` is not a `Pawn`, when the pawn has no `SMComponent`, or when that component's current special move
@@ -75,7 +76,8 @@ section 1); `WillowMind` overrides the behaviour as follows. In order:
    class and the damage-modifier attributes re-initialised (base from the class's init data, value recomputed from the
    stack); then, always, every pool of the controller's `ResourcePoolManager` is rebased. This pass counted 13
    base-and-recompute writes where that note lists 12: not reconciled here.
-3. **The mind's own part.** When the mind has both `AIClass` and `MyWillowPawn`: the pawn's `CommerceMarkup` value is set to
+3. **The mind's own part** (its context, the mind itself, and its Off answer: NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md
+   section 4.1, which confirms this order). When the mind has both `AIClass` and `MyWillowPawn`: the pawn's `CommerceMarkup` value is set to
    the evaluation of the class's `BaseCommerceMarkup` (the value only); and, when the pawn has a `StatusEffectComp`, ten
    status-effect resistance attributes of that component are re-initialised from the class's matching init data (base set
    to the evaluation, value recomputed from the attribute's modifier stack, no change notification): `Ignite`, `Shock`,
