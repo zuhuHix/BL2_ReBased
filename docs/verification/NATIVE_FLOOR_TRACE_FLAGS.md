@@ -199,12 +199,20 @@ the mode write, so nothing carries the partial-writes prefix.
 5. **No candidate left and the level clear:** no floor. With `Base` None nothing changes (the stand-in's log line);
    with a `Base` set, `BASE_SETTER`'s `NotRead`.
 
-The `NoLevelBaseSearch` stand-in becomes this rule on a `NoLevel` service (level part Clear): its own-collision skip
-widens to section 4's chains, and `clear_of` takes section 5's box. Its label changes from "the common convention"
-to "read (NATIVE_FLOOR_TRACE_FLAGS.md section 4), UNVERIFIED in game".
+**Hub rulings (review of #809): all three yes**, under the existing `NoLevelBaseSearch` setting, Off only, UNVERIFIED:
+1. **The stand-in's skip widens to the `Owner` chains, both ways**, as the game's walkers do (section 4): the actor
+   itself, every actor in its `Owner` chain, and every actor whose `Owner` chain holds it. Each chain is read
+   load-free and bounded by the links seen; an unloaded link that decides a candidate is `NotRead`, "a source
+   Owner-chain link the store has not loaded". The label changes from "the common convention" to "read
+   (NATIVE_FLOOR_TRACE_FLAGS.md section 4), UNVERIFIED in game".
+2. **`clear_of` takes the swept-box test** (section 5): the actor's cylinder swept down 8 units against the other
+   actor's bounds box, per axis, touching counted as meeting. A source without a cylinder `CollisionComponent` keeps
+   the `NotRead`.
+3. **The touch trace gets the same `Owner`-chain correction** (`touch_trace.rs`, `trace_filter::chain_of`): the
+   `Base` walk is replaced by section 4's two `Owner` walks. The implementer re-runs links 6 and 7 (an installed Off
+   strict `--slice-gate` under the machine lock) and reports their steps against main's.
 
-**The touch trace** (`touch_trace.rs`, `trace_filter::chain_of`): replace the `Base` walk with section 4's two `Owner`
-walks. Links 6 and 7 are re-run after it.
+Reference is unchanged for all three.
 
 ## 7. Predicted effect
 
@@ -234,7 +242,16 @@ walks. Links 6 and 7 are re-run after it.
 6. **Each refusal before the mode write,** with #518's three counters unchanged.
 7. **The touch trace:** a candidate owned by the source pickup, and the pickup's own `Owner`: passed over; the
    pickup's `Base` alone: no longer passed over.
-8. Reference: unchanged.
+8. **(hub rulings on #809), under `NoLevelBaseSearch`:**
+   - the stand-in with an actor in the source's `Owner` chain two links up, holding collision on the segment: passed
+     over, no floor, the log line; an actor whose `Owner`'s `Owner` is the source: passed over; an `Owner` cycle:
+     the walk ends, no hang;
+   - an unloaded `Owner` link that decides a candidate: `NotRead`, nothing written;
+   - `clear_of` with the swept box: section 8 row 3's cases, now inside the stand-in; a source with a non-cylinder
+     `CollisionComponent` and another actor holding collision: `NotRead`;
+   - the touch trace with the `Owner` walks: row 7's cases, through `touch_trace.rs`;
+   - the setting off: the existing refusals unchanged.
+9. Reference: unchanged.
 
 ## Open questions
 

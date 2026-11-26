@@ -26,7 +26,11 @@ and no bounds check changed.
     R2, and corrects the earlier notes' "base chain" (and `trace_filter::chain_of`) to the `Owner` chain, both ways;
   - lane E's clearance tests bounds in the right order but with too small a region (a line, not the swept box). A box
     test is proposed; it still clears the combat run's spawns.
-- **Needs the hub:** whether the stand-in's skip widens to the `Owner` chains, and whether `clear_of` takes the box
-  test, both under the existing `NoLevelBaseSearch` setting; and the touch trace's chain correction (links 6 and 7
-  to be re-run).
+- **Hub rulings (review of #809):** all three yes, under the existing `NoLevelBaseSearch` setting, Off only,
+  UNVERIFIED, Reference unchanged:
+  - the stand-in's skip widens to the `Owner` chains, both ways, as the game's walkers do;
+  - `clear_of` takes the swept-box test: the actor's cylinder swept down 8 units;
+  - the touch trace gets the same `Owner`-chain correction, and the implementer re-runs links 6 and 7.
+
+  Written into the note (section 6 and test row 8).
 - **Clean room:** a different lane implements this note.
