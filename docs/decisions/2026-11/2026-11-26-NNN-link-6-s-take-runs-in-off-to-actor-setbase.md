@@ -1,6 +1,6 @@
 ## 2026-11-26: Link 6's take runs in Off to Actor.SetBase
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-UPDATEAMMOCOUNTS, on main 0195ce94 (F's fixed #785). It implements
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-UPDATEAMMOCOUNTS, rebased onto main d3be3e5 (F's fixed #785 is on it). It implements
 NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md sections 3.1 and 3.3 to 3.8, its gaps 4.1 and 4.2, and
 NATIVE_PICKUP_SAVE_ROTATION.md section 5, with the hub's corrections on #785 and its two rulings. This lane did not
 read the executable. No session was run. **Every rule is UNVERIFIED in the running game.** Reference binds nothing and
@@ -43,8 +43,8 @@ is unchanged.
 - **Gap 4.1:** at the slice's pickup set-up, the controller and pawn take the pickup's `WorldInfo` when theirs is None.
   It is logged as an UNVERIFIED stand-in. The slice gate's pickup rows now also list the set-up's ammo and at-rest
   lines, and each step's own harness lines.
-- **The slice gate** (installed, Off, strict, release build, under the machine lock; main 0195ce94 and this change):
-  - 6 ok / 14 on both, X = 7.167/14 = 51.2%;
+- **The slice gate** (installed, Off, strict, release build, under the machine lock; main d3be3e5 and this change):
+  - 7 ok / 14 on both, X = 8.167/14 = 58.3% (also 6 ok, 51.2% on both, on the earlier base 0195ce94);
   - link 6 moves from `UpdateAmmoCounts`' `NotRead` to "stopped after partial writes: Actor.SetBase: the class's own
     implementation is not resolved", which is #785's prediction;
   - seven ammo definitions were preloaded (one was already resident), and the at-rest line was logged at the key;
