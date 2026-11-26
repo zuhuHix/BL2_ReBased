@@ -15,9 +15,10 @@
 //!   objective-specific looks up its mission's status bit (`bNotStarted`, `bActive`, `bReadyToTurnIn`,
 //!   `bComplete`); an objective-specific one with no linked objective is false, else the objective's state
 //!   (`MissionSystem::objective_state`) looks up its bit; then a non-empty `ObjectiveSetRestrictions` keeps a true
-//!   verdict only while one listed set is the active set. A mission other than the slice's counts as Complete when it
-//!   is in the completed set, else NotStarted, and its objectives as NotStarted. `RequiredObjectivesComplete` and
-//!   `Failed` are states the tracker never enters, so their bits never hold.
+//!   verdict only while one listed set is the active set (the one verdict of `crate::conditions`). A mission other
+//!   than the slice's counts as Complete when it is in the completed set in `ParityMode::Reference` (the C++), and as
+//!   NotStarted in Off (the bridge's `GetMissionStatus`); its objectives count as NotStarted.
+//!   `RequiredObjectivesComplete` and `Failed` are states the tracker never enters, so their bits never hold.
 //! - *What a notification does* to the registered dummy: every condition's verdict is recomputed from the tracker's
 //!   current state and applied to its sequence (the kernel fires events only for real transitions). The tracker's
 //!   observers run in registration order: the VM's own (the waypoint) first, then the dummy's conditions.
@@ -123,8 +124,6 @@ const COMBAT_FOLLOW_UP: &str = "the combat chain wired into the Fire slice (foll
 
 /// The settle bound of the drain and the depth bound of nested notifications (the C++ 16).
 const SETTLE: usize = 16;
-
-/// The mission status bits a condition looks up, by `Status::index` (the C++ `statusFields`).
 
 /// What the host must do or show, in order (the C++ `HostEvent::Kind`).
 #[non_exhaustive]
@@ -681,11 +680,12 @@ impl FireMissionSlice {
 
     /// One `BehaviorSequenceEnableByMission` verdict from the tracker's current state: the one verdict of
     /// `crate::conditions` (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 3), which the kernel's pass 2 asks too.
-    /// A mission other than the slice's own is NotStarted, as `GetMissionStatus` answers; the slice's completed set no
-    /// longer counts as Complete here (decision 2026-11-26-33). An objective outside its mission is reported and
-    /// false.
+    /// A mission other than the slice's own is Complete when the slice's completed set names it, in Reference only (the
+    /// C++); in Off it is NotStarted, as `GetMissionStatus` answers (decision 2026-11-26-33, review of #775, item 1).
+    /// An objective outside its mission is reported and false.
     fn condition_holds(&self, vm: &mut Vm, condition: ObjRef) -> Result<bool, MissionError> {
-        let v = crate::conditions::verdict(vm, &self.inner.mission, condition)?;
+        let completed = self.inner.state.borrow().completed.clone();
+        let v = crate::conditions::verdict(vm, &self.inner.mission, condition, Some(&completed))?;
         if let Some(objective) = v.outside {
             self.error(format!("enable condition names an objective outside its mission: {objective}"));
         }

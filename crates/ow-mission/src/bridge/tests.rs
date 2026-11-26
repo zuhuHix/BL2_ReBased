@@ -269,6 +269,31 @@ fn willowgame() -> Vec<u8> {
     t.prop("Bool", set, "bCanCompleteMission", 0, 0);
     let objective = t.class("MissionObjectiveDefinition", object);
     t.prop("Int", objective, "ObjectiveCount", 0, 0);
+    // The kernel's pass 2 reads it (lane IMPL-BEHAVIOR-KERNEL-PASS2, review of #775, item 2).
+    t.prop("Bool", objective, "bRememberItemsWithinObjective", 0, 0);
+    // A mission condition (pass 2's class, its fields and state structs) and a script observer whose reactions are
+    // natives the test binds (review of #775, item 2).
+    let condition = t.class("BehaviorSequenceEnableByMission", object);
+    let mission_states = toy_struct(&mut t, condition, "ToyMissionStates", None);
+    for f in ["bNotStarted", "bActive", "bReadyToTurnIn", "bComplete"] {
+        t.prop("Bool", mission_states, f, 0, 0);
+    }
+    let objective_states = toy_struct(&mut t, condition, "ToyObjectiveStates", None);
+    for f in ["bComplete", "bActive", "bNotStarted"] {
+        t.prop("Bool", objective_states, f, 0, 0);
+    }
+    t.prop("Object", condition, "LinkedMission", 0, object);
+    t.prop("Object", condition, "LinkedObjective", 0, object);
+    for f in ["bInstanced", "bIsObjectiveSpecific", "bCreateWaypoint"] {
+        t.prop("Bool", condition, f, 0, 0);
+    }
+    t.prop("Struct", condition, "MissionStatesToLinkTo", 0, mission_states);
+    t.prop("Struct", condition, "ObjectiveStatesToLinkTo", 0, objective_states);
+    toy_array_of(&mut t, condition, "ObjectiveSetRestrictions", "Object", object);
+    let observer = t.class("ToyMissionObserver", object);
+    let load = [param("Object", "Tracker", 0, object), param("Object", "Mission", CPF_OPT, object)];
+    native(&mut t, observer, "MissionReactionLevelLoad", &load, None, NATIVE);
+    native(&mut t, observer, "MissionReactionStatusChanged", &[param("Object", "Tracker", 0, object)], None, NATIVE);
     t.prop("Bool", objective, "bObjectiveIsOptional", 0, 0);
     t.prop("Bool", objective, "bAllOrNothing", 0, 0);
 
@@ -2431,4 +2456,79 @@ fn an_attach_plan_refusal_makes_and_caches_no_player_pawn() {
     }
     assert_eq!(s.inner.state.borrow().player_pawn, None, "no pawn cached");
     assert_eq!(pawns(vm), before, "no pawn made");
+}
+
+/// Review of #775, item 2: the note's test 12 at the bridge (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 6, lane IMPL-
+/// BEHAVIOR-KERNEL-PASS2). `bind_natives` installs the answers; `BridgeAnswers` gives the verdict over the bridge's own
+/// mission and its Complete test. A script observer and a kernel-registered condition stored under the bridge's
+/// mission: on a status change the observer reacts by name, once, and the condition is re-evaluated through the verdict
+/// with nothing called on it by name (its class has no reaction, so a call by name would fail). Its objective made
+/// unloaded, the next notification is the typed NotRead, prefixed "stopped after partial writes".
+#[test]
+fn the_bridge_re_evaluates_kernel_registered_conditions_after_its_observers() {
+    use ow_vm::mission_conditions::MissionConditions;
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let vm = env.vm();
+    assert!(vm.service::<MissionConditions>().is_some(), "bind_natives installs the answers");
+    let answers = ow_vm::mission_conditions::answers(vm).unwrap().expect("the answers");
+    let (mission, tracker) = (s.inner.mission.definition(), s.inner.o.tracker);
+    // The condition, not objective-specific, on the bridge's mission.
+    let class = vm.find_class("WillowGame.BehaviorSequenceEnableByMission").unwrap();
+    let c = vm.space.alloc(class, "Condition", None, ow_object::heap::Origin::Runtime).unwrap();
+    set(&mut vm.space, c, "LinkedMission", Value::Object(Some(mission))).unwrap();
+    let states = |vm: &mut Vm, field: &str, on: bool| {
+        let p = vm.space.prop(class, "MissionStatesToLinkTo").unwrap();
+        let mut v = vm.space.read(c, PropAddr::scalar(p)).unwrap().clone();
+        let s = v.struct_mut().unwrap();
+        let layout = vm.space.classes.struct_layout(s.ty).unwrap();
+        let (entry, _) = layout.field(vm.space.names.find(field).unwrap()).unwrap();
+        s.fields[entry as usize] = Value::Bool(on);
+        *vm.space.slot_mut(c, PropAddr::scalar(p)).unwrap() = v;
+    };
+    states(vm, "bNotStarted", true);
+    assert!(answers.verdict(vm, c).unwrap(), "the mission is NotStarted");
+    states(vm, "bNotStarted", false);
+    states(vm, "bActive", true);
+    assert!(!answers.verdict(vm, c).unwrap());
+    assert!(!answers.mission_complete(vm, mission).unwrap());
+    // The script observer, its reactions counted.
+    let counts: Rc<std::cell::RefCell<Vec<&'static str>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    for (name, label) in [("MissionReactionLevelLoad", "load"), ("MissionReactionStatusChanged", "status")] {
+        let f = vm.find_function(&format!("WillowGame.ToyMissionObserver.{name}")).unwrap();
+        let key = vm.function(f).and_then(|d| d.native_key.clone()).unwrap();
+        let log = counts.clone();
+        vm.register_native(&key, Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+            log.borrow_mut().push(label);
+            Ok(Value::None)
+        }))
+        .unwrap();
+    }
+    let observer_class = vm.find_class("WillowGame.ToyMissionObserver").unwrap();
+    let observer = vm.space.alloc(observer_class, "Observer", None, ow_object::heap::Origin::Runtime).unwrap();
+    let args = vec![Value::Object(Some(observer)), Value::Object(Some(mission))];
+    let register = "WillowGame.MissionTracker.RegisterMissionObserver";
+    env.call(register, Some(tracker), args, MissionScript::n_register_observer).unwrap();
+    assert_eq!(*counts.borrow(), ["load"]);
+    // The kernel-registered condition, stored under the mission's stock path.
+    let vm = env.vm();
+    let cell = vm.service::<MissionConditions>().unwrap();
+    cell.borrow_mut().store(s.inner.mission.path(), c);
+    s.notify(vm, Notification::StatusChanged).unwrap();
+    assert_eq!(*counts.borrow(), ["load", "status"], "the observer reacts once; the condition is not called");
+    // Its objective unloaded: the typed NotRead, after the observer's reaction, so prefixed.
+    set(&mut vm.space, c, "bIsObjectiveSpecific", Value::Bool(true)).unwrap();
+    let objective = vm.find_class("WillowGame.MissionObjectiveDefinition").unwrap();
+    let origin = ow_object::heap::Origin::Default { class: objective };
+    let lazy = vm.space.alloc_stand_in(objective, "Lazy", origin).unwrap();
+    set(&mut vm.space, c, "LinkedObjective", Value::Object(Some(lazy))).unwrap();
+    match s.notify(vm, Notification::StatusChanged) {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(ow_core::notyet::is_partial_writes(&n.to_string()), "{n}");
+            assert!(n.what.ends_with(ow_behavior::kernel::natives::OBJECTIVE_NOT_LOADED), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(*counts.borrow(), ["load", "status", "status"]);
 }

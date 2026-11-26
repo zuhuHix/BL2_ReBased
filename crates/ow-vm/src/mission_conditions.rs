@@ -34,7 +34,8 @@ pub trait MissionConditionAnswers {
 /// The VM service: the answers and the kernel-registered conditions by mission, in registration order.
 pub struct MissionConditions {
     answers: Rc<dyn MissionConditionAnswers>,
-    stored: Vec<(ObjRef, ObjRef)>,
+    /// (the mission's stock path, the condition), the one identity the verdict uses too (review of #775, item 4).
+    stored: Vec<(String, ObjRef)>,
 }
 
 impl std::fmt::Debug for MissionConditions {
@@ -59,21 +60,18 @@ impl MissionConditions {
         self.answers.clone()
     }
 
-    /// Stores `condition` under `mission` (commit step B). A pair stored already is kept once (a port choice: the
-    /// tracker's own duplicate handling was not read; a second copy would only re-apply the same verdict).
-    pub fn store(&mut self, mission: ObjRef, condition: ObjRef) {
-        if !self.stored.contains(&(mission, condition)) {
-            self.stored.push((mission, condition));
+    /// Stores `condition` under the mission whose stock path is `mission` (commit step B). A pair stored already is
+    /// kept once (a port choice: the tracker's own duplicate handling was not read; a second copy would only re-apply
+    /// the same verdict).
+    pub fn store(&mut self, mission: &str, condition: ObjRef) {
+        if !self.stored.iter().any(|(m, c)| m == mission && *c == condition) {
+            self.stored.push((mission.to_string(), condition));
         }
     }
 
-    /// The conditions stored under `mission`, in registration order.
-    pub fn stored_under(&self, mission: ObjRef) -> Vec<ObjRef> {
-        self.stored
-            .iter()
-            .filter(|(m, _)| *m == mission)
-            .map(|(_, c)| *c)
-            .collect()
+    /// The conditions stored under the mission whose stock path is `mission`, in registration order.
+    pub fn stored_under(&self, mission: &str) -> Vec<ObjRef> {
+        self.stored.iter().filter(|(m, _)| m == mission).map(|(_, c)| *c).collect()
     }
 }
 

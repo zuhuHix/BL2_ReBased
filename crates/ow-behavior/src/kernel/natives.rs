@@ -869,8 +869,14 @@ fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmE
     }
     drop(held);
     result?;
-    // Pass 2, after all of pass 1 (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 2.1), with the provider in its slot.
-    pass2::commit(vm, pid, &path, &planned)?;
+    // Pass 2, after all of pass 1 (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 2.1), with the provider in its slot. Pass 1
+    // has written by then (its enable bits, the provider's slot), though not every write moves #518's counters, so a
+    // refusal from the commit is always marked "stopped after partial writes" (the hub's ruling on review of #775,
+    // item 3), its kind kept.
+    pass2::commit(vm, pid, &path, &planned).map_err(|e| match e {
+        VmError::NotYet(n) => VmError::NotYet(n.after_partial_writes()),
+        other => other,
+    })?;
     Ok(Value::None)
 }
 

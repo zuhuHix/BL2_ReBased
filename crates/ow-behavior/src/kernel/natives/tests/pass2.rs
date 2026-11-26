@@ -384,11 +384,17 @@ impl P2 {
             .unwrap_or_default()
     }
 
+    /// The conditions stored under `mission`, by its stock path (the service's one identity, review of #775, item 4).
     fn stored(&self, mission: ObjRef) -> Vec<ObjRef> {
+        let path = crate::kernel::natives::pass2::mission_key(&self.t.vm, mission).unwrap();
         match self.t.vm.service::<MissionConditions>() {
-            Some(cell) => cell.borrow().stored_under(mission),
+            Some(cell) => cell.borrow().stored_under(&path),
             None => Vec::new(),
         }
+    }
+
+    fn path(&self, mission: ObjRef) -> String {
+        crate::kernel::natives::pass2::mission_key(&self.t.vm, mission).unwrap()
     }
 
     fn verdict(&self, condition: ObjRef, v: bool) {
@@ -713,16 +719,18 @@ fn a_later_notification_re_evaluates_through_the_verdict() {
     x.register(&h, d).unwrap();
     assert!(!x.enabled(&h, d));
     x.verdict(c, true);
-    reevaluate_conditions(&mut x.t.vm, m).unwrap();
+    let mp = x.path(m);
+    reevaluate_conditions(&mut x.t.vm, &mp).unwrap();
     assert!(x.enabled(&h, d), "follows the new verdict");
     assert_eq!(
         x.t.seen(),
         vec!["OnBehaviorSequenceEnabled En consumer=Maya"]
     );
-    // Another mission's notification reaches nothing.
-    let other = x.mission();
+    // Another mission's notification reaches nothing (another stock path: the service's identity).
+    let other = x.t.object(x.mission, "OtherMission");
     x.verdict(c, false);
-    reevaluate_conditions(&mut x.t.vm, other).unwrap();
+    let op = x.path(other);
+    reevaluate_conditions(&mut x.t.vm, &op).unwrap();
     assert!(x.enabled(&h, d));
     // The objective made unloaded: the typed NotRead.
     x.set(c, "bIsObjectiveSpecific", Value::Bool(true));
@@ -736,7 +744,7 @@ fn a_later_notification_re_evaluates_through_the_verdict() {
             )
             .unwrap();
     x.set(c, "LinkedObjective", Value::Object(Some(stand_in)));
-    match reevaluate_conditions(&mut x.t.vm, m) {
+    match reevaluate_conditions(&mut x.t.vm, &mp) {
         Err(VmError::NotYet(n)) => assert_eq!(
             (n.missing, &*n.what),
             (Missing::NotRead, OBJECTIVE_NOT_LOADED)
@@ -778,4 +786,40 @@ impl P2 {
         assert_eq!(self.links(condition), links, "{n}: the list unchanged");
         n
     }
+}
+
+/// Review of #775, item 3 (the hub's ruling): a refusal from commit step C always carries the partial-writes prefix,
+/// since pass 1 has run by then. A true verdict enables the sequence, and its enabled event's first behavior refuses
+/// before any heap write (so #518's counters alone would not mark it).
+#[test]
+fn a_refusal_from_the_reaction_carries_the_prefix() {
+    let mut x = p2(true);
+    let (h, d, c, _) = standard(&mut x, ("TestPass2Refuse", "ToyPass2Refuse"));
+    x.verdict(c, true);
+    match x.register(&h, d) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(ow_core::notyet::is_partial_writes(&n.to_string()), "{n}");
+            assert!(n.what.contains("an invented OnCreate behavior"), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review of #775, item 5: a store the service could not take (its cell borrowed) is refused in the plan, before any
+/// write, rather than dropped at the commit.
+#[test]
+fn a_borrowed_service_is_refused_before_any_write() {
+    let mut x = p2(true);
+    let (h, d, c, _) = standard(&mut x, OFF);
+    let cell = x.t.vm.service::<MissionConditions>().unwrap();
+    let held = cell.borrow();
+    let before = counters(&x.t.vm);
+    match x.register(&h, d) {
+        Err(VmError::ServiceBorrowed(name)) => assert!(name.ends_with("MissionConditions"), "{name}"),
+        other => panic!("{other:?}"),
+    }
+    drop(held);
+    assert_eq!(counters(&x.t.vm), before, "nothing written");
+    assert!(x.links(c).is_empty(), "nothing linked");
 }

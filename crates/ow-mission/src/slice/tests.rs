@@ -1102,6 +1102,22 @@ fn another_mission_is_not_started_even_in_the_completed_set() {
     assert!(!env.slice.dummy_enabled_sequences().unwrap().contains(&"OtherDone".to_string()));
 }
 
+/// Review of #775, item 1: Reference keeps the C++ verdict (`src/slice.cpp`), where a mission other than the slice's is
+/// Complete when the completed set names it, else NotStarted.
+#[test]
+fn reference_counts_the_completed_set_as_complete() {
+    let mut env = Env::new(Map::default(), ParityMode::Reference);
+    let mut completed = DetSet::new();
+    completed.insert("Other".to_string());
+    env.accept(&completed);
+    env.spawn();
+    assert!(env.slice.dummy_enabled_sequences().unwrap().contains(&"OtherDone".to_string()));
+    let mut env = Env::new(Map::default(), ParityMode::Reference);
+    env.accept(&none_completed());
+    env.spawn();
+    assert!(!env.slice.dummy_enabled_sequences().unwrap().contains(&"OtherDone".to_string()));
+}
+
 /// An objective-specific condition without an objective is false; one naming an objective outside its mission is
 /// false with an error line.
 #[test]

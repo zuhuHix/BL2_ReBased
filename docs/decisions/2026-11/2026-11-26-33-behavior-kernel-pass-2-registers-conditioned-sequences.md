@@ -24,22 +24,40 @@ c345fdb0. No bl-sdk session was granted. **Every rule is UNVERIFIED in the runni
   in Off, it asks the kernel (`reevaluate_conditions`) to re-evaluate every kernel-registered condition stored under
   its mission, through the same verdict. A refusal there is typed and carries the partial-writes prefix.
 - **Ruling 3, one verdict.** `ow-mission` `conditions::verdict` is the note's section 2.4 over a `MissionSystem`. The
-  Fire slice's `condition_holds` now asks it. **The slice's difference:** a mission other than the slice's own was
-  Complete when the slice's completed set named it. It is now NotStarted, as `GetMissionStatus` answers. Test
-  `another_mission_is_not_started_even_in_the_completed_set` records the change.
+  Fire slice's `condition_holds` now asks it, with the slice's completed set. **The slice's difference, Off only**
+  (review of #775, item 1): a mission other than the slice's own was Complete when the completed set named it. In Off
+  it is now NotStarted, as `GetMissionStatus` answers. **Reference is unchanged:** under `ParityMode::Reference` the
+  verdict still counts a mission in the completed set as Complete, as the C++ does (`src/slice.cpp`). Tests
+  `another_mission_is_not_started_even_in_the_completed_set` (Off) and `reference_counts_the_completed_set_as_complete`
+  (Reference) record both. The bridge's answers pass no set.
 - **The side finding** (the note's section 5). The direct native does nothing for a None definition (before: a
   `NotRead`), and nothing for one with no sequences, as the game's gate does (`SetDeathDefinition` with `Death_Siren`).
 - **Two port details:**
   - the decoder keeps a resident run-time condition object as it is, where it used to ask the store to load it (the
     plan has checked residency; the store's objects load as before);
-  - a condition stored twice under one mission is kept once.
+  - a condition stored twice under one mission is kept once;
+  - the service keys its list by the mission's stock path, the identity the verdict compares (review of #775, item 4).
+    A run-time object, which has none (no mission is one in the game), is keyed by its own name, marked `(run time)`.
 - Provider has index-based enable methods (`index_enabled`, `set_index_enabled`), since pass 2's records are per
   sequence. `set_sequence_enabled` now runs through them.
 
-**Tests.** `kernel/natives/tests/pass2.rs` covers the note's tests 1 to 11 and 13, test 8's refusals among them. Test
-12 is the kernel side: a later re-evaluation follows the new verdict, and an unloaded objective is the typed `NotRead`.
-The bridge-level case (a script observer beside a stored condition) is not a separate test. The three tests that
-pinned the old pass-2 `LayerAbsent` now assert the new refusals.
+**Review of #775** (a second commit):
+- item 3, the hub's ruling: every refusal from the commit is marked "stopped after partial writes", since pass 1 has
+  written by then, though not every one of its writes moves #518's counters;
+- item 5: the service's borrow is checked in the plan, and the store propagates `ServiceBorrowed` instead of dropping
+  the condition;
+- item 6: the slice's module documentation follows the one verdict.
+
+**Tests.** `kernel/natives/tests/pass2.rs` covers the note's tests 1 to 11 and 13, test 8's refusals among them. It
+also covers the kernel side of test 12 (a later re-evaluation follows the new verdict; an unloaded objective is the
+typed `NotRead`), the prefix on a refusal from the reaction (item 3), and a borrowed service (item 5). The bridge side
+of test 12 is `bridge/tests.rs` `the_bridge_re_evaluates_kernel_registered_conditions_after_its_observers`:
+- `bind_natives` installs the answers, and `BridgeAnswers` gives the verdict and the Complete test;
+- a script observer and a stored condition: on a status change the observer reacts by name, once, and nothing is called
+  on the condition;
+- its objective made unloaded: the prefixed `NotRead`.
+
+The three tests that pinned the old pass-2 `LayerAbsent` now assert the new refusals.
 
 **Measured** (installed Off strict `--slice-gate`, release build, under the machine lock, on local merges with E's pair
 #770 + #773, not pushed). Before (main c345fdb0 + #773) and after (+ this change): 6 ok, X 51.2%, every row
