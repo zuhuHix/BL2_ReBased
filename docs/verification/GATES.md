@@ -60,6 +60,18 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINKS-5-13-14-TAIL (2026-11-26, pc-hummer, docs only, on docs/native-links-5-13-14-tail from main
+f80b68e7, rebased onto c876a397):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_5_13_14_TAIL.md reads links
+5, 13 and 14 past the
+spawn. A local probe (installed Off strict `--slice-gate` runs under the machine lock, lane D's
+`fix/rust-spawn-setbasevalue` and `fix/rust-floor-trace-rulings` merged locally, each stop stood in by its rule,
+reverted and not committed) gives: link 4 passes; links 3 and 5 meet the death roll's drop weights (read: only player
+controllers count), `ClearDenStats` (read: nothing for an empty list) and the port's `MountDeathNotify` order
+tripwire; link 13 meets `AttackInjuredMeleeDamageModifier` (read: from `DamageInstigatorWPC`, 1 for an AI), Maya goes
+down, then `PlayInjured`'s interface table, `GetBalancedActorTypeIdentifier` (read) and the telemetry call, and the
+injured state's `NotifySkillEvent` and `ResolveContext` (read, unbound in the combat world). Link 14 is not reached.
+No code changed, so no measured number moved. UNVERIFIED in game.
+
 **FOLLOW-UP-HOOK (2026-11-26, pc-hummer, on fix/hook-rust-sensitive from main d90df41):** AI-assisted (Claude Code,
 Fable 5.2). The guard hook's sensitive list gains the Rust ports and the workspace files that AGENTS.md lists
 (`crates/ow-container/`, `crates/ow-package/`, the workspace's `Cargo.toml` and `rust-toolchain.toml`), with a shorter

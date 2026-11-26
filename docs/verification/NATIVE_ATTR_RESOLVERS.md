@@ -79,7 +79,9 @@ Fields: `Resource` (a `ResourceDefinition`), and `ResourceThreshold`, `AboveThre
 **The pools looked at.** Every controller of the current world's controller list, in list order (all controllers,
 not only the local player's). For each:
 - a controller virtual, not identified, gives the controller whose resource-pool provider interface is asked. With
-  none, the controller is skipped.
+  none, the controller is skipped. (Read since: None on `Controller`, `AIController` and the minds, the controller
+  itself on `PlayerController` and its subclasses, so only player controllers count; the provider is the controller's
+  own, NATIVE_LINKS_5_13_14_TAIL.md section 3.)
 - That provider is asked for its pool of `Resource`, as a pool reference. A reference that does not resolve (no
   manager, an index past the 16 slots, or a slot whose pool's `PoolGUID` differs) skips the controller.
 - A resolved pool still flagged `bCreatedAndNotModified` is skipped. On a network client the flag is first cleared
