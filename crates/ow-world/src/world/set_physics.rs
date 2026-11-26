@@ -413,7 +413,10 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
 pub const FLOOR_TRACE_LENGTH: f32 = 8.0;
 
 /// Whether the floor trace from `actor` misses `other`'s collision `component` by geometry alone, whatever the
-/// trace's flags (the hub's ruling for lane IMPL-COMBAT-WORLD-COLLISION; UNVERIFIED until the flags are read). Decided
+/// trace's flags. **UNVERIFIED**: the lane's own extension, accepted by the hub for lane IMPL-COMBAT-WORLD-COLLISION and
+/// to be checked against the trace's flags once they are read (queue 0ar). It is needed because #798's R2 check
+/// refused for any other actor holding collision wherever it stood, so separate spawn positions alone could not clear
+/// the trace. Decided
 /// only for an exact `Engine.CylinderComponent` whose box the bounding-cylinder rule answers
 /// ([`crate::world::bounding_cylinder::entry_box`]: radius R, half-height H, centred on the owner's `Location` plus an
 /// accepted `Translation`), with the actor's `Location` read and its own collision component holding no translation

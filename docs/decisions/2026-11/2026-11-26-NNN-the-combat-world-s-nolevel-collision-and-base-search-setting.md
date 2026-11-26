@@ -14,8 +14,10 @@ here is an UNVERIFIED stand-in.** Reference is unchanged.
     the population spawn points; UNVERIFIED)" and one line per placed pawn. The spacing of 1000 is far larger than
     every collision cylinder in the slice's combat world: Maya's has radius 42 and half-height 80, the AI pawns'
     radius 64 and half-height 48, and radius 150 and half-height 90;
-  - **the base search's clearance by geometry** (needed for the ruling to have its effect): #798's stand-in refused
-    whenever any other live actor held a `CollisionComponent`, wherever it stood. Another actor now no longer blocks
+  - **the base search's clearance by geometry, UNVERIFIED** (the lane's own extension beyond the ruling, which the hub
+    accepted; to be checked against the trace's flags, queue 0ar). Separate positions alone were not enough: #798's
+    stand-in refused whenever any other live actor held a `CollisionComponent`, wherever it stood, so a spawn 1000
+    units from Maya was refused the same as one at her feet. Another actor now no longer blocks
     when its component is an exact `Engine.CylinderComponent` whose box the bounding-cylinder rule answers, and the
     8-unit line down from the actor's `Location` runs more than the radius from its axis, or wholly above or below it.
     Touching counts as a hit. This is geometry alone, so it holds whatever the trace's flags are. Any other component,
