@@ -28,7 +28,7 @@
 //! **A template receiver** (review r1 of #763, the hub's ruling): an attached entry is [`RIGID_BODY`] (`LayerAbsent`,
 //! [`RIGID_LAYER`]), as before, and a template is never written.
 //!
-//! **A live receiver: the class table** (lane IMPL-LINK1-RIGID-BODY-CLASS-TABLE, decision 2026-11-26-NNN), coded from
+//! **A live receiver: the class table** (lane IMPL-LINK1-RIGID-BODY-CLASS-TABLE, decision 2026-11-26-25), coded from
 //! docs/verification/NATIVE_LINK1_RIGID_BODY_LAYER.md section 3.1 alone (lane ANALYST-LINK1-RIGID-BODY-LAYER, #763
 //! with its r1 fix; clean room: this lane did not read the executable). It replaces the attached entry's
 //! `LayerAbsent`: the game makes no body for these cases. The visit is **fixed** unless the pawn's `Physics` is
