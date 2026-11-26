@@ -2,9 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-combat-music, stacked on #804 @ bad2c3c on main
-21a668a):** AI-assisted (Claude Code, Opus 5.5). `ApplyGradeCustomizations`, `UpdatePlayThroughMaterial`,
+**IMPL-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-combat-music, moved onto main 74b06d8, which has
+#804):** AI-assisted (Claude Code, Opus 5.5). `ApplyGradeCustomizations`, `UpdatePlayThroughMaterial`,
 `GetCombatMusicManager`'s lazy creation and `PlayerDamagedByEnemy`'s gates, with the threat model's Off no-op stand-in
+(hub ruling on review of #801), Off. `cargo test -p ow-combat -p ow-cli` 572 passed / 0 failed / 10 ignored (the
+workspace 4,023 / 0 / 59 before the move); `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build,
+under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%, as on main: links 3, 4, 5, 13 and 14 at the spawn's
+`AttributeInitializationDefinition.SetBaseValue` ("a definition it names is not loaded"), so these natives are still
+not reached; link 7 at the HUD's pickup targeting; 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision
+2026-11-26-NNN.
+
 (hub ruling on review of #801), Off. `cargo test --workspace` 4,023 passed / 0 failed / 59 ignored;
 `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 7 not ok,
 8.167/14 = 58.3%, unchanged: links 3, 4, 5, 13 and 14 at "the base search's floor trace" (the combat world installs no

@@ -1,8 +1,7 @@
 ## 2026-11-26: The combat music manager and the spawn's balance tail
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-COMBAT-MUSIC-AND-AFTER, stacked on #804
-(fix/rust-bounding-cylinder @ bad2c3c, on main 21a668a), whose `bcyl_tail` holds the `GetCombatMusicManager` read this
-lane completes. Clean room: implemented from docs/verification/NATIVE_COMBAT_MUSIC_AND_AFTER.md (#801 as landed, r1)
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-COMBAT-MUSIC-AND-AFTER, first stacked on #804 (whose `bcyl_tail` holds the
+`GetCombatMusicManager` read this lane completes), then moved onto main 74b06d8 once #804 landed. Clean room: implemented from docs/verification/NATIVE_COMBAT_MUSIC_AND_AFTER.md (#801 as landed, r1)
 alone; this lane did not read the executable. No session was run. Every rule is UNVERIFIED in the running game.
 
 - **What was decided** (Off only; Reference binds nothing), in `ow-combat` `combat_music`:
@@ -40,8 +39,8 @@ alone; this lane did not read the executable. No session was run. Every rule is 
   registration). **Not tested:** test 5 (Reference unchanged), which holds by construction (`register` returns before
   binding outside Off); the behaviour run itself through `RunBehaviors` (only its plan); the store-built class default
   path of the creation.
-- **Measured:** see the GATES row of this lane. On the installed gate these natives are not reached yet: the spawns
-  of links 3, 4, 5, 13 and 14 stop first at the base search's floor trace (the combat world installs no collision
-  service).
+- **Measured:** see the GATES row of this lane. On the installed gate these natives are not reached yet: on main
+  74b06d8 the spawns of links 3, 4, 5, 13 and 14 stop first at `AttributeInitializationDefinition.SetBaseValue` ("a
+  definition it names is not loaded").
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.
