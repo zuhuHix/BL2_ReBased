@@ -48,8 +48,10 @@ harness work, with no new native rule.
   - the copied component's source f: the `LayerAbsent` with no layer, `WORLD_TRANSFORM` at `Scale` 0.92, the box at
     `Scale` 1.
 
-  Each new test was mutation-checked: `make` with a no-op init, the decoy made without its init, and two steps swapped
-  each fail a test. The two route tests now pin the new rule: every route sets the inputs in Off, and the decoy's
+  Each new test was mutation-checked: `MAKE_INIT` changed to a no-op, the decoy made without its init, and two entries
+  of `GUN_INIT_STEPS` swapped each fail a test. Not pinned (review r2 of #761): a no-op closure written into `make`'s
+  body in place of `MAKE_INIT` (only a dead-code warning shows it), and the order of the loop that runs
+  `GUN_INIT_STEPS` (the test pins the table, not the loop). The two route tests now pin the new rule: every route sets the inputs in Off, and the decoy's
   route and link 8's set none in Reference.
 - **The hub's call** (the note's open question 3): whether `skeletal_bounds` should answer a scaled world transform,
   the next stop of links 6 and 7.
