@@ -25,6 +25,13 @@ tests, plus a dated correction in NATIVE_ANIM_NODE_INIT.md section 2 D. No depen
   at the write) and clear; a case-insensitive lookup match, with nothing written or interned; no mesh, so no lookup;
   the auto-name while issuing; Maya's three additive nodes by toy values. The old issuing test now gives its node a
   name.
+- **Review r1 (#752):**
+  - `AddAnimSeqName` is read as a name in the preflight whatever the auto-name flag, so a malformed declaration is
+    refused before any write (test added);
+  - tests added for the not-loaded refusal, the search order with a not-loaded and a matching set, and no lookup with
+    the flag clear and no name;
+  - the "case-insensitive" test is relabelled (the name table folds case at intern);
+  - the init note says the same rules, with the init's own texts.
 - **Verified:** host tests and the installed slice gate, as in the GATES row. Link 1 moved earlier, to the lookup's
   not-loaded refusal for Maya's anim set `Anim_Siren.Base_Siren` (the refusal names the object). **UNVERIFIED in the
   running game.**

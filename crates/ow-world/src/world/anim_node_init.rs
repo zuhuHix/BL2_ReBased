@@ -336,15 +336,20 @@ fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
 }
 
 /// The text of the name the additive override looks up on `node`, or `None` for no lookup (the name None).
+/// `AddAnimSeqName` is read as a name whatever the auto-name flag (review r1 of #752, item 1: the write reads or
+/// writes it either way, so a malformed declaration is refused here, before any write).
 fn additive_name(vm: &Vm, node: ObjRef) -> Result<Option<String>, VmError> {
+    let own = match read(vm, node, "AddAnimSeqName")? {
+        Value::Name(n) => n,
+        other => return Err(script(format!("AddAnimSeqName holds {}, not a name", other.kind_name()))),
+    };
     if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) {
         return Ok(Some(AUTO_NAME.to_string()));
     }
-    match read(vm, node, "AddAnimSeqName")? {
-        Value::Name(n) if n == ow_object::ids::NameId::NONE => Ok(None),
-        Value::Name(n) => Ok(Some(vm.space.names.text(n).into_owned())),
-        other => Err(script(format!("AddAnimSeqName holds {}, not a name", other.kind_name()))),
+    if own == ow_object::ids::NameId::NONE {
+        return Ok(None);
     }
+    Ok(Some(vm.space.names.text(own).into_owned()))
 }
 
 /// [`ADDITIVE_NOT_LOADED`] naming the object (its store path, nothing loaded).
@@ -436,10 +441,12 @@ fn check_node(vm: &Vm, component: ObjRef, node: ObjRef, owner: Option<ObjRef>) -
                 for name in ["AddAnimSeq", "AddAnimLinkupIndex"] {
                     read(vm, node, name)?;
                 }
+                // The name's declaration first, whatever the flag (review r1 of #752, item 1).
+                let target = additive_name(vm, node)?;
                 if truth(&read(vm, node, "bAutoGenerateAdditiveSeqName")?) && !resets {
                     return Err(not_read(ADDITIVE_AUTO_NAME_ISSUING));
                 }
-                if let Some(target) = additive_name(vm, node)? {
+                if let Some(target) = target {
                     additive_lookup(vm, component, node, &target)?;
                 }
             }

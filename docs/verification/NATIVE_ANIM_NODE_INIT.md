@@ -148,9 +148,9 @@ decision 2026-11-26-11). Two points in step 2 above were wrong:*
   - *then, with a non-None name, a `SkeletalMesh` and a non-empty `AnimSets` on the component, the component's
     sequence lookup.*
 
-  *The port's kind D follows these from this date. A lookup match, and the auto-name while issuing notifies under a
-  name, are refused (that note's section 5 texts). The intern happens only at the write: the preflight matches by
-  text.*
+  *The port's kind D follows these from this date, by the same rules as that note's section 5, with the init's own
+  texts: a lookup match, a set or sequence not loaded, and the auto-name while issuing notifies under a name are
+  refused. The intern happens only at the write: the preflight matches by text.*
 
 ### E. `AnimTree` (and `WillowAnimTree`)
 
