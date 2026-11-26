@@ -29,13 +29,14 @@
 //!    with no geometry ([`crate::placement::NoLevel`]), the level part holds nothing to hit, and the actor part walks
 //!    every live actor's primitives in the placement walk's order (`CollisionComponent`, then `Components`), each
 //!    only rejecting, in the game walkers' order (the note's section 3):
-//!    - a primitive whose owner (`trace_filter::owner_of`) is the actor itself: passed over;
+//!    - a primitive that declares `Owner` and holds None (no owner), or whose owner (`trace_filter::owner_of`) is the
+//!      actor itself: passed over;
 //!    - the skip flag set, `BlockNonZeroExtent` clear, `CollideActors` clear, or the owner's `bCollideActors` clear:
 //!      passed over;
 //!    - the primitive's bounds (the bounding-cylinder rule's box) disjoint from the **swept box**: the actor's
 //!      collision cylinder (radius, radius, half-height) from `Location` plus its component's `Translation`, swept
 //!      down by 8 units, per axis, touching counted as meeting (the hub's ruling 2 on #809). The swept box is read
-//!      at the first candidate that reaches this test: a `CollisionComponent` that is not a cylinder is `NotRead`
+//!      and checked before the walk: a `CollisionComponent` that is not a cylinder is `NotRead`
 //!      ([`BASE_EXTENT`]); a start, extent or bounds that is not finite or not non-negative is `NotRead`
 //!      ([`BASE_SWEPT_BOX`]); bounds the rule does not answer keep its own `NotYet`;
 //!    - the owner in the actor's `Owner` chain, or the actor in the owner's (`trace_filter::owner_chains`, the hub's
@@ -419,11 +420,14 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
     // 4. The actor part, over every live actor's primitives in the placement walk's order.
     let space = &vm.space;
     let primitive = space.classes.by_path("Engine.PrimitiveComponent");
-    let unloaded = |o: ObjRef| vm.defs.is_unloaded(space, o);
+    // A handle the store has not loaded, or a slotless stand-in, is an unloaded link (the touch walk's rule; review of
+    // #816, item 2), so a chain never reads a missing slot.
+    let unloaded = |o: ObjRef| crate::touch_trace::is_unloaded(vm, o);
     let actors = crate::actors::actors_of(vm)?;
     let list = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
-    // 2. The swept box, read when the first candidate reaches the bounds test.
-    let mut swept: Option<Swept> = None;
+    // 2. The swept box, read and checked before the walk (review of #816, item 1): a source without a cylinder, or a
+    // malformed extent, refuses even with no candidate.
+    let swept = swept_box(vm, actor)?;
     for walked in list {
         if crate::actors::is_destroyed(space, walked)? {
             continue;
@@ -459,6 +463,12 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
             }
             // In the walkers' order (NATIVE_FLOOR_TRACE_FLAGS.md section 3): the owner, the skip flag, the extent
             // flag, the per-component test, the bounds, the Owner chains; only rejecting.
+            // A primitive with no owner is passed over (the walkers' first step; review of #816, item 3): a component
+            // that declares `Owner` and holds None. One that does not declare it is the walked actor's.
+            let part_class = space.heap.get(part)?.class;
+            if space.prop(part_class, "Owner").is_some() && object(vm, part, "Owner")?.is_none() {
+                continue;
+            }
             let owner = crate::trace_filter::owner_of(space, part, walked)?;
             if owner == actor {
                 continue;
@@ -476,10 +486,7 @@ fn search_base(vm: &Vm, actor: ObjRef) -> Result<(), VmError> {
             if !crate::actors::flag(space, owner, "bCollideActors")? {
                 continue;
             }
-            let s = match swept {
-                Some(s) => s,
-                None => *swept.insert(swept_box(vm, actor)?),
-            };
+            let s = swept;
             let (centre, extent) = crate::world::bounding_cylinder::entry_box(vm, owner, part)?;
             if !(centre.iter().chain(extent.iter()).all(|v| v.is_finite()) && extent.iter().all(|v| *v >= 0.0)) {
                 return Err(NotYet::not_read(BASE_SWEPT_BOX, RECORD_FLOOR).into());

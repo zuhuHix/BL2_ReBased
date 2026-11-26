@@ -817,7 +817,7 @@ fn the_base_search() {
     x.set(pawn, "Acceleration", moving);
     // The actor's own CollisionComponent is skipped (R2; read in NATIVE_FLOOR_TRACE_FLAGS.md section 4, UNVERIFIED
     // in game), even when it is placed in the world.
-    let own = x.obj("Engine.Actor");
+    let own = cylinder(&mut x, pawn, 30.0, 40.0);
     x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
     let actors = crate::actors::actors_of(x.vm()).unwrap();
     let info = x.obj("Engine.Actor"); // a stand-in first actor, with no collision
@@ -845,11 +845,15 @@ fn the_base_search() {
     x.set(pawn, "CollisionComponent", Value::Object(None));
     // Into PHYS_Walking: bForceFloorCheck set, the vectors kept.
     let pawn = x.obj("Engine.ToyPlainPawn");
+    let own = cylinder(&mut x, pawn, 30.0, 40.0);
+    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
     x.set(pawn, "Physics", Value::Byte(2));
     x.physics(pawn, 1).unwrap();
     assert_eq!((x.get(pawn, "Physics"), x.get(pawn, "bForceFloorCheck")), (Value::Byte(1), Value::Bool(true)));
     // A Base set: the base setter's NotRead, nothing written.
     let pawn = x.obj("Engine.ToyPlainPawn");
+    let own = cylinder(&mut x, pawn, 30.0, 40.0);
+    x.set(pawn, "CollisionComponent", Value::Object(Some(own)));
     let base = x.obj("Engine.ToyPlainPawn");
     x.set(pawn, "Physics", Value::Byte(2));
     x.set(pawn, "Base", Value::Object(Some(base)));
@@ -970,7 +974,8 @@ fn the_swept_box_needs_a_well_formed_cylinder_extent() {
     let (mut x, source, template) = floor_world();
     let plain = x.obj("Engine.PrimitiveComponent");
     x.set(source, "CollisionComponent", Value::Object(Some(plain)));
-    floor(&mut x, source).unwrap();
+    // Review of #816, item 1: the extent is checked before the walk, so even with no candidate it refuses.
+    assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_EXTENT.to_string())), "no candidate");
     other(&mut x, &template, [0.0, 0.0, 0.0]);
     assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_EXTENT.to_string())));
     x.set(source, "CollisionComponent", Value::Object(None));
@@ -1003,6 +1008,55 @@ fn the_swept_box_needs_a_well_formed_cylinder_extent() {
     x.set(c, "AbsoluteTranslation", Value::Bool(true));
     let refused = floor(&mut x, source).unwrap_err();
     assert_eq!(refused, (Missing::NotRead, crate::world::bounding_cylinder::WORLD_TRANSFORM.to_string()));
+}
+
+/// Review of #816, items 1, 3 and 4: the source's extent checked before the walk (a negative half-height, a NaN or
+/// infinite radius refuse with no candidate at all); the box per axis, not a circle (a candidate at (35, 35, 0), 49.5
+/// from the axis but within 40 on each axis, meets the box); the source's translation moves the box; a candidate with
+/// infinite bounds is malformed; a primitive with no owner is passed over.
+#[test]
+fn the_swept_box_s_review_cases() {
+    let swept = (Missing::NotRead, BASE_SWEPT_BOX.to_string());
+    let own = |x: &mut Fx, source: ObjRef| match x.get(source, "CollisionComponent") {
+        Value::Object(Some(c)) => c,
+        other => panic!("{other:?}"),
+    };
+    for (field, bad) in [("CollisionHeight", -1.0), ("CollisionRadius", f32::NAN), ("CollisionRadius", f32::INFINITY)] {
+        let (mut x, source, _) = floor_world();
+        let c = own(&mut x, source);
+        x.set(c, field, Value::Float(bad));
+        assert_eq!(floor(&mut x, source), Err(swept.clone()), "{field} {bad}, no candidate");
+    }
+    let (mut x, source, template) = floor_world();
+    other(&mut x, &template, [35.0, 35.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err(candidate()), "per axis, not a circle");
+    let (mut x, source, template) = floor_world();
+    other(&mut x, &template, [100.0, 0.0, 0.0]);
+    floor(&mut x, source).unwrap();
+    let c = own(&mut x, source);
+    let v = vec3(&mut x, &template, [100.0, 0.0, 0.0]);
+    x.set(c, "Translation", v);
+    assert_eq!(floor(&mut x, source), Err(candidate()), "the translation moves the start onto it");
+    let (mut x, source, template) = floor_world();
+    let (_, c) = other(&mut x, &template, [1000.0, 0.0, 0.0]);
+    x.set(c, "CollisionRadius", Value::Float(f32::INFINITY));
+    assert_eq!(floor(&mut x, source), Err(swept.clone()), "infinite candidate bounds");
+    let (mut x, source, template) = floor_world();
+    let (_, c) = other(&mut x, &template, [0.0, 0.0, 0.0]);
+    x.set(c, "Owner", Value::Object(None));
+    floor(&mut x, source).unwrap();
+}
+
+/// Review of #816, item 2: a slotless stand-in on the source's `Owner` chain that decides a candidate is the typed
+/// Owner-link refusal, not a heap error.
+#[test]
+fn a_slotless_owner_link_is_the_owner_link_refusal() {
+    let (mut x, source, template) = floor_world();
+    let class = x.vm().find_class("Engine.Actor").unwrap();
+    let stand_in = x.vm().space.alloc_stand_in(class, "Slotless", Origin::Default { class }).unwrap();
+    x.set(source, "Owner", Value::Object(Some(stand_in)));
+    other(&mut x, &template, [0.0, 0.0, 0.0]);
+    assert_eq!(floor(&mut x, source), Err((Missing::NotRead, BASE_OWNER_LINK.to_string())));
 }
 
 /// Section 8, rows 2 and 8 (the hub's ruling 1 on #809): the source's own primitives, its `Owner` chain and the actors
