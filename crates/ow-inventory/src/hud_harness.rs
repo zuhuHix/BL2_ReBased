@@ -64,7 +64,7 @@ pub const LINE_GEOMETRY: &str = "the pickup targeting's line check against level
 pub const LINE_ACTOR: &str = "the pickup targeting's line check: another actor's collision";
 /// The line check's endpoints, or a candidate's bounds, not finite, ordered and non-negative (NATIVE_LINK7_LINE_CHECK.md
 /// section 5, step 4).
-pub const LINE_MALFORMED: &str = "the pickup targeting's line check: a malformed segment or bounds";
+pub const LINE_MALFORMED: &str = "the pickup targeting's line check: a malformed endpoint or bounds";
 /// An object the store has not loaded that decides a candidate of the line check.
 pub const LINE_UNLOADED: &str = "the pickup targeting's line check: an object the store has not loaded (a load is a write)";
 /// The pawn classes whose trace filter keeps the `Pawn` row for this query (NATIVE_FLOOR_TRACE_FLAGS.md section 3: the
@@ -346,7 +346,8 @@ fn line_walk(vm: &Vm, from: [f32; 3], to: [f32; 3], source: ObjRef, target: ObjR
         return Err(unloaded_named(ow_attr::eval::class_path(space, target)));
     }
     let base = object(vm, target, "Base")?;
-    let unloaded = |o: ObjRef| vm.defs.is_unloaded(space, o);
+    // A store handle not loaded, or a slotless stand-in, is an unloaded link (an unloaded Owner link is not None).
+    let unloaded = |o: ObjRef| ow_world::touch_trace::is_unloaded(vm, o);
     let s = tf::Source {
         actor: source,
         unloaded: &unloaded,

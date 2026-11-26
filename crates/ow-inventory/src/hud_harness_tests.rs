@@ -94,6 +94,8 @@ fn engine() -> Vec<u8> {
         t.prop("Bool", pawn, b, 0, 0);
     }
     t.class("StaticMeshActor", actor);
+    t.class("Terrain", actor);
+    t.class("ToyPawnChild", pawn);
     t.class("InterpActor", actor);
     let volume = t.class("Volume", actor);
     t.prop("Bool", volume, "bPawnsOnly", 0, 0);
@@ -519,8 +521,15 @@ fn world_geometry_and_movers_are_tested() {
     x.set(c, "Owner", Value::Object(Some(controller)));
     x.set(controller, "CollisionComponent", Value::Object(Some(c)));
     x.set(controller, "bWorldGeometry", Value::Bool(true));
+    x.set(controller, "bCollideActors", Value::Bool(true));
+    x.vector(controller, "Location", [60.0, 0.0, 40.0]);
+    x.set(c, "CollisionRadius", Value::Float(20.0));
+    x.set(c, "CollisionHeight", Value::Float(20.0));
     x.w.actors().borrow_mut().place(controller).unwrap();
     assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // The same controller not the HUD's Owner: tested, the hash admission.
+    x.set(hud, "Owner", Value::Object(None));
+    assert!(refused(line(&x, &mut host, hud, target)).contains(ow_world::trace_filter::HASH_ADMISSION));
     // A bPawnsOnly volume: the source's volume test.
     let (mut x, hud, target, mut host) = line_world();
     let (v, _) = x.colliding("Engine.Volume", [60.0, 0.0, 40.0], 20.0, 20.0);
@@ -530,6 +539,48 @@ fn world_geometry_and_movers_are_tested() {
     let (mut x, hud, target, mut host) = line_world();
     x.colliding("WillowGame.ToyPickupChild", [60.0, 0.0, 40.0], 20.0, 20.0);
     assert!(refused(line(&x, &mut host, hud, target)).contains("the trace filter of WillowGame.ToyPickupChild"));
+}
+
+/// NATIVE_LINK7_LINE_CHECK.md section 6, tests 4 and 4a (review r1 of #814): a mover whose only blocking primitive is
+/// in `Components` is the hash admission's `NotRead`; a NaN bounds centre is malformed; an unloaded `Owner` link that
+/// decides a candidate is the Owner-chain link's `NotRead`, nothing loaded; a mistyped `bWorldGeometry` is a script
+/// error; a terrain is the terrain handling's `NotRead`; a `Pawn` subclass with no read row is "the trace filter of"
+/// it.
+#[test]
+fn the_fixed_note_s_section_6_4a_cases() {
+    use ow_world::trace_filter::{HASH_ADMISSION, OWNER_CHAIN_LINK, TERRAIN_HANDLING};
+    // A mover whose CollisionComponent is None and whose only primitive is in Components.
+    let (mut x, hud, target, mut host) = line_world();
+    let (mover, c) = x.colliding("Engine.InterpActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(mover, "CollisionComponent", Value::Object(None));
+    x.set(mover, "Components", Value::array(vec![Value::Object(Some(c))]));
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.contains(HASH_ADMISSION));
+    // A NaN bounds centre, far away on Y: malformed, not cleared.
+    let (mut x, hud, target, mut host) = line_world();
+    let (m, _) = x.colliding("Engine.StaticMeshActor", [f32::NAN, 900.0, 40.0], 20.0, 20.0);
+    x.set(m, "bWorldGeometry", Value::Bool(true));
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_MALFORMED));
+    // The HUD's Owner a slotless stand-in: the chain is undecided, so a world-geometry candidate names the link.
+    let (mut x, hud, target, mut host) = line_world();
+    let class = x.w.vm.find_class("Engine.Actor").unwrap();
+    let lazy = x.w.vm.space.alloc_stand_in(class, "Lazy", Origin::Default { class }).unwrap();
+    x.set(hud, "Owner", Value::Object(Some(lazy)));
+    let (m, _) = x.colliding("Engine.StaticMeshActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(m, "bWorldGeometry", Value::Bool(true));
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.contains(OWNER_CHAIN_LINK));
+    // A mistyped bWorldGeometry (an int in the bool's slot): a script error.
+    let (mut x, hud, target, mut host) = line_world();
+    let (m, _) = x.colliding("Engine.StaticMeshActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    let p = x.w.vm.space.prop(x.w.vm.space.heap.get(m).unwrap().class, "bWorldGeometry").unwrap();
+    *x.w.vm.space.slot_mut(m, PropAddr::scalar(p)).unwrap() = Value::Int(1);
+    assert!(matches!(host.line_blocker_for(&x.w.vm, FROM, TO, hud, target), Err(VmError::Script { .. })));
+    // A terrain on the line, and a Pawn subclass with no read row.
+    let (mut x, hud, target, mut host) = line_world();
+    x.colliding("Engine.Terrain", [60.0, 0.0, 40.0], 20.0, 20.0);
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.contains(TERRAIN_HANDLING));
+    let (mut x, hud, target, mut host) = line_world();
+    x.colliding("Engine.ToyPawnChild", [60.0, 0.0, 40.0], 20.0, 20.0);
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.contains("the trace filter of Engine.ToyPawnChild"));
 }
 
 /// (a): a primitive held only in `Components` is walked too; (c) malformed values; (d) an unloaded part is named.
