@@ -58,6 +58,7 @@ fn engine() -> Vec<u8> {
     native(&mut t, dropped, "TouchPickupTrace", &[at("StartLoc"), at("EndLoc")], Some(("Bool", 0)));
     native(&mut t, dropped, "GetPickupableInventory", &[], Some(("Object", actor)));
     native(&mut t, dropped, "GetPickupableInventoryDefinition", &[], Some(("Object", object)));
+    native(&mut t, dropped, "Pickupable_IsEnabled", &[], Some(("Bool", 0)));
     // The packages' WillowInventory is an Engine class (lane IMPL-PICKUP found `definition` binding WillowGame paths).
     let inventory = t.class("WillowInventory", actor);
     native(&mut t, inventory, "GetManufacturer", &[], Some(("Object", object)));
@@ -89,7 +90,11 @@ fn willow_game() -> Vec<u8> {
     native(&mut t, player, "GetInventoryPawn", &[], Some(("Object", pawn)));
     let globals = t.class("WillowGlobals", object);
     native(&mut t, globals, "RemovePickup", &[Param { type_ref: object, ..Param::new("Object", "inPickup") }], None);
-    t.class("WillowPickup", dropped);
+    let pickup = t.class("WillowPickup", dropped);
+    t.prop("Bool", pickup, "bPickupable", 0, 0);
+    native(&mut t, pickup, "Pickupable_IsEnabled", &[], Some(("Bool", 0)));
+    // Invented: a subclass with no field of its own (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5's third test).
+    t.class("ToyWillowPickupSubclass", pickup);
     t.build()
 }
 
@@ -297,6 +302,8 @@ fn reference_binds_nothing() {
         TOUCH_PICKUP_TRACE,
         GET_PICKUPABLE_INVENTORY,
         GET_PICKUPABLE_INVENTORY_DEFINITION,
+        PICKUPABLE_IS_ENABLED[0],
+        PICKUPABLE_IS_ENABLED[1],
     ] {
         assert!(!x.vm.has_native(key), "{key}");
     }
@@ -363,4 +370,70 @@ fn the_definition_query_on_a_cold_inventory_loads_no_code() {
         other => panic!("{other:?}"),
     }
     assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
+}
+
+// ---- Pickupable_IsEnabled (lane IMPL-PICKUPABLE-ISENABLED, NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5) ------------
+
+const ENABLED_WILLOW: &str = "WillowGame.WillowPickup.Pickupable_IsEnabled";
+const ENABLED_DROPPED: &str = "Engine.DroppedPickup.Pickupable_IsEnabled";
+
+fn enabled_not_read(r: Result<Value, VmError>) -> String {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD_ENABLED), "{n}");
+            n.what.to_string()
+        }
+        other => panic!("expected NotYet, got {other:?}"),
+    }
+}
+
+/// Section 5's first test: a toy `WillowPickup` with `bPickupable` set answers true, and cleared answers false, by
+/// either key. No write, draw, load or name is counted.
+#[test]
+fn a_willow_pickup_answers_its_b_pickupable() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    for enabled in [true, false] {
+        x.set(pickup, "bPickupable", Value::Bool(enabled));
+        let before = marks(&x.vm);
+        for path in [ENABLED_WILLOW, ENABLED_DROPPED] {
+            assert_eq!(x.call(path, pickup, vec![]).unwrap(), Value::Bool(enabled), "{path}");
+        }
+        assert_eq!(marks(&x.vm), before, "no code load, write, draw, store load or name");
+    }
+}
+
+/// Section 5's second test: a toy `DroppedPickup` that is not a `WillowPickup` is the `NotRead` (its own answer was not
+/// read), and nothing is counted.
+#[test]
+fn a_dropped_pickup_that_is_not_a_willow_pickup_is_not_read() {
+    let mut x = fx(ParityMode::Off);
+    let dropped = x.obj("Engine.DroppedPickup");
+    let before = marks(&x.vm);
+    let what = enabled_not_read(x.call(ENABLED_DROPPED, dropped, vec![]));
+    assert_eq!(what, format!("{PICKUPABLE_OTHER} Engine.DroppedPickup: its own answer is not read"));
+    assert_eq!(marks(&x.vm), before);
+}
+
+/// Section 5's third test: a subclass of `WillowPickup` with no field of its own reads the inherited `bPickupable`.
+#[test]
+fn a_willow_pickup_subclass_reads_the_inherited_field() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.ToyWillowPickupSubclass");
+    x.set(pickup, "bPickupable", Value::Bool(true));
+    assert_eq!(x.call(ENABLED_WILLOW, pickup, vec![]).unwrap(), Value::Bool(true));
+    x.set(pickup, "bPickupable", Value::Bool(false));
+    assert_eq!(x.call(ENABLED_WILLOW, pickup, vec![]).unwrap(), Value::Bool(false));
+}
+
+/// Where the note is silent: a `WillowPickup` the store has not loaded (here a slotless stand-in) is the `NotRead`,
+/// its slots not being the package's values; nothing is counted.
+#[test]
+fn an_unloaded_willow_pickup_is_not_read() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    x.vm.space.heap.get_mut(pickup).unwrap().slots.clear();
+    let before = marks(&x.vm);
+    assert_eq!(enabled_not_read(x.call(ENABLED_WILLOW, pickup, vec![])), PICKUPABLE_UNLOADED);
+    assert_eq!(marks(&x.vm), before);
 }

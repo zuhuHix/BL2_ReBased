@@ -44,6 +44,20 @@
 //!     (`Vm::find_loaded_method`, lane COLD-LOAD-FIXES): a class of the chain whose code is not loaded is a named
 //!     `NotYet { NotRead }`, "the class <path>, not loaded (a class load is a write)".
 //!
+//! - **`DroppedPickup.Pickupable_IsEnabled()` and `WillowPickup.Pickupable_IsEnabled()`** (lane
+//!   IMPL-PICKUPABLE-ISENABLED, decision 2026-11-26-NNN), coded from NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5
+//!   alone (clean room: analyst lane F read the native, this lane did not), UNVERIFIED. Both keys share one rule:
+//!   - a receiver of class `WillowGame.WillowPickup` or a subclass (the class table by path, so no code is loaded):
+//!     its `bPickupable`, read **by name** through the class layout, never by offset (the note places the field after
+//!     `RBState` under a fitted 16-byte alignment, UNVERIFIED). A class that declares no `bPickupable`, or one whose
+//!     `bPickupable` is not a bool, is a data error (`VmError::Script`);
+//!   - any other receiver, a `DroppedPickup` that is not a `WillowPickup` among them: `NotYet { NotRead }`
+//!     ([`PICKUPABLE_OTHER`]): `DroppedPickup`'s own answer was not read;
+//!   - a receiver the store has not loaded: `NotYet { NotRead }` ([`PICKUPABLE_UNLOADED`]). The note does not cover
+//!     it, and a handle's slots are not the package's values.
+//!
+//!   Nothing is written, loaded or drawn.
+//!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so Reference binds nothing here (R3).
 
 use std::rc::Rc;
@@ -80,6 +94,18 @@ pub const REMOVE_PICKUP: &str = "WillowGlobals.RemovePickup(object)";
 pub const TOUCH_PICKUP_TRACE: &str = "DroppedPickup.TouchPickupTrace(vector,vector)";
 pub const GET_PICKUPABLE_INVENTORY: &str = "DroppedPickup.GetPickupableInventory()";
 pub const GET_PICKUPABLE_INVENTORY_DEFINITION: &str = "DroppedPickup.GetPickupableInventoryDefinition()";
+/// The two `Pickupable_IsEnabled` keys (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5), one rule.
+pub const PICKUPABLE_IS_ENABLED: [&str; 2] =
+    ["DroppedPickup.Pickupable_IsEnabled()", "WillowPickup.Pickupable_IsEnabled()"];
+
+/// The record `Pickupable_IsEnabled` follows.
+pub const RECORD_ENABLED: &str = "NATIVE_TOUCH_COMPONENT_TEMPLATE.md";
+/// The class whose answer is read: it and its subclasses answer their `bPickupable`.
+pub const WILLOW_PICKUP: &str = "WillowGame.WillowPickup";
+/// The start of the `NotRead` for any other receiver: "Pickupable_IsEnabled on <class>: its own answer is not read".
+pub const PICKUPABLE_OTHER: &str = "Pickupable_IsEnabled on";
+/// The `NotRead` for a receiver the store has not loaded.
+pub const PICKUPABLE_UNLOADED: &str = "Pickupable_IsEnabled on a pickup the store has not loaded";
 
 /// The record of `TouchPickupTrace`.
 pub const RECORD_TOUCH: &str = ow_world::trace_filter::RECORD_TOUCH;
@@ -136,6 +162,27 @@ fn touch_pickup_trace(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         return Err(NotYet::not_read(TOUCH_UNLOADED, RECORD_TOUCH).into());
     }
     Ok(Value::Bool(ow_world::touch_trace::touch_line(c.vm, pickup, start, end)?))
+}
+
+/// `Pickupable_IsEnabled()` (module documentation): a `WillowPickup`'s `bPickupable`, read by name.
+fn pickupable_is_enabled(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const WHAT: &str = "Pickupable_IsEnabled";
+    let pickup = c.this.ok_or_else(|| bad(WHAT, "called without a pickup"))?;
+    let class = c.vm.space.heap.get(pickup)?.class;
+    let willow = c.vm.space.classes.by_path(WILLOW_PICKUP);
+    if !willow.is_some_and(|w| c.vm.space.classes.is_child_of(class, w)) {
+        let path = ow_attr::eval::class_path(&c.vm.space, pickup);
+        return Err(
+            NotYet::not_read(format!("{PICKUPABLE_OTHER} {path}: its own answer is not read"), RECORD_ENABLED).into()
+        );
+    }
+    if ow_world::touch_trace::is_unloaded(c.vm, pickup) {
+        return Err(NotYet::not_read(PICKUPABLE_UNLOADED, RECORD_ENABLED).into());
+    }
+    match required(c.vm, pickup, "bPickupable", WHAT)? {
+        Value::Bool(enabled) => Ok(Value::Bool(enabled)),
+        other => Err(bad(WHAT, format!("bPickupable is not a bool: {other:?}"))),
+    }
 }
 
 fn pickup_inventory(c: &mut NativeCall<'_>, what: &str) -> Result<Option<ow_object::ids::ObjRef>, VmError> {
@@ -241,6 +288,9 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     ];
     for (key, f) in natives {
         vm.register_native(key, f)?;
+    }
+    for key in PICKUPABLE_IS_ENABLED {
+        vm.register_native(key, Rc::new(pickupable_is_enabled))?;
     }
     // The touch trace refuses a script None in place of a vector (step 3), so the interpreter hands it over.
     vm.keep_struct_none(TOUCH_PICKUP_TRACE);
