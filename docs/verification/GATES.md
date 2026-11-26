@@ -9,7 +9,7 @@ definitions preloaded at the pickup world's set-up). `cargo test --workspace -j 
 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine
 lock), main d3be3e5 and this change: 7 ok / 7 not ok, 58.3% on both. Link 6 moves from `UpdateAmmoCounts`' `NotRead` to
 the prefixed `Actor.SetBase` stop, as predicted; link 7 only gains harness lines; every other row is unchanged.
-UNVERIFIED in game. Decision 2026-11-26-NNN.
+UNVERIFIED in game. Decision 2026-11-26-47.
 
 **ANALYST-SETDEFAULTPHYSICS-AND-SPAWN-BALANCE (2026-11-26, pc-hummer, docs only, on docs/native-setdefaultphysics, read
 and probed on main 785c2a4a, rebased onto 0195ce94):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md names
