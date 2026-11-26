@@ -46,7 +46,10 @@
 //! is a mesh); `bEnableSoftBodySimulation` set is [`RIGID_BODY`] (the soft body). Otherwise the writes:
 //! `bSkelCompFixed` := fixed, and `ClothMeshIndexData` := empty when `ClothSim` is zero. Then each `Attachments`
 //! entry's `Component` in the attach record under the same owner gets the same table, recursively, in array order;
-//! one not in the record is not visited.
+//! one not in the record is not visited, unless its `AttachedToSkelComponent` names this entry: then the port cannot
+//! tell whether it is attached, and it is [`UNRECORDED_ATTACHMENT`] (`NotRead`; review of #770, as #766's release
+//! rule refuses where the port cannot tell). Since socket attaches publish (lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL),
+//! Maya's never meets it.
 //!
 //! **The preflight.** Every refusal comes **before the first write**, over the whole walk and its recursion: the
 //! declarations (each flag and field with its kind, else `VmError::Script`); every entry, attachment component and
@@ -111,6 +114,9 @@ pub const UNREAD_CLASS: &str = "WillowPawn.InitializeRBPhysics: the rigid-body s
 pub const CLOTH: &str = "InitializeRBPhysics: the cloth set-up";
 /// The mesh's cloth bool, by place (fitted, UNVERIFIED).
 pub const CLOTH_BOOL: &str = "bClothMetal";
+/// An `Attachments` component back-linked to its entry but not in the attach record (`NotRead`).
+pub const UNRECORDED_ATTACHMENT: &str = "WillowPawn.InitializeRBPhysics: an attachment back-linked to its parent but \
+     not in the attach record (the port cannot tell whether it is attached)";
 /// The skeletal fields the rule reads, with their kinds (the two arrays' element kinds are checked apart).
 const SKELETAL_FIELDS: [(&str, Want); 9] = [
     ("bDisableAllRigidBody", Want::Bool),
@@ -290,9 +296,25 @@ fn plan(
         require_resident(vm, component)?;
         if crate::actors::attached_to(vm, component, owner)? {
             plan(vm, owner, component, seen, writes)?;
+        } else if back_linked(vm, component, entry)? {
+            // Review of #770: a back-linked component the record does not hold is not skipped silently.
+            return Err(NotYet::not_read(UNRECORDED_ATTACHMENT, RECORD_LAYER).into());
         }
     }
     Ok(())
+}
+
+/// Whether the resident `component`'s `AttachedToSkelComponent` names `parent` (false when its class declares none;
+/// declared as anything but an object, a data error).
+fn back_linked(vm: &Vm, component: ObjRef, parent: ObjRef) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let Some(p) = vm.space.prop(class, "AttachedToSkelComponent") else {
+        return Ok(false);
+    };
+    if !matches!(vm.space.classes.decl(p).map(|d| &d.kind), Some(PropKind::Object { .. })) {
+        return Err(bad(RB, "AttachedToSkelComponent is not declared as an object"));
+    }
+    Ok(object_of(&read(vm, component, "AttachedToSkelComponent", RB)?, RB)? == Some(parent))
 }
 
 /// `WillowPawn.InitializeRBPhysics()` in Off (module documentation). Every refusal comes before the first write.
