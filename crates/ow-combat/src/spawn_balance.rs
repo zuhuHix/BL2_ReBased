@@ -6,8 +6,10 @@
 //! The port's spawn has no factory, so the harness finds the balance by that pointer: among the
 //! `AIPawnBalanceDefinition` exports of the archetype's own package file, the one whose `AIPawnArchetype` is the
 //! spawned archetype (compared by path). Exactly one must match; none, or more than one, is recorded as the step's
-//! refusal naming the archetype. Each candidate is loaded through the store to read its pointer (a harness load at the
-//! spawn). The pick is logged ("harness input: …") and recorded for `ow-world`'s step ([`ow_world::spawn_balance`]),
+//! refusal naming the archetype. Each candidate is loaded through the store to read its pointer: **every
+//! `AIPawnBalanceDefinition` export of the package (35 on the slice) on every Off spawn, a harness load outside any
+//! preflight** (review of #792, item 5). A candidate whose load fails, or a package the store cannot load, is recorded as
+//! the step's `NotRead` naming it. The pick is logged ("harness input: …") and recorded for `ow-world`'s step ([`ow_world::spawn_balance`]),
 //! which runs it before the mind's recalculation. Which balance the game's own population picks was not observed.
 
 use ow_core::{ObjectPath, PackageName};
@@ -27,11 +29,15 @@ pub fn pick_line(archetype: &str, balance: &str) -> String {
     )
 }
 
-/// The candidates: the paths of `package`'s exports whose class is named [`BALANCE_CLASS`].
-fn candidates(vm: &mut Vm, package: &str) -> Result<Vec<String>, VmError> {
-    let Ok(name) = PackageName::parse(package) else { return Ok(Vec::new()) };
+/// The candidates: the paths of `package`'s exports whose class is named [`BALANCE_CLASS`]; `Err` with the refusal's
+/// text when the store cannot load the package.
+fn candidates(vm: &mut Vm, package: &str) -> Result<Result<Vec<String>, String>, VmError> {
+    let Ok(name) = PackageName::parse(package) else { return Ok(Ok(Vec::new())) };
     let (_, store) = vm.defs.code_mut();
-    let id = store.load(&name).map_err(|e| VmError::Script { function: "the spawn's balance pick".into(), message: e.to_string() })?;
+    let id = match store.load(&name) {
+        Ok(id) => id,
+        Err(e) => return Ok(Err(format!("the spawn's pawn balance: the package {package} cannot be loaded ({e})"))),
+    };
     let pkg = store.get(id);
     let mut out = Vec::new();
     for index in 1..=pkg.exports.len() as i32 {
@@ -41,7 +47,7 @@ fn candidates(vm: &mut Vm, package: &str) -> Result<Vec<String>, VmError> {
             out.push(path);
         }
     }
-    Ok(out)
+    Ok(Ok(out))
 }
 
 /// The path of the object `o` names: the store's handle path, else its object path.
@@ -52,9 +58,20 @@ fn path_of(vm: &Vm, o: ObjRef) -> String {
 /// Picks and records the balance of the pawn spawned from `archetype` of `package` (module documentation).
 pub fn pick(vm: &mut Vm, pawn: ObjRef, package: &str, archetype: &str) -> Result<(), VmError> {
     let mut matched = Vec::new();
-    for candidate in candidates(vm, package)? {
+    let candidates = match candidates(vm, package)? {
+        Ok(c) => c,
+        Err(why) => return ow_world::spawn_balance::record(vm, pawn, Err(why)),
+    };
+    for candidate in candidates {
         let Ok(path) = ObjectPath::parse(&candidate) else { continue };
-        let Ok(Some(balance)) = vm.defs.find(&mut vm.space, &path) else { continue };
+        let balance = match vm.defs.find(&mut vm.space, &path) {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => {
+                let why = format!("the spawn's pawn balance: the candidate {candidate} cannot be loaded ({e})");
+                return ow_world::spawn_balance::record(vm, pawn, Err(why));
+            }
+        };
         let class = vm.space.heap.get(balance)?.class;
         let Some(p) = vm.space.prop(class, "AIPawnArchetype") else { continue };
         if let Value::Object(Some(a)) = vm.space.read(balance, ow_object::ids::PropAddr::scalar(p))?.clone()

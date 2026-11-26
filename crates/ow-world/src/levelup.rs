@@ -49,13 +49,14 @@ use crate::pools::{self, is_a};
 /// The record.
 pub const RECORD: &str = "NATIVE_LEVEL_UP_ATTRIBUTES.md sections 1-2";
 
-/// The script-callable keys the installed packages declare (one shared thunk calls the class's virtual); the
-/// `WillowMind` key since lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (the note's section 4.1).
-pub const NATIVE_KEYS: [&str; 3] = [
+/// The script-callable keys the installed packages declare (one shared thunk calls the class's virtual).
+pub const NATIVE_KEYS: [&str; 2] = [
     "Controller.RecalculateAttributeInitializedState()",
     "WillowPlayerController.RecalculateAttributeInitializedState()",
-    "WillowMind.RecalculateAttributeInitializedState()",
 ];
+/// The `WillowMind` key, bound in Off only (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC, the note's section 4.1;
+/// review of #792, item 4: Reference keeps it unbound, as before).
+pub const MIND_KEY: &str = "WillowMind.RecalculateAttributeInitializedState()";
 
 /// What [`recalculate_attribute_initialized_state`] ran.
 #[non_exhaustive]
@@ -80,7 +81,9 @@ pub fn recalculate_attribute_initialized_state(
         )
         .into());
     }
+    // The marks and prefix wrapper is Off's (review of #792, item 4): Reference's refusals keep their text.
     let entry = marks(vm);
+    let off = vm.parity == ParityMode::Off;
     let result = (|| -> Result<Recalculated, VmError> {
         if mind {
             crate::spawn_balance::run_step(vm, controller)?;
@@ -102,7 +105,7 @@ pub fn recalculate_attribute_initialized_state(
         Ok(Recalculated { class_parts_skipped: skipped, manager })
     })();
     match result {
-        Err(e) if marks(vm) != entry => Err(pools::after_partial_writes(e)),
+        Err(e) if off && marks(vm) != entry => Err(pools::after_partial_writes(e)),
         other => other,
     }
 }
@@ -129,8 +132,8 @@ pub const RESISTANCES: [&str; 10] = [
 pub const MIND_NOT_LOADED: &str =
     "the WillowMind part of RecalculateAttributeInitializedState: an object the store has not loaded (a load is a write)";
 
-/// Where one value of the mind part lands: a stack attribute (written by its base, the value recomputed from its
-/// stack), or a plain float.
+/// Where one value of the mind part lands: a resistance, a stack attribute (written by its base, the value recomputed
+/// from its stack), or `CommerceMarkup`, a plain float written as the value (review of #792, item 3).
 #[derive(Debug, Clone, Copy)]
 enum Target {
     Stack(ObjRef, ow_object::layout::AttrCompanions),
@@ -212,12 +215,11 @@ fn plan_mind_part(vm: &mut Vm, mind: ObjRef) -> Result<Option<MindPart>, VmError
     mind_resident(vm, pawn)?;
     let mut writes = Vec::new();
     let data = init_data_of(vm, class, "BaseCommerceMarkup")?;
+    // `CommerceMarkup` is the value only, a plain float (NATIVE_MIND_ROUTE.md section 3; the installed package
+    // declares a `FloatProperty`): any other declaration is a script error.
     let target = match decl_of(vm, pawn, "CommerceMarkup")? {
-        (p, d) if d.attr.is_some_and(|c| c.value == p) => stack_target(vm, pawn, "CommerceMarkup")?,
-        (p, d) if matches!(d.kind, ow_object::layout::PropKind::Float | ow_object::layout::PropKind::FloatAttribute) => {
-            Target::Plain(pawn, p)
-        }
-        _ => return Err(mind_bad("CommerceMarkup is not declared as a float")),
+        (p, d) if matches!(d.kind, ow_object::layout::PropKind::Float) && d.attr.is_none() => Target::Plain(pawn, p),
+        _ => return Err(mind_bad("CommerceMarkup is not declared as a plain float")),
     };
     writes.push((data, target));
     let (p, d) = decl_of(vm, pawn, "StatusEffectComp")?;
@@ -352,6 +354,19 @@ impl NativePack for Pack {
                         message: "called without a controller".to_string(),
                     })?;
                     recalculate_attribute_initialized_state(c.vm, controller)?;
+                    Ok(Value::None)
+                }),
+            )?;
+        }
+        if vm.parity == ParityMode::Off {
+            vm.register_native(
+                MIND_KEY,
+                Rc::new(|c: &mut NativeCall<'_>| {
+                    let mind = c.this.ok_or_else(|| VmError::Script {
+                        function: MIND_KEY.to_string(),
+                        message: "called without a mind".to_string(),
+                    })?;
+                    recalculate_attribute_initialized_state(c.vm, mind)?;
                     Ok(Value::None)
                 }),
             )?;
