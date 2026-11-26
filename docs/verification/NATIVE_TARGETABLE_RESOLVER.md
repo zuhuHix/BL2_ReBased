@@ -31,7 +31,7 @@ yet"). Link 5 stops with link 3. This note reads that get, what it answers for t
   - `Pawn`'s `ITargetable` table slot and its `BalanceDefinitionState`;
   - `AIPawnBalanceDefinition`'s `Champion` bool.
 - **The packages** (`ow-package`, local, names only):
-  - `TargetableAttributeValueResolver.ETargetableValue` is `{ TARGETABLE_IsChampion, TARGETABLE_MAX }`;
+  - `TargetableAttributeValueResolver.ETargetableValue` has two values, `TARGETABLE_IsChampion` and `TARGETABLE_MAX`;
   - `D_Attributes.Targetable.Targetable_Is_Champion` has one context resolver, a `NoContextNeededAttributeContextResolver`,
     and this resolver as its only value resolver;
   - only three classes carry a native `ITargetable` table: `Engine.Pawn` (and so every pawn class),
@@ -92,9 +92,12 @@ balances, but only by their data.
 In `ow-attr`'s `value_resolvers::targetable`, for the value and the base value alike. Reference keeps its C++ stand-in.
 
 **Preflight**, write-free and load-free; the first refusal met is the answer:
+0. a resolver the store has not loaded: `NotRead`, "TargetableAttributeValueResolver: a resolver the store has not
+   loaded (a load is a write)". The hub's ruling (review of #783): this note did not read whether the evaluator loads
+   the resolver first, so the get does not load it;
 1. `ValueToResolve` declared as a byte on the resolver's class, else `VmError::Script`; not 0: **0.0**;
 2. a None context: **0.0**;
-3. a context the store has not loaded (a handle, or a stand-in without its slots): `NotYet { NotRead }`,
+3. a context the store has not loaded (a handle, or a stand-in without its slots): `NotRead`,
    "TargetableAttributeValueResolver: a context the store has not loaded (a load is a write)";
 4. **the cast, by the context's class chain** (the class table only, nothing loaded). The chain holds none of
    `Engine.Pawn`, `WillowGame.WillowInteractiveObject` and `WillowGame.WillowProjectile`: **0.0**;
@@ -103,13 +106,13 @@ In `ow-attr`'s `value_resolvers::targetable`, for the value and the base value a
    - `WillowGame.WillowAIPawn`:
      - `BalanceDefinitionState`, a struct with an object `BalanceDefinition`, declared, else `VmError::Script`;
      - `BalanceDefinition` None: **0.0**;
-     - a balance the store has not loaded: `NotYet { NotRead }`, "TargetableAttributeValueResolver: a balance definition
+     - a balance the store has not loaded: `NotRead`, "TargetableAttributeValueResolver: a balance definition
        the store has not loaded";
      - a balance whose first native class is `WillowGame.AIPawnBalanceDefinition`: its `Champion` (declared as a bool,
        else `VmError::Script`), **1.0 or 0.0**;
-     - any other balance class: `NotYet { NotRead }`, "TargetableAttributeValueResolver: DoesSpawnChampion of <class>".
+     - any other balance class: `NotRead`, "TargetableAttributeValueResolver: DoesSpawnChampion of <class>".
        The base's logged-error answer is not taken as a rule;
-   - any other first native class: `NotYet { NotRead }`, "TargetableAttributeValueResolver: IsChampion of <class>".
+   - any other first native class: `NotRead`, "TargetableAttributeValueResolver: IsChampion of <class>".
 
 Nothing is written, so no answer carries the partial-writes prefix. The spawn's own writes come before, so a refusal
 here reaches the slice as "stopped after partial writes", as today's does. Add, remove and set-base keep their
@@ -138,7 +141,7 @@ here reaches the slice as "stopped after partial writes", as today's does. Add, 
 ## 7. Predicted stops (from the probe)
 
 - **Links 3 and 4**, with section 5 bound: the get answers 0.0 on the enemy's mind. The spawn then stops at
-  **`WillowPawn.SetDefaultPhysics` "past its gates"**, the port's `NotYet { NotRead }`. That is NATIVE_MIND_ROUTE.md
+  **`WillowPawn.SetDefaultPhysics` "past its gates"**, the port's `NotRead`. That is NATIVE_MIND_ROUTE.md
   section 1's open collision branch: the two unnamed pawn queries, and the navigation-handle query of an AI pawn's
   default physics. It is after the spawn's writes, so prefixed.
   - Link 3's `hit` and link 4's `swing` are not reached. In the probe their errors were only the harness failing to
