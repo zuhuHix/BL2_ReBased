@@ -1,6 +1,6 @@
 # Links 3 and 4 past the spawn: the kill's and the swing's next steps (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-COMBAT-TAIL-LINKS-3-4 (decision 2026-11-26-NNN), the analyst half of
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-COMBAT-TAIL-LINKS-3-4 (decision 2026-11-26-69), the analyst half of
 the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/l34tail/`. This
 note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here
 is UNVERIFIED in the running game.**
