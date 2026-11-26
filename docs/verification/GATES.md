@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-combat-music, read and probed on main 03a8a09d,
+rebased onto fc8d2c42):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_COMBAT_MUSIC_AND_AFTER.md reads `GetCombatMusicManager`'s lazy creation
+and `CombatMusicManager.PlayerDamagedByEnemy` (its gates; the threat model outlined), and the spawn's new stops on main:
+`ApplyGradeCustomizations` (the balance's own playthrough index) and `UpdatePlayThroughMaterial`. A local probe (an
+installed Off `--combat-run` of the gate's steps, each stop stubbed, reverted and not committed) finds link 4's swing
+completing with its `ratio.` row once every earlier answer is in, link 13's three swings completing without a down
+(Maya at 156.9 of 212.7), and link 14 with nothing to bleed. No code changed, so no measured number moved.
+UNVERIFIED in game.
+
 **IMPL-LINK34-AFTER-MIND (2026-11-26, pc-hummer, on fix/rust-link34-after-mind, on main 7a67b9f):**
 AI-assisted (Claude Code, Opus 5.5). `SetPhysics`' base search (with the `NoLevel` stand-in) and the player pawn's
 layers; `IsFriendlyFire`, `InGodMode`, `IsHealingDamageType`, `AdjustMomentumForSurfaceType` and

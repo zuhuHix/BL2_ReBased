@@ -166,7 +166,8 @@ so no balance definition exists to fill the state with.
   pawn;
 - **refusals, decided before the step's first write:** a missing balance (no match) or one the store has not loaded
   is `NotRead`, with nothing written by this step;
-- the balance's customization step is then the next read, or its own `NotRead`;
+- the balance's customization step is then the next read, or its own `NotRead` (read since:
+  NATIVE_COMBAT_MUSIC_AND_AFTER.md section 3);
 - steps 7 to 9 of the factory script stay outside the port's spawn, as today.
 
 ## 4. Links 3 and 4 after the spawn (from the probe)
