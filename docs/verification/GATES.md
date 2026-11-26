@@ -8,7 +8,7 @@ scaled by it; the hub's ruling, UNVERIFIED engine maths). `cargo test --workspac
 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine
 lock), #761 head and this change: 6 ok / 8 not ok, 47.0% on both. Links 6 and 7 get past `GetBoundingCylinder` and stop
 in `touch` at the unbound `WillowPickup.Pickupable_IsEnabled()` (graded an error, so exit 1, not 3); every other row is
-unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+unchanged. UNVERIFIED in game. Decision 2026-11-26-21.
 
 **IMPL-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, on fix/rust-link67-pickup-gun-init from main 457c46e4):**
 AI-assisted (Claude Code, Opus 5.5). Links 6 and 7's world is `equip_world` plus the pickup set-up; `card::preflight`

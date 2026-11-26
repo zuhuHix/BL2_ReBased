@@ -467,7 +467,7 @@ wrong kind is a `VmError::Script` naming it. In order:
    translation to the owner's `Location`, and the box is (`Location` + mesh origin + `RootBoneTranslation`, mesh
    extent), with the extent times `BoundsScale` (no per-bone step while `SpaceBases` is empty). In every other case it
    is `WORLD_TRANSFORM`'s `NotRead`, as the cylinder case uses.
-   - **The hub's ruling (lane SCALED-BOUNDS-TRANSFORM, decision 2026-11-26-NNN):** a **uniform, positive** combined
+   - **The hub's ruling (lane SCALED-BOUNDS-TRANSFORM, decision 2026-11-26-21):** a **uniform, positive** combined
      scale `s` is answered too, the three axes exactly equal, finite and above 0. The box is then (`Location` + `s` ×
      mesh origin + `s` × `RootBoneTranslation`, mesh extent × `s` × `BoundsScale`), the standard UE3 bounds transform
      with no rotation. **UNVERIFIED**: the port's reading of the engine maths, not read from the native. A non-uniform,
