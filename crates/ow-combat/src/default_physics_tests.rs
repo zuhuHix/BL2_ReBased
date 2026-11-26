@@ -91,7 +91,12 @@ fn willow() -> Vec<u8> {
     for f in ["BodyClass", "SMComponent"] {
         t.prop("Object", willow_pawn, f, 0, object);
     }
+    // A pool reference with the four fields the port's pool handle rule reads (all None: no live pool).
     let shield_ref = ow_package::testkit::reflect::toy_struct(&mut t, willow_pawn, "ToyShieldRef", None);
+    t.prop("Object", shield_ref, "PoolManager", 0, object);
+    t.prop("Byte", shield_ref, "PoolIndexInManager", 0, 0);
+    t.prop("Byte", shield_ref, "PoolGUID", 0, 0);
+    t.prop("Object", shield_ref, "Data", 0, object);
     t.prop("Struct", willow_pawn, "ShieldArmor", 0, shield_ref);
     for f in ["ShieldVar", "ShieldMaxVar"] {
         t.prop("Float", willow_pawn, f, 0, 0);
@@ -391,4 +396,27 @@ fn the_balance_pick_is_by_the_archetype_pointer() {
             other => panic!("{archetype}: {other:?}"),
         }
     }
+}
+
+/// Review of #792, item 2: `SetPhysics`' preflight comes before the collision copy (a refused mode with a differing
+/// flag stops at the base search); `FlightMode` 4 is not flying (a walking class asks for nav-mesh walking); an
+/// uncloaked pawn never asks query 2 (a short stand-in `BodyClass` is not read).
+#[test]
+fn the_preflight_order_and_the_flight_modes() {
+    let mut x = fx();
+    let pawn = x.ai(WALKING, false, NONE);
+    x.mind(pawn, None);
+    x.set(pawn, "bBlockActors", Value::Bool(true));
+    assert_eq!(x.not_read(pawn), BASE_SEARCH, "SetPhysics first, before the collision copy");
+    let mut x = fx();
+    let pawn = x.ai(NONE, false, WALKING);
+    x.mind(pawn, Some(4));
+    assert_eq!(x.not_read(pawn), NAV_MESH, "FlightMode 4 is not flying");
+    let mut x = fx();
+    let pawn = x.ai(NONE, false, FLYING);
+    let c = x.vm().find_class("WillowGame.BodyClassDefinition").unwrap();
+    let stand_in = x.vm().space.alloc_stand_in(c, "Lazy", ow_object::heap::Origin::Default { class: c }).unwrap();
+    x.set(pawn, "BodyClass", Value::Object(Some(stand_in)));
+    x.run(pawn).unwrap();
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(FLYING), "uncloaked: query 2 not read");
 }

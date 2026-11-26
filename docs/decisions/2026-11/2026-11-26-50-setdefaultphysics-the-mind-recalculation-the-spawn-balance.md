@@ -19,18 +19,24 @@ NATIVE_MIND_ROUTE.md sections 1 and 3 alone; this lane did not read the executab
     the export, made the same way and never written, stands for the archetype the spawn copied, kept per pawn. No
     record is `NotRead` ("SetDefaultPhysics: the pawn's archetype");
   - **the can-cloak flag**, VM-wide and initially true, read and written by `StaticCanCloak` / `StaticSetCanCloak`;
-  - **`WillowMind.RecalculateAttributeInitializedState`** (`ow-world` `levelup`): the key bound to the shared rule;
+  - **`WillowMind.RecalculateAttributeInitializedState`** (`ow-world` `levelup`): the key bound to the shared rule,
+    **in Off only** (review of #792, item 4: Reference keeps it unbound, as before);
     the writes in the game's order, the skill refresh, the controller part (its pools' rebase) and then the mind's own
     part, which **corrects the port's order** (it ran the mind part's refusal first and the skill refresh before the
     class-level refusal). Refusals stay up front: the controller part's class-level step, then the mind part's plan
     (each of the eleven init data's definitions resident, with its chains' resolvers, else `NotRead`; each field
-    declared, else `VmError::Script`). The mind part sets `CommerceMarkup` and, with a `StatusEffectComp`, the ten
+    declared, else `VmError::Script`). The mind part sets `CommerceMarkup` (the value only, a plain float; any other
+    declaration is `VmError::Script`, review of #792, item 3) and, with a `StatusEffectComp`, the ten
     resistances by their base (the value recomputed from the modifier stack, `ow-attr`'s one-rounding stack fold,
     UNVERIFIED as the game's rounding), each evaluated with the mind as the context source. A refusal after a write is
-    prefixed;
+    prefixed, **in Off only**: the marks-and-prefix wrapper is limited to Off (review of #792, item 4), so a plain
+    controller's refusals in Reference keep their text;
   - **the spawn's balance** (the hub's ruling on #788; a logged, UNVERIFIED harness input): at the spawn, the
     `AIPawnBalanceDefinition` export of the archetype's package file whose `AIPawnArchetype` is the archetype (by
-    path; exactly one, else the step's `NotRead` naming it), logged. The step runs the pawn's installed
+    path; exactly one, else the step's `NotRead` naming it), logged. **The pick loads every `AIPawnBalanceDefinition`
+    export of the package (35 on the slice) on every Off spawn, a harness load outside any preflight**; a candidate
+    whose load fails, or a package the store cannot load, is the step's `NotRead` naming it (review of #792, item 5).
+    The step runs the pawn's installed
     `InitializeBalanceDefinitionState(balance, -1)` at the start of the mind's recalculation: in the port the
     attribute starting values run inside the mind's class-defaults script just before that call
     (`ApplyCharacterClassDefaults`: `SetDefaultPhysics`, …, `ApplyAttributeStartingValues`,
@@ -38,7 +44,11 @@ NATIVE_MIND_ROUTE.md sections 1 and 3 alone; this lane did not read the executab
 - **Tests** (invented packages): `default_physics_tests.rs` covers the note's tests 1 to 4, the can-cloak natives and
   test 5's pick (one match picked and logged, none and two refused); `ow-world` `pools/tests.rs` `mind_part` covers
   test 5's step, test 6 (the markup and the ten resistances after the rebase, no status component, an unloaded
-  definition and a mistyped field before any write) and test 8 (the `WillowMind` key). **Not tested:** a one-entry
+  definition and a mistyped field before any write) and test 8 (the `WillowMind` key). Review of #792 added: the
+  write order (the skill refresh's `GetSkillManager` first, the rebase with `CommerceMarkup` still unwritten, then the
+  mind part); `SetPhysics`' refusal before the collision copy, `FlightMode` 4 as not flying, and query 2 not read for
+  an uncloaked pawn; an unloaded recorded balance; a Reference spawn with no archetype record and no pick; and
+  `ShieldArmor` read strictly (a mistyped reference is an error). **Not tested:** a one-entry
   modifier stack and the context being the mind (the toy system has no resolvers). Two older tests changed with the
   rule: the mind part's blanket `NotRead`, and a toy class that now declares its init data.
 - **Measured:** see the GATES row of this lane.

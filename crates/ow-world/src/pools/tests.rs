@@ -209,6 +209,8 @@ fn package() -> Vec<u8> {
         t.prop("Float", world_info, f, 0, 0);
     }
     t.prop("Byte", world_info, "NetMode", 0, 0);
+    // The game info the mind's skill refresh asks (review of #792, item 1).
+    t.prop("Object", world_info, "Game", 0, object);
 
     // Definitions and resolvers.
     let pool_def = t.class("ResourcePoolDefinition", object);
@@ -679,6 +681,9 @@ struct Fx {
     w: World,
     wi: ObjRef,
     notes: Rc<RefCell<Vec<(ObjRef, i32)>>>,
+    /// Review of #792, item 1: when set, each `Note` also records this object's property, in `trace`.
+    watch: Rc<RefCell<Option<(ObjRef, String)>>>,
+    trace: Rc<RefCell<Vec<String>>>,
     dir: PathBuf,
 }
 
@@ -700,9 +705,10 @@ fn fx_mode(mode: ParityMode) -> Fx {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
+    let willow = willow_package();
     let defs = DefStore::from_synthetic(
         &dir,
-        &[("Engine.upk", &bytes)],
+        &[("Engine.upk", &bytes), ("WillowGame.upk", &willow)],
         IdentityPolicy::FirstInScanOrder,
         mode,
     )
@@ -715,6 +721,9 @@ fn fx_mode(mode: ParityMode) -> Fx {
     );
     let notes = Rc::new(RefCell::new(Vec::new()));
     let sink = notes.clone();
+    let watch: Rc<RefCell<Option<(ObjRef, String)>>> = Rc::new(RefCell::new(None));
+    let trace = Rc::new(RefCell::new(Vec::new()));
+    let (watched, traced) = (watch.clone(), trace.clone());
     vm.register_native(
         "Object.Note(int)",
         Rc::new(move |c: &mut NativeCall<'_>| {
@@ -724,6 +733,10 @@ fn fx_mode(mode: ParityMode) -> Fx {
             };
             sink.borrow_mut()
                 .push((c.this.expect("Note on an object"), k));
+            if let Some((o, name)) = watched.borrow().clone() {
+                let v = field(&c.vm.space, o, &name)?;
+                traced.borrow_mut().push(format!("note {k}: {name} {v:?}"));
+            }
             Ok(Value::None)
         }),
     )
@@ -751,7 +764,7 @@ fn fx_mode(mode: ParityMode) -> Fx {
     set_field(&mut w.vm.space, wi, "TimeSeconds", Value::Float(12.5)).unwrap();
     w.actors().borrow_mut().place_world_info(wi).unwrap();
     w.actors().borrow_mut().begin_play();
-    Fx { w, wi, notes, dir }
+    Fx { w, wi, notes, watch, trace, dir }
 }
 
 impl Fx {
@@ -760,7 +773,11 @@ impl Fx {
     }
 
     fn new_obj(&mut self, class: &str) -> ObjRef {
-        let c = self.vm().find_class(&format!("Engine.{class}")).unwrap();
+        self.new_obj_in(&format!("Engine.{class}"))
+    }
+
+    fn new_obj_in(&mut self, path: &str) -> ObjRef {
+        let c = self.vm().find_class(path).unwrap();
         ow_vm::interp::instantiate_from_defaults(self.vm(), c).unwrap()
     }
 
@@ -2631,7 +2648,7 @@ mod mind_part {
 
     /// A mind with an `AIClass` whose init data are the constants `k` (commerce `k`, resistance i `k + i + 1`) and a
     /// pawn, with a status component when `status`; the mind's pool made, so the controller part has a pool to rebase.
-    fn mind(x: &mut Fx, k: f32, status: bool) -> (ObjRef, ObjRef, Option<ObjRef>, ObjRef) {
+    pub(super) fn mind(x: &mut Fx, k: f32, status: bool) -> (ObjRef, ObjRef, Option<ObjRef>, ObjRef) {
         let (mind, m) = x.controller_with_manager("WillowMind");
         let (_, def) = x.resource();
         let pool = x.create(Some(m), Some(mind), Some(def), false).0.data.unwrap();
@@ -2781,6 +2798,70 @@ mod mind_part {
             assert_eq!(crate::spawn_balance::pending(x.vm(), pawn).unwrap(), None, "the record is spent");
             recalc(&mut x, mind).unwrap();
             assert_eq!(calls.borrow().len(), 1, "once");
+        });
+    }
+}
+
+/// An invented `WillowGame` (review of #792, item 1): the game info the mind's skill refresh asks for its manager.
+fn willow_package() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let game = t.class("WillowGameInfo", object);
+    native(&mut t, game, "GetSkillManager", &[], Some(("Object", object)), NATIVE);
+    t.p.build()
+}
+
+mod mind_order {
+    use super::*;
+
+    /// Review of #792, item 1 (the note's test 6, the order): the skill refresh's `GetSkillManager` before the pool's
+    /// rebase, the rebase before the mind part (`CommerceMarkup` still unwritten while the pool notes), then the mind
+    /// part.
+    #[test]
+    fn the_skill_refresh_then_the_rebase_then_the_mind_part() {
+        run(|| {
+            let mut x = fx();
+            let (mind, pawn, _, _) = super::mind_part::mind(&mut x, 1.5, false);
+            let game = x.new_obj_in("WillowGame.WillowGameInfo");
+            let wi = x.wi;
+            x.set(wi, "Game", Value::Object(Some(game)));
+            x.set(mind, "WorldInfo", Value::Object(Some(wi)));
+            let traced = x.trace.clone();
+            x.vm()
+                .register_native(
+                    "WillowGameInfo.GetSkillManager()",
+                    Rc::new(move |_c: &mut NativeCall<'_>| {
+                        traced.borrow_mut().push("skill".to_string());
+                        Ok(Value::Object(None))
+                    }),
+                )
+                .unwrap();
+            *x.watch.borrow_mut() = Some((pawn, "CommerceMarkup".to_string()));
+            x.call("WillowMind.RecalculateAttributeInitializedState", Some(mind), vec![]).unwrap();
+            let trace = x.trace.borrow().clone();
+            assert_eq!(trace.first().map(String::as_str), Some("skill"), "{trace:?}");
+            assert!(trace.len() > 1, "the rebase noted: {trace:?}");
+            assert!(trace[1..].iter().all(|l| l.ends_with("CommerceMarkup Float(0.0)")), "{trace:?}");
+            assert_eq!(x.get(pawn, "CommerceMarkup"), Value::Float(1.5), "the mind part last");
+        });
+    }
+
+    /// Review of #792, item 6: a recorded balance the store has not loaded (a stand-in without its slots) is the step's
+    /// `NotRead`, with nothing written.
+    #[test]
+    fn an_unloaded_balance_is_not_read() {
+        run(|| {
+            let mut x = fx();
+            let (mind, pawn, _, _) = super::mind_part::mind(&mut x, 1.0, false);
+            let c = x.vm().find_class("Engine.CharacterClassDefinition").unwrap();
+            let lazy = x.vm().space.alloc_stand_in(c, "Lazy", ow_object::heap::Origin::Default { class: c }).unwrap();
+            crate::spawn_balance::record(x.vm(), pawn, Ok(lazy)).unwrap();
+            let before = x.vm().space.heap.committed_writes();
+            let e = x.call("WillowMind.RecalculateAttributeInitializedState", Some(mind), vec![]).unwrap_err();
+            let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+            assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotRead, crate::spawn_balance::NOT_LOADED));
+            assert_eq!(x.vm().space.heap.committed_writes(), before, "nothing written");
         });
     }
 }

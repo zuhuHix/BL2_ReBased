@@ -1618,6 +1618,18 @@ fn an_off_spawn_goes_through_the_minds_class_route() {
     assert_eq!(crate::hit::access::object(vm, enemy.mind, "MyWillowPawn").unwrap(), Some(enemy.pawn));
     assert_eq!(pool_definitions(vm, enemy.mind), [(0, "Pool_Health".to_string())]);
     assert_eq!(ow_world::pools::get_health(&vm.space, enemy.pawn).unwrap(), 40.5, "the pool's invented start");
+    assert!(crate::hit::archetype_of(vm, enemy.pawn).unwrap().is_some(), "Off records the archetype");
+    assert!(ow_world::spawn_balance::pending(vm, enemy.pawn).unwrap().is_some(), "Off records the pick");
+}
+
+/// Review of #792, item 6: a Reference spawn records no archetype and makes no balance pick.
+#[test]
+fn a_reference_spawn_records_no_archetype_and_no_pick() {
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    assert_eq!(crate::hit::archetype_of(vm, enemy.pawn).unwrap(), None);
+    assert_eq!(ow_world::spawn_balance::pending(vm, enemy.pawn).unwrap(), None);
 }
 
 /// The `Controller` base of `ApplyCharacterClassStartingValues`, Off: every pool deleted, then the class's
