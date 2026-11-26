@@ -34,4 +34,8 @@ no bounds check changed.
   - Maya's answer is the kernel's pass-2 `LayerAbsent` with nothing written;
   - tests listed.
 - **Next** (a prediction, not a run): #738's 2.A is the stop, then this pass-2 `LayerAbsent`, then `SetDefaultStance`.
+- **Review r1 (#740):**
+  - preflight 7 is per definition in list order, the repeat then the condition, with a test for the mixed case;
+  - the arms' second material instance is named: one `Parent` write, then a second `SetMaterial`;
+  - two steps are rewritten as prose.
 - **Clean room:** a different lane implements this note.

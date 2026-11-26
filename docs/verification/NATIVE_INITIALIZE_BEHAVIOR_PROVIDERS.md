@@ -162,10 +162,13 @@ calls into it.
      "InitializeBehaviorProviders: a definition the store has not loaded (a load is a write)";
    - the (d) class test is by name on the object's loaded class chain. No class code is loaded;
    - the gate of 2.2 is then applied: a None definition or an empty `BehaviorSequences` is dropped.
-7. **the kernel step's own refusals, for every definition left, before any write:**
-   - **the same definition twice** in the list is the kernel rule's `NotYet { NotRead }`, "a provider registered twice
-     on one consumer". The game's handling of a repeat was not read. A `DefaultHitRegion` in `HitRegionList`
-     always produces one;
+7. **the kernel step's own refusals, before any write.** They are checked **per definition, in list order: the
+   repeat, then the condition**, as the kernel rule checks them on each call (`ow-behavior` `kernel::natives`,
+   `initialize_provider`). The first definition that meets either refusal decides the answer. The game hands the
+   definitions to the kernel one at a time in this order, so nothing in its reading sets another order:
+   - **a repeat** (a definition already met earlier in the list) is the kernel rule's `NotYet { NotRead }`, "a
+     provider registered twice on one consumer". The game's handling of a repeat was not read. A `DefaultHitRegion`
+     in `HitRegionList` always produces one;
    - **a sequence with a `CustomEnableCondition`** gives the kernel rule's pass-2 `NotYet { LayerAbsent }`, with the
      same text and layer. The test is a plain read of each entry's `CustomEnableCondition`.
 8. **`bNeedToApplyThisState` set:** `NotYet { NotRead }`, "InitializeBehaviorProviders: applying the replicated
@@ -203,7 +206,13 @@ written** and `ConsumerHandle` still -1.
 12. a stance handle not loaded: the not-loaded `NotRead`, nothing written;
 13. the order: providers from (b), (c), (e) and (f), all non-empty: the process's providers in that order;
 14. a later provider's pass-1 refusal after an earlier provider registered: the refusal with the partial-writes prefix;
-15. a `WillowAIPawn` receiver: the AI-body `NotRead`.
+15. a `WillowAIPawn` receiver: the AI-body `NotRead`;
+16. **the order of preflight 7:**
+    - a conditioned definition early in the list, then a later repeat of another definition: the condition's pass-2
+      `LayerAbsent`;
+    - a repeat early in the list, then a later conditioned definition: the repeat's `NotRead`.
+
+    Nothing is written in either case.
 
 ## 3. The material natives
 
@@ -234,7 +243,7 @@ It writes nothing.
 ### 3.2 `MaterialInstance.SetParent(MaterialInterface NewParent)` on a `MaterialInstanceConstant`
 
 The exec calls one material virtual. `MaterialInstanceConstant`'s body: when `Parent` differs from the argument,
-`Parent` := the argument and a material update follows (a render-side step, by fit). When it is the same, nothing.
+`Parent` becomes the argument and a material update follows (a render-side step, by fit). When it is the same, nothing.
 
 **Off answer:**
 - for a receiver whose first native class is `Engine.MaterialInstanceConstant`: that one write, or nothing when the
@@ -250,9 +259,9 @@ The exec calls one material virtual. `MaterialInstanceConstant`'s body: when `Pa
 
 ### 3.3 `MeshComponent.GetInstancedMaterialInstanceConstant(int ElementIndex)`
 
-1. `m` := `GetMaterial(ElementIndex)` (3.1);
-2. when `m` is a `MaterialInstanceConstant` (a class test) **and its `Outer` is this component**: the answer is `m`.
-   Nothing is written;
+1. it first asks for the component's material at the index, by 3.1's rule;
+2. when that material is a `MaterialInstanceConstant` (a class test) **and its `Outer` is this component**, it is the
+   answer. Nothing is written;
 3. otherwise **a new `MaterialInstanceConstant` is made with this component as its `Outer`**, with no name given and
    no template (read from the construction call's arguments; its flags were not decoded). Then:
    - `SetParent(GetMaterial(ElementIndex))` on it (3.2's body, with the material asked again);
@@ -307,9 +316,13 @@ The exec calls one material virtual. `MaterialInstanceConstant`'s body:
 
 ### 3.5 What `maya:8` reaches of these
 
-- **The arms** (on the path, after `SetDefaultStance`): script `new` of the instance, then 3.2 with `Arms.GetMaterial(0)`
-  (3.1). With the decoded data, both `Materials` lists are empty, so the parent is None and 3.2 writes nothing. Then
-  `SetMaterial` (#705, bound).
+- **The arms** (on the path, after `SetDefaultStance`), in the script's order:
+  - the first instance, `ArmsMaterialInstance`: script `new`, then 3.2 with `Arms.GetMaterial(0)` (3.1). With the
+    decoded data both `Materials` lists are empty, so the parent is None, and 3.2 writes nothing. Then `SetMaterial`
+    at index 0 (#705, bound);
+  - the second instance, `CustomizationArmsMaterialInstance`: script `new`, then 3.2 with `ArmsMaterialInstance` as
+    the parent. That is **one `Parent` write**, since the new instance's `Parent` is None. Then `SetMaterial` at
+    index 0 again, with the second instance.
 - **`UpdatePreferredColors`:**
   - on the spawn-time pass the pawn has no `PlayerReplicationInfo`, so the whole function is skipped;
   - on the second pass it would run, but `Mesh.Materials` (attachment 0's, from a template with none) is empty in
