@@ -453,7 +453,7 @@ pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
 /// gets the pawn there, as the dummy's copies do. A refusal after a write (a plan load, the pawn) is marked "stopped
 /// after partial writes" by #518's counters. UNVERIFIED in the running game (public UE3 component instancing).
 ///
-/// **The spawn's component attach** (lane BRIDGE-PAWN-ATTACH, the hub's ruling on #757, decision 2026-11-26-NNN): the
+/// **The spawn's component attach** (lane BRIDGE-PAWN-ATTACH, the hub's ruling on #757, decision 2026-11-26-17): the
 /// pawn then takes the step every spawned actor takes (`ow_world::actors::component_attach`, NATIVE_SPAWN_COMPONENT_
 /// ATTACH.md). Its preflight ([`plan`](ow_world::actors::component_attach::plan)) runs on the class default with the
 /// instancing plan, before the pawn is made; its writes ([`apply`](ow_world::actors::component_attach::apply)) run on
