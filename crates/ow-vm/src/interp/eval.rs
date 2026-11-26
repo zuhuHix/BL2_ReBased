@@ -324,8 +324,9 @@ pub(crate) fn check_entry(vm: &Vm, f: FuncId, args: &[Arg]) -> Result<(), VmErro
     if let Some(why) = &code.failure {
         return Err(cannot_run(&code.path, why));
     }
-    // The body's decoding, the same step the call takes first (its result is cached for the call).
-    decoded(vm, &code)?;
+    // The body's decoding, the same step the call takes first, checked without filling the decode cache (review r2 of
+    // #810, item 1: a check writes nothing; the call decodes and caches it).
+    check_prepared(vm, f)?;
     // The frame's two refusals, as the call meets them: the depth, then the slot bounds (review r2 of #631, item 2).
     vm.check_depth(f)?;
     frame_bounds(vm, &code)?;
@@ -419,6 +420,11 @@ pub(crate) fn check_prepared(vm: &Vm, f: FuncId) -> Result<(), VmError> {
     }
     let package = vm.defs.packages().shared(code.package);
     ow_script::decode::decode(&package, &code.info).map(|_| ()).map_err(|e| cannot_run(&code.path, &e.to_string()))
+}
+
+/// Whether `f`'s decoded body is in the decode cache (a read).
+pub(crate) fn is_decoded(vm: &Vm, f: FuncId) -> bool {
+    code_of(vm, f).is_some_and(|code| code.script.borrow().is_some())
 }
 
 fn decoded(vm: &Vm, code: &FuncCode) -> Result<Rc<Code>, VmError> {

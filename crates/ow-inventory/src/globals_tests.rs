@@ -438,18 +438,30 @@ fn the_resident_definition_lookup_keeps_the_missing_class_error() {
         t.class("ToyOther", object);
         t.build()
     };
+    // Review r2 of #810, item 2: read-only. With the package not open the lookup cannot tell, so it is the NotRead with
+    // no package opened and no reflection entry made.
     let (mut vm, dir, globals) = bare_gearbox_globals(&other);
-    let before = vm.class_code_loads();
+    let caches = |vm: &Vm| (vm.class_code_loads(), vm.defs.packages().loaded_count(), vm.defs.code().classes().count());
+    let before = caches(&vm);
+    match globals_definition_resident(&mut vm, globals, "test").unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("the class WillowGame.GlobalsDefinition, not loaded"), "{n}"),
+        e => panic!("{e}"),
+    }
+    assert_eq!(caches(&vm), before, "nothing opened, loaded or indexed");
+    // The package open (by the test) and its exports without the class: the hard "class not found".
+    vm.defs.code_mut().1.load(&ow_core::PackageName::parse("WillowGame").unwrap()).unwrap();
+    let before = caches(&vm);
     match globals_definition_resident(&mut vm, globals, "test").unwrap_err() {
         VmError::NotYet(n) => panic!("a missing class is not a NotYet: {n}"),
         e => assert!(e.to_string().contains("class not found: WillowGame.GlobalsDefinition"), "{e}"),
     }
-    assert_eq!(vm.class_code_loads(), before, "no class code loaded");
+    assert_eq!(caches(&vm), before, "nothing loaded or indexed");
     let _ = std::fs::remove_dir_all(&dir);
 
     let (mut vm, dir, globals) = bare_gearbox_globals(&willow_game());
     assert!(vm.space.classes.by_path(GLOBALS_DEFINITION_CLASS).is_none(), "GlobalsDefinition starts cold");
-    let before = vm.class_code_loads();
+    let caches = |vm: &Vm| (vm.class_code_loads(), vm.defs.packages().loaded_count(), vm.defs.code().classes().count());
+    let before = caches(&vm);
     match globals_definition_resident(&mut vm, globals, "test").unwrap_err() {
         VmError::NotYet(n) => {
             assert_eq!(n.missing, Missing::NotRead);
@@ -457,6 +469,6 @@ fn the_resident_definition_lookup_keeps_the_missing_class_error() {
         }
         e => panic!("{e}"),
     }
-    assert_eq!(vm.class_code_loads(), before, "no class code loaded");
+    assert_eq!(caches(&vm), before, "nothing opened, loaded or indexed");
     let _ = std::fs::remove_dir_all(&dir);
 }

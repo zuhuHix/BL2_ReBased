@@ -16,6 +16,11 @@ bounding-cylinder rule of (0, 45, 0) ± (118.5, 118.5, 32.7), which meets the li
 first form) was measured** and broke link 6: its `make` stopped at the spawn's "the base search after PostBeginPlay"
 (7 ok / 14, 50.0%), so the registration fallback is used. Before the review rulings, with the line check answered no
 hit outright, link 7 passed (9 ok / 14, 64.3%). UNVERIFIED in game. Decision 2026-11-26-66.
+Review of #810, r2: `Vm::check_call` checks a script's decode without filling the decode cache, the globals
+definition class is looked up read-only (no package opened, no reflection index), the pickup default and the
+`LifeSpan`s are read only once shrinking is on, and a pawn `Location` missing an axis is `VmError::Script`. `cargo test
+--workspace` 4,064 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. The gate was not rerun (lint and the
+touched crates' tests, as the hub asked).
 
 **IMPL-PLAYER-PAWN-FLAG (2026-11-26, pc-hummer, on fix/rust-player-pawn-on, on main c1058de6):** AI-assisted (Claude
 Code, Opus 5.5). In Off, the slice's combat set-up turns on the player set-up's `Pawn` (logged), and #805's

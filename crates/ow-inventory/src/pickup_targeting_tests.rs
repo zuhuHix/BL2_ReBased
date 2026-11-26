@@ -1017,9 +1017,34 @@ fn a_client_hud_needs_no_max_num_pickups() {
     let info = x.obj("Engine.WorldInfo");
     x.set(info, "NetMode", Value::Byte(3));
     x.set(plain, "WorldInfo", Value::Object(Some(info)));
-    let h = hud_state(&x.vm, plain).unwrap_or_else(|_| HudState { hud: plain, owner: None, definition: None, recipient: None, hover: None, reported: None });
+    let h = hud_state(&x.vm, plain).unwrap_or(HudState { hud: plain, owner: None, definition: None, recipient: None, hover: None, reported: None });
     let owner = x.controller;
-    assert_eq!(shrink_step(&mut x.vm, &h, owner, 3, None).unwrap().map(|s| s.0), None, "a client: nothing, no MaxNumPickups read");
+    assert_eq!(shrink_step(&mut x.vm, &h, owner, &[]).unwrap().map(|s| s.0), None, "a client: nothing, no MaxNumPickups read");
     x.set(info, "NetMode", Value::Byte(0));
-    assert!(matches!(shrink_step(&mut x.vm, &h, owner, 3, None), Err(VmError::Script { .. })), "enabled: MaxNumPickups needed");
+    assert!(matches!(shrink_step(&mut x.vm, &h, owner, &[]), Err(VmError::Script { .. })), "enabled: MaxNumPickups needed");
+}
+
+/// Review r2 of #810, item 3: the pickup default and the LifeSpans are read only once shrinking is on. A client HUD (and
+/// one with no WorldInfo) passes with the default not built, with and without pickups, and builds nothing; an enabled
+/// one still needs the default (the named NotRead).
+#[test]
+fn a_disabled_shrink_needs_no_pickup_default() {
+    for pickups in [false, true] {
+        let mut x = fx();
+        if pickups {
+            x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+        }
+        let defaults = x.vm.defs.class_default(&mut x.vm.space, PICKUP).unwrap();
+        x.vm.space.free(defaults).unwrap();
+        let info = x.obj("Engine.WorldInfo");
+        x.set(info, "NetMode", Value::Byte(3));
+        x.set(x.hud, "WorldInfo", Value::Object(Some(info)));
+        x.tick().unwrap();
+        x.set(x.hud, "WorldInfo", Value::Object(None));
+        x.tick().unwrap();
+        x.set(info, "NetMode", Value::Byte(0));
+        x.set(x.hud, "WorldInfo", Value::Object(Some(info)));
+        let n = not_yet(x.tick());
+        assert!(n.what.contains("class default"), "enabled: the default is needed ({pickups}): {n}");
+    }
 }

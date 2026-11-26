@@ -269,7 +269,7 @@ impl Fx {
 
 fn not_yet(r: Result<impl std::fmt::Debug, VmError>) -> (Missing, String) {
     match r {
-        Err(VmError::NotYet(n)) => (n.missing.clone(), n.what.to_string()),
+        Err(VmError::NotYet(n)) => (n.missing, n.what.to_string()),
         other => panic!("{other:?}"),
     }
 }
@@ -454,4 +454,26 @@ fn the_harness_hud_checks_the_setting_and_begun_play_itself() {
     assert_eq!(not_yet(harness_hud(x.vm(), controller)), (Missing::NotRead, BEGUN_PLAY.to_string()));
     assert_eq!(x.counters(), before, "nothing written");
     assert_eq!(x.get(controller, "myHUD"), Value::Object(None));
+}
+
+/// Review r2 of #810, item 4: a pawn `Location` without a `Z` field (here a `Rotator` value in its slot) is a data
+/// error (`VmError::Script`), as a malformed `Rotation` is.
+#[test]
+fn a_location_without_z_is_a_data_error() {
+    let mut x = fx();
+    let (controller, pawn) = (x.controller, x.pawn);
+    x.set(pawn, "BaseEyeHeight", Value::Float(64.0));
+    let rotation = x.get(controller, "Rotation");
+    {
+        let vm = x.vm();
+        let class = vm.space.heap.get(pawn).unwrap().class;
+        let p = vm.space.prop(class, "Location").unwrap();
+        *vm.space.slot_mut(pawn, PropAddr::scalar(p)).unwrap() = rotation;
+    }
+    enable_hud_targeting_harness(x.vm()).unwrap();
+    let mut host = HarnessHost::for_world(&x.w.vm);
+    match host.view(&x.w.vm, controller) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Location.X"), "{message}"),
+        other => panic!("{other:?}"),
+    }
 }

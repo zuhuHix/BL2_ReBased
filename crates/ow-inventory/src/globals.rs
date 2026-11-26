@@ -355,18 +355,28 @@ pub fn globals_definition_resident(vm: &mut Vm, globals: ObjRef, what: &str) -> 
     definition_of_class(vm, d, class)
 }
 
-/// The class at `path` in the class table (`Some`), or `None` when the table does not hold it but a package does (a
-/// cold class), both with no load. A path no package holds is `find_class`'s own error for it, which loads nothing
-/// since there is no class to load (lane COLD-LOAD-FIXES, review r1 of #708).
+/// The class at `path` in the class table (`Some`), or `None` when the table does not hold it but a package may (a
+/// cold class), read-only: no package is opened and no reflection index is built (review r2 of #810, item 2). A path
+/// no package can hold is the hard "class not found" (lane COLD-LOAD-FIXES, review r1 of #708): no package file of
+/// that name, or the package already open and its export table without the class. A package file that is not open is
+/// `None` (opening it to look is a write).
 fn resident_or_absent(vm: &mut Vm, path: &str) -> Result<Option<ClassId>, VmError> {
     if let Some(c) = vm.space.classes.by_path(path) {
         return Ok(Some(c));
     }
-    let present = {
-        let (code, store) = vm.defs.code_mut();
-        code.find_class(store, path).is_ok()
-    };
-    if present { Ok(None) } else { vm.find_class(path).map(Some) }
+    let not_found = || bad("the class table", format!("class not found: {path}"));
+    let Some((package, rest)) = path.split_once('.') else { return Err(not_found()) };
+    let store = vm.defs.packages();
+    if store.paths_named(package).is_empty() {
+        return Err(not_found());
+    }
+    let open = (0..store.loaded_count()).map(|i| store.get(i as ow_package::package::PackageId)).find(|p| {
+        p.source.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(package))
+    });
+    match open.map(|p| p.find_export(rest)) {
+        Some(Ok(None) | Ok(Some(0))) => Err(not_found()),
+        _ => Ok(None),
+    }
 }
 
 fn definition_of_class(vm: &Vm, d: ObjRef, class: ClassId) -> Result<ObjRef, VmError> {

@@ -245,7 +245,8 @@ fn vector(vm: &Vm, o: ObjRef, name: &str) -> Result<[f32; 3], VmError> {
     let v = read(vm, o, name)?.0;
     let mut out = [0.0; 3];
     for (slot, axis) in out.iter_mut().zip(["X", "Y", "Z"]) {
-        *slot = match crate::equip::field(vm, &v, axis)? {
+        // A missing axis is a data error, as for Rotation (review r2 of #810, item 4).
+        *slot = match crate::equip::field(vm, &v, axis).map_err(|e| bad(format!("{name}.{axis}: {e}")))? {
             Value::Float(x) => x,
             other => return Err(bad(format!("{name}.{axis} is {}", other.kind_name()))),
         };

@@ -2765,3 +2765,19 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
 
 // `New` with five operands (lane NEW-FIVE-OPERANDS).
 mod new_tests;
+
+/// Review r2 of #810, item 1: `Vm::check_prepared` and `Vm::check_call` are checks; they leave a cold script's decode
+/// cache as they found it, so a plan that checks a call and then refuses caches nothing. The call itself decodes and
+/// caches.
+#[test]
+fn the_call_checks_leave_the_decode_cache_cold() {
+    let mut r = start(ParityMode::Off);
+    let o = r.object("Core.Foo");
+    let f = r.vm.find_function("Core.Foo.Add2").unwrap();
+    assert!(!r.vm.is_decoded(f), "the body starts cold");
+    r.vm.check_prepared(f).unwrap();
+    r.vm.check_call(f, vec![Value::Int(1), Value::Int(2)]).unwrap();
+    assert!(!r.vm.is_decoded(f), "the checks cache nothing");
+    assert_eq!(r.vm.call(f, Some(o), vec![Value::Int(40), Value::Int(2)]).unwrap().ret, Value::Int(42));
+    assert!(r.vm.is_decoded(f), "the call caches its decode");
+}

@@ -43,6 +43,19 @@ run. Every rule is UNVERIFIED in the running game.
   split-screen owner `NotRead` before any write). **Not tested:** link 7's look on a toy fixture end to end (the
   installed gate runs it); the toy actors' bounds are points (their own body reads components the toy does not
   attach).
+- **Review of #810, r2:**
+  - `Vm::check_call`'s entry check now decodes a script body without storing the decode, as `Vm::check_prepared`
+    does, so a plan that checks a cold handler and then refuses (for example at the split-screen check) leaves the
+    cache cold. The call itself still decodes and caches. `Vm::is_decoded` is a read for tests;
+  - `globals_definition_resident`'s class lookups are read-only. A class in the table is used; a package file that is
+    not open is the cold `NotRead` (opening it to look is a write); "class not found" stays the hard error when no
+    package file of that name exists or the open package's export table lacks the class;
+  - the shrink step keeps its place in the plan, but reads the pickup default and each candidate's `LifeSpan` only
+    after its enable test, so a client HUD or one with no `WorldInfo` needs no built default;
+  - a pawn `Location` missing an axis is `VmError::Script`, as `Rotation` is;
+  - tests: the decode cache left cold by both checks and filled by the call; the cold class with no package opened,
+    no code loaded and no reflection entry; a disabled shrink with an unbuilt default (with and without pickups); a
+    `Location` with no axes.
 - **Measured:** see the GATES row of this lane.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.

@@ -689,9 +689,9 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
     let hover_particle = object_field(vm, gd, "PartItemHover")?.is_some();
     let (width, height) = (float(vm, gd, "HoverWidthPickup")?, float(vm, gd, "ItemHoverProjectionHeight")?);
     let range = float(vm, hud_definition, "PickupRange")?;
-    // Read-only (review of #810, item 2): the pickup class from the table, its default already built.
+    // Read-only (review of #810, item 2): the pickup class from the table. Its default and the LifeSpans are read by
+    // the shrink step only once shrinking is on (review r2 of #810, item 3).
     let pickup_class = table_class(vm, PICKUP)?;
-    let shrink_duration = float(vm, built_default(vm, pickup_class)?, "PickupShrinkDuration")?;
 
     let v = view.location;
     let look = view_direction(&view);
@@ -699,21 +699,14 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
     let mut closest: Option<(f32, ObjRef)> = None;
     let mut flagged = Vec::new();
     let mut best: (f32, Option<ObjRef>) = (0.0, None);
-    // The shrink step's count and the tracked pickup (smallest LifeSpan above the duration).
-    let mut counted = 0i64;
-    let mut tracked: Option<(f32, ObjRef)> = None;
+    // The shrink step's candidates: every counted pickup, suspended or not.
+    let mut candidates: Vec<ObjRef> = Vec::new();
     for entry in &list {
         let Some(p) = object_of(entry, WHAT)? else { continue };
         if !vm.space.classes.is_child_of(class_of(vm, p)?, pickup_class) || !flag(vm, p, "bPickupable")? {
             continue;
         }
-        let life = float(vm, p, "LifeSpan")?;
-        if life > shrink_duration {
-            counted += 1;
-            if tracked.is_none_or(|(t, _)| life < t) {
-                tracked = Some((life, p));
-            }
-        }
+        candidates.push(p);
         if suspended {
             continue;
         }
@@ -768,19 +761,13 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
         Some(w) => winner_tail(vm, h, w, v, look, look_flat, range, hover_particle)?,
     };
     // The shrink step after the winner's and the event's checks (review r1 of #467, the note's plan order).
-    let shrink = shrink_step(vm, h, owner, counted, tracked.map(|t| t.1))?;
+    let shrink = shrink_step(vm, h, owner, &candidates)?;
     Ok(Plan { closest: closest.map(|c| c.1), flagged, tail: Some(tail), shrink, outcome })
 }
 
 /// The shrink bookkeeping (module documentation): the `BeginShrinking` event to raise, if any. Every field it reads is
 /// declared with its kind, else a data error. Reads only.
-fn shrink_step(
-    vm: &mut Vm,
-    h: &HudState,
-    owner: ObjRef,
-    counted: i64,
-    tracked: Option<ObjRef>,
-) -> Result<Option<(ObjRef, Checked)>, VmError> {
+fn shrink_step(vm: &mut Vm, h: &HudState, owner: ObjRef, candidates: &[ObjRef]) -> Result<Option<(ObjRef, Checked)>, VmError> {
     // Whether shrinking is enabled first (review of #810, item 4); MaxNumPickups only when it is.
     let Some(info) = object_field(vm, h.hud, "WorldInfo")? else { return Ok(None) };
     let client = match required(vm, info, "NetMode", WHAT)? {
@@ -797,7 +784,21 @@ fn shrink_step(
         Value::Int(i) => i64::from(i),
         other => return Err(bad(WHAT, format!("MaxNumPickups is {}, not an int", other.kind_name()))),
     };
-    let Some(p) = tracked.filter(|_| counted > max) else { return Ok(None) };
+    // Only now the pickup default (built, read-only) and each candidate's LifeSpan (review r2 of #810, item 3): the count
+    // of those above the default's PickupShrinkDuration, and the one with the smallest such LifeSpan.
+    let shrink_duration = float(vm, built_default(vm, table_class(vm, PICKUP)?)?, "PickupShrinkDuration")?;
+    let mut counted = 0i64;
+    let mut tracked: Option<(f32, ObjRef)> = None;
+    for &p in candidates {
+        let life = float(vm, p, "LifeSpan")?;
+        if life > shrink_duration {
+            counted += 1;
+            if tracked.is_none_or(|(t, _)| life < t) {
+                tracked = Some((life, p));
+            }
+        }
+    }
+    let Some(p) = tracked.map(|t| t.1).filter(|_| counted > max) else { return Ok(None) };
     let f = method_of(vm, p, "BeginShrinking")?;
     vm.check_prepared(f)?;
     vm.check_call(f, Vec::new())?;

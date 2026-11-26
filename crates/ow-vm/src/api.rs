@@ -1093,6 +1093,12 @@ impl Vm {
         }
     }
 
+    /// Whether `f`'s decoded script body is cached (a read; review r2 of #810: [`Vm::check_call`] and
+    /// [`Vm::check_prepared`] leave the cache as they found it).
+    pub fn is_decoded(&self, f: FuncId) -> bool {
+        crate::interp::is_decoded(self, f)
+    }
+
     /// Binds an iterator native to `key`. A key registered twice is refused (C++ "duplicate iterator registration").
     pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError> {
         if self.iterators.contains_key(key) {

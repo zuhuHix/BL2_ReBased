@@ -99,7 +99,7 @@ use ow_script::function::FunctionInfo;
 pub use convert::{describe, describe_for_string};
 pub use load::instantiate_from_defaults;
 
-pub(crate) use eval::{Alias, Place, alias_value, check_alias_write, check_entry, is_a_named, is_child, prepare, run_frame, write_alias};
+pub(crate) use eval::{Alias, Place, alias_value, check_alias_write, check_entry, is_a_named, is_child, is_decoded, prepare, run_frame, write_alias};
 pub(crate) use load::{
     class_at, declare_state_code, find_class, find_class_if_present, find_function, find_function_if_any, is_state_code,
 };
