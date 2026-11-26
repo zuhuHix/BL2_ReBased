@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-BODYCLASS-PRELOAD (2026-11-26, pc-hummer, on fix/preload-bodyclass-definitions from main 0847259):**
+AI-assisted (Claude Code, Opus 5.5). The `maya` step's Off harness preloads exactly the body-class objects
+`InitializeBehaviorProviders`' preflight reads, and their provider definitions (NATIVE_MAYA9_AND_AFTER.md 4.2, hub
+ruling). `cargo test --workspace -j 8 --no-fail-fast` 3,863 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock), main and this change: 6 ok / 8 not ok, 51.2%
+on both, every row unchanged; 14 objects preloaded. Link 1 still stops at the unbound `Pawn.IsPlayerPawn()` (lane F's,
+not pushed). A local probe with an `IsPlayerPawn` stub (not committed) moves links 1, 3, 4, 5, 13 and 14 past the
+`RunStance0` `NotRead` to pass 2's `LayerAbsent` (`PlayerEvents_Siren`). UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **FIX-IS-PLAYER-PAWN-AND-UNBOUND-KEYS (2026-11-26, pc-hummer, on fix/is-player-pawn-and-unbound-keys from main
 08472592):** AI-assisted (Claude Code, Opus 5.5). It binds three existing rules where their keys were unbound, in Off
 only: `Pawn.IsPlayerPawn()` (render_hooks' pawn test), `Actor.AttachComponent` in the combat world, and the two
