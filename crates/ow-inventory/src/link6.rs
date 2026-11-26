@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-NNN). Link 6's take after `SetBase`, in `ParityMode::Off`.
+//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-57). Link 6's take after `SetBase`, in `ParityMode::Off`.
 //! AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_ACTOR_SETBASE.md section 4 (#795) and

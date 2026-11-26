@@ -9,7 +9,7 @@ Off audio stand-in), the empty-EndState destroy lift, RemovePickup and AllContro
 under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%; **link 6 ok, steps 3/3** (the destroy lifted in state
 `Pickup`, the audio stand-in logged); links 3, 4, 5, 13 and 14 at `Actor.SetPhysics`' "the base search for a
 walking-type mode" (as on main); link 7 at the HUD's pickup targeting pass, steps 2/4; 1, 2 and 8 to 12 ok.
-UNVERIFIED in game. Decision 2026-11-26-NNN.
+UNVERIFIED in game. Decision 2026-11-26-57.
 
 **ANALYST-COMBAT-MUSIC-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-combat-music, read and probed on main 03a8a09d,
 rebased onto fc8d2c42):**

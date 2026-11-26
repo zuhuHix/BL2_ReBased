@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-NNN). The iterator `WorldInfo.AllControllers(BaseClass,
+//! Owner: lane IMPL-LINK6-AFTER-TAKE (decision 2026-11-26-57). The iterator `WorldInfo.AllControllers(BaseClass,
 //! out C)` in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_LINK6_AFTER_TAKE.md section 4.1 (#797 as landed) alone;
