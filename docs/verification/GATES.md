@@ -10,7 +10,7 @@ threshold preload and `InitializeInternal(false)` before its drop (NATIVE_LINK67
 Installed Off strict `--slice-gate` (release build, under the machine lock), base 457c46e4 and this change: 6 ok / 8
 NotYet, 47.0% on both. Links 6 and 7 move in `touch` from the bounds' template `NotRead` to "Actor.GetBoundingCylinder:
 the component's world transform" (`NotRead`, the gun's `Scale` 0.92); link 8's row is unchanged. UNVERIFIED in game.
-Decision 2026-11-26-NNN.
+Decision 2026-11-26-18.
 
 **ANALYST-MAYA-PAWN-SPAWN-SOURCE (2026-11-26, pc-hummer, docs only, on docs/native-maya-pawn-spawn-source from main
 457c46e4):** AI-assisted (Claude Code, Opus 5.5). NATIVE_MAYA_PAWN_SPAWN_SOURCE.md reads how the game spawns Maya's
