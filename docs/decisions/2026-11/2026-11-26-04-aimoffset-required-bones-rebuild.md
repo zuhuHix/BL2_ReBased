@@ -26,9 +26,12 @@ Then the writes: `CurrentProfileIndex`, `RequiredBones`, `AimCpntIndexLUT`, as b
 before the first write.
 
 **Tests.** `aim_offset_rebuild_tests.rs` (6), on invented classes, invented `Engine.upk` mesh exports and a toy
-skeleton source, cover the note's section 5. Test 8 compares the layer's text names and the decoded ids directly. The
-skeleton-layer cases (no source, a mesh not loaded) are in `aim_offset_tests.rs`, whose toy mesh class is now
-`Engine.SkeletalMesh`, and the gate's cases are there already.
+skeleton source, cover the note's section 5. Test 8 compares the layer's text names and the decoded ids directly, and
+`aim_offset_tests.rs` runs it through the profiles layer itself (the source's bone names, a mesh export's skeleton).
+Test 7 includes the literal 257-bone, 256-component case. The skeleton-layer cases are in `aim_offset_tests.rs`, whose
+toy mesh class is now `Engine.SkeletalMesh` (with a property): no source, and, with a source installed, a mesh not
+loaded (the layer's "unloaded skeletal mesh" text). The gate's cases are there already. The tests leave nothing of
+section 5 out (review of #745, closed by lane REBUILD-TEST-GAPS).
 
 **The slice gate** (installed Off strict, release build, under the machine lock, on main 4c01c9a1, without #742):
 - before: 6 ok / 8 NotYet / 0 errors, `links ok 6/14`, 47.0%, with link 1 at the rebuild's `NotRead`;

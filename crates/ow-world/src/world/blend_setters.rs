@@ -293,7 +293,7 @@ pub fn set_active_child(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Err(NotYet::not_read(SET_ACTIVE_CHILD, RECORD).into())
 }
 
-/// Binds the three keys (Off only; the caller checks the mode). A key bound first keeps its binding.
+/// Binds the four keys (Off only; the caller checks the mode). A key bound first keeps its binding.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for (key, f) in [
         (FIND_ALL_ANIM_NODES, find_all_anim_nodes as fn(&mut NativeCall<'_>) -> Result<Value, VmError>),
