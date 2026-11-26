@@ -365,3 +365,19 @@ fn off_a_class_with_no_layout_on_the_chain_is_not_read() {
     assert_eq!(n.missing, Missing::NotRead);
     assert!(n.what.contains("a class with no layout"), "{e}");
 }
+
+/// Review of #790: a chain past the walk's 256-class cap is `NotRead`, not 0.0 (257 invented classes, none
+/// targetable, above the object's class).
+#[test]
+fn off_a_chain_past_the_cap_is_not_read() {
+    let mut x = Off::new(true);
+    let space = &mut x.fx.w.space;
+    let mut class = space.classes.by_path("Core.Object").unwrap();
+    for i in 0..257 {
+        class = space.classes.define(&format!("Toy.Deep{i}"), Some(class), vec![]).unwrap();
+    }
+    let e = super::targetable::targetable(space, class).unwrap_err();
+    let AttrError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.missing, Missing::NotRead);
+    assert!(n.what.contains("longer than 256 classes"), "{e}");
+}
