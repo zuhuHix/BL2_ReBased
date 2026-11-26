@@ -18,8 +18,9 @@ session was run. UNVERIFIED in the running game.
      - (f) `PlayerEventDef`;
   3. after each holder, its `BehaviorProviderDefinition`, whose `BehaviorSequences` the kernel's gate reads.
 - **What is not loaded:**
-  - step (d), the pawn's instance-data hit regions, adds nothing: the body composition refuses a component with a hit
-    region;
+  - step (d), the pawn's instance-data hit regions, adds nothing for component entries: the body composition refuses
+    a component with a hit region, and it is the port's only writer of those entries, so no other kind is there (an
+    edit, review of #779);
   - `ApplyBodyClassStartingValues` is script, and its other bound native (`SetDeathDefinition`) reads the `DeathDef`
     already listed;
   - a definition's sequences' own references (conditions, behaviors) are not loaded: the preflight does not read them,
