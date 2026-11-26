@@ -8,9 +8,14 @@
 //! **`FlagDefinition.ApplyFlagInitializationData(FlagsToSet, ContextSource)`** (section 3.3): the first argument
 //! declared as an array of a struct, else `VmError::Script`; an empty array or a None context does nothing; any entry
 //! is [`FLAG_ENTRY`] (`NotRead`): the value resolver's set-up step is not read. The hub ruled the game's C-runtime
-//! `rand()` draw is the VM's RNG stream, counted and UNVERIFIED; no draw is made while every entry refuses. The note's
-//! "skipped array" refusal is not decidable here: the native receives the array's value, and a source array the store
-//! skipped arrives empty, so it is answered as empty (the gap is recorded in the decision).
+//! `rand()` draw is the VM's RNG stream, counted and UNVERIFIED; no draw is made while every entry refuses.
+//!
+//! **A skipped array** (lane MAYA9-SKIPPED-FLAG-LAYERABSENT, the note's section 3.3): `FlagsToSet` is declared `const
+//! out`, so from script the argument aliases the caller's property (`WillowCharacterClassDefinition.
+//! DesignerFlagStartingValues` at the slice's call). When that property's decode was skipped
+//! ([`DefStore::is_skipped`](ow_defs::DefStore::is_skipped)), the array is not the data: [`FLAG_SKIPPED`]
+//! (`LayerAbsent`), before the empty test, with nothing loaded or written. An argument that aliases no object property
+//! (a local, a temporary, a call from the host) has no store mark and is answered by its value, as before.
 //!
 //! **`BalanceModifierDefinition.ApplyPlayThroughBasedPlayerAttributeEffects(Object)`** (section 3.4): a None argument
 //! does nothing; no world is `LayerAbsent`; the world's `WorldInfo` (none: nothing), its `GRI` as a `WillowGame.WillowGameReplicationInfo` (missing, or of another
@@ -29,6 +34,10 @@ pub const RECORD: &str = "docs/verification/NATIVE_MAYA9_AND_AFTER.md (sections 
 pub const APPLY_FLAG_INITIALIZATION: &str = "GearboxFramework.FlagDefinition.ApplyFlagInitializationData";
 pub const APPLY_PLAYTHROUGH_EFFECTS: &str =
     "WillowGame.BalanceModifierDefinition.ApplyPlayThroughBasedPlayerAttributeEffects";
+pub const FLAG_SKIPPED: &str =
+    "flag initialization: the flags array's property was skipped when the store decoded it (its struct layout)";
+/// The layer [`FLAG_SKIPPED`] waits on.
+pub const FLAG_SKIPPED_LAYER: &str = "ow-defs: the decode of an array of a struct the store skipped";
 pub const FLAG_ENTRY: &str =
     "flag initialization: the value resolver's set-up and the runtime random draw are not read";
 pub const PLAYTHROUGH_TABLE: &str =
@@ -44,6 +53,12 @@ pub fn apply_flag_initialization(c: &mut NativeCall<'_>) -> Result<Value, VmErro
     let declared = c.vm.function(c.function).and_then(|d| d.params.first()).map(|p| p.kind.clone());
     if !matches!(&declared, Some(PropKind::Array(inner)) if matches!(**inner, PropKind::Struct(_))) {
         return Err(bad(WHAT, "FlagsToSet is not declared as an array of a struct"));
+    }
+    // A skipped source array (module documentation): asked of the store's mark, before the value is trusted.
+    if let Some((owner, at)) = c.arg_property(0)
+        && c.vm.defs.is_skipped(&c.vm.space, owner, at.prop)
+    {
+        return Err(NotYet::layer_absent(FLAG_SKIPPED, FLAG_SKIPPED_LAYER, RECORD).into());
     }
     let empty = c.arg(0)?.elements().is_none_or(|e| e.is_empty());
     let context = if c.arg_count() > 1 { matches!(c.arg(1)?, Value::Object(Some(_))) } else { false };
@@ -114,3 +129,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     crate::hit::bind_fn(vm, APPLY_PLAYTHROUGH_EFFECTS, apply_playthrough_effects)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "maya9_tests.rs"]
+mod tests;
