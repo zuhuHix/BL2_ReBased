@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-GETPAWNINVENTORYMANAGER + #773 LOWs (2026-11-26, pc-hummer, on fix/getpawninventorymanager-and-773-lows: #774
+@ d35bcbb8 with #773 merged):** AI-assisted (Claude Code, Opus 5.5). `GetPawnInventoryManager` bound in Off (an on-foot
+pawn's `InvManager`); the #773 LOWs (the `Owner` check tested, PhysX tests 6 and 7, a composed socket test). `cargo test
+--workspace -j 8 --no-fail-fast` 3,876 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock), the merge and this branch: 6 ok / 8 not ok, 51.2% on both. Link
+6 passes `HasRoomInInventoryFor` and stops at `UpdateAmmoCounts`' `NotRead` (after partial writes), as predicted; every
+other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-BODYCLASS-PRELOAD (2026-11-26, pc-hummer, on fix/preload-bodyclass-definitions from main 0847259):**
 AI-assisted (Claude Code, Opus 5.5). The `maya` step's Off harness preloads exactly the body-class objects
 `InitializeBehaviorProviders`' preflight reads, and their provider definitions (NATIVE_MAYA9_AND_AFTER.md 4.2, hub
