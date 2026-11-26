@@ -56,6 +56,8 @@ fn arr(k: PropKind) -> PropKind {
 #[derive(Clone, Copy, PartialEq)]
 enum Shape {
     Good,
+    /// The additive class declares `AddAnimSeqName` an int (review r1 of #752, item 1).
+    IntAddName,
     /// The node class declares no `TickArrayIndex`.
     NoTickIndex,
     /// The component class declares no `bUpdateComposeSkeletonPasses` (lane IMPL-ANIM-NODE-INIT).
@@ -133,7 +135,7 @@ impl Fx {
         // The additive class and the lookup's anim sets (lane ANIM-NODE-INIT-D-CORRECTIONS).
         class(&mut vm, ADDITIVE_SEQUENCE, sequence, &[
             ("bAutoGenerateAdditiveSeqName", PropKind::Bool),
-            ("AddAnimSeqName", PropKind::Name),
+            ("AddAnimSeqName", if shape == Shape::IntAddName { PropKind::Int } else { PropKind::Name }),
             ("AddAnimSeq", o.clone()),
             ("AddAnimLinkupIndex", PropKind::Int),
         ]);
@@ -840,7 +842,8 @@ impl Drop for DirGuard {
 // ---- The per-node initialisation (NATIVE_ANIM_NODE_INIT.md section 2; lane IMPL-ANIM-NODE-INIT) -------------------
 
 use crate::world::anim_node_init::{
-    ADDITIVE_AUTO_NAME_ISSUING, ADDITIVE_LINKUP, CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_INTERFACE_NO_KEY, OWNER_INTERFACE_NOT_LOADED, OWNER_RECORD,
+    ADDITIVE_AUTO_NAME_ISSUING, ADDITIVE_LINKUP, ADDITIVE_NOT_LOADED, CAMERA, ENTRY_WEIGHTS, ON_INIT,
+    OWNER_INTERFACE_NO_KEY, OWNER_INTERFACE_NOT_LOADED, OWNER_RECORD,
     RECORD as INIT_RECORD, SEQUENCE_CHANGE, SPECIAL_MOVE_INTERFACE, answer_owner_for_tests, owner_not_decoded,
     owner_not_resolved, owner_target_missing, set_active_child, unknown_class,
 };
@@ -1059,8 +1062,9 @@ fn d_additive_override_runs_at_init() {
     assert_eq!((x.get(c, "AddAnimSeqName"), x.get(c, "AddAnimLinkupIndex")), (idle, Value::Int(-1)));
 }
 
-/// The additive override's refusals: a lookup match (the link-up is not read), case-insensitive, with nothing written
-/// or interned; the auto-name while issuing notifies under a name.
+/// The additive override's refusals: a lookup match by name (the link-up is not read; the name table folds case at
+/// intern, so this is one name, not a case test), with nothing written or interned; the auto-name while issuing
+/// notifies under a name.
 #[test]
 fn d_additive_override_refusals() {
     let mut x = Fx::new();
@@ -1091,6 +1095,79 @@ fn d_additive_override_refusals() {
     x.set(n, "bIsIssuingNotifies", Value::Bool(true));
     x.set(n, "AnimSeqName", walk);
     init_refused(refused_clean(&mut x, comp, t.root), ADDITIVE_AUTO_NAME_ISSUING);
+}
+
+/// Review r1 of #752, item 1: an `AddAnimSeqName` declared an int is a script error in the preflight, with the
+/// auto-name flag set too, before any node is written or `Add_None` interned.
+#[test]
+fn d_additive_malformed_name_is_refused_before_any_write() {
+    let mut x = Fx::with(Shape::IntAddName);
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bAutoGenerateAdditiveSeqName", Value::Bool(true));
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("AddAnimSeqName"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+    assert!(x.vm.space.names.find("Add_None").is_none(), "nothing interned");
+}
+
+/// Review r1 of #752, item 2 (#747 section 6, test 7): the lookup over a set the store has not loaded is
+/// `ADDITIVE_NOT_LOADED`, naming it (Maya's link-1 stop); the search order decides which of a not-loaded set and a
+/// matching one is met first; with the flag clear and `AddAnimSeqName` None there is no lookup, so a not-loaded set is
+/// never read.
+#[test]
+fn d_additive_lookup_not_loaded_order_and_no_name() {
+    // (a) A not-loaded set.
+    let (vm, _dir, lazy, _) = handles_store();
+    let mut x = Fx::on(vm, Shape::Good);
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+    x.set(n, "AddAnimSeqName", idle);
+    let mesh = x.obj("Engine.SkeletalMesh");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(comp, "AnimSets", Fx::objects(&[lazy]));
+    let e = not_yet(refused_clean(&mut x, comp, t.root));
+    assert!(e.what.starts_with(ADDITIVE_NOT_LOADED), "{}", e.what);
+    assert_eq!((e.missing, e.record), (Missing::NotRead, INIT_RECORD));
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "nothing loaded");
+    // (b) Sets [not loaded, matching]: the default order (last to first) meets the match; the reversed flag (first to
+    // last) meets the not-loaded set.
+    for (reverse, link_up) in [(false, true), (true, false)] {
+        let (vm, _dir, lazy, _) = handles_store();
+        let mut x = Fx::on(vm, Shape::Good);
+        let n = x.obj(ADDITIVE_SEQUENCE);
+        let (t, comp) = with_node(&mut x, n);
+        let idle = Value::Name(x.vm.space.names.intern("ADD_Idle"));
+        x.set(n, "AddAnimSeqName", idle);
+        x.set(n, "bReverseAnimSeqSearchOrder", Value::Bool(reverse));
+        let mesh = x.obj("Engine.SkeletalMesh");
+        let matching = anim_set(&mut x, &["ADD_Idle"]);
+        x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+        x.set(comp, "AnimSets", Fx::objects(&[lazy, matching]));
+        let e = not_yet(refused_clean(&mut x, comp, t.root));
+        if link_up {
+            assert_eq!(&*e.what, ADDITIVE_LINKUP, "default order");
+        } else {
+            assert!(e.what.starts_with(ADDITIVE_NOT_LOADED), "reversed: {}", e.what);
+        }
+    }
+    // (c) Flag clear, `AddAnimSeqName` None: no lookup, the not-loaded set never read.
+    let (vm, _dir, lazy, _) = handles_store();
+    let mut x = Fx::on(vm, Shape::Good);
+    let n = x.obj(ADDITIVE_SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    let mesh = x.obj("Engine.SkeletalMesh");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(comp, "AnimSets", Fx::objects(&[lazy]));
+    skeleton_for_tests(Some(five()));
+    let done = instance(&mut x.vm, comp, t.root);
+    skeleton_for_tests(None);
+    done.unwrap();
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "never read, nothing loaded");
+    let c = copy_of(&x, comp, n);
+    assert_eq!(x.get(c, "AddAnimLinkupIndex"), Value::Int(-1));
 }
 
 /// Maya's case (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 5, by toy values): one auto-name additive node whose tag
