@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-SETDEFAULTPHYSICS-AND-SPAWN-BALANCE (2026-11-26, pc-hummer, docs only, on docs/native-setdefaultphysics, read
+and probed on main 785c2a4a, rebased onto 0195ce94):** AI-assisted (Claude Code, Opus 5.5). NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md names
+`SetDefaultPhysics`' three open queries: `bCloaked`, the cloak's shield requirement, and the nav handle's flying test.
+It finds `BalanceDefinitionState` filled by the population factory's script `InitializeBalanceDefinitionState(balance,
+-1)`, an input the port's archetype spawn lacks. A local probe (an installed Off `--combat-run` of links 3 and 4's steps
+after `player:8`, stubs and a call trace, reverted and not committed) then measured the path. The spawns stop at the
+unbound `WillowMind` key of `RecalculateAttributeInitializedState` (its mind part now read); past five plain reads, link
+3's hit stops at the unread `GameInfo.IsFriendlyFire` and link 4's swing at `SetPhysics` on the player pawn. No code
+changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-TARGETABLE-RESOLVER (2026-11-26, pc-hummer, on fix/rust-targetable-resolver, rebased onto main 37a1f3e):**
 AI-assisted (Claude Code, Opus 5.5). `TargetableAttributeValueResolver`'s get and get-base in Off: an unloaded
 resolver `NotRead` (step 0), the `ITargetable` cast by class chain, `IsChampion` by first native class (Pawn,
