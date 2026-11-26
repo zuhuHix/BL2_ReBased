@@ -36,8 +36,19 @@ use crate::world::{BalanceState, World};
 
 const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
-const IMPORTS: [&str; 8] =
-    ["Class", "Function", "Enum", "State", "ObjectProperty", "BoolProperty", "ByteProperty", "NameProperty"];
+const IMPORTS: [&str; 11] = [
+    "Class",
+    "Function",
+    "Enum",
+    "State",
+    "ObjectProperty",
+    "BoolProperty",
+    "ByteProperty",
+    "NameProperty",
+    "ScriptStruct",
+    "StructProperty",
+    "FloatProperty",
+];
 const SCRIPT_FLAGS: u32 = 0x1 | 0x2 | 0x20000;
 const ROLES: [&str; 5] = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority", "ROLE_MAX"];
 const AUTHORITY: u8 = 3;
@@ -140,6 +151,14 @@ fn engine() -> Vec<u8> {
     t.prop("Object", actor, "CollisionComponent", 0, object);
     t.prop("Bool", actor, "bTearOff", 0, 0);
     t.prop("Bool", actor, "bHardAttach", 0, 0);
+    // The vectors the transition into PHYS_None or PHYS_Rotating zeroes (lane IMPL-LINK34-AFTER-MIND).
+    let vector = ow_package::testkit::reflect::toy_struct(&mut t, actor, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
+    for f in ["Velocity", "Acceleration"] {
+        t.prop("Struct", actor, f, 0, vector);
+    }
     native(&mut t, actor, "SetPhysics", &[Param::new("Byte", "NewPhysics")]);
     let other = Param { type_ref: actor, ..Param::new("Object", "Other") };
     native(&mut t, volume, "PhysicsChangedFor", std::slice::from_ref(&other));
@@ -497,7 +516,8 @@ fn the_transition_refusals_come_before_any_write() {
     let mut x = fx();
     let plain = x.obj("Engine.ToyPlainPawn");
     x.set(plain, "Physics", Value::Byte(2));
-    assert_eq!(not_yet(x.same(plain, 1)), (Missing::NotRead, BASE_SEARCH.to_string()));
+    // The base search (lane IMPL-LINK34-AFTER-MIND): this world has no collision service.
+    assert_eq!(not_yet(x.same(plain, 1)), (Missing::LayerAbsent(BASE_TRACE_LAYER), BASE_TRACE.to_string()));
     assert_eq!(x.get(plain, "bForceFloorCheck"), Value::Bool(false));
     let pawn = x.obj("WillowGame.ToyAIPawn");
     let base = x.obj("Engine.Actor");
@@ -580,7 +600,7 @@ fn residency_is_checked_only_where_used() {
 #[test]
 fn unlisted_classes_and_a_wrong_physics_kind_are_refused() {
     let mut x = fx();
-    for class in ["GearboxFramework.ToyNativePawn", "WillowGame.WillowPlayerPawn"] {
+    for class in ["GearboxFramework.ToyNativePawn"] {
         let pawn = x.obj(class);
         let (missing, text) = not_yet(x.same(pawn, CUSTOM));
         assert_eq!((missing, text), (Missing::NotRead, format!("Actor.SetPhysics: the physics change of {class}")));
@@ -700,4 +720,77 @@ fn a_callback_s_state_change_is_followed_at_dispatch() {
     assert_eq!(x.calls(), vec!["PhysicsChangedFor(actor) physics=Byte(14)"], "the class body's spy is not called");
     let landing = x.world.vm.space.names.find("Landing");
     assert_eq!(x.world.vm.space.heap.get(pawn).unwrap().state, landing, "the pawn is in the new state");
+}
+
+/// NATIVE_LINK34_AFTER_MIND.md section 3 (test 2; lane IMPL-LINK34-AFTER-MIND): a `WillowPlayerPawn` has `WillowPawn`'s
+/// layers. A change writes `Physics`; `PHYS_NavMeshWalking` meets no AI step.
+#[test]
+fn a_player_pawn_has_the_willow_pawn_layers() {
+    for mode in [CUSTOM, 12] {
+        let mut x = fx();
+        let pawn = x.obj("WillowGame.WillowPlayerPawn");
+        x.physics(pawn, mode).unwrap();
+        assert_eq!(x.get(pawn, "Physics"), Value::Byte(mode), "{mode}");
+    }
+}
+
+/// A collision service with geometry (the base search cannot run its trace there).
+struct WithGeometry;
+
+impl crate::placement::SpawnCollision for WithGeometry {
+    fn box_test(&self, _: [f32; 3], _: [f32; 3], _: crate::placement::Mode) -> Result<crate::placement::Test, VmError> {
+        Ok(crate::placement::Test::Clear)
+    }
+    fn box_sweep(&self, _: [f32; 3], _: [f32; 3], _: [f32; 3]) -> Result<crate::placement::Sweep, VmError> {
+        Ok(crate::placement::Sweep::Clear)
+    }
+    fn point_sweep(&self, _: [f32; 3], _: [f32; 3]) -> Result<crate::placement::Sweep, VmError> {
+        Ok(crate::placement::Sweep::Clear)
+    }
+}
+
+/// NATIVE_LINK34_AFTER_MIND.md section 2 (test 1; lane IMPL-LINK34-AFTER-MIND): the base search. No collision service
+/// is the trace's `LayerAbsent`; a service with geometry its `NotRead`; under `NoLevel` with no `Base` the mode is
+/// written, the vectors zeroed and the stand-in logged; with a `Base` set the base setter's `NotRead`. Each refusal
+/// writes nothing.
+#[test]
+fn the_base_search() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), (Missing::LayerAbsent(BASE_TRACE_LAYER), BASE_TRACE.to_string()));
+    let mut x = fx();
+    crate::placement::install_collision(x.vm(), Rc::new(WithGeometry)).unwrap();
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_TRACE_FLAGS.to_string()));
+    // The stand-in: into PHYS_None, the vectors zeroed and the line logged.
+    let mut x = fx();
+    crate::placement::install_collision(x.vm(), Rc::new(crate::placement::NoLevel)).unwrap();
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    let moving = {
+        let mut v = x.get(pawn, "Velocity");
+        for f in v.struct_mut().unwrap().fields.iter_mut() {
+            *f = Value::Float(3.0);
+        }
+        v
+    };
+    x.set(pawn, "Velocity", moving);
+    x.physics(pawn, 0).unwrap();
+    assert_eq!(x.get(pawn, "Physics"), Value::Byte(0));
+    let zero = x.get(pawn, "Velocity");
+    assert!(zero.as_struct().unwrap().fields.iter().all(|f| *f == Value::Float(0.0)), "{zero:?}");
+    assert!(x.vm().log.iter().any(|l| l == BASE_STAND_IN), "logged");
+    // Into PHYS_Walking: bForceFloorCheck set, the vectors kept.
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    x.physics(pawn, 1).unwrap();
+    assert_eq!((x.get(pawn, "Physics"), x.get(pawn, "bForceFloorCheck")), (Value::Byte(1), Value::Bool(true)));
+    // A Base set: the base setter's NotRead, nothing written.
+    let pawn = x.obj("Engine.ToyPlainPawn");
+    let base = x.obj("Engine.ToyPlainPawn");
+    x.set(pawn, "Physics", Value::Byte(2));
+    x.set(pawn, "Base", Value::Object(Some(base)));
+    assert_eq!(not_yet(x.same(pawn, 0)), (Missing::NotRead, BASE_SETTER.to_string()));
 }

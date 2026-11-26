@@ -138,6 +138,8 @@ pub struct CombatState {
     pub(crate) archetypes: DetMap<ObjRef, ObjRef>,
     /// `WillowPawn`'s process-wide can-cloak flag (`StaticCanCloak`), `None` until set: true.
     can_cloak: Option<bool>,
+    /// `WillowMind`'s process-wide AI-god flag (`GetAIGod`; lane IMPL-LINK34-AFTER-MIND), initially false.
+    ai_god: bool,
 }
 
 impl CombatState {
@@ -147,6 +149,13 @@ impl CombatState {
     }
     pub fn set_can_cloak(&mut self, on: bool) {
         self.can_cloak = Some(on);
+    }
+    /// The AI-god flag (initially false).
+    pub fn ai_god(&self) -> bool {
+        self.ai_god
+    }
+    pub fn set_ai_god(&mut self, on: bool) {
+        self.ai_god = on;
     }
 }
 

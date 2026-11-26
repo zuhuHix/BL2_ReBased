@@ -20,7 +20,7 @@ use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
 use ow_package::testkit::{Export, ints};
 use ow_vm::api::{StubPolicy, Vm};
 use ow_vm::error::VmError;
-use ow_world::world::set_physics::{BASE_SEARCH, NAV_MESH};
+use ow_world::world::set_physics::{BASE_TRACE, NAV_MESH};
 use ow_world::world::{BalanceState, World};
 
 use super::*;
@@ -234,6 +234,19 @@ impl Fx {
     fn run(&mut self, pawn: ObjRef) -> Result<(), VmError> {
         crate::hit::pools::set_default_physics(self.vm(), pawn)
     }
+    /// The refusal's text when it is a `LayerAbsent` before any write.
+    fn absent(&mut self, pawn: ObjRef) -> String {
+        let before = self.writes();
+        let what = match self.run(pawn) {
+            Err(VmError::NotYet(n)) => {
+                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                n.what.to_string()
+            }
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(self.writes(), before, "nothing written");
+        what
+    }
     fn not_read(&mut self, pawn: ObjRef) -> String {
         let before = self.writes();
         let what = match self.run(pawn) {
@@ -284,11 +297,11 @@ fn the_default_physics_and_bcollideworld() {
 fn the_modes_set_physics_refuses_are_refused_before_any_write() {
     let mut x = fx();
     let pawn = x.ai(FALLING, true, FLYING);
-    assert_eq!(x.not_read(pawn), BASE_SEARCH, "a turret asks for PHYS_None");
+    assert_eq!(x.absent(pawn), BASE_TRACE, "a turret asks for PHYS_None: the base search, no collision service");
     let mut x = fx();
     let pawn = x.ai(WALKING, false, NONE);
     x.mind(pawn, None);
-    assert_eq!(x.not_read(pawn), BASE_SEARCH, "the slice's case");
+    assert_eq!(x.absent(pawn), BASE_TRACE, "the slice's case");
     assert_eq!(x.get(pawn, "bCollideWorld"), Value::Bool(false));
     for physics in [NONE, NAV_MESH_WALKING] {
         let mut x = fx();
