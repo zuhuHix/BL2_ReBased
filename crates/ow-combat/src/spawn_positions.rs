@@ -21,10 +21,14 @@ use crate::hit::access::{class_name, error, get, set, set_field};
 /// The distance between two spawn positions, along X (module documentation).
 pub const SPACING: f32 = 1000.0;
 
-/// The set-up line of [`enable_spawn_positions`] (the hub's text, with the spacing).
-pub const SETUP_LINE: &str = "harness input: the combat run's spawn positions, apart from every other actor (stand-in \
-     for the population spawn points; UNVERIFIED): the n-th spawned pawn at (1000 n, 0, 0), Maya left where the set-up \
-     puts her";
+/// The set-up line of [`enable_spawn_positions`] (the hub's text, with the spacing built from [`SPACING`]; review of
+/// #813, LOW 5).
+pub fn setup_line() -> String {
+    format!(
+        "harness input: the combat run's spawn positions, apart from every other actor (stand-in for the population \
+         spawn points; UNVERIFIED): the n-th spawned pawn at ({SPACING} n, 0, 0), Maya left where the set-up puts her"
+    )
+}
 
 /// The registration key of [`SpawnPositions`].
 pub const KEY: &str = "SpawnPositions";
@@ -35,7 +39,7 @@ pub struct SpawnPositions {
     placed: u32,
 }
 
-/// Turns the spawn positions on for `vm`'s world (world set-up), logging [`SETUP_LINE`]. Off only, else a registration
+/// Turns the spawn positions on for `vm`'s world (world set-up), logging [`setup_line`]. Off only, else a registration
 /// refusal; turning it on twice is a registration refusal too.
 pub fn enable_spawn_positions(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
@@ -45,7 +49,7 @@ pub fn enable_spawn_positions(vm: &mut Vm) -> Result<(), VmError> {
         });
     }
     vm.add_service(SpawnPositions::default())?;
-    vm.log.push(SETUP_LINE.to_string());
+    vm.log.push(setup_line());
     Ok(())
 }
 
@@ -61,11 +65,10 @@ pub fn place(vm: &mut Vm, pawn: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
         return Ok(None);
     }
     let Some(service) = vm.service::<SpawnPositions>() else { return Ok(None) };
-    // The next position; the counter moves only once the write succeeded (review of #807, LOW 3).
-    let n = {
-        let s = service.try_borrow().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?;
-        s.placed.checked_add(1).ok_or_else(|| error("combat: too many spawn positions"))?
-    };
+    // The mutable borrow is taken before anything is written and held across the write, so a borrowed service refuses
+    // with nothing written; the counter moves only once the write succeeded (reviews of #807, LOW 3, and #813, item 1).
+    let mut s = service.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?;
+    let n = s.placed.checked_add(1).ok_or_else(|| error("combat: too many spawn positions"))?;
     let x = SPACING * n as f32;
     let Some(mut location) = get(vm, pawn, "Location")? else {
         return Err(error(format!("combat: the spawned {} declares no Location", class_name(vm, pawn))));
@@ -76,7 +79,8 @@ pub fn place(vm: &mut Vm, pawn: ObjRef) -> Result<Option<[f32; 3]>, VmError> {
         }
     }
     set(vm, pawn, "Location", location)?;
-    service.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SpawnPositions"))?.placed = n;
+    s.placed = n;
+    drop(s);
     let line = placed_line(&class_name(vm, pawn), x);
     vm.log.push(line);
     Ok(Some([x, 0.0, 0.0]))

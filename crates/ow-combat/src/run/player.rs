@@ -172,7 +172,9 @@ impl HealthPool {
             && vm.service::<PlayerPawnDuringSetUp>().is_some()
             && object(vm, controller, "Pawn")? != Some(pawn)
         {
-            crate::hit::access::set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+            // The field must be declared (review of #813, LOW 3): an undeclared `Pawn` is a `VmError::Script`, not a
+            // write that silently did nothing and a line that says it did.
+            crate::hit::access::set_required(vm, controller, "Pawn", Value::Object(Some(pawn)), "combat-run")?;
             vm.log.push(player_pawn_line(vm, pawn));
         }
         // The arguments by parameter name (the pawn is `P`, the class the other one), not by position.

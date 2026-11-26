@@ -55,19 +55,28 @@ fn each_placed_pawn_stands_apart_in_off() {
     assert_eq!(at(&mut vm, first), [1000.0, 0.0, 0.0]);
     assert_eq!(at(&mut vm, second), [2000.0, 0.0, 0.0]);
     let class = class_name(&vm, first);
-    assert_eq!(vm.log, [SETUP_LINE.to_string(), placed_line(&class, 1000.0), placed_line(&class, 2000.0)]);
+    assert_eq!(vm.log, [setup_line(), placed_line(&class, 1000.0), placed_line(&class, 2000.0)]);
     let bare = make(&mut vm, "Engine.ToyNoLocation");
     assert!(matches!(place(&mut vm, bare), Err(VmError::Script { .. })), "no Location");
     // Review of #807, LOW 3: the failed placement did not move the counter, so the next pawn takes the third place.
     let third = make(&mut vm, "Engine.Actor");
     assert_eq!(place(&mut vm, third).unwrap(), Some([3000.0, 0.0, 0.0]));
+    // Review of #813, item 1: a service already borrowed refuses before anything is written, and the counter stays.
+    let service = vm.service::<SpawnPositions>().unwrap();
+    let held = service.borrow();
+    let fourth = make(&mut vm, "Engine.Actor");
+    assert!(matches!(place(&mut vm, fourth), Err(VmError::ServiceBorrowed("SpawnPositions"))));
+    assert_eq!(at(&mut vm, fourth), [0.0, 0.0, 0.0], "nothing written");
+    drop(held);
+    assert_eq!(place(&mut vm, fourth).unwrap(), Some([4000.0, 0.0, 0.0]), "the counter did not move");
 }
 
 /// Review of #807, LOW 2: the set-up line states the spacing the code uses.
 #[test]
 fn the_set_up_line_states_the_spacing() {
     let spacing = format!("({} n, 0, 0)", SPACING);
-    assert!(SETUP_LINE.contains(&spacing), "{SETUP_LINE} does not contain {spacing}");
+    assert!(setup_line().contains(&spacing), "{} does not contain {spacing}", setup_line());
+    assert!(setup_line().contains("(1000 n, 0, 0)"), "the spacing prints as 1000");
 }
 
 /// Reference: the setting is refused, and even a directly added service places nothing.

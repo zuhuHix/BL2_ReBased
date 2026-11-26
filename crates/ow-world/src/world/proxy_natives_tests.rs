@@ -328,6 +328,14 @@ fn set_collision_size_writes_in_order_under_the_stand_in() {
     assert!(matches!(enable_nothing_touched(x.vm()), Err(VmError::Registration { .. })), "twice");
     let mut r = fx_in(ParityMode::Reference);
     assert!(matches!(enable_nothing_touched(r.vm()), Err(VmError::Registration { .. })), "Off only");
+    // Review of #813, LOW 4: a marker added directly in Reference does not apply the stand-in through the public
+    // helper; the touch update keeps its refusal and logs nothing.
+    r.vm().add_service(NothingTouched).unwrap();
+    let (a, _) = sized(&mut r, "Engine.Actor");
+    let logged = r.w.vm.log.len();
+    let e = set_collision_size(r.vm(), a, 80.0, 78.0).unwrap_err();
+    assert_eq!(not_yet(Err(e)), (Missing::LayerAbsent(TOUCH_LAYER), TOUCH_UPDATE.to_string()));
+    assert_eq!(r.w.vm.log.len(), logged, "no stand-in line");
 }
 
 #[test]

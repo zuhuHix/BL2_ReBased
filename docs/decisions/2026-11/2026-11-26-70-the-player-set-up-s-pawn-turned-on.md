@@ -12,8 +12,9 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-PLAYER-PAWN-FLAG, a harness lane 
     service. #807 gives the combat world link 9's `NoLevel` service, so link 1 would stop at the touch rule's
     `NotRead`. Under the same setting, a service that holds no level geometry now takes the stand-in too, with its own
     line (`NOTHING_TOUCHED_NO_LEVEL_LINE`). A service with geometry, and `NoLevel` without the setting, keep the
-    `NotRead`. This answers NATIVE_SPAWN_SETBASEVALUE.md's open question 4 the way the lane needed it; **it needs the
-    hub's confirmation**.
+    `NotRead`. This answers NATIVE_SPAWN_SETBASEVALUE.md's open question 4. **The hub confirmed it as a ruling**,
+    matching the other `NoLevel` stand-ins (Off, logged, UNVERIFIED). The stand-in is checked for Off inside the helper
+    too, so a marker added directly cannot apply it in Reference (review of #813).
 - **Verified (host only):**
   - `ow-world` proxy_natives: under the setting `NoLevel` takes the stand-in with its line; a service with geometry,
     and `NoLevel` without the setting, refuse with nothing written;
@@ -23,6 +24,9 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-PLAYER-PAWN-FLAG, a harness lane 
     X = 8.5/14 = 60.7%, every row the same**. Links 1 and 6 pass. Link 1's row shows the `Pawn` set and the no-geometry
     touch line. Links 3, 4, 5, 13 and 14 stop at the spawn's `SetBaseValue` (NATIVE_SPAWN_SETBASEVALUE.md), so Maya's
     class-level modifiers are not yet exercised by a swing.
-- **Not in this change:** #807's three review LOWs (queue 0as). The lane could not reach that review: it is not on
-  the PR and the hub's thread is on an environment not linked to this machine.
+- **#807's three review LOWs (queue 0as), in this change:** the floor line's bottom end is tested; the spawn spacing
+  is built into the set-up line from `SPACING`; the spawn counter moves only after the `Location` write, with the
+  service's mutable borrow taken before the write (review of #813, item 1).
+- **Review of #813:** the player set-up's `Pawn` write requires the field (a `VmError::Script` when the controller does
+  not declare it) before the line is logged.
 - **UNVERIFIED:** whether the game's touch update finds nothing here; both settings are harness inputs.

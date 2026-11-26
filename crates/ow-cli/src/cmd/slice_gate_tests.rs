@@ -628,7 +628,7 @@ fn the_combat_world_gets_its_collision_base_search_and_spawn_position_settings_i
     assert!(ow_world::placement::collision_model(&vm).unwrap().is_some(), "the collision service");
     assert!(vm.service::<NoLevelBaseSearch>().is_some(), "the base search's setting");
     assert!(vm.service::<ow_combat::spawn_positions::SpawnPositions>().is_some(), "the spawn positions");
-    let lines = [COMBAT_COLLISION_SETUP, BASE_STAND_IN_INPUT, ow_combat::spawn_positions::SETUP_LINE].map(String::from);
+    let lines = [COMBAT_COLLISION_SETUP.to_string(), BASE_STAND_IN_INPUT.to_string(), ow_combat::spawn_positions::setup_line()];
     assert_eq!(vm.log, lines);
     assert_eq!(setup_harness(&vm.log, &[]).len(), 3, "the three lines reach the rows as set-up inputs");
     assert!(matches!(combat_world_collision(&mut vm), Err(ow_vm::error::VmError::Registration { .. })), "twice");
@@ -647,7 +647,7 @@ fn the_combat_set_up_lines_have_no_runs_of_spaces() {
         TRACE_MISS_SETUP,
         COMBAT_COLLISION_SETUP,
         ow_world::world::set_physics::BASE_STAND_IN_INPUT,
-        ow_combat::spawn_positions::SETUP_LINE,
+        &ow_combat::spawn_positions::setup_line(),
     ] {
         assert!(!line.contains("  "), "{line}");
     }

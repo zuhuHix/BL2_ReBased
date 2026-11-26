@@ -174,12 +174,15 @@ pub fn plan_collision_size(vm: &Vm, actor: ObjRef) -> Result<SizePlan, VmError> 
         Some(f) => f.is_some(),
         None => return Err(NotYet::not_read(EVENT_NOT_LOADED, RECORD).into()),
     };
+    // The stand-in is Off only also here, so a `NothingTouched` marker added directly cannot apply it in Reference
+    // through the public helper (review of #813, LOW 4).
+    let setting = vm.parity == ParityMode::Off && vm.service::<NothingTouched>().is_some();
     let stand_in = match crate::placement::collision_model(vm)? {
         // A service with no geometry (link 9's NoLevel, which the combat world installs since #807) under the setting:
         // the same stand-in (lane IMPL-PLAYER-PAWN-FLAG; UNVERIFIED, NATIVE_SPAWN_SETBASEVALUE.md open question 4).
-        Some(m) if m.holds_no_geometry() && vm.service::<NothingTouched>().is_some() => Some(NOTHING_TOUCHED_NO_LEVEL_LINE),
+        Some(m) if m.holds_no_geometry() && setting => Some(NOTHING_TOUCHED_NO_LEVEL_LINE),
         Some(_) => return Err(NotYet::not_read(TOUCH_RULE, RECORD).into()),
-        None if vm.service::<NothingTouched>().is_some() => Some(NOTHING_TOUCHED_LINE),
+        None if setting => Some(NOTHING_TOUCHED_LINE),
         None => return Err(NotYet::layer_absent(TOUCH_UPDATE, TOUCH_LAYER, RECORD).into()),
     };
     Ok(SizePlan { cylinder, event, stand_in })
