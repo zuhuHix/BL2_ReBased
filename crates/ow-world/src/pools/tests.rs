@@ -243,6 +243,14 @@ fn package() -> Vec<u8> {
     t.prop("Object", init, "InitializationDefinition", 0, object);
     t.prop("Float", init, "BaseValueScaleConstant", 0, 0);
     t.prop("Struct", class_def, "BaseCommerceMarkup", 0, init);
+    // The class-level part's init data (lane IMPL-LINKS-13-14, NATIVE_LINKS_13_14.md section 3).
+    t.prop("Struct", class_def, "BaseEncumbranceResistance", 0, init);
+    let pair = toy_struct(&mut t, class_def, "DamageModifiers", None);
+    t.prop("Struct", pair, "ResistanceToImpact", 0, init);
+    t.prop("Struct", pair, "ResistanceToStatusEffect", 0, init);
+    for kind in levelup::DAMAGE_KINDS {
+        t.prop("Struct", class_def, &format!("Base{kind}DamageModifiers"), 0, pair);
+    }
     for n in levelup::RESISTANCES {
         t.prop("Struct", class_def, &format!("Base{n}ResistanceModifier"), 0, init);
     }
@@ -567,6 +575,16 @@ fn package() -> Vec<u8> {
     t.prop("Float", pawn, "HealthMaxVar", 0, 0);
     t.prop("Object", pawn, "StatusEffectComp", 0, object);
     t.prop("Float", pawn, "CommerceMarkup", 0, 0);
+    // The class-level part's thirteen pawn values: the encumbrance resistance and twelve stack attributes.
+    t.prop("Float", pawn, "EncumbranceResistance", 0, 0);
+    for kind in levelup::DAMAGE_KINDS {
+        for part in ["Impact", "StatusEffect"] {
+            let name = format!("{kind}{part}DamageModifier");
+            let stack = toy_array_of(&mut t, pawn, &format!("{name}ModifierStack"), "Object", object);
+            let base = t.prop("Float", pawn, &format!("{name}BaseValue"), 1 << 62, 0);
+            t.prop_tail("FloatAttribute", pawn, &name, 1 << 63, &ints(&[stack, base]));
+        }
+    }
     // The spawn's balance step (lane IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC): the script the step runs, native here so
     // a test can see the call.
     native(
@@ -655,6 +673,10 @@ fn package() -> Vec<u8> {
     let bare = t.class("BareController", actor);
     t.prop("Object", bare, "ResourcePoolManager", 0, manager);
     t.class("Thing", object);
+    // A modifier for the class-level part's stack test (the stack fold reads Type and Value).
+    let modifier = t.class("AttributeModifier", object);
+    t.prop("Byte", modifier, "Type", 0, 0);
+    t.prop("Float", modifier, "Value", 0, 0);
     t.p.build()
 }
 
@@ -2026,7 +2048,7 @@ fn the_level_up_recalculation_rebases_every_pool_of_a_controller_without_a_pawn(
 }
 
 #[test]
-fn the_class_level_parts_are_not_yet_in_off_and_skipped_in_reference() {
+fn the_class_level_parts_check_their_declarations_in_off_and_are_skipped_in_reference() {
     run(|| {
         for mode in [ParityMode::Off, ParityMode::Reference] {
             let mut x = fx_mode(mode);
@@ -2045,8 +2067,10 @@ fn the_class_level_parts_are_not_yet_in_off_and_skipped_in_reference() {
             let result = levelup::recalculate_attribute_initialized_state(x.vm(), controller);
             match mode {
                 ParityMode::Off => {
-                    assert!(matches!(vm_missing(result.unwrap_err()), Missing::NotRead));
-                    assert_eq!(x.noted(pool), vec![10], "refused before the rebase");
+                    // The class-level part is written since lane IMPL-LINKS-13-14 (mod `class_part` below); with
+                    // the toy class's zero data the call goes on to the rebase.
+                    result.unwrap();
+                    assert_eq!(x.noted(pool), vec![10, 20, 21], "the rebase after the class-level part");
                     // A vehicle pawn skips the class part; the status part still applies with MyWillowPawn.
                     let car = x.new_obj("Vehicle");
                     x.set(controller, "Pawn", Value::Object(Some(car)));
@@ -2061,7 +2085,7 @@ fn the_class_level_parts_are_not_yet_in_off_and_skipped_in_reference() {
                     let done = levelup::recalculate_attribute_initialized_state(x.vm(), controller)
                         .unwrap();
                     assert!(!done.class_parts_skipped);
-                    assert_eq!(x.noted(pool), vec![10, 20, 21]);
+                    assert_eq!(x.noted(pool), vec![10, 20, 21, 20, 21]);
                 }
                 _ => {
                     let done: Recalculated = result.unwrap();
@@ -2862,6 +2886,182 @@ mod mind_order {
             let VmError::NotYet(n) = &e else { panic!("{e:?}") };
             assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotRead, crate::spawn_balance::NOT_LOADED));
             assert_eq!(x.vm().space.heap.committed_writes(), before, "nothing written");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The class-level part (lane IMPL-LINKS-13-14; NATIVE_LINKS_13_14.md section 3 and section 8, test 1)
+// ---------------------------------------------------------------------------------------------------------------
+
+mod class_part {
+    use super::*;
+
+    /// The class-level fields in write order: (the class field, its member or None, the pawn field).
+    fn fields() -> Vec<(String, Option<&'static str>, String)> {
+        let mut out = vec![("BaseEncumbranceResistance".to_string(), None, "EncumbranceResistance".to_string())];
+        for kind in levelup::DAMAGE_KINDS {
+            out.push((format!("Base{kind}DamageModifiers"), Some("ResistanceToImpact"), format!("{kind}ImpactDamageModifier")));
+            out.push((
+                format!("Base{kind}DamageModifiers"),
+                Some("ResistanceToStatusEffect"),
+                format!("{kind}StatusEffectDamageModifier"),
+            ));
+        }
+        out
+    }
+
+    /// `v` with its init-data fields `set` (by name), at `member` when it is a pair.
+    fn with_data(x: &mut Fx, mut v: Value, member: Option<&str>, set: &[(&str, Value)]) -> Value {
+        let vm = x.vm();
+        let st = v.struct_mut().unwrap();
+        let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+        let target = match member {
+            Some(m) => {
+                let (i, _) = layout.field(vm.space.names.find(m).unwrap()).unwrap();
+                &mut st.fields[i as usize]
+            }
+            None => return with_init(vm, v, set),
+        };
+        let inner = std::mem::replace(target, Value::None);
+        *target = with_init(vm, inner, set);
+        v
+    }
+
+    fn with_init(vm: &Vm, mut v: Value, set: &[(&str, Value)]) -> Value {
+        let st = v.struct_mut().unwrap();
+        let layout = vm.space.classes.struct_layout(st.ty).unwrap().clone();
+        for (f, val) in set {
+            let (i, _) = layout.field(vm.space.names.find(f).unwrap()).unwrap();
+            st.fields[i as usize] = val.clone();
+        }
+        v
+    }
+
+    /// A controller with a pawn and a class whose thirteen init data are the constants 2 + i (scale 1).
+    fn controller(x: &mut Fx) -> (ObjRef, ObjRef, ObjRef, ObjRef) {
+        let (controller, m) = x.controller_with_manager("Controller");
+        let (_, def) = x.resource();
+        let pool = x.create(Some(m), Some(controller), Some(def), false).0.data.unwrap();
+        let class = x.new_obj("CharacterClassDefinition");
+        let pawn = x.new_obj("Pawn");
+        for (i, (field, member, _)) in fields().into_iter().enumerate() {
+            let v = x.get(class, &field);
+            let v = with_data(x, v, member, &[("BaseValueConstant", Value::Float(2.0 + i as f32)), ("BaseValueScaleConstant", Value::Float(1.0))]);
+            x.set(class, &field, v);
+        }
+        x.set(controller, "Pawn", Value::Object(Some(pawn)));
+        x.set(controller, "CharacterClass", Value::Object(Some(class)));
+        (controller, pawn, class, pool)
+    }
+
+    fn recalc(x: &mut Fx, c: ObjRef) -> Result<Recalculated, VmError> {
+        levelup::recalculate_attribute_initialized_state(x.vm(), c)
+    }
+
+    /// The thirteen values in order, the controller as the context; the encumbrance value only (its base field is
+    /// not touched: the pawn has none), each modifier by its base with the value from its empty stack; the rebase after.
+    #[test]
+    fn the_thirteen_values_are_written_before_the_rebase() {
+        run(|| {
+            let mut x = fx();
+            let (controller, pawn, _, pool) = controller(&mut x);
+            let before = x.vm().space.heap.committed_writes();
+            recalc(&mut x, controller).unwrap();
+            assert_eq!(x.noted(pool), vec![10, 20, 21], "the rebase ran");
+            for (i, (_, member, target)) in fields().into_iter().enumerate() {
+                let want = Value::Float(2.0 + i as f32);
+                assert_eq!(x.get(pawn, &target), want, "{target}");
+                if member.is_some() {
+                    assert_eq!(x.get(pawn, &format!("{target}BaseValue")), want, "{target} base");
+                }
+            }
+            assert!(x.vm().space.heap.committed_writes() > before);
+        });
+    }
+
+    /// A one-entry modifier stack: the value is recomputed from the new base and the stack (ow-attr's fold), so it
+    /// differs from the base; the stack is kept.
+    #[test]
+    fn a_modifier_stack_is_folded_into_the_value() {
+        run(|| {
+            let mut x = fx();
+            let (controller, pawn, _, _) = controller(&mut x);
+            let modifier = x.new_obj("AttributeModifier");
+            x.set(modifier, "Type", Value::Byte(1));
+            x.set(modifier, "Value", Value::Float(3.0));
+            let stack = Value::array(vec![Value::Object(Some(modifier))]);
+            x.set(pawn, "NormalImpactDamageModifierModifierStack", stack.clone());
+            recalc(&mut x, controller).unwrap();
+            assert_eq!(x.get(pawn, "NormalImpactDamageModifierBaseValue"), Value::Float(3.0));
+            assert_ne!(x.get(pawn, "NormalImpactDamageModifier"), Value::Float(3.0), "the stack applies");
+            assert_eq!(x.get(pawn, "NormalImpactDamageModifierModifierStack"), stack, "the stack is kept");
+        });
+    }
+
+    /// The gates: no pawn, a `Vehicle` pawn, or no class: only the rebase.
+    #[test]
+    fn the_gates_leave_only_the_rebase() {
+        run(|| {
+            let mut x = fx();
+            for gate in 0..3 {
+                let (controller, pawn, _, pool) = controller(&mut x);
+                match gate {
+                    0 => x.set(controller, "Pawn", Value::Object(None)),
+                    1 => {
+                        let car = x.new_obj("Vehicle");
+                        x.set(controller, "Pawn", Value::Object(Some(car)));
+                    }
+                    _ => x.set(controller, "CharacterClass", Value::Object(None)),
+                }
+                recalc(&mut x, controller).unwrap();
+                assert_eq!(x.noted(pool), vec![10, 20, 21], "gate {gate}: the rebase");
+                assert_eq!(x.get(pawn, "NormalImpactDamageModifier"), Value::Float(0.0), "gate {gate}: not written");
+            }
+        });
+    }
+
+    /// An init-data definition the store has not loaded: `NotRead` naming the class-level part, before any write.
+    /// (A mistyped field is covered in `levelup`'s own unit tests: this fixture types `Pawn` and `CharacterClass`.)
+    #[test]
+    fn an_unloaded_definition_or_a_mistyped_field_refuses_before_any_write() {
+        run(|| {
+            let mut x = fx();
+            let (controller, pawn, class, pool) = controller(&mut x);
+            let with_fields = x.vm().find_class("Engine.CharacterClassDefinition").unwrap();
+            let lazy = x
+                .vm()
+                .space
+                .alloc_stand_in(with_fields, "Lazy", ow_object::heap::Origin::Default { class: with_fields })
+                .unwrap();
+            let v = x.get(class, "BaseShockDamageModifiers");
+            let v = with_data(&mut x, v, Some("ResistanceToStatusEffect"), &[("InitializationDefinition", Value::Object(Some(lazy)))]);
+            x.set(class, "BaseShockDamageModifiers", v);
+            let before = x.vm().space.heap.committed_writes();
+            let e = recalc(&mut x, controller).unwrap_err();
+            match &e {
+                VmError::NotYet(n) => {
+                    assert_eq!(n.missing, Missing::NotRead);
+                    assert!(n.what.starts_with(levelup::CLASS_NOT_LOADED), "{}", n.what);
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(x.vm().space.heap.committed_writes(), before, "nothing written");
+            assert_eq!(x.noted(pool), vec![10], "refused before the rebase");
+            assert_eq!(x.get(pawn, "EncumbranceResistance"), Value::Float(0.0));
+        });
+    }
+
+    /// Reference: unchanged, the class-level part skipped and its fields not read.
+    #[test]
+    fn reference_skips_the_class_level_part() {
+        run(|| {
+            let mut x = fx_mode(ParityMode::Reference);
+            let (controller, pawn, _, pool) = controller(&mut x);
+            let done = recalc(&mut x, controller).unwrap();
+            assert!(done.class_parts_skipped);
+            assert_eq!(x.noted(pool), vec![10, 20, 21]);
+            assert_eq!(x.get(pawn, "NormalImpactDamageModifier"), Value::Float(0.0));
         });
     }
 }

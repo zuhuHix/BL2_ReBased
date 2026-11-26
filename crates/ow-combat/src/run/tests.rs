@@ -2279,3 +2279,41 @@ fn a_pawn_in_its_spawn_move_keeps_its_physics() {
     let refused = set_default_physics(vm, other).unwrap_err();
     assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
 }
+
+/// NATIVE_LINKS_13_14.md section 8, test 2 (lane IMPL-LINKS-13-14, the hub's rulings on #796): the Off AI adopt sets
+/// the mind's `CharacterClass` to the pawn's `AIClass`, logged, before `InitializeCharacterClass`; Reference does not.
+/// (The class-level writes it enables are tested in `ow-world`'s `pools/tests.rs`, mod `class_part`.)
+#[test]
+fn the_ai_adopt_gives_the_mind_its_character_class_in_off_only() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    let class = object(vm, enemy.pawn, "AIClass").unwrap();
+    assert!(class.is_some());
+    assert_eq!(object(vm, enemy.mind, "CharacterClass").unwrap(), class);
+    let line = crate::hit::adopt_class_line(vm, class.unwrap());
+    assert_eq!(vm.log.iter().filter(|l| **l == line).count(), 1, "{:?}", vm.log);
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    assert_eq!(object(vm, enemy.mind, "CharacterClass").unwrap(), None);
+    assert!(!vm.log.iter().any(|l| l.contains("the AI adopt sets the mind's CharacterClass")));
+}
+
+/// Section 8, test 2: the Off player set-up runs `ApplyCharacterClassDefaults` with the controller's `Pawn` set to the
+/// player's pawn, logged once; the `Pawn` stays set afterwards. Reference: no `Pawn` change.
+#[test]
+fn the_player_set_up_sets_the_controller_s_pawn_and_keeps_it() {
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("maya:4");
+    run.apply("mayahealth:0.5");
+    assert_eq!(run.errors(), Vec::<String>::new());
+    let vm = &mut run.world().vm;
+    assert_eq!(object(vm, fake.controller, "Pawn").unwrap(), Some(fake.pawn), "the Pawn stays set");
+    let line = crate::run::player::player_pawn_line(vm, fake.pawn);
+    assert_eq!(vm.log.iter().filter(|l| **l == line).count(), 1, "logged once: {:?}", vm.log);
+    let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    run.apply("maya:4");
+    let vm = &mut run.world().vm;
+    assert_eq!(object(vm, fake.controller, "Pawn").unwrap(), None, "Reference: unchanged");
+}

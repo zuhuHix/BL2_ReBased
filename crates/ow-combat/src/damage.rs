@@ -198,9 +198,72 @@ fn source_kind(vm: &mut Vm, source: Option<ClassId>) -> Option<usize> {
     kind
 }
 
+/// The two skill-event tag lists of the summary (NATIVE_LINKS_13_14.md section 5).
+pub const TAG_LISTS: [&str; 2] = ["DamageTakenSkillEventsTriggered", "DamageDealtSkillEventsTriggered"];
+/// The end-of-list tag.
+pub const TAG_END: u8 = 255;
+/// The lists' length.
+pub const TAG_LIST_LEN: i32 = 8;
+/// The record of the reset.
+pub const RECORD_RESET: &str = "NATIVE_LINKS_13_14.md section 5";
+
+/// The declared summary struct of `pipeline` and its two lists' first field indices (NATIVE_LINKS_13_14.md section 5,
+/// review r1 of #796): `DamageSummary` a `DamageEventSummary` struct, each list a static array of eight bytes, else
+/// `VmError::Script`. Reads only.
+pub fn summary_schema(vm: &Vm, pipeline: ObjRef, what: &str) -> Result<(ow_object::ids::StructId, [usize; 2]), VmError> {
+    let bad = |m: String| VmError::Script { function: what.to_string(), message: m };
+    let class = vm.space.heap.get(pipeline)?.class;
+    let p = vm.space.prop(class, "DamageSummary").ok_or_else(|| bad("the pipeline declares no DamageSummary".into()))?;
+    let decl = vm.space.classes.decl(p).ok_or_else(|| bad("DamageSummary is undeclared".into()))?;
+    let ow_object::layout::PropKind::Struct(ty) = decl.kind else {
+        return Err(bad("DamageSummary is not declared as a struct".into()));
+    };
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(|| bad("DamageSummary's struct has no layout".into()))?;
+    if !layout.path().as_str().ends_with(".DamageEventSummary") && layout.path().as_str() != "DamageEventSummary" {
+        return Err(bad(format!("DamageSummary is a {}, not a DamageEventSummary", layout.path().as_str())));
+    }
+    let mut first = [0usize; 2];
+    for (slot, list) in first.iter_mut().zip(TAG_LISTS) {
+        let n = vm.space.names.find(list).ok_or_else(|| bad(format!("DamageEventSummary declares no {list}")))?;
+        let (i, d) = layout.field(n).ok_or_else(|| bad(format!("DamageEventSummary declares no {list}")))?;
+        if !matches!(d.kind, ow_object::layout::PropKind::Byte { .. }) || d.array_dim != TAG_LIST_LEN {
+            return Err(bad(format!("{list} is not declared as a static array of eight bytes")));
+        }
+        *slot = i as usize;
+    }
+    Ok((ty, first))
+}
+
+/// `AdjustDamage`'s reset at entry (NATIVE_LINKS_13_14.md section 5; Off only, UNVERIFIED): the whole summary zeroed,
+/// then all eight bytes of both tag lists set to 255. One write; checked first.
+pub(crate) fn reset_summary(vm: &mut Vm, pipeline: ObjRef) -> Result<(), VmError> {
+    let (ty, first) = summary_schema(vm, pipeline, "WillowDamagePipeline.AdjustDamage")?;
+    let mut v = vm.space.classes.zero_value(&ow_object::layout::PropKind::Struct(ty));
+    let s = v.struct_mut().ok_or_else(|| error("combat hit: the summary's zero value is not a struct"))?;
+    for i in first {
+        for k in 0..TAG_LIST_LEN as usize {
+            s.fields[i + k] = Value::Byte(TAG_END);
+        }
+    }
+    crate::hit::access::set(vm, pipeline, "DamageSummary", v)?;
+    Ok(())
+}
+
 /// `WillowDamagePipeline.AdjustDamage(out IncomingDamage, out DamageSeverityPercent, DamagedActor, DamageInstigator,
-/// HitLocation, DamageSource, out HitMomentum, out HitInfo)` returning the summary (module documentation).
+/// HitLocation, DamageSource, out HitMomentum, out HitInfo)` returning the summary (module documentation). In Off the
+/// summary is reset first ([`reset_summary`], lane IMPL-LINKS-13-14), so a later refusal carries the partial-writes
+/// prefix.
 pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    if c.vm.parity != ParityMode::Off {
+        return adjust_damage_stages(c);
+    }
+    let pipeline = this(c, "AdjustDamage")?;
+    reset_summary(c.vm, pipeline)?;
+    adjust_damage_stages(c).map_err(ow_world::pools::after_partial_writes)
+}
+
+/// [`adjust_damage`]'s stages.
+fn adjust_damage_stages(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let pipeline = this(c, "AdjustDamage")?;
     let victim = arg_object(c, 2)?;
     let instigator = arg_object(c, 3)?;

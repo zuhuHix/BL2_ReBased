@@ -162,6 +162,13 @@ impl HealthPool {
         };
         let controller = bridge.player_controller();
         let pawn = bridge.player_pawn(vm)?;
+        // The hub's ruling on #796 (NATIVE_LINKS_13_14.md section 4, lane IMPL-LINKS-13-14; UNVERIFIED): as the
+        // possess leaves it in the game, the controller's `Pawn` is the player's pawn when `ApplyCharacterClassDefaults`
+        // recalculates, and it stays set afterwards.
+        if object(vm, controller, "Pawn")? != Some(pawn) {
+            crate::hit::access::set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+            vm.log.push(player_pawn_line(vm, pawn));
+        }
         // The arguments by parameter name (the pawn is `P`, the class the other one), not by position.
         let class_id = vm.space.heap.get(controller)?.class;
         let state = vm.space.heap.get(controller)?.state;
@@ -533,4 +540,13 @@ pub(crate) fn with_player_pawn<T>(
         set(vm, controller, "Pawn", v)?;
     }
     result
+}
+
+/// The harness line of the player set-up's controller `Pawn` (the hub's ruling on #796).
+pub fn player_pawn_line(vm: &Vm, pawn: ObjRef) -> String {
+    format!(
+        "harness input: the player set-up runs ApplyCharacterClassDefaults with the controller's Pawn set to {} {}, and          it stays set (hub ruling on #796; UNVERIFIED)",
+        crate::hit::access::class_name(vm, pawn),
+        vm.space.heap.get(pawn).map(|x| vm.space.names.text(x.name).into_owned()).unwrap_or_default()
+    )
 }

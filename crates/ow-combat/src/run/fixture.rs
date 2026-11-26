@@ -180,7 +180,7 @@ fn take_damage_params() -> [P<'static>; 8] {
 /// controllers, the attribute data classes.
 pub fn engine() -> Vec<u8> {
     let mut e = Toy::new(&[
-        "Byte", "Object", "Bool", "Float", "Array", "Struct", "Class", "Name", "Int",
+        "Byte", "Object", "Bool", "Float", "Array", "Struct", "Class", "Name", "Int", "FloatAttribute",
     ]);
     e.root = e.t.class("Object", 0);
     let actor = e.cls("Actor", 0);
@@ -295,11 +295,21 @@ pub fn engine() -> Vec<u8> {
     e.prop("Object", world, "GRI", 0, 0);
     let controller = e.cls("Controller", actor);
     e.prop("Object", controller, "Pawn", 0, 0);
+    // The class the recalculation's class-level part reads (NATIVE_LINKS_13_14.md section 4; lane IMPL-LINKS-13-14).
+    e.prop("Object", controller, "CharacterClass", 0, 0);
     e.prop("Object", controller, "ResourcePoolManager", 0, 0);
     // The class starting values (NATIVE_COMBAT_GROUNDWORK.md 1.10, 1.11; decision 2026-11-19-26): the AI mind's route.
     e.native(controller, "ApplyCharacterClassStartingValues", &[P("Object", "inCharacterClass", 0, 0)], None);
     let pawn = e.cls("Pawn", actor);
     e.prop("Object", pawn, "Controller", 0, 0);
+    // The class-level part's thirteen pawn values (NATIVE_LINKS_13_14.md section 3): the encumbrance resistance and
+    // the twelve damage-modifier stack attributes, each with its base and modifier stack.
+    e.prop("Float", pawn, "EncumbranceResistance", 0, 0);
+    for kind in ["Normal", "Explosive", "Shock", "Corrosive", "Incendiary", "Amp"] {
+        for part in ["Impact", "StatusEffect"] {
+            stack_attribute(&mut e, pawn, &format!("{kind}{part}DamageModifier"));
+        }
+    }
     e.prop("Struct", pawn, "HealthPool", 0, reference);
     e.prop("Float", pawn, "HealthVar", 0, 0);
     e.prop("Float", pawn, "HealthMaxVar", 0, 0);
@@ -633,6 +643,9 @@ pub fn willow_game() -> Vec<u8> {
     let notify = w.import_full("Function", pawn, "NotifyTakeHit");
     let ai_class = w.cls("AIClassDefinition", 0);
     let health_definition_property = w.prop("Object", ai_class, "HealthPoolDefinition", 0, 0);
+    // The class-level part's init data (NATIVE_LINKS_13_14.md section 3), each defaulting to 1 x 1 = 1 as the real
+    // class defaults give the twelve modifiers (NATIVE_LEVEL_UP_ATTRIBUTES.md section 1).
+    class_level_data(&mut w, ai_class);
     // The three fields `ApplyCharacterClassStartingValues`' base reads, declared as the game's class declares them
     // (review r1 of #444: undeclared is bad data); unset in every toy AI class, so the route makes no pool.
     w.array_of(ai_class, "ResourcePools", "Object", 0);
@@ -1096,7 +1109,11 @@ pub fn willow_game() -> Vec<u8> {
         w.prop("Object", pipeline, n, 0, 0);
     }
     w.prop("Bool", pipeline, "bCanHitFriendly", 0, 0);
-    let summary = w.strukt(pipeline, "DamageSummary");
+    // The game's struct name and its two skill-event tag lists, eight bytes each (NATIVE_LINKS_13_14.md section 5).
+    let summary = w.strukt(pipeline, "DamageEventSummary");
+    for list in ["DamageTakenSkillEventsTriggered", "DamageDealtSkillEventsTriggered"] {
+        w.prop_dim("Byte", summary, list, 8, 0);
+    }
     for n in [
         "InitialDamage",
         "PreviousHealth",
@@ -1340,6 +1357,40 @@ pub fn willow_game() -> Vec<u8> {
     });
     loot::willow_game_loot(&mut w, globals_class, data, willow_pawn, ai_pawn, set_health);
     w.build()
+}
+
+/// A float stack attribute `name` on `owner`: the value (stack flag, naming its stack and base), `<name>BaseValue`
+/// (plain-attribute flag) and `<name>ModifierStack` (an array of objects).
+fn stack_attribute(t: &mut Toy, owner: i32, name: &str) {
+    let base = t.prop("Float", owner, &format!("{name}BaseValue"), ow_object::layout::PropertyDecl::PLAIN_ATTRIBUTE, 0);
+    let stack = t.array_of(owner, &format!("{name}ModifierStack"), "Object", 0);
+    t.t.prop_tail("FloatAttribute", owner, name, ow_object::layout::PropertyDecl::STACK_ATTRIBUTE, &ints(&[stack, base]));
+}
+
+/// The class-level part's seven init-data fields on `class`: `BaseEncumbranceResistance` and the six
+/// `Base<Kind>DamageModifiers` pairs (`ResistanceToImpact`, `ResistanceToStatusEffect`), each defaulting to 1 x 1.
+fn class_level_data(t: &mut Toy, class: i32) {
+    let mut defaults = t.p().float_tag("BaseValueConstant", 1.0);
+    defaults.extend(t.p().float_tag("BaseValueScaleConstant", 1.0));
+    defaults.extend_from_slice(&t.p().none());
+    let mut payload = vec![0u8; 52];
+    payload.extend(defaults);
+    let mut export = Export::new(t.t.import("ScriptStruct"), "ClassLevelInitData", payload);
+    export.outer = class;
+    let data = t.p().add_export_with(export);
+    for n in ["BaseValueConstant", "BaseValueScaleConstant"] {
+        t.prop("Float", data, n, 0, 0);
+    }
+    for n in ["BaseValueAttribute", "InitializationDefinition"] {
+        t.prop("Object", data, n, 0, 0);
+    }
+    let pair = t.strukt(class, "ClassLevelDamageModifiers");
+    t.prop("Struct", pair, "ResistanceToImpact", 0, data);
+    t.prop("Struct", pair, "ResistanceToStatusEffect", 0, data);
+    t.prop("Struct", class, "BaseEncumbranceResistance", 0, data);
+    for kind in ["Normal", "Explosive", "Shock", "Corrosive", "Incendiary", "Amp"] {
+        t.prop("Struct", class, &format!("Base{kind}DamageModifiers"), 0, pair);
+    }
 }
 
 /// The data tags of an `AttributeInitializationData` value `constant x scale`.
