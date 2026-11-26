@@ -1,8 +1,10 @@
 //! Owner: lane IMPL-LINK1-RBPHYSICS. `maya:8` after the collision setters, in `ParityMode::Off`:
-//! `WillowPawn.InitializeRBPhysics` (2.A), `WillowPawn.InitializeBehaviorProviders` (2.B, `NotRead`),
-//! `WillowPlayerPawn.GetLinearColor` (2.D), `MeshComponent.GetInstancedMaterialInstanceConstant` (2.E, `NotRead`) and
+//! `WillowPawn.InitializeRBPhysics` (2.A), `WillowPlayerPawn.GetLinearColor` (2.D),
+//! `MeshComponent.GetInstancedMaterialInstanceConstant` (2.E, `NotRead`) and
 //! `WillowPlayerPawn.OnNativeApplyBodyClassStartingValuesHook` (2.F). 2.C (`GetFirstPersonWeaponHoldDef`) is in
-//! [`super::weapon_hold`]. AI-assisted (Claude Code).
+//! [`super::weapon_hold`]. 2.B (`WillowPawn.InitializeBehaviorProviders`) is not bound here: the kernel pack binds its
+//! rule (`ow_behavior::kernel::natives`, NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md; #744), and a placeholder here made
+//! that binding a duplicate registration (#744's landing check). AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_LINK1_RBPHYSICS_AND_AFTER.md section 2 alone (lane
 //! ANALYST-LINK1-RBPHYSICS-AND-AFTER, #738 with its r1 fix, on main); this lane did not read the executable. **Every
@@ -48,7 +50,6 @@ use super::component_setters::{Want, bad, bool_of, object_of, schemas, write};
 pub const RECORD: &str = "docs/verification/NATIVE_LINK1_RBPHYSICS_AND_AFTER.md";
 /// The native keys.
 pub const INITIALIZE_RB_PHYSICS: &str = "WillowPawn.InitializeRBPhysics()";
-pub const INITIALIZE_BEHAVIOR_PROVIDERS: &str = "WillowPawn.InitializeBehaviorProviders()";
 pub const GET_LINEAR_COLOR: &str = "WillowPlayerPawn.GetLinearColor(color)";
 pub const GET_INSTANCED_MIC: &str = "MeshComponent.GetInstancedMaterialInstanceConstant(int)";
 pub const APPLY_HOOK: &str = "WillowPlayerPawn.OnNativeApplyBodyClassStartingValuesHook()";
@@ -56,8 +57,6 @@ pub const APPLY_HOOK: &str = "WillowPlayerPawn.OnNativeApplyBodyClassStartingVal
 pub const RIGID_BODY: &str = "WillowPawn.InitializeRBPhysics: a component's rigid body";
 pub const RIGID_LAYER: &str = "a physics layer (rigid bodies)";
 pub const NOT_LOADED: &str = "WillowPawn.InitializeRBPhysics: a component the store has not loaded (a load is a write)";
-/// 2.B.
-pub const PROVIDER_LIST: &str = "WillowPawn.InitializeBehaviorProviders (the provider list)";
 /// 2.E: the read branch needs `GetMaterial` (no rule yet); the creation branch is not read either.
 pub const GET_MATERIAL: &str = "MeshComponent.GetMaterial";
 /// `PHYS_RigidBody`.
@@ -151,11 +150,6 @@ pub fn initialize_rb_physics(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-/// `WillowPawn.InitializeBehaviorProviders()` (2.B): the provider list is not named yet.
-pub fn initialize_behavior_providers(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    Err(NotYet::not_read(PROVIDER_LIST, RECORD).into())
-}
-
 /// `MeshComponent.GetInstancedMaterialInstanceConstant(int)` (2.E): both branches need routines not read.
 pub fn get_instanced_mic(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Err(NotYet::not_read(GET_MATERIAL, RECORD).into())
@@ -211,11 +205,10 @@ pub fn apply_hook(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-/// Binds the five keys (Off only; the caller checks the mode). A key bound first keeps its binding.
+/// Binds the four keys (Off only; the caller checks the mode). A key bound first keeps its binding.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for (key, f) in [
         (INITIALIZE_RB_PHYSICS, initialize_rb_physics as fn(&mut NativeCall<'_>) -> Result<Value, VmError>),
-        (INITIALIZE_BEHAVIOR_PROVIDERS, initialize_behavior_providers),
         (GET_LINEAR_COLOR, get_linear_color),
         (GET_INSTANCED_MIC, get_instanced_mic),
         (APPLY_HOOK, apply_hook),

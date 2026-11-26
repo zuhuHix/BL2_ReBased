@@ -20,7 +20,6 @@ use super::*;
 struct Fx {
     vm: Vm,
     rb: FuncId,
-    providers: FuncId,
     linear: FuncId,
     mic: FuncId,
     hook: FuncId,
@@ -66,8 +65,6 @@ fn fx_in(mode: ParityMode) -> Fx {
         vm.declare_function(d).unwrap()
     };
     let rb = declare(&mut vm, "WillowGame.WillowPawn.InitializeRBPhysics", INITIALIZE_RB_PHYSICS, pawn, vec![], None);
-    let providers =
-        declare(&mut vm, "WillowGame.WillowPawn.InitializeBehaviorProviders", INITIALIZE_BEHAVIOR_PROVIDERS, pawn, vec![], None);
     let c = decl(&mut vm, "C", PropKind::Struct(color)).with_flags(PropertyDecl::PARAM);
     let ret = decl(&mut vm, "ReturnValue", PropKind::Struct(linear));
     let linear_fn = declare(&mut vm, "WillowGame.WillowPlayerPawn.GetLinearColor", GET_LINEAR_COLOR, player, vec![c], Some(ret));
@@ -78,7 +75,7 @@ fn fx_in(mode: ParityMode) -> Fx {
     if mode != ParityMode::Reference {
         register(&mut vm).unwrap();
     }
-    Fx { vm, rb, providers, linear: linear_fn, mic, hook, player, component, color }
+    Fx { vm, rb, linear: linear_fn, mic, hook, player, component, color }
 }
 
 fn fx() -> Fx {
@@ -222,17 +219,12 @@ fn a_lazy_component_and_a_template_receiver() {
     assert_eq!(layer(x.rb(template).unwrap_err()), RIGID_BODY);
 }
 
-/// 2.B and 2.E: `NotRead`, nothing written.
+/// 2.E: `NotRead`, nothing written.
 #[test]
-fn the_provider_list_and_the_instanced_material_are_not_read() {
+fn the_instanced_material_is_not_read() {
     let mut x = fx();
-    let p = x.pawn(&[]);
     let c = x.component("Mesh", None, false);
     let before = x.marks();
-    match x.vm.call(x.providers, Some(p), vec![]) {
-        Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, PROVIDER_LIST)),
-        other => panic!("{other:?}"),
-    }
     match x.vm.call(x.mic, Some(c), vec![Value::Int(0)]) {
         Err(VmError::NotYet(n)) => assert_eq!(&*n.what, GET_MATERIAL),
         other => panic!("{other:?}"),
@@ -276,10 +268,11 @@ fn the_hook_sets_immune_to_falling_damage_only() {
     assert_eq!(before.iter().zip(&after).filter(|(a, b)| a != b).count(), 1);
 }
 
-/// Reference binds none of the five keys through the world pack's own gate (review of #742, item 4); Off binds them all.
+/// Reference binds none of the four keys through the world pack's own gate (review of #742, item 4); Off binds them all,
+/// and not `InitializeBehaviorProviders`, whose rule the kernel pack binds (#744's landing check).
 #[test]
 fn reference_binds_nothing() {
-    let keys = [INITIALIZE_RB_PHYSICS, INITIALIZE_BEHAVIOR_PROVIDERS, GET_LINEAR_COLOR, GET_INSTANCED_MIC, APPLY_HOOK];
+    let keys = [INITIALIZE_RB_PHYSICS, GET_LINEAR_COLOR, GET_INSTANCED_MIC, APPLY_HOOK];
     let mut r = fx_in(ParityMode::Reference);
     ow_vm::api::NativePack::register(&crate::world::Pack, &mut r.vm).unwrap();
     for key in keys {
@@ -289,6 +282,7 @@ fn reference_binds_nothing() {
     for key in keys {
         assert!(x.vm.has_native(key), "{key}");
     }
+    assert!(!x.vm.has_native("WillowPawn.InitializeBehaviorProviders()"), "the kernel pack's key");
 }
 
 /// Review of #742, item 1: on a live receiver only the attach record counts. An unrecorded entry whose `bAttached` is
