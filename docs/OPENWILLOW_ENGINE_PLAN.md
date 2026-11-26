@@ -130,11 +130,13 @@ each candidate, and the maintainer picked from the measurements
   benchmark scene) and an animation and material pipeline written by hand.
 - The engine crates (wgpu, winit, glam, bytemuck, pollster, rapier3d, the Ruffle crates from git, and a Java JDK to
   build Ruffle) enter the tree only with `THIRD_PARTY.md` entries the maintainer approves, when the host work needs
-  them. None is in the tree yet.
+  them. Of these, wgpu and winit are in the tree, used by `ow-host` alone (approved 2026-11-16, `THIRD_PARTY.md`,
+  "Engine crates: wgpu and winit").
 
 Prototypes live under ignored `local/bench/`; the record is
-[ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md). The host itself is not written yet, and nothing about the Rust
-route is verified yet.
+[ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md). The host (`crates/ow-host`) draws and walks Sanctuary from the
+installed game ([TOOLING.md](TOOLING.md), "`ow-host`: the Rust host"); no playable slice runs in it yet, and nothing
+about the Rust route is verified against the game yet.
 
 **What UE5 gave, and what the Rust host must therefore build or pick a crate for.** The old argument for UE5 was that
 the conceptual mapping is nearly 1:1: UE3 material node graphs to UE5 material graphs, AnimTree to AnimBP, Matinee to

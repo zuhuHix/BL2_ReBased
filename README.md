@@ -51,7 +51,7 @@ One developer, a lot of AI, and a written record of every check.
 <p align="center"><sub>Frames captured from this project's UE 5.8 build on <code>main</code> (7eee9ee), 2026-11-07: Phaselock's cast, the Fire mission's reward screen, Fight For Your Life and a shotgun shot. The models, textures and UI movies were imported on my PC from my own copy of the game. This is not concept art and not a mod of the old .exe. It does not match the original yet: <a href="#how-close-is-it">here's the scoreboard</a>.</sub></p>
 
 > [!IMPORTANT]
-> **There is no game to play yet, and no download.** The retired UE5 host was a developer prototype: one map, one Vault Hunter and one mission, with labelled stand-ins, and most of its rules not yet confirmed against the original game. The Rust host that replaces it doesn't run yet. I put it up early so people can watch it grow.
+> **There is no game to play yet, and no download.** The retired UE5 host was a developer prototype: one map, one Vault Hunter and one mission, with labelled stand-ins, and most of its rules not yet confirmed against the original game. The Rust host that replaces it draws and walks Sanctuary, and nothing of the slice plays in it yet. I put it up early so people can watch it grow.
 >
 > This is a fan project, not affiliated with Gearbox, 2K or Take-Two. No game files and no Gearbox code live in this repo. It only works against **your own purchased copy** of Borderlands 2, and it never touches your install.
 
@@ -150,7 +150,7 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 ## Progress in pictures
 
 > [!NOTE]
-> **Everything in this section shows the retired UE5 host** (removed on 2026-11-14, last held by commit `08bcf3e`). "Ours" below means that host. The "State" lines describe what it did; the Rust host has none of it on screen yet. I'm keeping the pictures as a record and as the target the Rust host has to meet again.
+> **Everything in this section shows the retired UE5 host** (removed on 2026-11-14, last held by commit `08bcf3e`). "Ours" below means that host. The "State" lines describe what it did; of all this, the Rust host so far draws Sanctuary, and none of the rest as it is shown here. I'm keeping the pictures as a record and as the target the Rust host has to meet again.
 
 *Where a real-game frame exists it sits next to ours, and each card says in its own text what still looks wrong. The newest cards (uploaded 2026-11-08) show our build 40ae631, captured 2026-11-07; their real-game frames come from my own sessions, and each card's footer says whether mods were on. Full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/BL2_ReBased/releases/tag/progress-gallery) release, not in the repository: they show game content, and the rules for that are in [docs/LEGAL.md](docs/LEGAL.md).*
 
@@ -369,7 +369,7 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 ## What you'd get (eventually)
 
-**The first milestone is the goal:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in the new engine. The retired UE5 host got parts of it running; the Rust host has none of it yet. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine is meant to buy you. These are goals, and none of them exist yet:
+**The first milestone is the goal:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in the new engine. The retired UE5 host got parts of it running; the Rust host walks Sanctuary and plays none of the rest yet. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine is meant to buy you. These are goals, and none of them exist yet:
 
 <table>
   <tr>
@@ -396,13 +396,13 @@ Six phases. Each one ends with a gate, a thing you can actually see or do, so it
 
 **Current priority: a vertical slice, not breadth.** Porting all 82 maps is the easy part. The hard, unproven part is phases 2 through 4, actually running the game's code. So the goal right now is proving those on **one map and one Vault Hunter**, end to end, before spending more time on anything else ([why](ROADMAP.md#priority-the-vertical-slice)).
 
-**Since the switch to Rust (2026-11-14),** the host half of phases 1 to 4 is back to not started, and the game-reading half (reader, VM, combat, mission and item rules) keeps its status. The priority order hasn't changed.
+**With the switch to Rust (2026-11-14),** the host half of phases 1 to 4 went back to not started, and the game-reading half (reader, VM, combat, mission and item rules) kept its status. The Rust host has since begun on phase 1: it draws and walks Sanctuary, with none of it checked against the game. The priority order hasn't changed.
 
 | Phase | What you'll be able to do | Where it is |
 |:--|:--|:--|
 | <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0 · Read the files** | The engine can open every BL2 file | **Done.** 2,008 packages, gated 2026-09-10, with the C++ reader. The Rust port has to match it before it takes over |
 | <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **0R · Pick the engine** | Bevy and an own engine on wgpu + winit each build the same small Sanctuary-and-Maya scene, and I pick from the measurements | **Picked 2026-11-15: own engine on wgpu + winit** ([record](docs/verification/ENGINE_BENCHMARK.md), [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The Rust core port, the other half of 0R, is still in progress |
-| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **1 · See a map** | Walk around Sanctuary in the Rust host, verified against the real game. The rest of the 82 maps come in phase 5 | **Not started in Rust.** The retired UE5 host loaded three maps as scenery and had matched-camera rounds of Sanctuary; that stays on record as the target |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **1 · See a map** | Walk around Sanctuary in the Rust host, verified against the real game. The rest of the 82 maps come in phase 5 | **Begun in Rust, nothing verified.** `ow-host` draws and walks Sanctuary from the installed game; none of it is checked against the real game. The retired UE5 host loaded three maps as scenery and had matched-camera rounds of Sanctuary; that stays on record as the target |
 | <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | **Core in progress, host not started.** A C++ bytecode loader, interpreter and Core natives since 2026-09-30, to be ported to Rust. In the UE5 host it drove backpack navigation and pieces of the mission and combat rules |
 | <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | **Not started in Rust.** Movement numbers from stock data (#77) carry over; the UE5 host's movement was maintainer-tested on 2026-10-02, with no verification record |
 | <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **4 · One Vault Hunter, proven** | The full loop on Sanctuary. About 3,800 of Gearbox's undocumented functions have to be worked out. **This is the mountain** | **Core in progress, host not started.** The combat, mission and item rules carry over. The UE5 host's scripted loop passed 14 of 14 with stand-ins; that doesn't count for the Rust host |
@@ -466,7 +466,7 @@ Full policy: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE). Covers my 
 <br>
 
 **Can I play Borderlands 2 in this?**
-Not yet. There's no download. Until 2026-11-14, on my machines, Maya could walk Sanctuary, shoot enemies on a test range, loot a gun and run one mission in the UE5 host, but that was a developer harness, not the game, and that host is now retired. The Rust host doesn't run yet. The full campaign is Phase 5. It's gonna be a while...
+Not yet. There's no download. Until 2026-11-14, on my machines, Maya could walk Sanctuary, shoot enemies on a test range, loot a gun and run one mission in the UE5 host, but that was a developer harness, not the game, and that host is now retired. The Rust host draws and walks Sanctuary, but none of that loop plays in it yet. The full campaign is Phase 5. It's gonna be a while...
 
 **Is this a remaster? A remake?**
 Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it. Remasters will follow later on when people enjoy their new modding capabilities.
