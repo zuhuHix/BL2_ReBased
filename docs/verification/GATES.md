@@ -60,6 +60,14 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FOLLOW-UP-HOOK (2026-11-26, pc-hummer, on fix/hook-rust-sensitive from main d90df41):** AI-assisted (Claude Code,
+Fable 5.2). The guard hook's sensitive list gains the Rust ports and the workspace files that AGENTS.md lists
+(`crates/ow-container/`, `crates/ow-package/`, the workspace's `Cargo.toml` and `rust-toolchain.toml`), with a shorter
+reminder (290 characters for `src/package.cpp`, 402 before). New `tests/sensitive_guard_test.py`: 6 tests OK, and as
+ctest `py-sensitive_guard` 1 of 1 passed (`ctest -N` in a fresh configure on this machine lists 167 entries, this one
+among them). The full ctest, `verify_packages` and the cargo build and tests were not run: no C++, Rust or reader file
+changed. The standing ctest figure of 173 should therefore read 174 on the next full run; that is UNVERIFIED.
+
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
 flags, the swept-box test (well-formed values only) and the `Owner` chains both ways; the touch trace's `Owner`-chain
