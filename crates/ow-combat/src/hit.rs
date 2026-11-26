@@ -1505,6 +1505,12 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
         // such as `Attribute_HealthMultiplier` hold the class values) and recalculates. Read from the script; the rest
         // of `Possess` is not run (decision 2026-11-19-15). A native it reaches that nothing binds stops here.
         set_required(vm, mind, "MyWillowPawn", Value::Object(Some(pawn)), unit)?;
+        // The hub's ruling on #796 (NATIVE_LINKS_13_14.md section 4, lane IMPL-LINKS-13-14; UNVERIFIED): `Possess`'s
+        // one write the adopt now runs, the mind's `CharacterClass` := the pawn's `AIClass`, before
+        // `InitializeCharacterClass`, so the recalculation's class-level part runs from the AI class. This narrows
+        // decision 2026-11-19-26 by that write; the rest of `Possess` stays out.
+        set_required(vm, mind, "CharacterClass", Value::Object(Some(class)), unit)?;
+        vm.log.push(adopt_class_line(vm, class));
         let mind_class = vm.space.heap.get(mind)?.class;
         let Some(initialize) = vm.find_method(mind_class, "InitializeCharacterClass", None)? else {
             return Err(error("combat: the mind class has no InitializeCharacterClass"));
@@ -1531,6 +1537,14 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
         .ok_or_else(|| error("combat: SetHealthResourcePoolDefinition returned no manager"))?;
     set_required(vm, mind, "ResourcePoolManager", written, unit)?;
     Ok(Enemy { pawn, mind })
+}
+
+/// The harness line of the adopt's `CharacterClass` write (the hub's ruling on #796).
+pub fn adopt_class_line(vm: &Vm, class: ObjRef) -> String {
+    let named = vm.defs.handle_path(class).unwrap_or_else(|| crate::hit::access::class_name(vm, class));
+    format!(
+        "harness input: the AI adopt sets the mind's CharacterClass to the pawn's AIClass {named}, as WillowMind.Possess          does (hub ruling on #796; UNVERIFIED)"
+    )
 }
 
 /// The object a hold behavior (the installed `Behavior_AIHold` script) is applied to for `context`: the live game

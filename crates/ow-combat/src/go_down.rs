@@ -120,6 +120,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     crate::maya9::register(vm)?;
     crate::default_physics::register(vm)?;
     crate::link34::register(vm)?;
+    crate::links1314::register(vm)?;
     for path in UNRESOLVED {
         let (class, function) = class_and_function(path);
         let what = format!("{class}.{function}: the class's own implementation is not resolved");

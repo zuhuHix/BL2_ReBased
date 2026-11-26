@@ -8,8 +8,14 @@
 //!
 //! **What the call does here**, in the record's order (the controller-class part, then the player-controller part):
 //! 1. *Class-level pawn attributes* (only with a pawn that is not a vehicle and a `CharacterClass`): the encumbrance
-//!    resistance value and twelve damage-modifier attributes from the class's init data. The record does not name the
-//!    pawn properties these land in, so in `ParityMode::Off` this step is `NotYet { NotRead }` whenever it applies.
+//!    resistance value and twelve damage-modifier attributes from the class's init data. In `ParityMode::Off` they are
+//!    written (lane IMPL-LINKS-13-14, NATIVE_LINKS_13_14.md section 3, #796 r1; UNVERIFIED), the controller as the
+//!    context source: `Pawn.EncumbranceResistance`'s value only, from `BaseEncumbranceResistance`; then for Normal,
+//!    Explosive, Shock, Corrosive, Incendiary and Amp in that order, `<Kind>ImpactDamageModifier` from
+//!    `Base<Kind>DamageModifiers.ResistanceToImpact` and `<Kind>StatusEffectDamageModifier` from its
+//!    `ResistanceToStatusEffect`, each by its base with the value recomputed from its stack ([`plan_class_part`]). The
+//!    plan (declarations, each init-data definition and its chains' resolvers resident, else `NotRead` naming it) is
+//!    made before any write; the writes come before the pool rebase.
 //! 2. *Pool rebase, always* (even with no pawn): `ResourcePoolManager.RecalculateBaseValues` on the controller's
 //!    `ResourcePoolManager`, which runs the installed script `ResourcePool.CalculateBaseValues(true)` on every pool
 //!    in slot order (`crate::pools::recalculate_base_values`). The script sets each pool's base maximum from its
@@ -89,13 +95,17 @@ pub fn recalculate_attribute_initialized_state(
             crate::spawn_balance::run_step(vm, controller)?;
         }
         let skipped = vm.parity == ParityMode::Reference;
-        // The refusals up front: the controller part's class-level step, then the mind's own part (its plan).
+        // The refusals up front: the controller part's class-level step (its plan), then the mind's own part.
+        let class_part = if skipped { None } else { plan_class_part(vm, controller)? };
         if !skipped {
             refuse_class_parts(&vm.space, controller)?;
         }
         let part = if mind { plan_mind_part(vm, controller)? } else { None };
         if mind {
             skill_refresh(vm, controller)?;
+        }
+        if let Some(class_part) = class_part {
+            apply_mind_part(vm, controller, &class_part)?;
         }
         let manager = object(&vm.space, controller, "ResourcePoolManager")?;
         pools::recalculate_base_values(vm, manager)?;
@@ -174,16 +184,109 @@ fn init_data_of(vm: &mut Vm, class: ObjRef, field: &str) -> Result<ow_attr::api:
         return Err(mind_bad(format!("{field} is not declared as a struct")));
     }
     let v = vm.space.read(class, ow_object::ids::PropAddr::scalar(p))?.clone();
-    let data = ow_attr::eval::init_data(&vm.space, &v)?;
+    init_data_resident(vm, &v, mind_resident)
+}
+
+/// The init data in the struct value `v`, its definitions checked resident by `resident` (with their chains'
+/// resolvers, which the evaluator's read preflight checks).
+fn init_data_resident(
+    vm: &mut Vm,
+    v: &Value,
+    resident: fn(&Vm, ObjRef) -> Result<(), VmError>,
+) -> Result<ow_attr::api::InitData, VmError> {
+    let data = ow_attr::eval::init_data(&vm.space, v)?;
     if let Some(attr) = data.base_value_attribute {
-        mind_resident(vm, attr)?;
+        resident(vm, attr)?;
         let attrs = vm.attrs.clone();
         attrs.preflight_read_resident(attr, &mut ow_attr::api::EvalCx::new(vm))?;
     }
     if let Some(def) = data.initialization_definition {
-        mind_resident(vm, def)?;
+        resident(vm, def)?;
     }
     Ok(data)
+}
+
+/// The damage kinds of the class-level part, in its write order (NATIVE_LINKS_13_14.md section 3).
+pub const DAMAGE_KINDS: [&str; 6] = ["Normal", "Explosive", "Shock", "Corrosive", "Incendiary", "Amp"];
+/// A class-level part object the store has not loaded (the text names it).
+pub const CLASS_NOT_LOADED: &str =
+    "the class-level part of RecalculateAttributeInitializedState: an object the store has not loaded (a load is a write)";
+/// The record of the class-level part.
+pub const RECORD_CLASS: &str = "NATIVE_LINKS_13_14.md section 3";
+
+fn class_bad(message: impl Into<String>) -> VmError {
+    VmError::Script { function: "RecalculateAttributeInitializedState".to_string(), message: message.into() }
+}
+
+/// [`CLASS_NOT_LOADED`] naming `o` (its handle's path, else its class's).
+fn class_resident(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    let x = vm.space.heap.get(o)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if vm.defs.is_unloaded(&vm.space, o) || vm.defs.is_failed(&vm.space, o) || short {
+        let named = vm.defs.handle_path(o).unwrap_or_else(|| ow_attr::eval::class_path(&vm.space, o));
+        return Err(NotYet::not_read(format!("{CLASS_NOT_LOADED}: {named}"), RECORD_CLASS).into());
+    }
+    Ok(())
+}
+
+/// The class-level part, planned (module documentation, step 1): `None` without a pawn, with a `Vehicle` pawn, or
+/// without a `CharacterClass`. Reads only, loads nothing.
+fn plan_class_part(vm: &mut Vm, controller: ObjRef) -> Result<Option<MindPart>, VmError> {
+    let class = object(&vm.space, controller, "CharacterClass")?;
+    let pawn = object(&vm.space, controller, "Pawn")?;
+    let (Some(class), Some(pawn)) = (class, pawn) else { return Ok(None) };
+    if is_a(&vm.space, pawn, "Vehicle")? {
+        return Ok(None);
+    }
+    class_resident(vm, class)?;
+    class_resident(vm, pawn)?;
+    let struct_field = |vm: &Vm, field: &str| -> Result<Value, VmError> {
+        let (p, d) = decl_of(vm, class, field).map_err(|_| class_bad(format!("the class declares no {field}")))?;
+        if !matches!(d.kind, ow_object::layout::PropKind::Struct(_)) {
+            return Err(class_bad(format!("{field} is not declared as a struct")));
+        }
+        Ok(vm.space.read(class, ow_object::ids::PropAddr::scalar(p))?.clone())
+    };
+    let member = |vm: &Vm, v: &Value, field: &str, name: &str| -> Result<Value, VmError> {
+        let s = v.as_struct().ok_or_else(|| class_bad(format!("{field} is not a struct value")))?;
+        let layout = vm.space.classes.struct_layout(s.ty).ok_or_else(|| class_bad(format!("{field}'s struct has no layout")))?;
+        let n = vm.space.names.find(name).ok_or_else(|| class_bad(format!("{field} declares no {name}")))?;
+        let (i, d) = layout.field(n).ok_or_else(|| class_bad(format!("{field} declares no {name}")))?;
+        if !matches!(d.kind, ow_object::layout::PropKind::Struct(_)) {
+            return Err(class_bad(format!("{field}.{name} is not declared as a struct")));
+        }
+        Ok(s.fields[i as usize].clone())
+    };
+    let mut writes = Vec::new();
+    // The encumbrance resistance: the value only (a float, or the value of an attribute).
+    let v = struct_field(vm, "BaseEncumbranceResistance")?;
+    let data = init_data_resident(vm, &v, class_resident)?;
+    let target = match decl_of(vm, pawn, "EncumbranceResistance") {
+        Ok((p, d))
+            if matches!(d.kind, ow_object::layout::PropKind::Float | ow_object::layout::PropKind::FloatAttribute)
+                && d.attr.is_none_or(|c| c.value == p) =>
+        {
+            Target::Plain(pawn, p)
+        }
+        _ => return Err(class_bad("EncumbranceResistance is not declared as a float value")),
+    };
+    writes.push((data, target));
+    for kind in DAMAGE_KINDS {
+        let field = format!("Base{kind}DamageModifiers");
+        let v = struct_field(vm, &field)?;
+        for (member_name, target_name) in
+            [("ResistanceToImpact", format!("{kind}ImpactDamageModifier")), ("ResistanceToStatusEffect", format!("{kind}StatusEffectDamageModifier"))]
+        {
+            let m = member(vm, &v, &field, member_name)?;
+            let data = init_data_resident(vm, &m, class_resident)?;
+            let target = stack_target(vm, pawn, &target_name).map_err(|e| match e {
+                VmError::Script { message, .. } => class_bad(message),
+                other => other,
+            })?;
+            writes.push((data, target));
+        }
+    }
+    Ok(Some(MindPart { writes }))
 }
 
 /// The stack attribute `name` of `o`, its companions named `<name>BaseValue` and `<name>ModifierStack`.
@@ -237,8 +340,8 @@ fn plan_mind_part(vm: &mut Vm, mind: ObjRef) -> Result<Option<MindPart>, VmError
     Ok(Some(MindPart { writes }))
 }
 
-/// The mind part's writes (module documentation): each value evaluated with the mind as the context source and no
-/// override, then written; a resistance by its base, the value recomputed from its modifier stack (`ow-attr`'s stack
+/// The mind part's writes, and the class-level part's (module documentation): each value evaluated with the mind
+/// (the controller) as the context source and no override, then written; a resistance by its base, the value recomputed from its modifier stack (`ow-attr`'s stack
 /// fold, the one-rounding form, UNVERIFIED).
 fn apply_mind_part(vm: &mut Vm, mind: ObjRef, part: &MindPart) -> Result<(), VmError> {
     let attrs = vm.attrs.clone();
@@ -298,26 +401,14 @@ fn skill_refresh(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// Off mode: `NotYet` when step 1 or step 3 applies (module documentation). Reads `CharacterClass`, `Pawn` and, on a
+/// Off mode: `NotYet` when step 3 applies (module documentation). Reads `CharacterClass` and, on a
 /// `WillowPlayerController`, `MyWillowPawn` and its `StatusEffectComp`.
 fn refuse_class_parts(
     space: &ow_object::heap::ObjectSpace,
     controller: ObjRef,
 ) -> Result<(), VmError> {
+    // Step 1 is planned and written by `plan_class_part` (lane IMPL-LINKS-13-14); only step 3 refuses here.
     let class_def = object(space, controller, "CharacterClass")?;
-    let pawn = object(space, controller, "Pawn")?;
-    let class_part = match (pawn, class_def) {
-        (Some(p), Some(_)) => !is_a(space, p, "Vehicle")?,
-        _ => false,
-    };
-    if class_part {
-        return Err(NotYet::not_read(
-            "the class-level pawn attributes of RecalculateAttributeInitializedState (encumbrance resistance \
-             and twelve damage modifiers: the pawn properties they land in are not named)",
-            RECORD,
-        )
-        .into());
-    }
     if is_a(space, controller, "WillowPlayerController")? {
         let component = match object(space, controller, "MyWillowPawn")? {
             Some(p) => object(space, p, "StatusEffectComp")?,
@@ -374,3 +465,7 @@ impl NativePack for Pack {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "levelup_tests.rs"]
+mod tests;
