@@ -347,3 +347,20 @@ fn a_nodes_argument_that_is_no_array_is_a_script_error() {
     }
     assert_eq!(x.marks(), before);
 }
+
+/// Lane IMPL-AIMOFFSET-REBUILD: `WillowAnimNodeFeatherBlend` declares its own `SetBlendTarget`, under its own key; it
+/// reaches the same rule, feather step included (Maya's `UBMoveBlend` call, `(1.0, 0.0)`).
+#[test]
+fn the_feather_blend_s_own_key_reaches_the_rule() {
+    let mut x = fx();
+    let a = decl(&mut x.vm, "BlendTarget", PropKind::Float).with_flags(PropertyDecl::PARAM);
+    let b = decl(&mut x.vm, "BlendTime", PropKind::Float).with_flags(PropertyDecl::PARAM);
+    let feather = x.feather;
+    let f = native(&mut x.vm, "WillowGame.WillowAnimNodeFeatherBlend.SetBlendTarget", FEATHER_SET_BLEND_TARGET, feather, vec![a, b]);
+    register(&mut x.vm).unwrap();
+    assert!(x.vm.has_native(FEATHER_SET_BLEND_TARGET));
+    let n = x.blend_node(feather, "UBMoveBlend");
+    x.vm.call(f, Some(n), vec![Value::Float(0.25), Value::Float(0.0)]).unwrap();
+    assert_eq!((x.float(n, "Child2WeightTarget"), x.float(n, "Child2Weight")), (0.25, 0.25));
+    assert_eq!(x.weights(n), [1.0, 0.25], "the feather step");
+}

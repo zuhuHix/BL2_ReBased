@@ -46,6 +46,9 @@ pub const RECORD: &str = "docs/verification/NATIVE_LINK1_TAIL_SETTERS.md";
 /// The native keys.
 pub const FIND_ALL_ANIM_NODES: &str = "AnimNode.FindAllAnimNodes(array,name)";
 pub const SET_BLEND_TARGET: &str = "AnimNodeBlend.SetBlendTarget(float,float)";
+/// `WillowAnimNodeFeatherBlend`'s own declaration of the native, which shares `AnimNodeBlend`'s exec (2.B): the same
+/// rule (lane IMPL-AIMOFFSET-REBUILD; the installed run showed #739 had bound only the base class's key).
+pub const FEATHER_SET_BLEND_TARGET: &str = "WillowAnimNodeFeatherBlend.SetBlendTarget(float,float)";
 pub const SET_ACTIVE_CHILD_KEY: &str = "AnimNodeBlendList.SetActiveChild(int,float)";
 /// 2.A's component or node not loaded.
 pub const FIND_NOT_LOADED: &str = "AnimNode.FindAllAnimNodes: an object the store has not loaded (a load is a write)";
@@ -295,6 +298,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for (key, f) in [
         (FIND_ALL_ANIM_NODES, find_all_anim_nodes as fn(&mut NativeCall<'_>) -> Result<Value, VmError>),
         (SET_BLEND_TARGET, set_blend_target),
+        (FEATHER_SET_BLEND_TARGET, set_blend_target),
         (SET_ACTIVE_CHILD_KEY, set_active_child),
     ] {
         if !vm.has_native(key) {

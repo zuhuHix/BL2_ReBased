@@ -1,6 +1,6 @@
 ## 2026-11-26: the aim-offset node's required-bones rebuild in Off
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-AIMOFFSET-REBUILD, on main 4c01c9a1. It implements
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-AIMOFFSET-REBUILD, rebased onto main 1709b8a8 (with #742). It implements
 docs/verification/NATIVE_AIMOFFSET_REBUILD.md section 3 (lane E's note, #741 with its r1 fix, on main). Clean room:
 this lane did not read the executable. No real-game session was run. **Every rule is UNVERIFIED in the running
 game.** Reference keeps the stub policy.
@@ -37,7 +37,12 @@ skeleton-layer cases (no source, a mesh not loaded) are in `aim_offset_tests.rs`
 Links 1, 3, 4, 5, 13 and 14 pass the rebuild and `FindAllAnimNodes` (#739), and stop at an **error, the unbound
 `WillowAnimNodeFeatherBlend.SetBlendTarget(float,float)`**. The feather blend declares its own native, which shares
 `AnimNodeBlend`'s exec (NATIVE_LINK1_TAIL_SETTERS.md 2.B), and #739 bound only `AnimNodeBlend.SetBlendTarget`'s key.
-That key was the one #739 had not verified. Binding the feather key to the same rule is a one-line follow-up there.
-The hub predicted InitializeRBPhysics's unbound native on plain main: the run stops before it.
+That key was the one #739 had not verified: **#739's binding missed the subclass key.** This lane binds
+`WillowAnimNodeFeatherBlend.SetBlendTarget(float,float)` to the same `blend_setters` rule, in Off only (its own
+commit, with a test that a feather-blend receiver reaches the rule through its own key).
+With the feather key bound and the branch on main 1709b8a8 (with #742): 6 ok / 8 NotYet / 0 errors, `links ok 6/14`,
+`step share X = 6.583/14 = 47.0%`. Links 1, 3, 4, 5, 13 and 14 pass `SetBlendTarget` and stop at `maya:8` on
+`NotYet { NotPorted }`, "UpdateAnimations: the tree nodes' ticks" (NATIVE_BONE_TRANSFORM_LAYER.md), in
+`Mesh.UpdateAnimations`, before `InitializeRBPhysics`.
 
-**Gates.** `cargo test --workspace -j 8`: 3,723 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.
+**Gates.** `cargo test --workspace -j 8`: 3,738 passed / 0 failed / 58 ignored (after the rebase). `crate_edges_test.py`: OK.
