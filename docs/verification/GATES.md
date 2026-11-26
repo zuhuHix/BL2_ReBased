@@ -8,7 +8,7 @@ out` argument aliases a property the store skipped (new read-only `NativeCall::a
 LOWs (an undeclared `ConsumerHandle` tested, the enter-route order UNVERIFIED, unwalkable `ITargetable` chains
 `NotRead`). `cargo test --workspace -j 8 --no-fail-fast` 3,934 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. No slice-gate run: Maya's `DesignerFlagStartingValues` decodes, and
 no link answers differently (the follow-ups refuse only shapes the slice does not hold). UNVERIFIED in game. Decision
-2026-11-26-NNN.
+2026-11-26-48.
 
 **IMPL-UPDATEAMMOCOUNTS (2026-11-26, pc-hummer, on fix/rust-updateammocounts, rebased onto main d3be3e5):**
 AI-assisted (Claude Code, Opus 5.5). Link 6's take in Off (NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md 3.1, 3.3-3.8, 4.1,
