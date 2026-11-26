@@ -834,6 +834,10 @@ fn package() -> Vec<u8> {
     t.prop("Name", actor, "BaseBoneName", 0, 0);
     t.prop("Struct", actor, "RelativeLocation", 0, vector);
     t.prop("Struct", actor, "RelativeRotation", 0, rotator);
+    // The base's scale fields SetBase's identity case reads (lane IMPL-PAWN-INTERACTION-PROXY).
+    t.prop("Float", actor, "DrawScale", 0, 0);
+    t.prop("Struct", actor, "DrawScale3D", 0, vector);
+    t.prop("Struct", actor, "PrePivot", 0, vector);
     native(
         &mut t,
         actor,

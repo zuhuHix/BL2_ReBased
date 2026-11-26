@@ -5,7 +5,8 @@
 //! lane did not read the executable. **Every rule is UNVERIFIED in the running game.** Reference binds nothing.
 //!
 //! **Which receivers.** The rule applies to a receiver whose first native class (the class table only) is one of the
-//! seven tables the note read ([`READ_CLASSES`]). Any other receiver is [`NOT_RESOLVED`] (`NotRead`), decided first.
+//! seven tables the note read, plus `PawnInteractionProxy` (NATIVE_PAWN_INTERACTION_PROXY.md section 5;
+//! [`READ_CLASSES`]). Any other receiver is [`NOT_RESOLVED`] (`NotRead`), decided first.
 //! The native callers (`SetPhysics`' base search, the base-clearing transition) are not read: `SetPhysics`' base-setter
 //! `NotRead` stands, and this binding does not lift it.
 //!
@@ -22,7 +23,9 @@
 //! 4. a `SkelComp` whose `Owner` is not `NewBase`: nothing; one that passes: [`BONE_PLACEMENT`] (`NotRead`);
 //! 5. `NewBase`, `SkelComp` and `AttachName` all as they are: nothing (no event, no `BaseChange`);
 //! 8. with a `NewBase` that is not `bWorldGeometry`: a hard-attached receiver that is not a simulated proxy needs the
-//!    full inverse ([`HARD_ATTACH`]); a base with a non-zero `Rotation`, or a receiver rotation not normalised (each
+//!    full inverse ([`HARD_ATTACH`]), except in NATIVE_PAWN_INTERACTION_PROXY.md section 5's identity case (the
+//!    receiver exactly on an unturned base with `DrawScale` 1, `DrawScale3D` (1, 1, 1) and `PrePivot` zero, those three
+//!    declared on the base), which gets a zero relative pose (lane IMPL-PAWN-INTERACTION-PROXY); a base with a non-zero `Rotation`, or a receiver rotation not normalised (each
 //!    part within the 16-bit signed range, pitch within a quarter turn), needs the rotation conversion ([`TURNED`]).
 //!
 //! **The commit**, steps 6 to 10: the old base (not `bWorldGeometry`) loses every copy of the receiver from `Attached`,
@@ -47,7 +50,7 @@ pub const KEY: &str = "Actor.SetBase(object,vector,object,name)";
 const PACKAGE: &str = "Engine";
 const WHAT: &str = "Actor.SetBase";
 /// The first native classes whose tables the note read.
-pub const READ_CLASSES: [&str; 7] = [
+pub const READ_CLASSES: [&str; 8] = [
     "Engine.Actor",
     "Engine.Inventory",
     "Engine.Weapon",
@@ -55,6 +58,8 @@ pub const READ_CLASSES: [&str; 7] = [
     "Engine.WillowInventory",
     "Engine.DroppedPickup",
     "WillowGame.WillowPickup",
+    // NATIVE_PAWN_INTERACTION_PROXY.md section 5 (lane IMPL-PAWN-INTERACTION-PROXY): the proxy's table holds Actor's body.
+    "WillowGame.PawnInteractionProxy",
 ];
 pub const NOT_RESOLVED: &str = "SetBase: the class's own implementation is not resolved";
 pub const NOT_LOADED: &str = "SetBase: an object the store has not loaded (a load is a write)";
@@ -124,7 +129,7 @@ fn class_path(vm: &Vm, o: ObjRef) -> String {
 }
 
 /// The path of `o`'s first native class (the class table only, as `Actor.SetPhysics`' layers take it).
-fn first_native(vm: &Vm, o: ObjRef) -> Result<Option<String>, VmError> {
+pub(crate) fn first_native(vm: &Vm, o: ObjRef) -> Result<Option<String>, VmError> {
     let code = vm.defs.code();
     let mut cursor = Some(vm.space.heap.get(o)?.class);
     while let Some(c) = cursor {
@@ -251,10 +256,14 @@ fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, Vm
         return Ok(false);
     }
     let hard = flag(vm, receiver, "bHardAttach")?;
-    if hard && !role_is(vm, receiver, "ROLE_SimulatedProxy")? {
+    let simulated = role_is(vm, receiver, "ROLE_SimulatedProxy")?;
+    // The identity case (NATIVE_PAWN_INTERACTION_PROXY.md section 5): a hard-attached receiver that is not a simulated
+    // proxy, sitting exactly on an unturned, unscaled, unpivoted base, gets a zero relative pose; any other is the full
+    // inverse's `NotRead`.
+    if hard && !simulated && !identity(vm, receiver, new)? {
         return Err(NotYet::not_read(HARD_ATTACH, RECORD).into());
     }
-    let pose = !hard || role_is(vm, receiver, "ROLE_Authority")?;
+    let pose = !hard || !simulated;
     if pose {
         let base_rotation = structure(vm, new, "Rotation")?;
         let rotation = structure(vm, receiver, "Rotation")?;
@@ -263,6 +272,58 @@ fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, Vm
         }
     }
     Ok(pose)
+}
+
+/// Whether every float field of the vector struct `v` is `want` (a missing or non-float field is a data error).
+fn vector_is(vm: &Vm, v: &Value, want: f32, what: &str) -> Result<bool, VmError> {
+    let mut all = true;
+    for f in ["X", "Y", "Z"] {
+        match struct_field(vm, v, f) {
+            Some(Value::Float(x)) => all &= x == want,
+            other => return Err(script(format!("{what}.{f} is {other:?}, not a float"))),
+        }
+    }
+    Ok(all)
+}
+
+/// Section 5's identity case (module documentation): the receiver's `Location` and `Rotation` equal the base's, the
+/// base's `Rotation` zero, `DrawScale` 1, `DrawScale3D` (1, 1, 1) and `PrePivot` zero. The base's three scale fields
+/// must be declared (a float and two structs), else `VmError::Script`. Reads only.
+fn identity(vm: &Vm, receiver: ObjRef, new: ObjRef) -> Result<bool, VmError> {
+    let scale = match field(vm, new, "DrawScale")? {
+        (PropKind::Float, Value::Float(f)) => f,
+        (k, _) => return Err(script(format!("DrawScale is declared as {}, not a float", k.kind_name()))),
+    };
+    let scale_3d = structure(vm, new, "DrawScale3D")?;
+    let pivot = structure(vm, new, "PrePivot")?;
+    let (base_location, base_rotation) = (structure(vm, new, "Location")?, structure(vm, new, "Rotation")?);
+    let (location, rotation) = (structure(vm, receiver, "Location")?, structure(vm, receiver, "Rotation")?);
+    Ok(location == base_location
+        && rotation == base_rotation
+        && is_zero_rotation(vm, &base_rotation)?
+        && scale == 1.0
+        && vector_is(vm, &scale_3d, 1.0, "DrawScale3D")?
+        && vector_is(vm, &pivot, 0.0, "PrePivot")?)
+}
+
+/// `SetBase(new, , skel, attach)`'s preflight alone, for a caller that must decide its refusals before its own writes
+/// (lane IMPL-PAWN-INTERACTION-PROXY: `SetHardAttach`'s first `SetBase(None)`). Reads only.
+pub(crate) fn preflight(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>, skel: Option<ObjRef>, attach: &Value) -> Result<(), VmError> {
+    plan(vm, receiver, new, skel, attach).map(|_| ())
+}
+
+/// `SetBase(new, , skel, attach)` as the native runs it: the preflight, then the commit, a refusal after its first
+/// write prefixed. For `SetHardAttach`'s two inner calls.
+pub(crate) fn run(vm: &mut Vm, receiver: ObjRef, new: Option<ObjRef>, skel: Option<ObjRef>, attach: &Value) -> Result<(), VmError> {
+    let Some(plan) = plan(vm, receiver, new, skel, attach)? else {
+        return Ok(());
+    };
+    let entry = marks(vm);
+    match commit(vm, receiver, &plan) {
+        Ok(()) => Ok(()),
+        Err(e) if marks(vm) != entry => Err(crate::pools::after_partial_writes(e)),
+        Err(e) => Err(e),
+    }
 }
 
 /// The preflight (module documentation): `None` for nothing to do. Reads only.
