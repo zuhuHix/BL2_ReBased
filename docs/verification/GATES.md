@@ -6,7 +6,9 @@ Update this file in the commit that changes a number. Paste real output in repor
 8fa9839d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_PICKUP_GUN_INIT.md reads the pickup gun's init in the
 game. `InitializeInternal` reaches `InitMeshes`, which sets the shared gestalt mesh on both meshes, long before the
 drop, whose `AttachMeshToPickup` copies the initialised third-person mesh. It gives links 6 and 7's harness recipe:
-link 8's preparation and `init` phase on each gun before `drop_at`, all covered on main. It predicts the `touch` stop:
+link 8's preparation and `init` phase on each gun before `drop_at`, in `equip_world` plus the pickup set-up (the
+hub's ruling, review r1 of #756), with manufacturer inputs on the pickup routes; init in that world is not run on main.
+It predicts the `touch` stop:
 source f's stored-bounds `LayerAbsent` without the mesh layer, `WORLD_TRANSFORM` (scale 0.92) with it. It corrects the
 "run-time mesh" claim in two notes. No code changed, so no measured number moved; the slice gate was not run for this
 lane. UNVERIFIED in game.

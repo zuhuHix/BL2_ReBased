@@ -24,11 +24,21 @@ bounds check changed.
 - **Proposed harness:**
   - link 8's preparation for each pickup gun, before `drop_at`: manufacturer inputs, the preloads, the mesh layer,
     the threshold preload and `InitializeInternal(false)`;
-  - all covered on main, except the decoy's unowned init;
+  - in `equip_world` plus the pickup set-up (the hub's ruling), with manufacturer inputs on the pickup routes;
+    init in that world, and the decoy's unowned init, are not run on main;
   - refusals after the weapon's creation keep `make`'s partial-writes mark.
 - **Next** (a prediction, not a run): without the mesh layer, source f's stored-bounds `LayerAbsent`. With it, the
   bounding cylinder's `WORLD_TRANSFORM` `NotRead` (the scale 0.92); whether to answer a scaled transform is the hub's
   call.
 - **Correction:** two notes said the init's mesh is built at run time and is not an export. For the gestalt path that
   is wrong.
+- **Review r1 (#756):**
+  - the world: link 8's init runs in `equip_world` (the card set-up and preflight, the action-skill pack, its
+    globals), and the pickup world lacks them, so the pickup world becomes `equip_world` plus the pickup set-up;
+    "covered on main" became "as link 8";
+  - the routes: `manufacturer_inputs()` true for `Pickup` and `PickupDecoy`, the decoy included; the threshold
+    preload's prefix differs from link 8's;
+  - the same dated correction in NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 7; the run-time claim attributed to that
+    note only;
+  - two script steps added (`HideBonesInMesh(FirstPersonMesh)`, `UpdateTouchRadiusForAutomaticallyPickedUpInventory`).
 - **Clean room:** a different lane implements this note.

@@ -249,6 +249,10 @@ and the touch ends.
 - **After option B's decoder and interpreter change:** `new`'s component-instancing `NotRead` (3.3, 3.4 item 1).
 - **Once that step is read, with the gun's init:** source f's stored-bounds `LayerAbsent` for the run-time
   composite mesh (3.4).
+
+  *Corrected 2026-11-26 in NATIVE_LINK67_PICKUP_GUN_INIT.md section 6 (decision 2026-11-26-15): the mesh is the
+  gestalt definition's shared `GestaltSkeletalMesh`, an export. The `LayerAbsent` holds only without the mesh layer;
+  with it, the stop is `WORLD_TRANSFORM` (scale 0.92).*
 - **Once bounds answer:** `TouchPickupTrace` (bound) and the pickup query (bound), then **`Pickupable_IsEnabled`
   (unbound; section 5's rule)**. Then the touch ends, and link 7 meets the HUD `LayerAbsent`.
 

@@ -51,8 +51,8 @@ calls `ClientInitializeFromWeaponTypeDefinition`, which:
    is a package export, the same object for every rifle of the type; the parts live in `GestaltData`;
 2. `ThirdPersonMesh.InitGestaltMeshDataFromOther(FirstPersonMesh)`: the third-person component takes the same
    `GestaltData`;
-3. **`SetSkeletalMesh(that mesh)` on `FirstPersonMesh`, then on `ThirdPersonMesh`.** This is what gives the
-   third-person mesh its `SkeletalMesh`;
+3. **`SetSkeletalMesh(that mesh)` on `FirstPersonMesh`, then `HideBonesInMesh(FirstPersonMesh)`, then
+   `SetSkeletalMesh(that mesh)` on `ThirdPersonMesh`.** This is what gives the third-person mesh its `SkeletalMesh`;
 4. `ThirdPersonMesh.SetScale(type's ThirdPersonMeshScale)` (0.92 for the slice's rifle) and `HideBonesInMesh` on it;
 5. the weapon material (`BuildWeaponMaterial`), set at index 0 on both meshes; then the part particles, the effects
    and the visible ammo bones, and the extra slots.
@@ -62,13 +62,14 @@ calls `ClientInitializeFromWeaponTypeDefinition`, which:
 `WillowInventory.DropFrom` makes the pickup (`CreatePickup`), sets its velocity and torque, then calls the pickup's
 `InitializeFromInventory(self, Instigator, true)`. That sets the pickup's `Inventory` and calls `InventoryAssociated`,
 which:
-1. drops any old collision component;
-2. calls **`Inventory.AttachMeshToPickup(pickup)`**: `new(Pickup) class'SkeletalMeshComponent'(ThirdPersonMesh)`.
+1. `UpdateTouchRadiusForAutomaticallyPickedUpInventory` (script);
+2. drops any old collision component;
+3. calls **`Inventory.AttachMeshToPickup(pickup)`**: `new(Pickup) class'SkeletalMeshComponent'(ThirdPersonMesh)`.
    The new component **copies the initialised third-person mesh**: its `SkeletalMesh`, `GestaltData`, `Scale` 0.92
    and `Materials` (#743 section 3.2). Then `SetAnimTreeTemplate(None)`, `SetForceRefPose(true)`, `SetHidden(false)`,
    `SetOwnerNoSee(false)`, `HideBonesInMesh`, `AttachComponent`, and the component becomes the pickup's
    `CollisionComponent`;
-3. `SetLightEnvironment`, then `InitializePickupForRBPhysics`, then `PickupAssociated`.
+4. `SetLightEnvironment`, then `InitializePickupForRBPhysics`, then `PickupAssociated`.
 
 Then `SetPickupability`. **`touch` comes later still**, when a pawn walks into the pickup. A loot pool's pickup goes
 the same way: the pool makes the weapon (with its init), then its pickup (by fit, through the same
@@ -79,17 +80,48 @@ the same way: the pool makes the weapon (with its init), then its pickup (by fit
 Today `make` prepares each gun on the pickup routes (`prepare_line_typed`, `prepare_unowned_typed`). Those make the
 weapon, Maya, her controller and manager, and nothing more: no manufacturer inputs, no preloads, and no
 `InitializeInternal`. Link 8 prepares **the same weapons-file line** (`EQUIP_WEAPON`) with all of them, and runs the
-init as its `init` phase. Link 8 passes on main, so every native that init reaches on this line is bound.
+init as its `init` phase. Link 8 passes on main, **but in its own world** (review r1 of #756).
+
+**The world first.** Link 8 runs in `equip_world`, the pickup links in `pickup_world`. They differ where the init
+needs them:
+- `equip_world` runs the card's class set-up (`ow_inventory::equip::card::setup`) before any object is made, and
+  registers `ow_skills::action_skill::Pack` (`bare_world_t`'s `equip` flag). It places its `WorldInfo` and makes its
+  globals with the installed definition (`equip_globals`);
+- link 8's driver also runs `card::preflight` before the weapon is made;
+- `pickup_world` (`run_world_t`) has neither the card set-up nor the pack. It makes its globals its own way, and adds
+  the pickup's own set-up: the weapon class default, the empty component registry and scene layers, the particle
+  preload and the game info.
+
+`ClientInitializeFromWeaponTypeDefinition` calls `InitializeAttributeSlots` and `CacheWeaponCard` before `InitMeshes`.
+So in `pickup_world` the init can refuse before it reaches the mesh.
+
+**The hub's ruling: the pickup world becomes `equip_world` plus the pickup set-up.** What changes for links 6 and 7:
+- the card's class set-up runs at world build, and `card::preflight` runs before `make`, as link 8's driver does;
+- the action-skill pack is registered. Its keep-existing bindings (`ResolveContext`, `AddAttributeModifier`,
+  `Actor.Trace`) bind the same functions the other packs do (decision 2026-11-26-12), so no rule the pickup reaches
+  changes;
+- the globals are `equip_world`'s (one object, the installed definition). The pickup set-up uses them instead of
+  making its own;
+- the pickup set-up then adds the weapon class default, the registry and scene layers, the particle preload and the
+  game info, as `pickup_world` does today.
+
+**Init in this world is not run on main.** Link 8 runs init in `equip_world` without the pickup set-up, and the
+pickup links never run it. So every step below is "as link 8", not "covered".
+
+**The routes.** The pickup routes set no manufacturer inputs: `WeaponRoute::manufacturer_inputs()` is true for
+`EquipRun` and `Link8` only, and `prepare_link8_typed` makes only an owned gun. The change, the smaller of the two:
+**`manufacturer_inputs()` true for `Pickup` and `PickupDecoy` as well.** The decoy gets the inputs too: it is the same
+line, and its init reads the same definition data.
 
 **The recipe, per gun, before `drop_at`,** in link 8's order:
 
 | # | Step | Kind | On main |
 |---|---|---|---|
-| 1 | the weapon with the link 8 route's manufacturer inputs (`WeaponRoute::Link8` sets them; the pickup routes do not) | harness | covered (link 8) |
-| 2 | `preload_muzzle_flashes`, `preload_gestalt_mesh`, `preload_gestalt_skeletal_mesh`, `preload_material_part_material`, `preload_material_classes` | harness loads (UNVERIFIED stand-ins for boot and streaming loads) | covered (link 8) |
-| 3 | `install_mesh_layer` (the skeletal-mesh data source) | harness | covered (link 8); **the pickup world does not install it today** |
-| 4 | `preload_threshold_attributes` | harness load | covered (link 8) |
-| 5 | **`WillowWeapon.InitializeInternal(false)`** (`run_phase_typed("init")`): `BuildCompositeMesh`, `InitGestaltMeshDataFromOther`, `SetSkeletalMesh`, `SetScale`, `HideBonesInMesh`, `BuildWeaponMaterial`, `SetMaterial`, the effects | script and natives | covered: link 8 passes it on this line |
+| 1 | the weapon with the manufacturer inputs (the routes' change above) | harness | as link 8; not on the pickup routes |
+| 2 | `preload_muzzle_flashes`, `preload_gestalt_mesh`, `preload_gestalt_skeletal_mesh`, `preload_material_part_material`, `preload_material_classes` | harness loads (UNVERIFIED stand-ins for boot and streaming loads) | as link 8 |
+| 3 | `install_mesh_layer` (the skeletal-mesh data source) | harness | as link 8; **the pickup world does not install it today** |
+| 4 | `preload_threshold_attributes` | harness load | as link 8, **but inside `make`'s mark** (below) |
+| 5 | **`WillowWeapon.InitializeInternal(false)`** (`run_phase_typed("init")`): `InitializeAttributeSlots`, `CacheWeaponCard`, then `InitMeshes` (`BuildCompositeMesh`, `InitGestaltMeshDataFromOther`, `SetSkeletalMesh`, `SetScale`, `HideBonesInMesh`, `BuildWeaponMaterial`, `SetMaterial`, the effects) | script and natives | link 8 passes it in `equip_world`; **in the merged world, not run on main** |
 
 Then `make` goes on as today: `drop_at`, which clears `Owner` and `Instigator` and spawns and initialises the pickup.
 
@@ -116,9 +148,12 @@ That follows the subobject-instancing ruling (#435), as link 8's weapon does.
 ## 4. The Off answer per step (for the implementer)
 
 - **Harness only; no new native rule.** Each step above is a harness call that link 8 already makes, or the
-  installed script.
-- **Order:** steps 1 to 5 run inside `make`'s mark (`slice_pickup::build`'s `wrote`), after the weapon is made and
-  before `drop_at`.
+  installed script. The changes are the world (equip plus pickup set-up) and the two routes' manufacturer inputs.
+- **Order:** the world is built as above, and `card::preflight` runs before `make`. Steps 1 to 5 run inside
+  `make`'s mark (`slice_pickup::build`'s `wrote`), after the weapon is made and before `drop_at`.
+- **A prefix difference from link 8:** link 8 runs `preload_threshold_attributes` after its `make` mark, so its
+  refusal there is unprefixed. Here it runs inside `make`, after the weapon exists, so the same refusal carries the
+  "stopped after partial writes: " prefix.
 - **Refusals:** a preload's or the init's refusal after the weapon's creation is terminal for `make`, and is marked
   "stopped after partial writes: " (the existing `after_writes`), its kind and record kept. A refusal before the
   weapon exists is unprefixed. Each harness load logs its "harness input:" lines, as link 8's do, and
@@ -155,11 +190,14 @@ So the predicted order of stops on links 6 and 7:
 6. once a scaled transform is answered: `TouchPickupTrace` and the pickup query (bound), then `Pickupable_IsEnabled`,
    still unbound (its rule: NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5).
 
-## 6. A correction to two notes
+## 6. A correction to one note, and a pointer in another
 
-NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.4 item 3 and NATIVE_NEW_COMPONENT_INSTANCING.md section 6 said that with
-the gun's init the mesh would be "built at run time, not a package export", so source f's accessor would find no
-export. **That is wrong for the slice's rifle.** On the gestalt path `BuildCompositeMesh` answers the shared
+NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.4 item 3 and its section 7 said that with the gun's init the mesh would
+be "built at run time, not a package export", so source f's accessor would find no export.
+NATIVE_NEW_COMPONENT_INSTANCING.md section 6 made no such claim; it predicted only the stored-bounds `LayerAbsent`,
+which holds only without the mesh layer (its pointer says so).
+
+**The run-time claim is wrong for the slice's rifle.** On the gestalt path `BuildCompositeMesh` answers the shared
 `GestaltSkeletalMesh`, an export (section 2.1). Source f's `LayerAbsent` comes only from a missing mesh layer, and with
 the layer the stop moves on to `WORLD_TRANSFORM` (section 5). A non-gestalt weapon with two or more part meshes takes
 the merge (`MERGE_LAYER`), which does make a new mesh. The slice's rifle does not.
