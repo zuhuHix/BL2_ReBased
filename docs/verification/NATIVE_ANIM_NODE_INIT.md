@@ -137,7 +137,7 @@ step 5) was not read. On Maya's 31 sequence nodes `AnimSeq` and `ActiveCameraAni
 `bIsIssuingNotifies` is clear. So only the plain writes above happen.
 
 *Correction 2026-11-26 (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 3, #747; lane ANIM-NODE-INIT-D-CORRECTIONS,
-decision 2026-11-26-NNN). Two points in step 2 above were wrong:*
+decision 2026-11-26-11). Two points in step 2 above were wrong:*
 - *the "unless" guard needs both conditions: the reset is skipped only when `bIsIssuingNotifies` is set **and**
   `AnimSeqName` is not None. A node issuing notifies with no name is reset;*
 - *for `WillowAnimNodeSequenceAdditiveBlend`, the "set animation" is the additive class's override, through the class
