@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-TARGETABLE-RESOLVER (2026-11-26, pc-hummer, on fix/rust-targetable-resolver from main 785c2a4):** AI-assisted
+(Claude Code, Opus 5.5). `TargetableAttributeValueResolver`'s get and get-base in Off: the `ITargetable` cast by class
+chain, `IsChampion` by first native class (Pawn, WillowPawn, WillowPlayerPawn false; WillowAIPawn its balance's
+`Champion`; other classes `NotRead`). `cargo test --workspace -j 8 --no-fail-fast` 3,905 passed / 0 failed / 59
+ignored; `crate_edges_test.py`
+OK. Installed Off strict `--slice-gate` (release build, under the machine lock), main and this branch: 6 ok / 8 not
+ok, 51.2% on both, every row unchanged: link 1 stops at pass 2's unloaded `CustomEnableCondition`, so links 3 and 4
+do not reach their spawns. A `--combat-run` probe of link 3's and link 4's spawns (after `player:8`): both pass the
+resolver and stop at `WillowPawn.SetDefaultPhysics` "past its gates", as predicted, without the predicted
+partial-writes prefix. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-MAYA9-NATIVES (2026-11-26, pc-hummer, on fix/rust-maya9-natives, rebased onto main 1fed25cc):** AI-assisted (Claude
 Code, Opus 5.5). `WillowPlayerPawn.SetDefaultStance` / `WillowPawn.SetDefaultStance`, the `ShieldResourcePool`
 idle-reset hook, `FlagDefinition.ApplyFlagInitializationData` and
