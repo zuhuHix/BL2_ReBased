@@ -967,7 +967,8 @@ impl Vm {
 
     /// Whether the native function `f` has an implementation: its package's binding of its key, or the VM-wide
     /// one. `false` for a script function.
-    /// Under the shadow audit, a true answer is recorded as [`Vm::has_native`]'s is.
+    /// Under the shadow audit, a true answer is recorded as [`Vm::has_native`]'s is: the audit is for set-up code that
+    /// keeps an existing binding. A read-only caller asks [`Vm::is_bound_unaudited`] instead.
     #[track_caller]
     pub fn is_bound(&self, f: FuncId) -> bool {
         let bound = self.native_of(f).is_some();
@@ -975,6 +976,12 @@ impl Vm {
             self.note_shadow(key, std::panic::Location::caller().file());
         }
         bound
+    }
+
+    /// [`Vm::is_bound`] without the shadow audit's record (review of #748): for read-only callers that ask whether a
+    /// call would have an implementation, not set-up code keeping an existing binding. The audit is for set-up only.
+    pub fn is_bound_unaudited(&self, f: FuncId) -> bool {
+        self.native_of(f).is_some()
     }
 
     /// The implementation the call of native `f` runs: its package's binding of its key first, then the VM-wide

@@ -227,7 +227,9 @@ pub fn attribute(vm: &mut Vm, owner: ObjRef, name: &str, fallback: f32) -> Resul
 /// Binds `f` to the native at `path` (`Package.Class.Function`) when the package set declares it native (module
 /// documentation, "Binding"). A function the set lacks, a script function, or a function already bound: nothing.
 /// The binding is for `path`'s package (`Vm::register_native_for`), so a same-named native of another package is
-/// neither bound nor shadowed by it.
+/// neither bound nor shadowed by it. `#[track_caller]` (and on [`bind_fn`]): the shadow audit records the file that
+/// called this helper, not `hit.rs`, so a shadow between two users of the helper is seen (review of #748).
+#[track_caller]
 pub fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
@@ -239,6 +241,7 @@ pub fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
 }
 
 /// [`bind`] of a closure.
+#[track_caller]
 pub fn bind_fn(
     vm: &mut Vm,
     path: &str,

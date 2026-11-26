@@ -922,16 +922,31 @@ pub mod owner_setup;
 
 /// A shadow the slice worlds have by design (lane PLACEHOLDER-SHADOWS): `ResolveContext` and `AddAttributeModifier` are
 /// one wrapper each (`ow_inventory::equip::natives`), which the equip pack binds VM-wide and the action skill pack
-/// binds through `ow_combat::hit::bind_fn`, keep-existing in either order. The pack that gives up the key would have
-/// bound the same function, so nothing is lost. Exactly those two keys, between exactly those two files.
+/// (`ow-skills/src/action_skill.rs`) binds through `ow_combat::hit::bind_fn`, keep-existing in either order. The
+/// helper is `#[track_caller]`, so the audit names the action skill file, not `hit.rs` (review of #748). The pack that
+/// gives up the key would have bound the same function, so nothing is lost. Exactly those two keys, between exactly
+/// those two files.
+///
+/// **A third, seen once the helper is `#[track_caller]`** (lane SHADOW-AUDIT-FOLLOWUPS): `Actor.Trace`, which
+/// `ow-combat/src/go_down.rs` and `ow-skills/src/action_skill.rs` both bind through the helper to the one
+/// implementation, `ow_world::world::actor_trace::trace`. Before, both sides were recorded as `hit.rs`, the blind spot
+/// decision 2026-11-26-07 stated. Exactly that key (by its function's native key) between exactly those two files.
 #[cfg(test)]
 pub(crate) fn shared_wrapper_shadow(s: &ow_vm::api::NativeShadow) -> bool {
     use ow_inventory::equip::natives::{ADD_MODIFIER, RESOLVE_CONTEXT};
     let file = |f: &str, tail: &str| f.replace('\\', "/").ends_with(tail);
-    (s.key == RESOLVE_CONTEXT || s.key == ADD_MODIFIER)
+    let wrappers = (s.key == RESOLVE_CONTEXT || s.key == ADD_MODIFIER)
         && file(s.bound_by, "ow-inventory/src/equip/natives.rs")
-        && file(s.checked_by, "ow-combat/src/hit.rs")
+        && file(s.checked_by, "ow-skills/src/action_skill.rs");
+    let trace = s.key == ACTOR_TRACE_KEY
+        && file(s.bound_by, "ow-combat/src/go_down.rs")
+        && file(s.checked_by, "ow-skills/src/action_skill.rs");
+    wrappers || trace
 }
+
+/// `Actor.Trace`'s native key, as the shadow audit records it.
+#[cfg(test)]
+const ACTOR_TRACE_KEY: &str = "Actor.Trace(vector,vector,vector,vector,bool,vector,tracehitinfo,int,bool,object)";
 
 #[cfg(test)]
 mod tests;

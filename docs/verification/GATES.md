@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SHADOW-AUDIT-FOLLOWUPS (2026-11-26, pc-hummer, code, on fix/shadow-audit-followups from main c8d70e3f):**
+AI-assisted (Claude Code, Opus 5.5). `ow_combat::hit::bind` and `bind_fn` are `#[track_caller]`. Three read-only
+callers use `Vm::is_bound_unaudited`. The allowance names `ow-skills/src/action_skill.rs`, plus `Actor.Trace`, which the
+closed blind spot showed (one implementation bound by both sides).
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,780 passed / 0 failed / 59 ignored. `crate_edges_test.py`: OK.
+- The installed shadow census (`installed_slice_worlds_have_no_silent_native_shadow`, ignored, under the machine lock):
+  0 silent shadows in each of the five slice worlds. Before the `Actor.Trace` allowance it found that one key in the
+  equip world. No binding changed, so the slice gate was not run.
+
 **ANIM-NODE-INIT-D-CORRECTIONS (2026-11-26, pc-hummer, code, on fix/anim-node-init-d-corrections from main
 afde0d73):** AI-assisted (Claude Code, Opus 5.5). `anim_node_init.rs` kind D follows #747: the additive override runs
 at init (the auto-name `Add_None` interned only at the write, the re-set, a read-only lookup), and the notifies guard
