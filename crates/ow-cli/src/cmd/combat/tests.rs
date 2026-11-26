@@ -31,6 +31,9 @@ mod mesh_harness_tests;
 // Every slice-gate pack registered together, with no duplicate key (#744's landing check).
 #[path = "pack_wiring_tests.rs"]
 mod pack_wiring_tests;
+// The maya step's anim-set preload (lane PRELOAD-MAYA-ANIMSETS).
+#[path = "anim_set_preload_tests.rs"]
+mod anim_set_preload_tests;
 
 /// The scenarios: name, steps, the C++ digest, and whether Off mode equals it (else only Reference does).
 const CASES: [(&str, &str, u64, bool); 16] = [

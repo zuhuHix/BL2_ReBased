@@ -520,6 +520,70 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     Ok(done)
 }
 
+/// The log line of one anim-set preload (lane PRELOAD-MAYA-ANIMSETS).
+pub(crate) fn anim_set_preload_line(path: &str) -> String {
+    format!("harness input: set-up preload: {path} (UNVERIFIED: the game streams it with the character)")
+}
+
+/// The anim sets of Maya's mesh component, and their sequences (lane PRELOAD-MAYA-ANIMSETS, the hub's ruling on the
+/// lookups of NATIVE_UPDATEANIMATIONS_TREE_TICKS.md and NATIVE_ANIM_NODE_INIT.md): in the game they are resident when
+/// she spawns, because they load with her character's packages. The port loads **exactly** the sets the archetype's
+/// `Mesh` component lists in `AnimSets`, then each set's `Sequences`, through the store, each logged as a harness input
+/// ([`anim_set_preload_line`]), an UNVERIFIED stand-in for that streaming load. Nothing else is loaded: not the sets
+/// `UpdateAnimSets` adds later, not a sequence's own references. A `Mesh`, `AnimSets` or `Sequences` the archetype does
+/// not have, or a None entry, is skipped; a load that fails is the step's error. The function checks no parity mode:
+/// it runs wherever the `maya` step's harness inputs run.
+pub(crate) fn preload_mesh_anim_sets(vm: &mut Vm, archetype: ObjRef) -> Result<(), VmError> {
+    let Some(mesh) = object_slot(vm, archetype, "Mesh")? else {
+        vm.log.push("harness input: set-up preload: no Mesh component on the archetype".to_string());
+        return Ok(());
+    };
+    if vm.defs.is_unloaded(&vm.space, mesh) {
+        vm.log.push(format!("harness input: set-up preload: the Mesh component {} is not resident; skipped", object_path(vm, mesh)));
+        return Ok(());
+    }
+    for set in objects_of(vm, mesh, "AnimSets")? {
+        preload_one(vm, set)?;
+        for sequence in objects_of(vm, set, "Sequences")? {
+            preload_one(vm, sequence)?;
+        }
+    }
+    Ok(())
+}
+
+/// The objects array property `name` of the resident `o` holds, None entries left out (empty when not declared).
+fn objects_of(vm: &Vm, o: ObjRef, name: &str) -> Result<Vec<ObjRef>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let Some(p) = vm.space.prop(class, name) else {
+        return Ok(Vec::new());
+    };
+    let v = vm.space.read(o, ow_object::ids::PropAddr::scalar(p))?;
+    Ok(v.elements()
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|e| match e {
+            Value::Object(Some(x)) => Some(*x),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Loads `o` through the store when it is a handle not loaded yet, logged before the load ([`anim_set_preload_line`]).
+fn preload_one(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
+    if !vm.defs.is_unloaded(&vm.space, o) {
+        return Ok(());
+    }
+    let path = vm.defs.handle_path(o).unwrap_or_else(|| object_path(vm, o));
+    vm.log.push(anim_set_preload_line(&path));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+    vm.log.extend(vm.defs.take_log());
+    if let Err(e) = loaded {
+        vm.log.push(format!("harness input: set-up preload: {path}: failed ({e})"));
+        return Err(VmError::from(e));
+    }
+    Ok(())
+}
+
 /// The package file whose export `o` is (or will be, for a store handle), from its heap origin.
 pub(crate) fn file_package(vm: &Vm, o: ObjRef) -> Option<ow_package::PackageId> {
     use ow_object::heap::Origin;
@@ -818,6 +882,9 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
                                     load_same_package_references(vm, archetype)?;
                                     // The body composition's templates and their meshes (lane LINK1-HEAD-MESH).
                                     preload_body_composition(vm, archetype)?;
+                                    // Her mesh component's anim sets and their sequences (lane
+                                    // PRELOAD-MAYA-ANIMSETS, hub ruling).
+                                    preload_mesh_anim_sets(vm, archetype)?;
                                 }
                             }
                             Err(e) => {
