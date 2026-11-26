@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-COMBAT-MUSIC-AND-AFTER (decision 2026-11-26-NNN). The spawn's balance tail and the combat music
+//! Owner: lane IMPL-COMBAT-MUSIC-AND-AFTER (decision 2026-11-26-65). The spawn's balance tail and the combat music
 //! manager on the swing's path (links 3, 4, 13 and 14), in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_COMBAT_MUSIC_AND_AFTER.md sections 3 to 6 (#801 as landed)
