@@ -20,10 +20,10 @@ alone; this lane did not read the executable. No session was run. Every rule is 
   - **The first native class:** a class with code in the store by its decoded body's native bit (an undecoded body
     counts as native, as `ow-world`'s `first_native` does); a class without code by the class table's native mark.
     `ow-attr` cannot depend on `ow-world`, so this is a second copy of that walk.
-  - **The resolver's own definition is loaded first**, as every resolver's is (`ensure_loaded`, which a load-free
-    scope refuses). The note's preflight does not list the resolver; the installed probe showed it is an unloaded
-    store handle (a subobject of `Targetable_Is_Champion`), and a first version that refused it stopped both spawns
-    there. The rule itself then writes, loads and interns nothing. Add, remove and set-base keep their `NotRead`.
+  - **A resolver the store has not loaded is `NotRead`** (step 0, the hub's ruling on review of #783): the get does
+    not load it, since the note did not read whether the evaluator loads the resolver first. The installed probe met
+    that case: the resolver is an unloaded handle (a subobject of `Targetable_Is_Champion`), so links 3 and 4 now
+    stop at this refusal. The rule writes, loads and interns nothing. Add, remove and set-base keep their `NotRead`.
 - **Tests** (`targetable_tests.rs`, invented classes): the note's tests 1 to 7 (8, Reference, is the existing test).
   Each call checks that the value and the base value agree and that the heap's writes, the store's load transitions
   and the name table are unchanged. `class_code_loads` is a VM counter: `ow-attr` has no VM and loads no class code,
