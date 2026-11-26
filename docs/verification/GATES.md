@@ -14,7 +14,7 @@ The player set-up's `Pawn` is deferred behind an Off harness setting, off by def
 `cargo test --workspace -j 8 --no-fail-fast` 4,006 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed
 Off strict `--slice-gate` (release build, under the machine lock): **7 ok / 14, X = 8.167/14 = 58.3%, every row as on the
 base f2748772.** The first version, which set the `Pawn`, scored 6 ok, because link 1 reached the trade proxy's
-`SetCollisionSize`. UNVERIFIED in game. Decision 2026-11-26-NNN.
+`SetCollisionSize`. UNVERIFIED in game. Decision 2026-11-26-59.
 
 **ANALYST-PAWN-INTERACTION-PROXY (2026-11-26, pc-hummer, docs only, on docs/native-pawn-interaction-proxy, probed on main
 03a8a09d, rebased onto eef4f83):** AI-assisted (Claude Code, Opus 5.5). NATIVE_PAWN_INTERACTION_PROXY.md reads the
