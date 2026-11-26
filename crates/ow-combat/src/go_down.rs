@@ -59,13 +59,13 @@ pub const COLLISION_LAYER: &str = "the world's collision";
 /// The natives of section 3.2 whose class implementation is not resolved: `NotRead` at entry.
 /// `WillowPlayerController.UpdateInputContext` left the list (lane PLACEHOLDER-SHADOWS): `ow_world::world::after_login`
 /// binds the native's own rule (its section 3.2), and in every world this entry was the binding given up.
-pub const UNRESOLVED: [&str; 15] = [
+pub const UNRESOLVED: [&str; 13] = [
     "Engine.Controller.IsLocalController",
     "Engine.PlayerController.IsLocalController",
     "WillowGame.WillowPawn.GetParent",
     "WillowGame.WillowAIPawn.GetParent",
-    "WillowGame.WillowPawn.SetDefaultStance",
-    "WillowGame.WillowPlayerPawn.SetDefaultStance",
+    // `WillowPawn`'s and `WillowPlayerPawn`'s `SetDefaultStance` left the list (lane IMPL-MAYA9-NATIVES,
+    // NATIVE_MAYA9_AND_AFTER.md section 3.1): `crate::stance` binds their rules, first. `WillowAIPawn`'s is not read.
     "WillowGame.WillowAIPawn.SetDefaultStance",
     "Engine.Actor.SetHidden",
     "Engine.Actor.SetHardAttach",
@@ -114,6 +114,9 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
+    // The stance rules first, so either pack order binds the same functions (lane IMPL-MAYA9-NATIVES).
+    crate::stance::register(vm)?;
+    crate::maya9::register(vm)?;
     for path in UNRESOLVED {
         let (class, function) = class_and_function(path);
         let what = format!("{class}.{function}: the class's own implementation is not resolved");

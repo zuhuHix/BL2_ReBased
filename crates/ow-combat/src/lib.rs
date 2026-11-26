@@ -16,6 +16,8 @@ pub mod go_down;
 pub mod hit;
 pub mod holds;
 pub mod loot;
+pub mod maya9;
 pub mod pawn_interface;
 pub mod run;
+pub mod stance;
 pub mod xp;
