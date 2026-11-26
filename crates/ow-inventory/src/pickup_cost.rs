@@ -10,6 +10,9 @@
 //! **`CanAffordToPickUpPickupable`** (section 2.4), a preflight that writes, loads and interns nothing:
 //! 1. no pickupable: true;
 //! 2. a pickupable the store has not loaded: [`PICKUPABLE_NOT_LOADED`] (`NotRead`);
+//!
+//!    (Each shared refusal text starts with the asking native's name, [`CAN_AFFORD_NAME`] or [`PAY_FOR_NAME`]:
+//!    review of #774.)
 //! 3. **the cost query, by fit (UNVERIFIED):** the pickupable's own `bCostsToPickUp` (bool), `CostsToPickUpType`
 //!    (byte) and `CostsToPickUpAmount` (int), read by name. A class that declares any of them otherwise, or not at all,
 //!    is [`COST_QUERY`] (`NotRead`): its own answer was not read;
@@ -22,7 +25,8 @@
 //! **`PayForPickupable`** (section 2.2): steps 1 to 4 and step 6's not-loaded check and cast only, not step 5. Golden
 //! keys raise the controller's `SpendGoldenKey` once per unit (an amount of 0 or less: none). Any other type, with the
 //! cast replication info, calls `AddCurrencyOnHand(type, -amount)` last; a failed cast does nothing. Every refusal
-//! comes before the first call. The note's `GetCurrencyOnHand` read whose answer is dropped is not made (it writes
+//! of the checks comes before the first call. A raised `SpendGoldenKey` is a write: an error of a later raise is marked
+//! "stopped after partial writes" (review of #774), as the crate's other natives mark one after their first write. The note's `GetCurrencyOnHand` read whose answer is dropped is not made (it writes
 //! nothing).
 //!
 //! **`UpdateAmmoCounts(bSilent)`** (section 4): [`AMMO_REFRESH`] (`NotRead`), nothing written.
@@ -47,12 +51,14 @@ pub const CAN_AFFORD: &str = "WillowPlayerController.CanAffordToPickUpPickupable
 pub const PAY_FOR: &str = "WillowPlayerController.PayForPickupable(interface)";
 pub const UPDATE_AMMO_COUNTS: &str = "WillowPlayerController.UpdateAmmoCounts(bool)";
 /// The refusals.
-pub const PICKUPABLE_NOT_LOADED: &str =
-    "CanAffordToPickUpPickupable: a pickupable the store has not loaded (a load is a write)";
-pub const COST_QUERY: &str = "CanAffordToPickUpPickupable: the cost query of";
+/// The two natives' names, which start their shared refusals' texts (`"<name>: <text>"`).
+pub const CAN_AFFORD_NAME: &str = "CanAffordToPickUpPickupable";
+pub const PAY_FOR_NAME: &str = "PayForPickupable";
+pub const PICKUPABLE_NOT_LOADED: &str = "a pickupable the store has not loaded (a load is a write)";
+/// `"<name>: the cost query of <class>"`.
+pub const COST_QUERY: &str = "the cost query of";
 pub const GOLDEN_KEY_COUNT: &str = "CanAffordToPickUpPickupable: the controller's golden-key count";
-pub const INFO_NOT_LOADED: &str =
-    "CanAffordToPickUpPickupable: a replication info the store has not loaded (a load is a write)";
+pub const INFO_NOT_LOADED: &str = "a replication info the store has not loaded (a load is a write)";
 pub const AMMO_REFRESH: &str = "UpdateAmmoCounts: the controller's ammo refresh";
 /// The currency type of golden keys.
 pub const GOLDEN_KEYS: u8 = 3;
@@ -70,13 +76,13 @@ fn unloaded(vm: &Vm, o: ObjRef) -> bool {
     ow_world::touch_trace::is_unloaded(vm, o) || vm.defs.is_failed(&vm.space, o)
 }
 
-/// Steps 1 to 4: `Ok(None)` for no pickupable or no cost.
-fn cost_of(vm: &Vm, pickupable: Option<ObjRef>) -> Result<Option<Cost>, VmError> {
+/// Steps 1 to 4 for the native `name`: `Ok(None)` for no pickupable or no cost.
+fn cost_of(vm: &Vm, pickupable: Option<ObjRef>, name: &str) -> Result<Option<Cost>, VmError> {
     let Some(p) = pickupable else {
         return Ok(None);
     };
     if unloaded(vm, p) {
-        return Err(NotYet::not_read(PICKUPABLE_NOT_LOADED, RECORD).into());
+        return Err(NotYet::not_read(format!("{name}: {PICKUPABLE_NOT_LOADED}"), RECORD).into());
     }
     let class = vm.space.heap.get(p)?.class;
     let declared = |name: &str, ok: fn(&PropKind) -> bool| {
@@ -87,36 +93,37 @@ fn cost_of(vm: &Vm, pickupable: Option<ObjRef>) -> Result<Option<Cost>, VmError>
         && declared("CostsToPickUpAmount", |k| matches!(k, PropKind::Int));
     if !shaped {
         let path = ow_attr::eval::class_path(&vm.space, p);
-        return Err(NotYet::not_read(format!("{COST_QUERY} {path}"), RECORD).into());
+        return Err(NotYet::not_read(format!("{name}: {COST_QUERY} {path}"), RECORD).into());
     }
-    const WHAT: &str = "CanAffordToPickUpPickupable";
+    let what = format!("WillowPlayerController.{name}");
+    let what = what.as_str();
     let costs = match read(vm, p, "bCostsToPickUp")? {
         Some(Value::Bool(b)) => b,
-        other => return Err(bad(WHAT, format!("bCostsToPickUp holds {other:?}"))),
+        other => return Err(bad(what, format!("bCostsToPickUp holds {other:?}"))),
     };
     if !costs {
         return Ok(None);
     }
     let currency = match read(vm, p, "CostsToPickUpType")? {
         Some(Value::Byte(b)) => b,
-        other => return Err(bad(WHAT, format!("CostsToPickUpType holds {other:?}"))),
+        other => return Err(bad(what, format!("CostsToPickUpType holds {other:?}"))),
     };
     let amount = match read(vm, p, "CostsToPickUpAmount")? {
         Some(Value::Int(i)) => i,
-        other => return Err(bad(WHAT, format!("CostsToPickUpAmount holds {other:?}"))),
+        other => return Err(bad(what, format!("CostsToPickUpAmount holds {other:?}"))),
     };
     Ok(Some(Cost { currency, amount }))
 }
 
 /// Step 6's not-loaded check and cast: the controller's `PlayerReplicationInfo` when it is a
 /// `WillowPlayerReplicationInfo` (by the class table, nothing loaded), else `None`.
-fn replication_info(vm: &Vm, controller: ObjRef) -> Result<Option<ObjRef>, VmError> {
+fn replication_info(vm: &Vm, controller: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
     let Some(info) = read(vm, controller, "PlayerReplicationInfo")?.map(|v| object_of(&v, "PlayerReplicationInfo")).transpose()?.flatten()
     else {
         return Ok(None);
     };
     if unloaded(vm, info) {
-        return Err(NotYet::not_read(INFO_NOT_LOADED, RECORD).into());
+        return Err(NotYet::not_read(format!("{name}: {INFO_NOT_LOADED}"), RECORD).into());
     }
     let class = vm.space.heap.get(info)?.class;
     let cast = vm.space.classes.by_path(REPLICATION_INFO).is_some_and(|w| vm.space.classes.is_child_of(class, w));
@@ -158,13 +165,13 @@ fn can_afford(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowPlayerController.CanAffordToPickUpPickupable";
     let controller = c.this.ok_or_else(|| bad(WHAT, "called without a controller"))?;
     let pickupable = pickupable_arg(c, WHAT)?;
-    let Some(cost) = cost_of(c.vm, pickupable)? else {
+    let Some(cost) = cost_of(c.vm, pickupable, CAN_AFFORD_NAME)? else {
         return Ok(Value::Bool(true));
     };
     if cost.currency == GOLDEN_KEYS {
         return Err(NotYet::not_read(GOLDEN_KEY_COUNT, RECORD).into());
     }
-    let Some(info) = replication_info(c.vm, controller)? else {
+    let Some(info) = replication_info(c.vm, controller, CAN_AFFORD_NAME)? else {
         return Ok(Value::Bool(true));
     };
     let f = method(c.vm, info, "GetCurrencyOnHand", WHAT)?;
@@ -177,26 +184,32 @@ fn pay_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowPlayerController.PayForPickupable";
     let controller = c.this.ok_or_else(|| bad(WHAT, "called without a controller"))?;
     let pickupable = pickupable_arg(c, WHAT)?;
-    let Some(cost) = cost_of(c.vm, pickupable)? else {
+    let Some(cost) = cost_of(c.vm, pickupable, PAY_FOR_NAME)? else {
         return Ok(Value::None);
     };
     if cost.currency == GOLDEN_KEYS {
         let units = cost.amount.max(0);
         if units > 0 {
             let f = method(c.vm, controller, "SpendGoldenKey", WHAT)?;
-            for _ in 0..units {
-                c.vm.call(f, Some(controller), vec![])?;
+            for raised in 0..units {
+                // A raised event is a write: a later raise's error follows it (review of #774).
+                c.vm.call(f, Some(controller), vec![]).map_err(|e| if raised > 0 { after_writes(e) } else { e })?;
             }
         }
         return Ok(Value::None);
     }
-    let Some(info) = replication_info(c.vm, controller)? else {
+    let Some(info) = replication_info(c.vm, controller, PAY_FOR_NAME)? else {
         return Ok(Value::None);
     };
     let f = method(c.vm, info, "AddCurrencyOnHand", WHAT)?;
     let delta = cost.amount.checked_neg().ok_or_else(|| bad(WHAT, "the cost amount cannot be negated"))?;
     c.vm.call(f, Some(info), vec![Value::Byte(cost.currency), Value::Int(delta)])?;
     Ok(Value::None)
+}
+
+/// `e` after a write: a `NotYet` marked once, its kind and record kept; any other error unchanged.
+fn after_writes(e: VmError) -> VmError {
+    ow_world::world::component_setters::after_writes(e)
 }
 
 /// Binds the three keys in Off (the caller checks the mode). No pack bound them before (checked by grep), so a

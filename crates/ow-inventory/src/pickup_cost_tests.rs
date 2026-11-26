@@ -71,6 +71,8 @@ struct Fx {
     dir: PathBuf,
     keys_spent: Rc<Cell<u32>>,
     currency_calls: Rc<Cell<u32>>,
+    /// The `SpendGoldenKey` call that refuses (0: none), and the calls so far.
+    key_fail_on: Rc<Cell<u32>>,
 }
 
 impl Drop for Fx {
@@ -109,6 +111,7 @@ fn fx_in(mode: ParityMode) -> Fx {
     crate::pickup::register(&mut vm).unwrap();
     // Toy stand-ins for the bound currency natives (ow-combat's in the slice) and the controller's event, counting.
     let (keys_spent, currency_calls) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let key_fail_on = Rc::new(Cell::new(0u32));
     if mode == ParityMode::Off {
         let calls = currency_calls.clone();
         vm.register_native(
@@ -133,17 +136,21 @@ fn fx_in(mode: ParityMode) -> Fx {
             }),
         )
         .unwrap();
-        let spent = keys_spent.clone();
+        let (spent, fail_on, key_calls) = (keys_spent.clone(), key_fail_on.clone(), Rc::new(Cell::new(0u32)));
         vm.register_native(
             "WillowPlayerController.SpendGoldenKey()",
             Rc::new(move |_: &mut NativeCall<'_>| {
+                key_calls.set(key_calls.get() + 1);
+                if key_calls.get() == fail_on.get() {
+                    return Err(ow_core::NotYet::not_read("a toy golden-key refusal", "TOY.md").into());
+                }
                 spent.set(spent.get() + 1);
                 Ok(Value::None)
             }),
         )
         .unwrap();
     }
-    Fx { vm, dir, keys_spent, currency_calls }
+    Fx { vm, dir, keys_spent, currency_calls, key_fail_on }
 }
 
 fn fx() -> Fx {
@@ -273,16 +280,16 @@ fn an_unread_class_and_lazy_objects_are_not_read() {
     let mut x = fx();
     let (pc, _) = x.controller(5);
     let dropped = x.obj("Engine.DroppedPickup");
-    assert_eq!(not_read(x.afford(pc, Some(dropped))), format!("{COST_QUERY} Engine.DroppedPickup"));
+    assert_eq!(not_read(x.afford(pc, Some(dropped))), format!("{CAN_AFFORD_NAME}: {COST_QUERY} Engine.DroppedPickup"));
     let class = x.vm.find_class("WillowGame.WillowPickup").unwrap();
     let lazy = x.vm.space.alloc_stand_in(class, "LazyPickup", Origin::Default { class }).unwrap();
-    assert_eq!(not_read(x.afford(pc, Some(lazy))), PICKUPABLE_NOT_LOADED);
+    assert_eq!(not_read(x.afford(pc, Some(lazy))), format!("{CAN_AFFORD_NAME}: {PICKUPABLE_NOT_LOADED}"));
     let p = x.pickup(Some((0, 5)));
     // A class with slots, so a slotless stand-in of it counts as not loaded.
     let class = x.vm.find_class("WillowGame.WillowPlayerReplicationInfo").unwrap();
     let lazy_info = x.vm.space.alloc_stand_in(class, "LazyInfo", Origin::Default { class }).unwrap();
     x.set(pc, "PlayerReplicationInfo", Value::Object(Some(lazy_info)));
-    assert_eq!(not_read(x.afford(pc, Some(p))), INFO_NOT_LOADED);
+    assert_eq!(not_read(x.afford(pc, Some(p))), format!("{CAN_AFFORD_NAME}: {INFO_NOT_LOADED}"));
 }
 
 /// Test 7: `PayForPickupable`. Free: nothing. Currency 5: the money goes down by 5 through `AddCurrencyOnHand`.
@@ -327,5 +334,47 @@ fn reference_binds_nothing() {
     let x = fx_in(ParityMode::Reference);
     for key in [CAN_AFFORD, PAY_FOR, UPDATE_AMMO_COUNTS] {
         assert!(!x.vm.has_native(key), "{key}");
+    }
+}
+
+/// Review of #774, LOW: `PayForPickupable`'s shared refusals name it: a lazy pickupable, an unread cost class and a
+/// lazy replication info. Nothing is written.
+#[test]
+fn pay_for_pickupable_s_refusals_name_it() {
+    let mut x = fx();
+    let (pc, _) = x.controller(5);
+    let class = x.vm.find_class("WillowGame.WillowPickup").unwrap();
+    let lazy = x.vm.space.alloc_stand_in(class, "LazyPickup", Origin::Default { class }).unwrap();
+    let dropped = x.obj("Engine.DroppedPickup");
+    let p = x.pickup(Some((0, 5)));
+    let class = x.vm.find_class("WillowGame.WillowPlayerReplicationInfo").unwrap();
+    let lazy_info = x.vm.space.alloc_stand_in(class, "LazyInfo", Origin::Default { class }).unwrap();
+    let before = x.marks();
+    assert_eq!(not_read(x.pay(pc, Some(lazy))), format!("{PAY_FOR_NAME}: {PICKUPABLE_NOT_LOADED}"));
+    assert_eq!(not_read(x.pay(pc, Some(dropped))), format!("{PAY_FOR_NAME}: {COST_QUERY} Engine.DroppedPickup"));
+    assert_eq!(x.marks(), before, "nothing written");
+    x.set(pc, "PlayerReplicationInfo", Value::Object(Some(lazy_info)));
+    let before = x.marks();
+    assert_eq!(not_read(x.pay(pc, Some(p))), format!("{PAY_FOR_NAME}: {INFO_NOT_LOADED}"));
+    assert_eq!(x.marks(), before, "nothing written");
+}
+
+/// Review of #774, MED: a raised `SpendGoldenKey` is a write, so a later raise's refusal is marked "stopped after
+/// partial writes" (kind and record kept); the first raise's refusal is not.
+#[test]
+fn a_later_golden_key_raise_s_refusal_is_after_partial_writes() {
+    for (fail_on, marked) in [(2, true), (1, false)] {
+        let mut x = fx();
+        x.key_fail_on.set(fail_on);
+        let (pc, _) = x.controller(0);
+        let keys = x.pickup(Some((GOLDEN_KEYS, 2)));
+        match x.pay(pc, Some(keys)) {
+            Err(VmError::NotYet(n)) => {
+                assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY.md"), "{n}");
+                assert_eq!(ow_core::notyet::is_partial_writes(&n.what), marked, "fail on raise {fail_on}: {}", n.what);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(x.keys_spent.get(), fail_on - 1, "the raises before the failing one");
     }
 }
