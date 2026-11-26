@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK34-AFTER-MIND (decision 2026-11-26-NNN). Five natives links 3 and 4 meet after the mind, in
+//! Owner: lane IMPL-LINK34-AFTER-MIND (decision 2026-11-26-55). Five natives links 3 and 4 meet after the mind, in
 //! `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from docs/verification/NATIVE_LINK34_AFTER_MIND.md sections 4 to 8 (#793 as landed)
