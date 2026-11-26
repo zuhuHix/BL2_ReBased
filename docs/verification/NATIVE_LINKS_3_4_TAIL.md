@@ -32,14 +32,18 @@ note reads on past that point: link 3's lethal hit and link 4's melee swing, wit
 - **A local probe** (temporary code, reverted, never committed): installed Off strict `--slice-gate` runs under the
   machine lock, on main d118d2bb with lane E's two open branches merged locally (`fix/rust-combat-music`, for
   `ApplyGradeCustomizations`; `fix/rust-links-13-14`). Each stop below was stood in by the rule this note or an earlier
-  one reads, in turn, with a call trace.
+  one reads, in turn, with a call trace. Each run's substitutions are recorded beside its trace in the ignored
+  `local/analysis/l34tail/SUBSTITUTIONS.txt` (review r1 of #812).
+- **Not the earlier completed swing.** The probes of #793 and #796 (NATIVE_LINK34_AFTER_MIND.md section 9,
+  NATIVE_LINKS_13_14.md section 5) ran link 4's swing to its end on older mains, with their own stand-ins. This run
+  is a separate one, on main d118d2bb; its order of stops below is its own (review r1 of #812).
 
 ## 2. The probe's sequence
 
 With `SetBaseValue`'s two load refusals stood in (the unloaded handle loaded, the preflight skipped), **both spawns
 complete**. Then, in order (each row stood in for the next):
 
-**Link 3** (`hit:{baby}:9999::Bullet`):
+**Link 3** (the gate's hit step: a 9999 Bullet hit on the spawned baby):
 
 | # | Stop | Read? | This note |
 |---|---|---|---|
@@ -51,7 +55,7 @@ complete**. Then, in order (each row stood in for the next):
 | 6 | unbound `WillowPawn.IsActionSkillRunning()` | no | **section 7** |
 | 7 | unbound `WillowDialogGlobalsDefinition.Get()` (`WillowPlayerPawn.AddKillStreakScore`) | the mission bridge binds it | section 8 |
 
-**Link 4** (`swing:{adult}:melee`):
+**Link 4** (the gate's swing step: a melee swing of the spawned adult at Maya):
 
 | # | Stop | Read? | This note |
 |---|---|---|---|
@@ -145,8 +149,17 @@ allowed types, no reactions, no death behaviours; its behaviour provider holds n
 - **decided in the preflight:** a reaction that would fire, non-empty `RegionDeathBehaviors`, or an `OnRegionDeath` with
   sequences on the region's provider: `NotRead`, "the hit region's behaviours" (they run through the existing behaviour
   rules once wired). Then the censorship flag is never needed on the slice's path;
+- **also decided in the preflight, before the record changes** (review r1 of #812):
+  - an independent region with an instigator and `bShowDamageNumbers`: `NotRead`, "the hit region's damage-number
+    notification" (the instigator's virtual is not read);
+  - the region, its `BehaviorProviderDefinition` (when it has one), or the helper not resident: `NotRead`, naming the
+    object. An unloaded provider is not "no sequences";
 - **commit:** the record (made or found), its two fractions, `Damage`, `RecentDamage`, `bHasGored`, and `D`. These are
   writes inside `AdjustDamage`, so a later refusal in the same pass carries the partial-writes prefix;
+- **the capped value goes back into the pipeline** (review r1 of #812): the routine changes `S.FinalDamage`, so the
+  pipeline's working damage after stage 13 is that capped `D`, and `HitRegionCapReduction` := the working damage before
+  the stage − `D`. Without this the tail would apply the uncapped damage: with a limit of 0.5 and `HealthMax` 100, a
+  60-point hit on a fresh record must take 50 from health, not 60, with `HitRegionCapReduction` 10;
 - the current health and `HealthMax` read as the pools rule reads them (NATIVE_DAMAGE_DEATH.md section 2).
 
 ## 5. `BaseBalanceDefinition.GetDisplayNameAtGrade(GradeIndex)` (link 3)
@@ -158,12 +171,20 @@ The exec reads the int and calls the class virtual.
      `ApplyGradeCustomizations` uses, NATIVE_COMBAT_MUSIC_AND_AFTER.md section 3) is above 1. A fixup list from the
      globals' playthrough data is searched once (cached in `HasLookedUpFixupIndex` and `FixupAIPawnNameIndex`) for an
      entry keyed by this balance's name (case-insensitive); a found entry with a non-empty name gives that name;
-  2. **otherwise:** the playthrough index (the same query; −1 without the globals, 0 without a Willow replication
-     info), capped at `PlayThroughs` count − 1. Out of range: an empty string. Else
-     `PlayThroughs[index].DisplayName`.
+  2. **otherwise:** the playthrough index, from the getter's own source (review r1 of #812):
+     - the engine's globals singleton (`GearboxGlobals`, the port's `WillowGlobals`) absent: −1;
+     - otherwise `WorldInfo.GRI` cast to `WillowGameReplicationInfo`: absent, 0; present, its `CurrentPlaythrough`
+       field (the replication info's playthrough virtual is that plain read), and a negative value gives −1;
+     - capped at `PlayThroughs` count − 1. Out of range (−1 included): an empty string. Else
+       `PlayThroughs[index].DisplayName`.
 
-**Proposed Off answer:** load-free reads of `PlayThroughs` and the current-playthrough rule the port already has
-(decision 2026-11-19-109, the current-playthrough virtual and the engine-wide condition). A playthrough above 1:
+     The fixup's gate in step 1 reads the same `CurrentPlaythrough`.
+
+**Proposed Off answer:** load-free reads of `PlayThroughs` and step 2's own source. Not decision 2026-11-19-109's
+helper: that one needs an exact `WillowPlayerController` and answers 0 for a missing world or replication info, where
+this getter has no controller and answers −1 without the globals, so the empty-string case would be lost (review r1 of
+#812). Declared, else `VmError::Script`: `WorldInfo.GRI` (an object) and `CurrentPlaythrough` (an int). A playthrough
+above 1:
 `NotRead`, "GetDisplayNameAtGrade: the playthrough name fixup" (the
 fixup list's source is not named). The two cache fields are written only on that path, so the slice's path writes
 nothing. Another balance class's virtual: `NotRead`. Declared, else `VmError::Script`: `PlayThroughs` (an array of the
@@ -209,7 +230,13 @@ binds it only in the mission bridge (`ow-mission` `bridge.rs`; the C++ reference
 `GD_Globals.Dialog.DialogGlobals`
 of the mission package). The combat world does not, so `WillowPlayerPawn.AddKillStreakScore` errs there.
 
-**Proposed Off answer:** bind the same rule in the combat world, load-free (the object resident, else `NotRead`).
+**The source, read** (review r1 of #812): the engine's globals singleton (`GearboxGlobals`, the port's `WillowGlobals`),
+its `TheGlobalsDefinition`, and that definition's `Dialog` (`GearboxGlobalsDefinition.Dialog`), cast to
+`WillowDialogGlobalsDefinition`; any link None, or another class: None. Nothing on this path loads.
+
+**Proposed Off answer:** that path in the combat world, load-free and write-free: each object resident, else
+`NotRead`. **Not** the mission binding as it is: it loads an export and writes a cache, so a cold cache would make a
+preflight write. Declared, else `VmError::Script`: `TheGlobalsDefinition` and `Dialog` (objects).
 `AddKillStreakScore` then reads `KillPointValue`, `KillStreakTargetScore` and `DET_KillStreak`, and may call the
 pawn's `DialogComponent.TriggerEvent` and `PostPlayerEvent(3)`. Those are script and natives this note did not read.
 
@@ -218,8 +245,21 @@ pawn's `DialogComponent.TriggerEvent` and `PostPlayerEvent(3)`. Those are script
 - **Rows 1 and 2** (#788 section 4.2): bind the plain reads in the combat world. `IsPlayingAny` is bound today only as
   the C++ stand-in where the special-move pack is wired (`ow-combat` `hit.rs`).
 - **Row 3, the shield stage** (NATIVE_DAMAGE_DEATH.md stage 10): Maya has a shield pool. The rule is read except the
-  controller's damage-number notification, whose identity stays open. Off: port stage 10 as read; the notification
-  `NotRead` when a player instigator's controller would get it (an AI instigator's controller does not).
+  controller's damage-number notification, whose identity stays open. Off: port stage 10 as read.
+- **The Off preflight for stages 10 and 15** (review r1 of #812), all decided **before the shield is subtracted**, so a
+  refusal there writes nothing of either stage:
+  - declared with their kinds, else `VmError::Script`: the victim's `ShieldArmor` pool reference; the damage type
+    definition's `ShieldDamageModifier`; the summary's `ShieldReduction`, `DamageDealtToShields` and
+    `ProtectionTimerReduction`; for stage 15, the globals definition's `ProtectionTimerThreshold`,
+    `ProtectionTimerMaintainedMaxHealthPct` and `ProtectionTimerDurationInSeconds`;
+  - not resident (the shield pool, the damage type definition, the shield factor's attribute objects, the globals
+    definition): `NotRead`, naming the object;
+  - the plan computes both stages' numbers first. Then each unsupported callback is a typed `NotRead`: the shield
+    reaching 0 (`OnShieldDepleted`, "the shield-depleted handler"); a player instigator's controller due its
+    damage-number notification (an AI instigator's controller is not); the protection timer due to start
+    (`EnableProtectionTimer`, "the protection timer's start"), or any other timer operation the stage would make;
+  - the recent-damage tracker's shield record follows NATIVE_DAMAGE_DEATH.md's `RecordRecentDamage` rule, checked
+    in the same preflight.
 - **Row 4, the resistance:** #796's ruling (the player's `Pawn` set at set-up, lane E's deferred setting). With it
   on, Maya's thirteen class values are written and this stop clears.
 - **Row 5, the protection timer** (stage 15): read. In the probe the swing's damage was 69.7 against Maya's 212.7,
@@ -253,17 +293,30 @@ stop is not known.
    - a lethal hit: `bHasGored` true, `Damage` := `M`; a non-empty `RegionDeathBehaviors`, a reaction that would fire,
      or a provider with sequences: `NotRead` before any write;
    - a `SeqEvent_TakeHitRegionDamage` in `GeneratedEvents`: `NotRead`;
-   - a later refusal in the same `AdjustDamage` pass: the partial-writes prefix.
+   - a later refusal in the same `AdjustDamage` pass: the partial-writes prefix;
+   - (review r1 of #812) a limit of 0.5, `HealthMax` 100, a 60-point hit on a fresh record: health loses 50, and
+     `HitRegionCapReduction` is 10; an independent region with an instigator and `bShowDamageNumbers`: the
+     damage-number `NotRead`, the record unchanged; an unloaded provider: `NotRead`;
 2. **`GetDisplayNameAtGrade`:** playthrough 0 and 1: that entry's `DisplayName`; a playthrough beyond the list: the
    last entry; an empty list: an empty string; playthrough 2: `NotRead`; the base class: an empty string; the grade
-   argument changes nothing.
+   argument changes nothing; no globals singleton: an empty string; no Willow replication info: entry 0; a negative
+   `CurrentPlaythrough`: an empty string (review r1 of #812).
 3. **`NotifyKilledEnemy`:** `PlayerStats` None: nothing written; set: `NotRead`, nothing written; an unloaded globals
    definition: `NotRead`.
 4. **`IsActionSkillRunning`:** `MyActionSkill` None: false; set: true.
-5. **`WillowDialogGlobalsDefinition.Get`** in a combat world: the dialog globals; unloaded: `NotRead`.
+5. **`WillowDialogGlobalsDefinition.Get`** in a combat world: the globals definition's `Dialog`; a `Dialog` of
+   another class, or None: None; an unloaded globals definition or `Dialog`: `NotRead`, nothing loaded; a class that
+   declares `Dialog` as an int: `VmError::Script`.
+5a. **Stages 10 and 15** (review r1 of #812): a shield that would reach 0: the `OnShieldDepleted` `NotRead`, the shield
+   unchanged; a hit that would start the protection timer: its `NotRead`, the shield unchanged; an unloaded globals
+   definition: `NotRead`; a mistyped `ShieldDamageModifier`: `VmError::Script`.
 6. **`DoForceFeedbackWaveform`** with an unloaded waveform and no gamepad: nothing, nothing loaded; with a gamepad, a
    manager and a replication info: the residency check, then the manager's `NotRead`.
-7. **Each refusal before its native's first write,** with #518's three counters unchanged.
+7. **Each refusal: nothing written by its own stage or native** (review r1 of #812). Off `AdjustDamage` writes the
+   summary's reset on entry, so a refusal inside it (the Kismet event, the damage-number notification) correctly
+   carries the outer partial-writes prefix; the test checks that the stage itself wrote nothing (its record, `D`, the
+   reduction fields), not that #518's counters are unchanged for the whole pass. For a native outside `AdjustDamage`,
+   the three counters unchanged.
 8. Reference: unchanged.
 
 ## Open questions

@@ -27,4 +27,16 @@ bounds check changed.
     resistance (#796's ruling), then `DoForceFeedbackWaveform` refusing an unloaded waveform before its gates.
 - **Needs the hub:** how the interface value is fixed (the VM's store, or `IsFriendlyFire` accepting the object); and
   whether `DoForceFeedbackWaveform`'s residency check moves past its gates.
+- **Review r1 (#812):**
+  - the hit-region cap's capped `FinalDamage` feeds the pipeline's working damage, with `HitRegionCapReduction`
+    filled; the damage-number dispatch and an unloaded region or provider are typed refusals before the record changes;
+  - the refusal tests check what each stage wrote, since `AdjustDamage` writes its summary reset on entry;
+  - the dialog globals' load-free source read (the globals singleton's `TheGlobalsDefinition.Dialog`), with
+    declaration checks; the mission binding's load and cache are not reused;
+  - the Off preflight for the shield and protection stages (declarations, residency, the `OnShieldDepleted`, timer and
+    notification refusals), all before the shield is subtracted;
+  - `GetDisplayNameAtGrade`'s own playthrough source (`WorldInfo.GRI.CurrentPlaythrough`, −1 without the globals),
+    not decision 2026-11-19-109's helper;
+  - the probe's substitutions recorded in the ignored trace, and this probe told apart from the earlier swings; the
+    probe labels spelled out; the `IsActionSkillRunning` index row made consistent.
 - **Clean room:** a different lane implements this note.
