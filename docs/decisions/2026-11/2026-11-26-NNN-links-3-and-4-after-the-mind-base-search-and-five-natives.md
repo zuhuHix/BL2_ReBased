@@ -1,7 +1,7 @@
 ## 2026-11-26: Links 3 and 4 after the mind: the base search and five natives
 
-AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-LINK34-AFTER-MIND, on main 54c9cf0 with #792
-(fix/rust-setdefaultphysics @ 08f8dae) merged in: links 3 and 4 need it to reach these stops. Clean room: implemented
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-LINK34-AFTER-MIND, stacked on #792 (fix/rust-setdefaultphysics @ 464346d9,
+on main 54c9cf0): links 3 and 4 need it to reach these stops. Clean room: implemented
 from docs/verification/NATIVE_LINK34_AFTER_MIND.md (#793 as landed) alone; this lane did not read the executable. No
 session was run. Every rule is UNVERIFIED in the running game.
 
