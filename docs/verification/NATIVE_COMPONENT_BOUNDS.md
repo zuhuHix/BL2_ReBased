@@ -532,6 +532,9 @@ table unchanged, causes no class-code load (where #685 has landed), and carries 
 3. Set `HiddenGame` on a pawn's mesh and read `Bounds` after a transform update: expect the fixed mesh bounds (source
    a), not the physics bodies' box.
 
+**Addendum (2026-11-26):** Maya's live answer, and a non-zero `Translation` with zero rotations and unit scale, are
+NATIVE_BOUNDING_CYLINDER_AND_AFTER.md section 2.
+
 ## Open questions
 
 1. **Not read:**

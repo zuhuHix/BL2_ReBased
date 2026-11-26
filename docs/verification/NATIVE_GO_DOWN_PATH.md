@@ -99,7 +99,8 @@ This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`
   the same body. The behavior kernel's `READ_ONLY_QUERIES` allow-lists only the `Controller` key. Binding one key does
   not bind the other: a lane that binds them binds both, and adds the `PlayerController` key to that allow-list if a
   preflight is to call it. Until then both answer `NotRead`, and the kernel's `PlayLocal` stays `NotYet`;
-- `WillowPawn.GetParent` (also reached as `WillowAIPawn.GetParent`);
+- `WillowPawn.GetParent` (also reached as `WillowAIPawn.GetParent`): resolved since, NATIVE_BOUNDING_CYLINDER_AND_AFTER.md
+  section 5;
 - `WillowPawn.SetDefaultStance` (also reached as `WillowPlayerPawn.SetDefaultStance` and `WillowAIPawn`'s);
 - `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`)
   and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up). `SetBase`'s
@@ -275,7 +276,9 @@ be visited answers `NotRead`, "SetShadowCasting: which component flags it sets".
 
 Read since, for the getters, `IsHealingDamageType`, `IsFriendlyFire`, `InGodMode`, `AdjustMomentumForSurfaceType`
 and `IsVulnerableToFriendlyFire`: NATIVE_SET_DEFAULT_PHYSICS_AND_SPAWN_BALANCE.md section 4.2 and
-NATIVE_LINK34_AFTER_MIND.md.
+NATIVE_LINK34_AFTER_MIND.md. For `GetAmmoTheftAmounts`, `PawnCheckPlayHitPreconditions` and the skill-event iterator:
+NATIVE_LINKS_13_14.md. For `TryFullBodyGib`, `GetMaxShieldStrength`, `ShakeView`, `DoForceFeedbackWaveform` and
+`GetCombatMusicManager`: NATIVE_BOUNDING_CYLINDER_AND_AFTER.md.
 
 `Controller.InGodMode`, `DamagePipeline.GetBarrelSourceTime`, `GetCanInflictFriendlyFire`, `GetPlantSourceTime`,
 `DamageTypeDefinition.IsHealingDamageType`, `GameInfo.IsFriendlyFire`, `Pawn.GetController`, `Pawn.InGodMode`,
