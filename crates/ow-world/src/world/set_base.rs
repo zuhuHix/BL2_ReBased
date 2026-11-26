@@ -298,7 +298,10 @@ fn identity(vm: &Vm, receiver: ObjRef, new: ObjRef) -> Result<bool, VmError> {
     let pivot = structure(vm, new, "PrePivot")?;
     let (base_location, base_rotation) = (structure(vm, new, "Location")?, structure(vm, new, "Rotation")?);
     let (location, rotation) = (structure(vm, receiver, "Location")?, structure(vm, receiver, "Rotation")?);
-    Ok(location == base_location
+    // Each Location part finite (review of #805), so equal infinities cannot pass and write NaN.
+    let finite = |v: &Value| v.as_struct().is_some_and(|s| s.fields.iter().all(|f| matches!(f, Value::Float(x) if x.is_finite())));
+    Ok(finite(&location)
+        && location == base_location
         && rotation == base_rotation
         && is_zero_rotation(vm, &base_rotation)?
         && scale == 1.0

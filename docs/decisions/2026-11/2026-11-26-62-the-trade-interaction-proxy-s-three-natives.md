@@ -42,7 +42,7 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
   second refusal, and the destroyed proxy's prefixed `NotRead` with no second `SetBase`. SetBase on a proxy: the
   identity case as authority and as autonomous proxy, the simulated proxy with no pose, and four non-identity cases
   refused with nothing written. `BaseChange` after `SetBase(None)` marks the proxy deleted. Reference binds neither
-  key. The world fixture's `Actor` gains `DrawScale`, `DrawScale3D` and `PrePivot`.
+  key. The world fixture's `Actor` gains `DrawScale`, `DrawScale3D` and `PrePivot`. Review of #805: the identity case also requires each `Location` part to be finite; added are a turned receiver on an unturned base, a base with `DrawScale3D` (1, 1, 2) and equal infinite `Location`s (each the hard-attach `NotRead`, nothing written), and a stale relative pose zeroed for the authority and the autonomous proxy and kept for the simulated proxy; link 6's two older hard-attach tests put the receiver off its base, so they no longer pass only by the fixture's zero `DrawScale` (removing the rotation, `DrawScale3D`, finiteness or pose-role checks each fails a test).
 - **Measured:** see the GATES row of this lane, including the local probe merged with #803 and the deferred player
   `Pawn` forced on.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
