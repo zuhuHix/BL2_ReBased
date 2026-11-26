@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-NEW-TEMPLATE-COPY (2026-11-26, pc-hummer, on fix/rust-new-template-copy from main 8fa9839d):** AI-assisted
+(Claude Code, Opus 5.5). Off `new` with a template copies it (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, option
+B): the template's slots, transient fields (`PropertyDecl::TRANSIENT` 0x2000, by fit) from the class default, and the
+archetype (a new heap field, plus the `ObjectArchetype` slot when declared). The blanket bit-23 refusal is narrowed by
+NATIVE_NEW_COMPONENT_INSTANCING.md section 3 on both paths: only a non-None value of a component field, or of a field
+whose class is not loaded, is refused, before anything is made; bit 10 only with the bit. `cargo test --workspace -j 8
+--no-fail-fast` 3,791 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
+(release build, under the machine lock): before (8fa9839d) 6 ok / 8 NotYet, 42.9%; after 6 ok / 8 NotYet, 47.0%.
+Links 6 and 7 pass `make` (1/3, 1/4) and stop at `GetBoundingCylinder`'s template `NotRead`. No real-game run.
+
 **PRELOAD-MAYA-ANIMSETS (2026-11-26, pc-hummer, on fix/preload-maya-animsets, stacked on #751 405315a9):**
 AI-assisted (Claude Code, Opus 5.5). The `maya` step preloads exactly the anim sets her archetype's `Mesh` component
 lists in `AnimSets` (`Anim_Siren.Base_Siren`) and her weapon holds' sets (`Rifle_Siren`, `RocketLauncher_Siren`,

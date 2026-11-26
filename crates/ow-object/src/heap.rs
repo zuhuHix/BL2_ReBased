@@ -102,6 +102,10 @@ pub struct Object {
     /// Destroyed (pending kill): still readable, no longer yielded by [`Heap::live`].
     pub destroyed: bool,
     pub origin: Origin,
+    /// The object's archetype when it was made from a template (`New` with a template, decision
+    /// 2026-11-26-NNN, NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2). `None` otherwise: the archetype is then the
+    /// class default object (or, for an export, not modelled), as before this field existed.
+    pub archetype: Option<ObjRef>,
 }
 
 impl Object {
@@ -121,6 +125,7 @@ impl Object {
             state: None,
             destroyed: false,
             origin,
+            archetype: None,
         }
     }
 }
