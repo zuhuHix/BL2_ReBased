@@ -66,6 +66,21 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
   reached, not loaded). **Not tested:** test 7 (the effect through a spawn); the installed gate shows it.
 - **Measured** (rebased onto main f80b68e, which has #808 and #810; the GATES row): 8 ok / 14, 9.500/14 = 67.9%
   (main 60.7%). Both spawns complete, and links 3, 4 and 13 stop at the unbound `DamagePipeline.GetBarrelSourceTime()`,
-  as the note's sections 5 and 8 predicted; links 5 and 14 are blocked behind them.
+  as the note's sections 5 and 8 predicted; links 5 and 14 are blocked behind them. (Correction, review of #815: link
+  13 is blocked by link 4's stop in strict mode, 0/4 steps; it does not reach the native itself.)
+- **Review of #815, r1:**
+  - the walk past the preflight's depth bound stops whole with the preflight's own refusal (it used to drop the branch
+    and go on through its siblings, exponential for data referring back to its own definition), and follows each
+    initialization definition once (a visited list; the preflight itself is unchanged);
+  - discovery reads each spawn kind's archetype through the store's own load of the export, logged first ("preload
+    <archetype> (the spawn kind's archetype, read for its starting values; UNVERIFIED)"). Its references stay handles, so
+    the `AIClass` and its parents load in the walk, each logged, and a failed load is logged and left. No copy is made,
+    so nothing is left to free; a second discovery adds no object and no name. The archetype itself stays resident as
+    the store's object (a logged load);
+  - a data read's attribute-system error (a wrong-kind `BaseValue`, a definition without `ValueFormula`) is
+    `VmError::Script`; a declared `AttributeStartingValuesNew` that is not an array is one too, before any definition
+    loads;
+  - tests: a self-referential formula visited once and a 40-deep chain stopped by the bound; discovery by path (the
+    order of the lines, the counts after a second discovery); a broken `AIClass` export; both malformed-data cases.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.
