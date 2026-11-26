@@ -271,6 +271,13 @@ fn the_byte_limits_in_the_note_s_order() {
     let n = x.node(vec![a.clone(), c255], 2);
     x.by_index(n, 1).unwrap();
     assert_eq!(x.bytes(n, "AimCpntIndexLUT")[1], 254, "the last of 255 positions");
+    // Review of #745: the literal case, 257 bones with a 256-component profile, is the bone limit.
+    let e256 = x.profile("E", &names);
+    let n = x.node(vec![a.clone(), e256], 0);
+    match x.refusal(n, 1) {
+        VmError::NotYet(e) => assert_eq!((e.missing, &*e.what), (Missing::NotRead, PAST_A_BYTE)),
+        other => panic!("{other:?}"),
+    }
     // The order: 257 bones and a malformed list is the bone limit, not the list's script error.
     let broken = Value::structure(x.profile, vec![Value::Name(ow_object::ids::NameId::NONE), Value::array(vec![Value::Int(1)])]);
     let n = x.node(vec![a, broken], 0);

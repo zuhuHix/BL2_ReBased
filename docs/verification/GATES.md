@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**REBUILD-TEST-GAPS (2026-11-26, pc-hummer, on main afde0d73):** AI-assisted (Claude Code, Opus 5.5). #745's review
+gaps: the unloaded-mesh text with a skeleton source installed, NATIVE_AIMOFFSET_REBUILD.md test 8 through the profiles
+layer, the literal 257-bone / 256-component case, a comment; no rule changed. `cargo test --workspace -j 8` 3,778
+passed / 0 failed / 58 ignored; `crate_edges_test.py` OK. No slice gate (no rule changed). No real-game run.
+
 **ANALYST-NEW-COMPONENT-INSTANCING (2026-11-26, pc-hummer, docs only, on docs/native-new-component-instancing from
 main 1709b8a8):** AI-assisted (Claude Code, Opus 5.5). NATIVE_NEW_COMPONENT_INSTANCING.md reads the component-instancing
 pass that script `new` runs for a class with class-flag bit 23. A None component field is left alone; a component

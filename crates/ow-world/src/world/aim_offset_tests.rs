@@ -55,6 +55,8 @@ fn package_with(cdo: bool) -> Vec<u8> {
     let mesh_comp = t.class("ToyMeshComponent", object);
     // Lane IMPL-AIMOFFSET-REBUILD: the mesh class is `Engine.SkeletalMesh`, so a mesh reaches the skeletal layer.
     let mesh = t.class("SkeletalMesh", object);
+    // Review of #745: a property, so a slotless stand-in of the class reads as not loaded.
+    t.prop("Int", mesh, "ToyLodCount", 0, 0);
     t.prop("Object", mesh_comp, "SkeletalMesh", 0, mesh);
     t.prop("Object", node, "SkelComponent", 0, mesh_comp);
     let aim = t.class("AnimNodeAimOffset", node);
@@ -123,6 +125,10 @@ fn package_with(cdo: bool) -> Vec<u8> {
     let mut p = ints(&[0]);
     p.extend_from_slice(&none);
     let lazy = t.p.add_export(willow, "LazyTemplate_0", p);
+    // Review of #745: a mesh export, so the skeletal layer reads it by identity.
+    let mut p = ints(&[0]);
+    p.extend_from_slice(&none);
+    t.p.add_export(mesh, "ToyMesh_0", p);
     let mut p = ints(&[0]);
     p.extend(t.p.object_tag("TemplateNode", lazy));
     p.extend_from_slice(&none);
@@ -321,12 +327,44 @@ fn a_change_with_a_mesh_asks_the_skeletal_layer() {
     assert_eq!(x.current(n), 1);
     // A change that is no change is still nothing, mesh or not.
     x.nothing(|x| x.by_index(n, 1));
-    // A mesh the store has not loaded: the skeletal layer's LayerAbsent, nothing loaded.
+    // A mesh the store has not loaded (review of #745): with a skeleton source installed, so the refusal can only be
+    // the layer's not-loaded one, on a resource-origin stand-in of a mesh class with properties.
+    install_skeleton(&mut x, small_skeleton());
     let class = x.vm.space.classes.by_path("Engine.SkeletalMesh").unwrap();
-    let lazy_mesh = x.vm.space.alloc_stand_in(class, "LazyMesh", Origin::Default { class }).unwrap();
+    let lazy_mesh = x.vm.space.alloc_stand_in(class, "LazyMesh", Origin::Resource { package: 0, index: 1 }).unwrap();
     x.set(comp, "SkeletalMesh", Value::Object(Some(lazy_mesh)));
     let e = x.refusal(|x| x.by_name(n, "A"));
     assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{e}");
+    assert!(e.what.contains("the unloaded skeletal mesh LazyMesh"), "{e}");
+}
+
+/// A skeleton source answering `ToyMesh_0` only.
+struct ToySkeleton(crate::world::skeletal::ReferenceSkeleton);
+
+impl crate::world::skeletal::SkeletonSource for ToySkeleton {
+    fn skeleton(&self, _: &str, _: &str, leaf: &str) -> Result<Option<crate::world::skeletal::ReferenceSkeleton>, String> {
+        Ok((leaf == "ToyMesh_0").then(|| self.0.clone()))
+    }
+}
+
+fn install_skeleton(x: &mut Fx, skeleton: crate::world::skeletal::ReferenceSkeleton) {
+    crate::world::skeletal::SkeletalMeshes::install(&mut x.vm, Box::new(ToySkeleton(skeleton))).unwrap();
+}
+
+/// Root, `Spine_2` (a numbered name), Arm and Hand, a chain.
+fn small_skeleton() -> crate::world::skeletal::ReferenceSkeleton {
+    let names = ["Root", "Spine_2", "Arm", "Hand"];
+    crate::world::skeletal::ReferenceSkeleton {
+        bones: names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| crate::world::skeletal::SkeletonBone {
+                name: n.to_string(),
+                parent: i.checked_sub(1),
+                bind: None,
+            })
+            .collect(),
+    }
 }
 
 /// Test 5, today's store behaviour (the interim rule): an empty `Profiles` on the list's owner is the profiles'
@@ -459,6 +497,8 @@ struct Fake {
     names: Vec<&'static str>,
     refuse: Option<&'static str>,
     end: Option<usize>,
+    /// Each profile's component bone names, by profile position (none given: no components).
+    bones: Vec<Vec<&'static str>>,
 }
 
 impl crate::world::aim_profiles::ProfileSource for Fake {
@@ -475,14 +515,18 @@ impl crate::world::aim_profiles::ProfileSource for Fake {
         let profiles = self
             .names
             .iter()
-            .map(|n| crate::world::aim_profiles::SourceProfile { name: n.to_string(), bones: Vec::new() })
+            .enumerate()
+            .map(|(i, n)| crate::world::aim_profiles::SourceProfile {
+                name: n.to_string(),
+                bones: self.bones.get(i).map_or_else(Vec::new, |b| b.iter().map(|s| s.to_string()).collect()),
+            })
             .collect();
         Ok((Some(profiles), self.end.unwrap_or(walked.end)))
     }
 }
 
 fn with_source(x: &mut Fx, names: &[&'static str], refuse: Option<&'static str>, end: Option<usize>) {
-    let source = Fake { names: names.to_vec(), refuse, end };
+    let source = Fake { names: names.to_vec(), refuse, end, bones: Vec::new() };
     crate::world::aim_profiles::AimProfiles::install(&mut x.vm, Box::new(source)).unwrap();
 }
 
@@ -557,4 +601,36 @@ fn an_empty_list_the_node_does_not_tag_is_layer_absent() {
         assert!(matches!(e.missing, Missing::LayerAbsent(_)), "{name}: {e}");
         assert!(e.what.starts_with(PROFILES) && e.what.contains("no Profiles tag"), "{name}: {}", e.what);
     }
+}
+
+/// Review of #745, NATIVE_AIMOFFSET_REBUILD.md test 8 through the profiles layer: a copy whose template's `Profiles`
+/// the store skipped takes the components' bone names from the layer's source (text, a numbered `Spine_2` given in the
+/// reader's lower-case form). On the mesh export's skeleton they give the same lists as the decoded form gives in
+/// `aim_offset_rebuild_tests.rs` (0, 1, 2, 3 and 255, 0, 255, 1), and nothing is interned.
+#[test]
+fn the_profiles_layer_s_bone_names_drive_the_rebuild() {
+    let mut x = fx();
+    let source = Fake { names: vec!["A", "B"], refuse: None, end: None, bones: vec![vec![], vec!["spine_2", "Hand"]] };
+    crate::world::aim_profiles::AimProfiles::install(&mut x.vm, Box::new(source)).unwrap();
+    install_skeleton(&mut x, small_skeleton());
+    let skipped = x.export("Skipped_0");
+    let mesh = x.export("ToyMesh_0");
+    let copy = x.node("Copy_L", &[]);
+    x.set(copy, "TemplateNode", Value::Object(Some(skipped)));
+    let comp = x.obj("ToyMeshComponent", "Comp_L");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.set(copy, "SkelComponent", Value::Object(Some(comp)));
+    x.vm.space.names.intern("B");
+    let names = x.vm.space.names.len();
+    x.by_name(copy, "B").unwrap();
+    assert_eq!(x.current(copy), 1);
+    let bytes = |x: &Fx, f: &str| -> Vec<u8> {
+        x.get(copy, f).elements().unwrap().iter().map(|v| match v {
+            Value::Byte(b) => *b,
+            other => panic!("{other:?}"),
+        }).collect()
+    };
+    assert_eq!(bytes(&x, "RequiredBones"), [0, 1, 2, 3]);
+    assert_eq!(bytes(&x, "AimCpntIndexLUT"), [255, 0, 255, 1]);
+    assert_eq!(x.vm.space.names.len(), names, "nothing interned");
 }
