@@ -99,7 +99,9 @@ This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`
 - `WillowPawn.GetParent` (also reached as `WillowAIPawn.GetParent`);
 - `WillowPawn.SetDefaultStance` (also reached as `WillowPlayerPawn.SetDefaultStance` and `WillowAIPawn`'s);
 - `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`)
-  and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up);
+  and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up). `SetBase`'s
+  implementation was resolved and read later, in NATIVE_ACTOR_SETBASE.md (its arguments are `NewBase`, `NewFloor`,
+  `SkelComp` and `AttachName`);
 - `Pawn.TermRagdoll()`;
 - `WillowPlayerPawn.InitRagdoll()`. `WillowPlayerPawn` declares its own `InitRagdoll`, so this is a separate native key
   from `Engine.Pawn.InitRagdoll`, with the same body. That body only calls the pawn class's own implementation, which

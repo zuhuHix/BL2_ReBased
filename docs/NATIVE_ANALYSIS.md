@@ -82,6 +82,9 @@ either. What worked (2026-11-19, NATIVE_LOGIN_URL_CONFIG_INPUT.md):
 3. follow that constructor, and the constructors it calls in turn, to the store that installs the class table;
 4. read the slot from that table.
 
+In step 1, the string the registration routine refers to is the class's C++ name read from its second character:
+the routine points into the prefixed name (`AWillowWeapon`, `UAttributeExpression`), so a search for the bare script
+name finds nothing. Search for the prefixed name and use the address two bytes in (NATIVE_ACTOR_SETBASE.md, 2026-11-26).
 This was done with a throwaway helper, kept under `local/analysis/link1login/scripts/` (not tracked). It is not a
 query form of `OwNativeQuery.java`; making it one would be a tooling change. The table found this way is identified
 by fit until a second entry of it is checked against a behaviour another record already gives.

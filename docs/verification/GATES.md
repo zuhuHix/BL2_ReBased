@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-ACTOR-SETBASE (2026-11-26, pc-hummer, docs only, on docs/native-actor-setbase, rebased onto main c79c2f8):**
+AI-assisted (Claude Code, Opus 5.5). NATIVE_ACTOR_SETBASE.md resolves and reads `Actor.SetBase`'s implementation (the
+same one in every class table of the slice's chain). On the slice, `SetBase(None)` reaches a weapon with no base, so
+it does nothing. The note then reads link 6's `key` on, measured by a local probe on #789's head a9f7187a (an
+installed Off strict `--slice-gate` with each stop stubbed, under the machine lock, reverted and not committed):
+`GetAmmoCount`, `SelectAkEvent` and `PlayAkEvent` (each unbound), the pickup's destroy in its state `Pickup` (the
+W5-STATES `LayerAbsent`), then `WillowGlobals.RemovePickup`'s `NotRead`. No code changed, so no measured number moved.
+UNVERIFIED in game.
+
 **ANALYST-LINK34-AFTER-MIND (2026-11-26, pc-hummer, docs only, on docs/native-link34-after-mind, read and probed on main
 d3be3e5e, rebased onto fc860b5c):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK34_AFTER_MIND.md reads the natives on links 3 and 4 past the mind. It
 names `SetPhysics`' base search, the spawns' first stop: a downward floor trace of 8 units, whose flags are not decoded.
