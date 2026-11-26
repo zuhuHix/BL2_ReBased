@@ -58,7 +58,7 @@ use crate::hit::access::{
 use crate::hit::{self, Enemy, HitReport, Player, TakeDamageEvent, call_method, note, with_state};
 
 mod player;
-pub use player::{BridgeGain, PlayerBridge};
+pub use player::{BridgeGain, PlayerBridge, PlayerPawnDuringSetUp, enable_player_pawn_during_set_up};
 mod shots;
 use player::{Episode, Fee, HealthPool};
 

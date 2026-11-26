@@ -164,8 +164,9 @@ impl HealthPool {
         let pawn = bridge.player_pawn(vm)?;
         // The hub's ruling on #796 (NATIVE_LINKS_13_14.md section 4, lane IMPL-LINKS-13-14; UNVERIFIED): as the
         // possess leaves it in the game, the controller's `Pawn` is the player's pawn when `ApplyCharacterClassDefaults`
-        // recalculates, and it stays set afterwards.
-        if object(vm, controller, "Pawn")? != Some(pawn) {
+        // recalculates, and it stays set afterwards. Deferred (the hub's ruling on IMPL-LINKS-13-14): only with the
+        // [`PlayerPawnDuringSetUp`] harness setting, which no set-up turns on yet.
+        if vm.service::<PlayerPawnDuringSetUp>().is_some() && object(vm, controller, "Pawn")? != Some(pawn) {
             crate::hit::access::set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
             vm.log.push(player_pawn_line(vm, pawn));
         }
@@ -540,6 +541,25 @@ pub(crate) fn with_player_pawn<T>(
         set(vm, controller, "Pawn", v)?;
     }
     result
+}
+
+/// The harness setting that sets the controller's `Pawn` during the player set-up (the hub's ruling on #796; a VM
+/// service, its presence turns it on). **Deferred, off by default** (the hub's ruling on IMPL-LINKS-13-14): setting
+/// the `Pawn` runs `WillowPlayerPawn.SetUpTradeInteraction`, whose `PawnInteractionProxy.Initialize` calls
+/// `SetCollisionSize`, `SetHardAttach` and `SetBase` on the proxy, outside NATIVE_ACTOR_SETBASE.md's seven tables; it
+/// is turned on once those are read (queue 0aq).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerPawnDuringSetUp;
+
+/// Turns [`PlayerPawnDuringSetUp`] on (Off only, else a registration refusal; twice is a registration refusal too).
+pub fn enable_player_pawn_during_set_up(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Err(VmError::Registration {
+            key: "PlayerPawnDuringSetUp".to_string(),
+            reason: "the player set-up's Pawn is an Off harness setting",
+        });
+    }
+    vm.add_service(PlayerPawnDuringSetUp).map(|_| ())
 }
 
 /// The harness line of the player set-up's controller `Pawn` (the hub's ruling on #796).
