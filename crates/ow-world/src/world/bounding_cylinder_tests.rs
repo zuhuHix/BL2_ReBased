@@ -118,6 +118,8 @@ fn engine() -> Vec<u8> {
     t.prop("Float", actor, "DrawScale", 0, 0);
     t.prop("Struct", actor, "DrawScale3D", 0, vector);
     t.prop("Struct", actor, "Rotation", 0, rotator);
+    // Review of #764, item 4: the owner's pre-pivot, part of the simplest transform.
+    t.prop("Struct", actor, "PrePivot", 0, vector);
     // Review r1 of #660, item 1: a float the radius can be written to, and an object the height cannot.
     let toy_radius = t.p.next_export() + 1;
     t.prop("Float", actor, "ToyRadius", 0, 0);
@@ -1228,6 +1230,34 @@ fn a_uniform_positive_scale_scales_the_stored_box() {
         x.set(c, "Scale", Value::Float(bad));
         x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
     }
+    x.set(c, "Scale", Value::Float(1.0));
+    // Review of #764, item 2: "uniform" is exactly equal, with no tolerance. One ulp above 1 on one axis is refused.
+    let near = 1.000_000_1f32;
+    assert_ne!(near, 1.0, "the axis differs from 1 as an f32");
+    x.vector3(c, "Scale3D", [1.0, 1.0, near]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(c, "Scale3D", [1.0; 3]);
+    x.answers(pickup, (unit[0], unit[2]), "unit scale again");
+}
+
+/// Review of #764, item 4: a non-zero owner `PrePivot` leaves the simplest transform, so the stored box is the world
+/// transform's `NotRead` (UNVERIFIED: the port's reading that a pre-pivot moves the owner's frame); zero answers again.
+#[test]
+fn a_non_zero_pre_pivot_is_the_world_transform() {
+    let mut x = fx();
+    let (pickup, c) = x.skeletal();
+    let mesh = x.mesh_export();
+    x.set(c, "SkeletalMesh", Value::Object(Some(mesh)));
+    x.bounds_source(TOY_BOUNDS);
+    x.unit_scales(pickup, c, 1.0);
+    let unit = box_cylinder(&[([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])]);
+    x.answers(pickup, (unit[0], unit[2]), "zero PrePivot");
+    for pivot in [[0.0, 0.0, 1.0], [-0.5, 0.0, 0.0]] {
+        x.vector3(pickup, "PrePivot", pivot);
+        x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    }
+    x.vector3(pickup, "PrePivot", [0.0; 3]);
+    x.answers(pickup, (unit[0], unit[2]), "zero PrePivot again");
 }
 
 /// 9.7 tests 2 and 9a: a mesh takes source f. With no accessor answer, the stored-bounds `LayerAbsent`. With one, the
@@ -1367,6 +1397,15 @@ fn the_physics_and_parent_sources() {
     x.vector3(c, "Scale3D", [1.0, 2.0, 1.0]);
     x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
     x.vector3(c, "Scale3D", [1.0; 3]);
+    // Review of #764, item 3: a uniform non-unit scale is the simplest transform since the scaled-bounds ruling, so
+    // source b answers PARENT_ROOT there, no longer the world transform's NotRead.
+    x.set(c, "Scale", Value::Float(2.0));
+    x.refuses(pickup, not_read(), PARENT_ROOT, BOUNDS_RECORD);
+    x.set(c, "Scale", Value::Float(1.0));
+    // Review of #764, item 4: a non-zero owner PrePivot on source b is the world transform's NotRead.
+    x.vector3(pickup, "PrePivot", [0.0, 0.0, 1.0]);
+    x.refuses(pickup, not_read(), WORLD_TRANSFORM, BOUNDS_RECORD);
+    x.vector3(pickup, "PrePivot", [0.0; 3]);
     // Source d.
     x.set(parent, "bComponentUseFixedSkelBounds", Value::Bool(false));
     let parent_asset = x.live("Engine.PhysicsAsset");
