@@ -654,8 +654,11 @@ pub(crate) const AT_REST_INPUT: &str = "harness input: the pickup world turns on
 
 /// The log line of one ammo-definition preload.
 pub(crate) fn ammo_preload_line(path: &str) -> String {
-    format!("harness input: set-up preload: {path} (UNVERIFIED: an ammo definition the game has resident)")
+    format!("harness input: set-up preload: {path}{AMMO_PRELOAD_TAIL}")
 }
+
+/// The tail of [`ammo_preload_line`].
+pub(crate) const AMMO_PRELOAD_TAIL: &str = " (UNVERIFIED: an ammo definition the game has resident)";
 
 /// The hub's ruling for `UpdateAmmoCounts` (lane IMPL-UPDATEAMMOCOUNTS): the eight ammo definitions the globals
 /// definition lists (`ow_inventory::pickup_take::AMMO`'s fields, in that order) are loaded through the store at the
