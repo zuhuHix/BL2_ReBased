@@ -49,8 +49,10 @@ source exclusion needs; on main c876a397. **Every rule is UNVERIFIED in the runn
 - **The note's fix:** the lane built in the hub's points (a) to (g) first, then followed the note as landed: owners by
   `owner_of`, the malformed text, and section 6's 4a tests.
 - **Review of #818 (Sol, high):** the box's limits must be finite and ordered (an overflowing limit is malformed, not a
-  miss on another axis); the shared filter resolves the owner before the terrain check, so a primitive a terrain lists
-  but another actor owns takes that owner's row (the floor-trace and touch tests updated with it); bounds the rule
+  miss on another axis); the shared filter keeps #514's terrain rule (reviews r1 and r2: the walked actor first, then
+  the resolved owner, a terrain on either side refuses), so a primitive a terrain lists but an exact `WillowPickup`
+  owns gives `TERRAIN_HANDLING` NotRead: no note reads the game's answer for that case, so this is the conservative
+  answer, **UNVERIFIED** (the hub's ruling, which withdraws the review's item 2); bounds the rule
   does not answer (a mover's static mesh) leave the candidate's own refusal (the hash admission), not a layer error;
   the exact Willow pawn rows pass over whatever rule the filter met first; `Components` must be declared an array of
   objects and both fields must exist, else a data error; a part's class is classified before its residency, so a
