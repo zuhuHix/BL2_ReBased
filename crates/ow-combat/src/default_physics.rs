@@ -169,9 +169,9 @@ fn default_physics(vm: &Vm, pawn: ObjRef) -> Result<u8, VmError> {
 /// The shield's current and maximum (module documentation, step 4).
 fn shield(vm: &Vm, pawn: ObjRef) -> Result<(f32, f32), VmError> {
     let (reference, _) = read(vm, pawn, "ShieldArmor")?;
-    if let Ok(r) = ow_world::pools::read_ref(&vm.space, &reference)
-        && let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)?
-    {
+    // A mistyped reference is an error, not a fall-back to the plain fields (review of #792, item 7).
+    let r = ow_world::pools::read_ref(&vm.space, &reference)?;
+    if let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)? {
         resident(vm, pool)?;
         return Ok((float(vm, pool, "CurrentValue")?, float(vm, pool, "MaxValue")?));
     }

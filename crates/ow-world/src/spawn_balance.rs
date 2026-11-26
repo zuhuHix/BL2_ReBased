@@ -62,7 +62,9 @@ pub fn run_step(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
         Some(Err(why)) => return Err(NotYet::not_read(why, RECORD).into()),
         Some(Ok(b)) => b,
     };
-    if vm.defs.is_unloaded(&vm.space, balance) || vm.defs.is_failed(&vm.space, balance) {
+    let x = vm.space.heap.get(balance)?;
+    let short = vm.space.classes.get_layout(x.class).is_some_and(|l| x.slots.len() < l.slot_count() as usize);
+    if short || vm.defs.is_unloaded(&vm.space, balance) || vm.defs.is_failed(&vm.space, balance) {
         return Err(NotYet::not_read(NOT_LOADED, RECORD).into());
     }
     let class = vm.space.heap.get(pawn)?.class;
