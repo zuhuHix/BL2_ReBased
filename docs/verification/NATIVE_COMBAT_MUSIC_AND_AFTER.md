@@ -131,9 +131,11 @@ The exec calls the manager's virtual:
 **Proposed Off answer:**
 - the gates as read, write-free;
 - past them: `NotRead`, "CombatMusicManager.PlayerDamagedByEnemy: the threat model";
-- **for the hub, a possible stand-in:** the manager's state drives the music only, and nothing read on the slice reads
-  it back. So a logged no-op could stand in behind an Off-only harness setting. UNVERIFIED: that no gameplay rule reads
-  the threat was not searched.
+- **hub ruling (review of #801): a logged no-op stand-in, behind a setting.** Under an Off-only slice harness setting
+  (like the audio stand-in), the threat model past the gates is a no-op: nothing written, one harness-input log line per
+  call. It is UNVERIFIED. The manager's state drives the music only, and nothing read on the slice reads it back; that
+  no gameplay rule reads the threat was not searched. Without the setting it stays the `NotRead` above. Reference is
+  unchanged.
 
 **On the slice:** `CombatMusicParams` is set by section 5, so the swing reaches the threat model.
 
@@ -174,7 +176,9 @@ The exec calls the manager's virtual:
    - an unloaded globals definition: `NotRead` before the creation.
 4. **`PlayerDamagedByEnemy`:**
    - no params, no enemy, or a `bCausedByWorld` damage type: nothing;
-   - otherwise the `NotRead` (or, under a hub-ruled setting, the logged no-op).
+   - otherwise the `NotRead`;
+   - (hub ruling) with the harness setting on: past the gates, nothing written and one harness-input log line; the gated
+     cases answer as without it; Reference with the setting on is unchanged.
 5. Reference: unchanged.
 
 ## Open questions
@@ -188,9 +192,9 @@ The exec calls the manager's virtual:
    - the playthrough virtual;
    - the behaviour runner;
    - the pawn query.
-4. **For the hub:**
-   - the music manager's no-op stand-in (section 6);
-   - link 13's down, which the rules do not produce at these numbers (#796's no-cap ruling).
+4. **Ruled by the hub:**
+   - on #801: the music manager's no-op stand-in, behind an Off-only harness setting (section 6);
+   - on #796: no cap on link 13's swings, so link 13's down is what the rules produce (none at these numbers).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

@@ -29,5 +29,7 @@ bounds check changed.
   - `PlayerDamagedByEnemy`'s gates are read and its threat model outlined;
   - with every earlier answer in, link 4's swing completes; link 13's swings complete without a down; link 14 has
     nothing to bleed.
-- **Needs the hub:** whether the music manager's threat model may be a logged no-op stand-in.
+- **Hub ruling (review of #801):** the music manager's threat model may be a logged no-op stand-in, behind an Off-only
+  slice harness setting like the audio stand-in. It is UNVERIFIED; without the setting it stays `NotRead`; Reference is
+  unchanged.
 - **Clean room:** a different lane implements this note.
