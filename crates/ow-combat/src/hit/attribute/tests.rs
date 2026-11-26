@@ -142,22 +142,23 @@ impl ValueResolver for Probe {
     }
 }
 
-struct Fx {
+pub(super) struct Fx {
     world: World,
     _dir: crate::run::tests::Dir,
 }
 
 impl Fx {
-    fn new(mode: ParityMode) -> Self {
+    pub(super) fn new(mode: ParityMode) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "ow-attr-getvalue-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        let (engine, gearbox) = (engine(), gearbox());
+        // Lane IMPL-RESOLVER-CHAIN-LOADS: an invented WillowGame too (`super::chain_load_tests::willow`).
+        let (engine, gearbox, willow) = (engine(), gearbox(), super::chain_load_tests::willow());
         let defs = DefStore::from_synthetic(
             &dir,
-            &[("Engine.upk", &engine), ("GearboxFramework.upk", &gearbox)],
+            &[("Engine.upk", &engine), ("GearboxFramework.upk", &gearbox), ("WillowGame.upk", &willow)],
             IdentityPolicy::FirstInScanOrder,
             mode,
         )
@@ -177,7 +178,7 @@ impl Fx {
         let world = World::new(vm, BalanceState::new(snapshot), &[&crate::hit::Pack]).unwrap();
         Self { world, _dir: crate::run::tests::Dir(dir) }
     }
-    fn vm(&mut self) -> &mut Vm {
+    pub(super) fn vm(&mut self) -> &mut Vm {
         &mut self.world.vm
     }
     fn make_in(&mut self, path: &str) -> ObjRef {
@@ -190,10 +191,10 @@ impl Fx {
     fn set(&mut self, o: ObjRef, name: &str, value: Value) {
         set_required(self.vm(), o, name, value, "test").unwrap();
     }
-    fn value(&mut self, o: ObjRef, name: &str) -> Value {
+    pub(super) fn value(&mut self, o: ObjRef, name: &str) -> Value {
         get(self.vm(), o, name).unwrap().unwrap()
     }
-    fn pawn(&mut self, toughness: f32) -> ObjRef {
+    pub(super) fn pawn(&mut self, toughness: f32) -> ObjRef {
         let p = self.make("Pawn");
         self.set(p, "Toughness", Value::Float(toughness));
         p
@@ -231,7 +232,7 @@ impl Fx {
         r
     }
     /// `GetValue(source, ResolvedContext, override)` from the host: the result and the out context.
-    fn get_value(&mut self, a: ObjRef, source: Value, over: Value) -> Result<(Value, Value), VmError> {
+    pub(super) fn get_value(&mut self, a: ObjRef, source: Value, over: Value) -> Result<(Value, Value), VmError> {
         self.get_value_out(a, source, Value::Object(None), over)
     }
     fn get_value_out(&mut self, a: ObjRef, source: Value, out: Value, over: Value) -> Result<(Value, Value), VmError> {

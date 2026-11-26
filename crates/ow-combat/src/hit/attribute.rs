@@ -96,3 +96,5 @@ fn object_arg(c: &NativeCall<'_>, i: usize, name: &str) -> Result<Option<ObjRef>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod chain_load_tests;

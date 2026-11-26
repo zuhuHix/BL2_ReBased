@@ -580,10 +580,30 @@ fn multi_context_not_read(what: &str) -> AttrError {
 // The chains
 // ---------------------------------------------------------------------------------------------------------------
 
+/// A chain entry loaded before the walk reads or dispatches it (lane IMPL-RESOLVER-CHAIN-LOADS; NATIVE_TARGETABLE_
+/// RESOLVER.md section 5.1, the hub's ruling on #787). The port's store is lazy, so a resident definition's chain can
+/// still hold unloaded handles; the game's package load has them resident with it, by fit. The load is
+/// [`ensure_loaded`]'s, so a load-free scope refuses it as before (`NotRead` naming the entry). A load that fails
+/// leaves the handle in place, and the walk's residency check ([`resident`]) answers the store's `BadData` for it
+/// here, where the entry is reached.
+fn load_entry(cx: &mut EvalCx<'_>, entry: ObjRef, what: &str) -> Result<(), AttrError> {
+    match ensure_loaded(cx, entry) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let WorldParts { space, defs, .. } = cx.world.parts();
+            let failed = defs.as_deref().is_some_and(|d| d.is_failed(space, entry));
+            if failed {
+                resident(cx, entry, what)?;
+            }
+            Err(e)
+        }
+    }
+}
+
 /// [`AttributeSystem::resolve_context`]: the `ContextResolverChain` left to right, each resolver receiving what the
 /// previous returned (the first receives `source`); a None entry is skipped; a resolver answering None ends the walk
-/// with None; an empty chain (or one of None entries only) is None. Status: UNVERIFIED (NATIVE_ATTRIBUTES.md
-/// section 1, high confidence).
+/// with None; an empty chain (or one of None entries only) is None. Each entry is loaded before it is dispatched
+/// ([`load_entry`]). Status: UNVERIFIED (NATIVE_ATTRIBUTES.md section 1, high confidence).
 pub(crate) fn resolve_context(
     sys: &AttributeSystem,
     attr: ObjRef,
@@ -598,6 +618,7 @@ pub(crate) fn resolve_context(
         let Some(resolver) = object("ContextResolverChain entry", entry)? else {
             continue;
         };
+        load_entry(cx, resolver, "a context resolver")?;
         let r = sys.context_resolver(cx.world.parts().space, resolver)?;
         match r.resolve(sys, resolver, attr, current, cx)? {
             Some(context) => current = Some(context),
@@ -627,10 +648,13 @@ pub(crate) fn resolve_contexts(
 
 /// The context `GetValue` uses: the override source's when the override is given and resolves, else the source's.
 /// [`AttributeSystem::preflight_read`]: what a read can refuse before it evaluates anything (review of #442). The
-/// definition is loaded, and must not be multi-context. Every resolver of its context chain must be a class this
-/// library implements. Every entry of its value chain must be set and a class it implements. Nothing is resolved or
-/// evaluated, so no generator is drawn and no resolver writes. A refusal from deeper in a read (a nested attribute, a
-/// resolver's own data) can only be found by evaluating, and is not covered here.
+/// definition is loaded, and must not be multi-context. Every non-None entry of its two chains is loaded too, before
+/// it is checked ([`load_entry`]; lane IMPL-RESOLVER-CHAIN-LOADS), so a read that runs this first loads the definition
+/// and each of its N unloaded chain entries: 1+N loads, and #518's `load_transitions` rises by as many (it was 1).
+/// Every resolver of its context chain must be a class this library implements. Every entry of its value chain must be
+/// set and a class it implements. Nothing is resolved or evaluated, so no generator is drawn and no resolver writes. A
+/// refusal from deeper in a read (a nested attribute, a resolver's own data) can only be found by evaluating, and is
+/// not covered here.
 pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
     ensure_loaded(cx, attr)?;
     if is_multi_context(cx.world.parts().space, attr)? {
@@ -639,6 +663,7 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
     let chain = required(cx, attr, "ContextResolverChain")?;
     for entry in elements("ContextResolverChain", &chain)? {
         if let Some(resolver) = object("ContextResolverChain entry", entry)? {
+            load_entry(cx, resolver, "a context resolver")?;
             sys.context_resolver(cx.world.parts().space, resolver)?;
         }
     }
@@ -647,6 +672,7 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
+        load_entry(cx, resolver, "a value resolver")?;
         sys.value_resolver(cx.world.parts().space, resolver)?.available(resolver, cx)?;
     }
     Ok(())
@@ -855,6 +881,8 @@ fn fold_chain(
                 NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into(),
             );
         };
+        // Loaded before its dispatch (`load_entry`, lane IMPL-RESOLVER-CHAIN-LOADS).
+        load_entry(cx, resolver, "a value resolver")?;
         // A refusal after a resolver of this evaluation committed writes is terminal and prefixed (review r1 of #458,
         // item 4): `fold` marks it on the way out, whichever API the read came through.
         let r = sys.value_resolver(cx.world.parts().space, resolver)?;
