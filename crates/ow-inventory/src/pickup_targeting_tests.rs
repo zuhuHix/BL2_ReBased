@@ -157,6 +157,8 @@ fn willow_game() -> Vec<u8> {
 struct Events {
     seen: Vec<(String, Option<ObjRef>)>,
     refuse: bool,
+    /// Whether the toy `BeginShrinking` refuses (review of #810, item 1).
+    refuse_shrink: bool,
     hud: Option<ObjRef>,
 }
 
@@ -285,7 +287,11 @@ fn fx_with(warm_player_pawn: bool) -> Fx {
     vm.register_native(
         "WillowPickup.BeginShrinking()",
         Rc::new(move |c: &mut NativeCall<'_>| {
-            e3.borrow_mut().seen.push((format!("Shrink {:?}", c.this.unwrap()), None));
+            if e3.borrow().refuse_shrink {
+                return Err(NotYet::not_read("the toy BeginShrinking", "TOY.md").into());
+            }
+            let reported = reported_now(c.vm, e3.borrow().hud);
+            e3.borrow_mut().seen.push((format!("Shrink {:?}", c.this.unwrap()), reported));
             Ok(Value::None)
         }),
     )
@@ -938,4 +944,82 @@ fn the_pawn_test_with_the_player_pawn_class_cold_loads_no_code() {
     assert!(n.what.contains("open question 1"), "{n}");
     assert_eq!(cold_marks(&x.vm), before, "no code load, write, draw, store load or name");
     assert!(!x.vm.class_code_loaded(player_pawn), "still cold");
+}
+
+/// Review of #810, item 1: `BeginShrinking` comes after the nearest-pickup and particle-offset writes and before the
+/// seen-item, hover and reporting writes. Raised with a winner to report: before `SawPickupable`, with `S` still
+/// empty. Refused: the refusal is prefixed (`ClosestPickup` was written before it), `SawPickupable` has not run and
+/// `S` and `H` are unchanged.
+#[test]
+fn begin_shrinking_comes_before_the_report() {
+    let setup = || {
+        let mut x = fx();
+        let defaults = x.vm.defs.class_default(&mut x.vm.space, PICKUP).unwrap();
+        x.set(defaults, "PickupShrinkDuration", Value::Float(15.0));
+        let aimed = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+        let far = x.pickup([150.0, 600.0, 0.0], [0.0; 3]);
+        for p in [aimed, far] {
+            x.set(p, "LifeSpan", Value::Float(20.0));
+        }
+        x.set(x.hud, "MaxNumPickups", Value::Int(1));
+        (x, aimed)
+    };
+    let (mut x, aimed) = setup();
+    assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: aimed, reported: true });
+    let seen = x.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen[0].0.starts_with("Shrink") && seen[0].1.is_none(), "the shrink first, S still empty: {seen:?}");
+    assert!(seen[1].0.starts_with("Saw"), "{seen:?}");
+    let (mut x, _) = setup();
+    x.events.borrow_mut().refuse_shrink = true;
+    let n = not_yet(x.tick());
+    assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains("the toy BeginShrinking"), "{n}");
+    assert!(x.seen().is_empty(), "SawPickupable has not run");
+    assert_eq!((x.slot("CachedHoverPickup"), x.slot("CachedBestPickup")), (None, None), "H and S unchanged");
+}
+
+/// Review of #810, item 2: the plan reads only. A class default that is not built, or a handler whose class code is not
+/// loaded, is a named `NotYet { NotRead }` with nothing written, loaded or drawn, and so no prefix.
+#[test]
+fn the_plan_loads_and_builds_nothing() {
+    let counters = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions(), x.vm.class_code_loads());
+    // The pickup class's default freed: not built.
+    let mut x = fx();
+    x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let defaults = x.vm.defs.class_default(&mut x.vm.space, PICKUP).unwrap();
+    x.vm.space.free(defaults).unwrap();
+    let before = counters(&x);
+    let n = not_yet(x.tick());
+    assert!(n.what.contains("class default") && !n.what.starts_with(PARTIAL_WRITES), "{n}");
+    assert_eq!(counters(&x), before, "nothing built or loaded");
+    // A recipient whose class code is not loaded: the handler's lookup is the NotRead, nothing loaded.
+    let mut x = fx();
+    x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let cold = {
+        let (code, store) = x.vm.defs.code_mut();
+        let key = code.find_class(store, "WillowGame.ToyMuteController").unwrap();
+        code.define_layout(store, &mut x.vm.space.names, &mut x.vm.space.classes, key).unwrap()
+    };
+    let recipient = x.vm.space.alloc(cold, "Cold", None, ow_object::heap::Origin::Runtime).unwrap();
+    x.set(x.hud, "WPlayerOwner", Value::Object(Some(recipient)));
+    let before = counters(&x);
+    let n = not_yet(x.tick());
+    assert!(n.what.contains("is not loaded") && !n.what.starts_with(PARTIAL_WRITES), "{n}");
+    assert_eq!(counters(&x), before, "no class code loaded");
+}
+
+/// Review of #810, item 4: whether shrinking is on is decided before `MaxNumPickups` is read, so a client HUD whose class
+/// does not declare it answers nothing; an enabled one needs it (a data error).
+#[test]
+fn a_client_hud_needs_no_max_num_pickups() {
+    let mut x = fx();
+    let plain = x.obj("Engine.HUD");
+    let info = x.obj("Engine.WorldInfo");
+    x.set(info, "NetMode", Value::Byte(3));
+    x.set(plain, "WorldInfo", Value::Object(Some(info)));
+    let h = hud_state(&x.vm, plain).unwrap_or_else(|_| HudState { hud: plain, owner: None, definition: None, recipient: None, hover: None, reported: None });
+    let owner = x.controller;
+    assert_eq!(shrink_step(&mut x.vm, &h, owner, 3, None).unwrap().map(|s| s.0), None, "a client: nothing, no MaxNumPickups read");
+    x.set(info, "NetMode", Value::Byte(0));
+    assert!(matches!(shrink_step(&mut x.vm, &h, owner, 3, None), Err(VmError::Script { .. })), "enabled: MaxNumPickups needed");
 }

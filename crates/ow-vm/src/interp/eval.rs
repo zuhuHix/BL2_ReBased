@@ -405,6 +405,22 @@ fn cannot_run(path: &str, why: &str) -> VmError {
 
 /// The function's script, decoded on its first call (C++ `Function::code`; a failure is kept and reported on every
 /// call, as `decodeFailed`).
+/// [`prepare`] without writing anything (review of #810, item 2): the cached decode's answer when there is one, else a
+/// decode that is checked and not stored, so a write-free plan learns whether the call would run.
+pub(crate) fn check_prepared(vm: &Vm, f: FuncId) -> Result<(), VmError> {
+    let Some(code) = code_of(vm, f) else {
+        return Ok(());
+    };
+    if let Some(why) = &code.failure {
+        return Err(cannot_run(&code.path, why));
+    }
+    if let Some(done) = &*code.script.borrow() {
+        return done.clone().map(|_| ()).map_err(|why| cannot_run(&code.path, &why));
+    }
+    let package = vm.defs.packages().shared(code.package);
+    ow_script::decode::decode(&package, &code.info).map(|_| ()).map_err(|e| cannot_run(&code.path, &e.to_string()))
+}
+
 fn decoded(vm: &Vm, code: &FuncCode) -> Result<Rc<Code>, VmError> {
     if let Some(done) = &*code.script.borrow() {
         return done.clone().map_err(|why| cannot_run(&code.path, &why));

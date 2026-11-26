@@ -657,8 +657,11 @@ pub(crate) fn pickup_world(
 
 /// The log line of [`preload_hud_definition`].
 pub(crate) fn hud_preload_line(path: &str) -> String {
-    format!("harness input: set-up preload: {path} (UNVERIFIED: the HUD definition the game has resident)")
+    format!("harness input: set-up preload: {path}{HUD_PRELOAD_TAIL}")
 }
+
+/// The tail of [`hud_preload_line`].
+pub(crate) const HUD_PRELOAD_TAIL: &str = " (UNVERIFIED: the HUD definition the game has resident)";
 
 /// The globals definition's `HUDDefinition`, loaded through the store at the pickup world's set-up and logged before
 /// its load; one already resident, or a None field, is left as it is (lane IMPL-LINK7-HUD-TARGETING). The harness

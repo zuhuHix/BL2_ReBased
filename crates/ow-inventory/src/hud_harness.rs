@@ -49,6 +49,7 @@ pub const RECORD: &str = "NATIVE_LINK7_HUD_TARGETING.md";
 pub const NO_GAME: &str = "the harness HUD: the world has no game";
 pub const HUD_CLASS: &str = "the harness HUD: HUDType is not a WillowHUD";
 pub const SECOND_SET_UP: &str = "the harness HUD: a second set-up";
+pub const BEGUN_PLAY: &str = "the harness HUD: the world has begun play (the spawn would run the HUD's begin-play events)";
 pub const HUD_DEFINITION: &str = "the harness HUD: the globals definition's HUDDefinition, not loaded (a load is a write)";
 pub const LINE_GEOMETRY: &str = "the pickup targeting's line check against level geometry (not read)";
 pub const LINE_ACTOR: &str = "the pickup targeting's line check: another actor's collision";
@@ -166,8 +167,22 @@ fn hud_plan(vm: &mut Vm, controller: ObjRef) -> Result<(ClassId, ObjRef), VmErro
 /// Ruling 1 (module documentation): the controller's harness HUD, made at set-up before the world could begin play
 /// (so no begin-play event runs on it), once: a second set-up is [`SECOND_SET_UP`] `NotRead`. Without the setting,
 /// nothing is made and the targeting answers as it does (its no-HUD `LayerAbsent`).
+///
+/// It checks its own conditions (review of #810, item 3): with the setting off it answers as the headless world does
+/// (the targeting's own `myHUD`, else its no-HUD `LayerAbsent`), nothing made; in a world that has begun play it is
+/// [`BEGUN_PLAY`] `NotRead` before any write, since the spawn would then run the HUD's begin-play events.
 pub fn harness_hud(vm: &mut Vm, controller: ObjRef) -> Result<ObjRef, VmError> {
     off_only(vm, "HarnessHud")?;
+    if !harness_on(vm) {
+        return crate::pickup_targeting::hud_of(vm, controller);
+    }
+    let begun = match vm.service::<ow_world::actors::Actors>() {
+        Some(a) => a.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.begun_play(),
+        None => false,
+    };
+    if begun {
+        return Err(NotYet::not_read(BEGUN_PLAY, RECORD).into());
+    }
     let (class, definition) = hud_plan(vm, controller)?;
     let request = ow_world::actors::SpawnRequest::new(Some(class)).with_owner(Some(controller)).with_no_collision_fail(true);
     let hud = ow_world::actors::spawn(vm, controller, &request)?.ok_or_else(|| bad("the HUD class did not spawn"))?;
@@ -252,7 +267,8 @@ impl Host for HarnessHost {
         };
         let (rotation, _) = read(vm, owner, "Rotation")?;
         let part = |p: &str| -> Result<i32, VmError> {
-            match crate::equip::field(vm, &rotation, p)? {
+            // An undeclared member is a data error of this harness (review of #810, item 5).
+            match crate::equip::field(vm, &rotation, p).map_err(|e| bad(format!("the controller's Rotation.{p}: {e}")))? {
                 Value::Int(i) => Ok(i),
                 other => Err(bad(format!("the controller's Rotation.{p} is {}", other.kind_name()))),
             }

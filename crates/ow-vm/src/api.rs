@@ -1073,6 +1073,26 @@ impl Vm {
         }
     }
 
+    /// [`Vm::prepare_call`] without writing anything (review of #810, item 2): a native must be bound; a script function
+    /// must have package bytecode that decodes, checked from the cache or by a decode that is not stored. For a
+    /// write-free preflight.
+    pub fn check_prepared(&self, f: FuncId) -> Result<(), VmError> {
+        let Some(d) = self.function(f) else {
+            return Err(VmError::Script { function: format!("{f:?}"), message: "no such function in this VM".to_string() });
+        };
+        if let Some(key) = d.native_key.clone() {
+            return if self.is_bound(f) { Ok(()) } else { Err(VmError::UnboundNative(key)) };
+        }
+        if crate::interp::check_script(self, f)? {
+            Ok(())
+        } else {
+            Err(VmError::Script {
+                function: d.path.as_str().to_string(),
+                message: "declared by hand, with no package export and so no bytecode".to_string(),
+            })
+        }
+    }
+
     /// Binds an iterator native to `key`. A key registered twice is refused (C++ "duplicate iterator registration").
     pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError> {
         if self.iterators.contains_key(key) {

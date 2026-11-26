@@ -75,6 +75,16 @@ pub(crate) fn prepare_script(vm: &mut crate::api::Vm, f: ow_object::ids::FuncId)
     Ok(true)
 }
 
+/// [`prepare_script`] without writing anything (review of #810, item 2): `Ok(false)` with no package export behind
+/// `f`; otherwise its decode checked from the cache, or by a decode that is not stored.
+pub(crate) fn check_script(vm: &crate::api::Vm, f: ow_object::ids::FuncId) -> Result<bool, crate::error::VmError> {
+    if load::code_of(vm, f).is_none() {
+        return Ok(false);
+    }
+    eval::check_prepared(vm, f)?;
+    Ok(true)
+}
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;

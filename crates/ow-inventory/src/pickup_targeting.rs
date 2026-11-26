@@ -234,7 +234,7 @@ impl WorldGlobals {
                 cx.world.globals()?
             };
             native_getter(vm, globals, "GetGlobalsDefinition", "WillowGame.WillowGlobals.GetGlobalsDefinition")?;
-            let class = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
+            let class = table_class(vm, GLOBALS_DEFINITION_CLASS)?;
             match object_field(vm, globals, "TheGlobalsDefinition")? {
                 Some(d) if vm.space.classes.is_child_of(class_of(vm, d)?, class) => Ok((globals, d)),
                 _ => Err(refused(
@@ -422,14 +422,50 @@ fn class_of(vm: &Vm, o: ObjRef) -> Result<ClassId, VmError> {
     Ok(vm.space.heap.get(o)?.class)
 }
 
-/// `name` on `o` as its class and current state resolve it.
-fn method_of(vm: &mut Vm, o: ObjRef, name: &str) -> Result<FuncId, VmError> {
+/// `name` on `o` as its class and current state resolve it, read-only (review of #810, item 2): a class of the chain
+/// whose code is not loaded is a named `NotYet { NotRead }` (a load is a write), no function a data error.
+fn method_of(vm: &Vm, o: ObjRef, name: &str) -> Result<FuncId, VmError> {
     let (class, state) = {
         let h = vm.space.heap.get(o)?;
         (h.class, h.state)
     };
-    vm.find_method(class, name, state)?
-        .ok_or_else(|| bad(WHAT, format!("{} has no {name}", ow_attr::eval::class_path(&vm.space, o))))
+    match vm.find_loaded_method(class, name, state) {
+        None => Err(refused(format!(
+            "the code of {name} on {} is not loaded (a load is a write)",
+            ow_attr::eval::class_path(&vm.space, o)
+        ))),
+        Some(f) => f.ok_or_else(|| bad(WHAT, format!("{} has no {name}", ow_attr::eval::class_path(&vm.space, o)))),
+    }
+}
+
+/// The class at `path` in the class table, read-only: not there is a named `NotYet { NotRead }` (a class load is a
+/// write; review of #810, item 2).
+fn table_class(vm: &Vm, path: &str) -> Result<ClassId, VmError> {
+    vm.space
+        .classes
+        .by_path(path)
+        .ok_or_else(|| refused(format!("the class {path} is not in the class table (a class load is a write)")))
+}
+
+/// `class`'s class default object when it is already built with all its slots, read-only: none is a named
+/// `NotYet { NotRead }` (building it is a write; review of #810, item 2).
+fn built_default(vm: &Vm, class: ClassId) -> Result<ObjRef, VmError> {
+    let slots = vm.space.classes.get_layout(class).map_or(0, |l| l.slot_count() as usize);
+    vm.space
+        .heap
+        .handles()
+        .into_iter()
+        .find(|&o| {
+            vm.space.heap.get(o).is_ok_and(|x| {
+                x.class == class && matches!(x.origin, ow_object::heap::Origin::Default { .. }) && x.slots.len() >= slots
+            })
+        })
+        .ok_or_else(|| {
+            refused(format!(
+                "the class default of {} is not built (building it is a write)",
+                vm.space.classes.get_layout(class).map_or_else(String::new, |l| l.path().to_string())
+            ))
+        })
 }
 
 /// Checks, without running anything, that `name` on `o` resolves to the native declaration `declaration` (review r1
@@ -626,9 +662,16 @@ fn hud_state(vm: &Vm, hud: ObjRef) -> Result<HudState, VmError> {
 /// One pass of `hud` (module documentation), the globals resolved by `globals` when the pass reaches the pickup list.
 pub fn tick(vm: &mut Vm, hud: ObjRef, globals: &dyn Globals, host: &mut dyn Host) -> Result<Outcome, VmError> {
     let state = hud_state(vm, hud)?;
-    let plan = plan(vm, &state, globals, host)?;
-    let mut wrote = false;
-    commit(vm, hud, plan, &mut wrote).map_err(|e| if wrote { after_writes(e) } else { e })
+    // A refusal carries the partial-writes prefix only when a write really came before it (review of #810, item 1):
+    // the counters (heap writes, random draws, load transitions, class code loads) taken before the plan.
+    let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.class_code_loads());
+    let entry = marks(vm);
+    let run = (|| {
+        let plan = plan(vm, &state, globals, host)?;
+        let mut wrote = false;
+        commit(vm, hud, plan, &mut wrote)
+    })();
+    run.map_err(|e| if marks(vm) != entry { after_writes(e) } else { e })
 }
 
 fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -> Result<Plan, VmError> {
@@ -646,10 +689,9 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
     let hover_particle = object_field(vm, gd, "PartItemHover")?.is_some();
     let (width, height) = (float(vm, gd, "HoverWidthPickup")?, float(vm, gd, "ItemHoverProjectionHeight")?);
     let range = float(vm, hud_definition, "PickupRange")?;
-    let defaults = vm.defs.class_default(&mut vm.space, PICKUP);
-    vm.log.extend(vm.defs.take_log());
-    let shrink_duration = float(vm, defaults.map_err(VmError::from)?, "PickupShrinkDuration")?;
-    let pickup_class = vm.find_class(PICKUP)?;
+    // Read-only (review of #810, item 2): the pickup class from the table, its default already built.
+    let pickup_class = table_class(vm, PICKUP)?;
+    let shrink_duration = float(vm, built_default(vm, pickup_class)?, "PickupShrinkDuration")?;
 
     let v = view.location;
     let look = view_direction(&view);
@@ -739,10 +781,7 @@ fn shrink_step(
     counted: i64,
     tracked: Option<ObjRef>,
 ) -> Result<Option<(ObjRef, Checked)>, VmError> {
-    let max = match required(vm, h.hud, "MaxNumPickups", WHAT)? {
-        Value::Int(i) => i64::from(i),
-        other => return Err(bad(WHAT, format!("MaxNumPickups is {}, not an int", other.kind_name()))),
-    };
+    // Whether shrinking is enabled first (review of #810, item 4); MaxNumPickups only when it is.
     let Some(info) = object_field(vm, h.hud, "WorldInfo")? else { return Ok(None) };
     let client = match required(vm, info, "NetMode", WHAT)? {
         Value::Byte(b) => b == 3,
@@ -754,9 +793,13 @@ fn shrink_step(
     if object_field(vm, owner, "Player")?.is_some() {
         return Err(NotYet::not_read(SPLIT_SCREEN, RECORD_SHRINK).into());
     }
+    let max = match required(vm, h.hud, "MaxNumPickups", WHAT)? {
+        Value::Int(i) => i64::from(i),
+        other => return Err(bad(WHAT, format!("MaxNumPickups is {}, not an int", other.kind_name()))),
+    };
     let Some(p) = tracked.filter(|_| counted > max) else { return Ok(None) };
     let f = method_of(vm, p, "BeginShrinking")?;
-    vm.prepare_call(f)?;
+    vm.check_prepared(f)?;
     vm.check_call(f, Vec::new())?;
     Ok(Some((p, Checked { f, args: Vec::new() })))
 }
@@ -778,7 +821,7 @@ fn handler(vm: &mut Vm, recipient: Option<ObjRef>, name: &str, pickup: Option<Ob
     if !fits {
         return Err(bad(WHAT, format!("{name}'s parameters are {kinds:?}, not {want} object reference(s)")));
     }
-    vm.prepare_call(f)?;
+    vm.check_prepared(f)?;
     let args = match pickup {
         Some(w) => vec![handler_arg(vm, f, w)],
         None => Vec::new(),
@@ -859,7 +902,11 @@ fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outc
     for p in plan.flagged {
         write(vm, p, "bHasPickupParticleOffset", Value::Bool(true), WHAT)?;
     }
-    let shrink = plan.shrink;
+    // The shrink step's event, after the nearest-pickup and particle-offset writes and before the seen-item, hover and
+    // reporting writes (the note's order; review of #810, item 1).
+    if let Some((p, call)) = plan.shrink {
+        vm.call(call.f, Some(p), call.args)?;
+    }
     let Some(tail) = plan.tail else { return Ok(plan.outcome) };
     write(vm, hud, "SavedLookAtInventory", obj(tail.seen_item), WHAT)?;
     if let Some(hover) = tail.hover_before {
@@ -883,9 +930,6 @@ fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outc
     }
     if let Some(seen) = tail.seen_item_after {
         write(vm, hud, "SavedLookAtInventory", obj(seen), WHAT)?;
-    }
-    if let Some((p, call)) = shrink {
-        vm.call(call.f, Some(p), call.args)?;
     }
     Ok(plan.outcome)
 }

@@ -436,3 +436,22 @@ fn reference_refuses_the_setting() {
     assert!(matches!(harness_hud(r.vm(), controller), Err(VmError::Registration { .. })));
     assert!(!r.w.vm.log.iter().any(|l| l == SETTING_INPUT));
 }
+
+/// Review of #810, item 3: the harness HUD checks its own conditions. With the setting off it answers as the headless
+/// world does (the no-HUD `LayerAbsent`), nothing made; in a world that has begun play it is the `NotRead` before any
+/// write.
+#[test]
+fn the_harness_hud_checks_the_setting_and_begun_play_itself() {
+    let mut x = fx();
+    let controller = x.controller;
+    let before = x.counters();
+    assert!(matches!(not_yet(harness_hud(x.vm(), controller)).0, Missing::LayerAbsent(_)), "setting off");
+    assert_eq!(x.counters(), before);
+    assert_eq!(x.get(controller, "myHUD"), Value::Object(None));
+    enable_hud_targeting_harness(x.vm()).unwrap();
+    x.w.actors().borrow_mut().begin_play();
+    let before = x.counters();
+    assert_eq!(not_yet(harness_hud(x.vm(), controller)), (Missing::NotRead, BEGUN_PLAY.to_string()));
+    assert_eq!(x.counters(), before, "nothing written");
+    assert_eq!(x.get(controller, "myHUD"), Value::Object(None));
+}

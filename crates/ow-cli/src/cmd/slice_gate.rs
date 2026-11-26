@@ -1394,7 +1394,13 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     let at_rest = crate::cmd::inventory::equip_run::AT_REST_INPUT;
     let ammo = |l: &String| l.starts_with("harness input: set-up preload: ") && l.ends_with(crate::cmd::inventory::equip_run::AMMO_PRELOAD_TAIL);
     let audio = ow_inventory::link6::AUDIO_INPUT;
-    r.harness.extend(world.vm.log.iter().filter(|l| ammo(l) || *l == at_rest || *l == audio).cloned());
+    // Link 7's HUD setting and the HUD definition's preload (lane IMPL-LINK7-HUD-TARGETING), set-up lines, so the row
+    // shows them even when `make` refuses at its preflight (review of #810, item 6).
+    let hud_setting = ow_inventory::hud_harness::SETTING_INPUT;
+    let hud_preload = |l: &String| l.starts_with("harness input: set-up preload: ") && l.ends_with(crate::cmd::inventory::equip_run::HUD_PRELOAD_TAIL);
+    r.harness.extend(
+        world.vm.log.iter().filter(|l| ammo(l) || *l == at_rest || *l == audio || *l == hud_setting || hud_preload(l)).cloned(),
+    );
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The card's preflight before the weapon is made, as link 8's driver runs it (NATIVE_LINK67_PICKUP_GUN_INIT.md
