@@ -1,6 +1,6 @@
 # Link 1's rigid-body layer: what InitializeRBPhysics builds for Maya (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK1-RIGID-BODY-LAYER (decision 2026-11-26-NNN), the analyst half of
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK1-RIGID-BODY-LAYER (decision 2026-11-26-20), the analyst half of
 the clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/rblayer/`. This
 note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule
 here is UNVERIFIED in the running game.**
