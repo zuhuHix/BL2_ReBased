@@ -1,7 +1,9 @@
 //! The body-class preload (lane IMPL-BODYCLASS-PRELOAD) on an invented package (AGENTS.md rule 9). The body class lists
 //! a default hit region that its `HitRegionList` does not hold, two regions (one with an `OverrideDeathDef`), two
 //! stances, a death definition, a player event definition and an unrelated reference; each holder names its own
-//! provider definition. AI-assisted (Claude Code).
+//! provider definition. The player event definition's sequences name two pass-2 conditions (one twice, one sequence
+//! with none); the first links an objective and a mission, and references an unrelated object (lane
+//! IMPL-PASS2-CONDITION-PRELOAD). AI-assisted (Claude Code).
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -22,7 +24,7 @@ use super::{body_class_preload_line, preload_body_class_definitions};
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 fn package() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "ArrayProperty"]);
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "ArrayProperty", "ScriptStruct", "StructProperty"]);
     let object = t.class("Object", 0);
     let pawn = t.class("ToyPawn", object);
     t.prop("Object", pawn, "BodyClass", 0, object);
@@ -37,6 +39,13 @@ fn package() -> Vec<u8> {
     t.prop("Object", holder, "BehaviorProviderDefinition", 0, object);
     t.prop("Object", holder, "OverrideDeathDef", 0, object);
     let provider = t.class("ToyProvider", object);
+    let sequence = ow_package::testkit::reflect::toy_struct(&mut t, provider, "ToySequence", None);
+    t.prop("Object", sequence, "CustomEnableCondition", 0, object);
+    toy_array_of(&mut t, provider, "BehaviorSequences", "Struct", sequence);
+    let condition = t.class("ToyCondition", object);
+    for name in ["LinkedObjective", "LinkedMission", "ToyOther"] {
+        t.prop("Object", condition, name, 0, object);
+    }
     let list = |t: &mut ScriptToy, name: &str, items: &[i32]| -> Vec<u8> {
         let mut value = i32::try_from(items.len()).unwrap().to_le_bytes().to_vec();
         for i in items {
@@ -60,8 +69,30 @@ fn package() -> Vec<u8> {
             tags
         })
     };
-    let names = ["P_R1", "P_R2", "P_R3", "P_D2", "P_S1", "P_S2", "P_D1", "P_E1"];
-    let p: Vec<i32> = names.iter().map(|n| def(&mut t, n)).collect();
+    // Pass 2's objects: an objective, a mission and an unrelated object (plain objects), and two conditions.
+    let plain = |t: &mut ScriptToy, name: &str| export(t, object, name, &|_| Vec::new());
+    let (objective, mission, other) = (plain(&mut t, "Objective_1"), plain(&mut t, "Mission_1"), plain(&mut t, "Other_1"));
+    let c1 = export(&mut t, condition, "Cond_1", &move |t| {
+        let mut tags = t.p.object_tag("LinkedObjective", objective);
+        tags.extend(t.p.object_tag("LinkedMission", mission));
+        tags.extend(t.p.object_tag("ToyOther", other));
+        tags
+    });
+    let c2 = export(&mut t, condition, "Cond_2", &|_| Vec::new());
+    let names = ["P_R1", "P_R2", "P_R3", "P_D2", "P_S1", "P_S2", "P_D1"];
+    let mut p: Vec<i32> = names.iter().map(|n| def(&mut t, n)).collect();
+    // P_E1's sequences: Cond_1, none, Cond_2, Cond_1 again.
+    let events = export(&mut t, provider, "P_E1", &move |t| {
+        let mut value = 4i32.to_le_bytes().to_vec();
+        for c in [c1, 0, c2, c1] {
+            if c != 0 {
+                value.extend(t.p.object_tag("CustomEnableCondition", c));
+            }
+            value.extend_from_slice(&t.none);
+        }
+        t.p.tag("BehaviorSequences", "ArrayProperty", &value)
+    });
+    p.push(events);
     let d2 = hold(&mut t, "Death_Override", p[3], 0);
     let r1 = hold(&mut t, "Region_1", p[0], d2);
     let r2 = hold(&mut t, "Region_2", p[1], 0);
@@ -154,11 +185,21 @@ fn exactly_what_the_preflight_reads_is_loaded_once() {
         "Events_Body",
         "P_E1",
     ];
-    assert_eq!(n, expected.len());
-    assert_eq!(x.vm.defs.load_transitions() - before, expected.len() as u64, "those objects, nothing else");
+    // Pass 2's objects, after P_E1 (lane IMPL-PASS2-CONDITION-PRELOAD): each condition once, in sequence order, and
+    // the first one's LinkedObjective. Not its LinkedMission, not its other reference.
+    let pass2 = ["Cond_1", "Objective_1", "Cond_2"];
+    assert_eq!(n, expected.len() + pass2.len());
+    assert_eq!(x.vm.defs.load_transitions() - before, n as u64, "those objects, nothing else");
     let mut want = lines(&expected);
+    want.extend(lines(&pass2));
     want.push(format!("harness input: set-up preload: {} body-class definition objects loaded", expected.len()));
+    want.push(format!("harness input: set-up preload: {} pass-2 condition objects loaded", pass2.len()));
     assert_eq!(harness(&x.vm), want);
+    let c1 = x.vm.defs.find(&mut x.vm.space, &ObjectPath::parse("GD_ToyBody.Cond_1").unwrap()).unwrap().unwrap();
+    for name in ["LinkedMission", "ToyOther"] {
+        let o = object(&slot(&x.vm, c1, name));
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, o), "{name} stays unloaded");
+    }
     let body = object(&slot(&x.vm, x.archetype, "BodyClass"));
     let default = object(&slot(&x.vm, body, "DefaultHitRegion"));
     let unrelated = object(&slot(&x.vm, body, "Unrelated"));

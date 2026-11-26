@@ -298,6 +298,9 @@ fn a_conditioned_player_event_definition_with_an_unloaded_condition_is_refused()
     // store handle not loaded yet (the preflight loads nothing), is the not-loaded NotRead, before any write.
     let text = x.refused(p, Missing::NotRead);
     assert!(text.contains("a CustomEnableCondition the store has not loaded"), "{text}");
+    // Lane IMPL-PASS2-CONDITION-PRELOAD: the refusal names the unloaded condition, its kind unchanged.
+    let named = format!("{}: TestCond.ToyConditionalProvider.Condition", crate::kernel::natives::pass2::CONDITION_NOT_LOADED);
+    assert!(text.starts_with(&named), "{text}");
     assert!(x.t.seen().is_empty(), "pass 1 never ran");
 }
 
