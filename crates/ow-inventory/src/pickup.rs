@@ -50,7 +50,8 @@
 //!   - a receiver of class `WillowGame.WillowPickup` or a subclass (the class table by path, so no code is loaded):
 //!     its `bPickupable`, read **by name** through the class layout, never by offset (the note places the field after
 //!     `RBState` under a fitted 16-byte alignment, UNVERIFIED). A class that declares no `bPickupable`, or one whose
-//!     `bPickupable` is not a bool, is a data error (`VmError::Script`);
+//!     `bPickupable` is not a bool, is a data error (`VmError::Script`), checked from the class before the loaded test
+//!     below (review of #765, item 1);
 //!   - any other receiver, a `DroppedPickup` that is not a `WillowPickup` among them: `NotYet { NotRead }`
 //!     ([`PICKUPABLE_OTHER`]): `DroppedPickup`'s own answer was not read;
 //!   - a receiver the store has not loaded: `NotYet { NotRead }` ([`PICKUPABLE_UNLOADED`]). The note does not cover
@@ -175,6 +176,16 @@ fn pickupable_is_enabled(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         return Err(
             NotYet::not_read(format!("{PICKUPABLE_OTHER} {path}: its own answer is not read"), RECORD_ENABLED).into()
         );
+    }
+    // The declaration first (review of #765, item 1): a subclass that declares no bool `bPickupable` is the data
+    // error the module documentation names, loaded or not.
+    let declared = c.vm.space.prop(class, "bPickupable").and_then(|p| c.vm.space.classes.decl(p));
+    match declared {
+        None => return Err(bad(WHAT, "the pickup's class declares no bPickupable")),
+        Some(d) if !matches!(d.kind, PropKind::Bool) => {
+            return Err(bad(WHAT, format!("bPickupable is declared as {:?}, not a bool", d.kind)));
+        }
+        Some(_) => {}
     }
     if ow_world::touch_trace::is_unloaded(c.vm, pickup) {
         return Err(NotYet::not_read(PICKUPABLE_UNLOADED, RECORD_ENABLED).into());

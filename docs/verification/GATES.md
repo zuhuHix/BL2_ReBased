@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**BOUNDS-AND-PICKUPABLE-FOLLOWUPS (2026-11-26, pc-hummer, on fix/bounds-pickupable-followups from main 4d2fd17c):**
+AI-assisted (Claude Code, Opus 5.5). The #764/#765 review LOWs:
+- `Pickupable_IsEnabled` checks the `bPickupable` declaration before the loaded test;
+- the skeletal stored box needs a zero owner `PrePivot` (UNVERIFIED);
+- tests pin the exact-uniform scale and source b's `PARENT_ROOT` at a uniform `Scale` 2.
+
+`cargo test --workspace -j 8` 3,830 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
+`--slice-gate` (release build, under the machine lock): 6 ok / 14, X = 7.167/14 = 51.2%. That is the same on base
+4d2fd17c, with all 14 rows identical. UNVERIFIED in game.
+
 **IMPL-LINK1-RIGID-BODY-CLASS-TABLE (2026-11-26, pc-hummer, on fix/rust-link1-rigid-body-class-table from main
 4bd8d4f):** AI-assisted (Claude Code, Opus 5.5). `InitializeRBPhysics` answers a live pawn by
 NATIVE_LINK1_RIGID_BODY_LAYER.md's class table, every refusal before the first write; a template keeps the physics

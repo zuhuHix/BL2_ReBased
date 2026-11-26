@@ -32,7 +32,9 @@ This lane did not read the executable. No session was run.
   - Three tests now pin the new rule instead of the unit-scale one:
     - the main source-f test: `Scale` 2 is answered (the box scaled about the owner), and a non-uniform `Scale3D` is
       the `NotRead`;
-    - the parent-source test: a non-uniform `Scale3D` keeps the `NotRead`;
+    - the parent-source test: a non-uniform `Scale3D` keeps the `NotRead`. Source b with a uniform non-unit scale
+      is now the simplest transform, so it answers `PARENT_ROOT` there instead of `WORLD_TRANSFORM` (review of #764,
+      item 3);
     - #761's pickup test: the gun's 0.92 is answered, scaled.
 - **Verified:** the tests on invented data and the installed rows above. **Not verified:** everything in the running
   game, and the bounds maths against the native.

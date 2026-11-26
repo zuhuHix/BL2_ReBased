@@ -78,6 +78,12 @@ fn engine() -> Vec<u8> {
 }
 
 fn willow_game() -> Vec<u8> {
+    willow_game_with(Some("Bool"))
+}
+
+/// `WillowGame` with `WillowPickup`'s `bPickupable` declared of kind `field`, or not at all for `None` (invented, for
+/// the declaration checks of review of #765, item 1).
+fn willow_game_with(field: Option<&str>) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
@@ -91,7 +97,9 @@ fn willow_game() -> Vec<u8> {
     let globals = t.class("WillowGlobals", object);
     native(&mut t, globals, "RemovePickup", &[Param { type_ref: object, ..Param::new("Object", "inPickup") }], None);
     let pickup = t.class("WillowPickup", dropped);
-    t.prop("Bool", pickup, "bPickupable", 0, 0);
+    if let Some(kind) = field {
+        t.prop(kind, pickup, "bPickupable", 0, 0);
+    }
     native(&mut t, pickup, "Pickupable_IsEnabled", &[], Some(("Bool", 0)));
     // Invented: a subclass with no field of its own (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 5's third test).
     t.class("ToyWillowPickupSubclass", pickup);
@@ -110,13 +118,17 @@ impl Drop for Fx {
 }
 
 fn fx(mode: ParityMode) -> Fx {
+    fx_with(mode, Some("Bool"))
+}
+
+fn fx_with(mode: ParityMode, field: Option<&str>) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-inventory-pickup-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, w) = (engine(), willow_game());
+    let (e, w) = (engine(), willow_game_with(field));
     let defs = DefStore::from_synthetic(
         &dir,
         &[("Engine.upk", e.as_slice()), ("WillowGame.upk", w.as_slice())],
@@ -435,5 +447,47 @@ fn an_unloaded_willow_pickup_is_not_read() {
     x.vm.space.heap.get_mut(pickup).unwrap().slots.clear();
     let before = marks(&x.vm);
     assert_eq!(enabled_not_read(x.call(ENABLED_WILLOW, pickup, vec![])), PICKUPABLE_UNLOADED);
+    assert_eq!(marks(&x.vm), before);
+}
+
+fn enabled_script(r: Result<Value, VmError>) -> String {
+    match r {
+        Err(VmError::Script { function, message }) => {
+            assert_eq!(function, "Pickupable_IsEnabled");
+            message
+        }
+        other => panic!("expected VmError::Script, got {other:?}"),
+    }
+}
+
+/// Review of #765, item 1: a `WillowPickup` class that declares no `bPickupable` is the data error, by either key, and
+/// it is found before the loaded check: an unloaded receiver of that class is the data error too, not the `NotRead`.
+/// Nothing is counted.
+#[test]
+fn a_willow_pickup_class_without_b_pickupable_is_a_script_error() {
+    let mut x = fx_with(ParityMode::Off, None);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    let before = marks(&x.vm);
+    for path in [ENABLED_WILLOW, ENABLED_DROPPED] {
+        let message = enabled_script(x.call(path, pickup, vec![]));
+        assert!(message.contains("declares no bPickupable"), "{path}: {message}");
+    }
+    x.vm.space.heap.get_mut(pickup).unwrap().slots.clear();
+    let message = enabled_script(x.call(ENABLED_WILLOW, pickup, vec![]));
+    assert!(message.contains("declares no bPickupable"), "{message}");
+    assert_eq!(marks(&x.vm), before);
+}
+
+/// Review of #765, item 1: a `bPickupable` declared as an int is the data error, before the loaded check too.
+#[test]
+fn a_non_bool_b_pickupable_is_a_script_error() {
+    let mut x = fx_with(ParityMode::Off, Some("Int"));
+    let pickup = x.obj("WillowGame.ToyWillowPickupSubclass");
+    let before = marks(&x.vm);
+    let message = enabled_script(x.call(ENABLED_WILLOW, pickup, vec![]));
+    assert!(message.contains("not a bool"), "{message}");
+    x.vm.space.heap.get_mut(pickup).unwrap().slots.clear();
+    let message = enabled_script(x.call(ENABLED_WILLOW, pickup, vec![]));
+    assert!(message.contains("not a bool"), "{message}");
     assert_eq!(marks(&x.vm), before);
 }

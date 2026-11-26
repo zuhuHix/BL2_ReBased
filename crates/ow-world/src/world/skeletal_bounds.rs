@@ -43,7 +43,9 @@
 //! **The stored box** ([`stored_box`], sources a and f): the accessor ([`crate::world::skeletal::mesh_bounds`]); while
 //! it answers none, `NotYet { LayerAbsent }` ([`SKELETAL_BOUNDS`], [`STORED_LAYER`]). Once it answers, only the
 //! simplest world transform is answered: the cylinder rule's conditions (`Translation` zero, none of the three
-//! Absolute flags, `Owner` the receiver), a zero component and owner `Rotation`, and a **uniform, positive** combined
+//! Absolute flags, `Owner` the receiver), a zero component and owner `Rotation`, a zero owner `PrePivot` (review of
+//! #764, item 4: the port's reading that a pre-pivot moves the owner's frame, **UNVERIFIED**), and a **uniform,
+//! positive** combined
 //! scale `s` (`Scale` × `Scale3D` × the owner's `DrawScale` × `DrawScale3D`, the three axes exactly equal, finite and
 //! above 0; the hub's ruling, lane SCALED-BOUNDS-TRANSFORM). Then the box is (`Location` + `s` × the mesh origin + `s`
 //! × `RootBoneTranslation`, the mesh extent × `s` × `BoundsScale`): the standard UE3 bounds transform with no rotation
@@ -174,8 +176,9 @@ pub fn skeletal_box(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<([f32; 3], [f32
 }
 
 /// The simplest world transform the stored box answers (module documentation, "The stored box"): zero `Translation`,
-/// none of the three Absolute flags, `owner` as the component's `Owner`, zero component and owner `Rotation`, and a
-/// uniform, positive combined scale, which is the answer; `None` for any other transform.
+/// none of the three Absolute flags, `owner` as the component's `Owner`, zero component and owner `Rotation`, a zero
+/// owner `PrePivot` (UNVERIFIED), and a uniform, positive combined scale, which is the answer; `None` for any other
+/// transform.
 fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<f32>, VmError> {
     let space = &vm.space;
     let component_owner = object(space, c, "Owner")?;
@@ -189,6 +192,7 @@ fn simple_transform(vm: &Vm, owner: ObjRef, c: ObjRef) -> Result<Option<f32>, Vm
         || component_owner != Some(owner)
         || !rotation_zero(vm, c)?
         || !rotation_zero(vm, owner)?
+        || vector(space, owner, &field(space, owner, "PrePivot")?, "PrePivot")? != [0.0; 3]
     {
         return Ok(None);
     }
