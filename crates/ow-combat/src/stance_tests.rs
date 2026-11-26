@@ -22,6 +22,15 @@ use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
+thread_local! {
+    /// Each stance event the native dispatched to the kernel, (event, provider path), in order (review of #781).
+    pub(super) static FIRED: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn fired() -> Vec<(String, String)> {
+    FIRED.with(|f| f.borrow().clone())
+}
+
 struct Env {
     vm: Vm,
     _dir: PathBuf,
@@ -31,7 +40,11 @@ struct Env {
     aim: ClassId,
     control: ClassId,
     bare: ClassId,
+    mesh: ClassId,
+    tree: ClassId,
+    ai: ClassId,
     set_default: FuncId,
+    pawn_default: FuncId,
 }
 
 fn decl(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
@@ -110,6 +123,20 @@ fn env() -> Env {
     ];
     let willow_pawn = class(&mut vm, "WillowGame.WillowPawn", Some(bare), &pawn_fields);
     let pawn = class(&mut vm, "WillowGame.WillowPlayerPawn", Some(willow_pawn), &[]);
+    let ai = class(&mut vm, "WillowGame.WillowAIPawn", Some(willow_pawn), &[]);
+    // A mesh with an anim tree, for the aim-offset lookup (FindAnimNode's reads).
+    let mesh = class(&mut vm, "Toy.SkeletalMeshComponent", Some(bare), &[
+        ("Animations", o.clone()),
+        ("AnimTickArray", PropKind::Array(Box::new(o.clone()))),
+    ]);
+    let tree = class(&mut vm, "Engine.AnimTree", Some(bare), &[("NodeName", PropKind::Name)]);
+    vm.add_service(ow_world::world::tree_lookup::TreeLookups::default()).unwrap();
+    let pawn_default = vm
+        .declare_function(
+            FunctionDecl::native(ObjectPath::parse(PAWN_SET_DEFAULT_STANCE).unwrap(), PAWN_SET_DEFAULT_STANCE)
+                .with_owner(willow_pawn),
+        )
+        .unwrap();
     let set_default = vm
         .declare_function(
             FunctionDecl::native(ObjectPath::parse(PLAYER_SET_DEFAULT_STANCE).unwrap(), PLAYER_SET_DEFAULT_STANCE)
@@ -129,7 +156,8 @@ fn env() -> Env {
     .unwrap();
     ow_behavior::kernel::natives::Pack.register(&mut vm).unwrap();
     register(&mut vm).unwrap();
-    Env { vm, _dir: dir, pawn, body, stance, aim, control, bare, set_default }
+    FIRED.with(|f| f.borrow_mut().clear());
+    Env { vm, _dir: dir, pawn, body, stance, aim, control, bare, mesh, tree, ai, set_default, pawn_default }
 }
 
 impl Env {
@@ -172,7 +200,7 @@ impl Env {
     /// and an archetype whose `bCanCrouch` is true.
     fn pawn(&mut self, body: ObjRef) -> ObjRef {
         let p = self.make(self.pawn, "Maya");
-        let mesh = self.make(self.bare, "Mesh");
+        let mesh = self.make(self.mesh, "Mesh");
         let node = self.make(self.aim, "AimNode");
         let aim = self.name("Aim");
         self.set(node, "NodeName", aim);
@@ -225,7 +253,8 @@ fn a_kernel_consumer_without_the_provider_answers_nothing_and_a_crate_consumer_i
     e.run(p).unwrap();
     assert_eq!(e.get(p, "CurrentStance"), Value::Object(Some(five[0])));
     assert_eq!(e.get(p, "bCanCrouch"), Value::Bool(true), "the writes after the event ran");
-    // A crate-owned consumer: the typed NotRead, after the writes.
+    assert_eq!(fired(), [(ENTER.to_string(), ow_behavior::provider::stock_path(&e.vm, provider).unwrap())], "enter once, no exit");
+    // A crate-owned consumer: the typed NotRead in the preflight, nothing written (review of #781, item 1).
     let mut e = env();
     let (b, five) = e.body("Body");
     let p = e.pawn(b);
@@ -234,15 +263,107 @@ fn a_kernel_consumer_without_the_provider_answers_nothing_and_a_crate_consumer_i
     let pid = ow_behavior::kernel::natives::allocate(&mut e.vm, "ow-combat", 7).unwrap();
     let handle = e.vm.space.classes.struct_by_path("Toy.BehaviorConsumerHandle").unwrap();
     e.set(p, "ConsumerHandle", Value::structure(handle, vec![Value::Int(pid)]));
+    let before = e.writes();
     match e.run(p) {
         Err(VmError::NotYet(n)) => {
-            assert_eq!(n.missing, Missing::NotRead);
-            assert!(n.to_string().contains(CRATE_OWNED), "{n}");
-            assert!(n.to_string().contains("partial writes"), "{n}");
+            assert_eq!((n.missing, &*n.what), (Missing::NotRead, CRATE_OWNED));
+            assert!(!ow_core::notyet::is_partial_writes(&n.to_string()), "{n}");
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(e.get(p, "CurrentStance"), Value::Object(Some(five[0])), "written before the event");
+    assert_eq!(e.writes(), before, "nothing written");
+    assert_eq!(e.get(p, "CurrentStance"), Value::Object(None));
+    assert!(fired().is_empty());
+}
+
+/// Review of #781, item 2: the positive event case. With a current stance and a new one, both with providers, on a
+/// kernel consumer: one OnExitStance on the old provider, then one OnEnterStance on the new one; with no current
+/// stance, OnEnterStance once and no OnExitStance. (The dispatch is recorded where the native hands the event to the
+/// kernel; registering a provider on the process needs the kernel's own provider fixtures.)
+#[test]
+fn the_events_go_once_each_to_the_kernel_in_order() {
+    let mut e = env();
+    let (b, five) = e.body("Body");
+    let p = e.pawn(b);
+    let (old, new) = (e.make(e.bare, "OldProvider"), e.make(e.bare, "NewProvider"));
+    e.set(five[1], "BehaviorProviderDefinition", Value::Object(Some(old)));
+    e.set(five[0], "BehaviorProviderDefinition", Value::Object(Some(new)));
+    e.set(p, "CurrentStance", Value::Object(Some(five[1])));
+    let register = e.vm.find_function(ow_behavior::kernel::natives::REGISTER_CONSUMER).unwrap();
+    let handle = e.vm.call(register, None, vec![Value::Object(Some(p))]).unwrap().ret;
+    e.set(p, "ConsumerHandle", handle);
+    e.run(p).unwrap();
+    let path = |o| ow_behavior::provider::stock_path(&e.vm, o).unwrap();
+    assert_eq!(fired(), [(EXIT.to_string(), path(old)), (ENTER.to_string(), path(new))]);
+    assert_eq!(e.get(p, "CurrentStance"), Value::Object(Some(five[0])));
+}
+
+/// Review of #781, item 2: an archetype whose `bCanCrouch` is false gives false.
+#[test]
+fn the_archetype_s_crouch_false_is_copied() {
+    let mut e = env();
+    let (b, _) = e.body("Body");
+    let p = e.pawn(b);
+    e.set(p, "bCanCrouch", Value::Bool(true));
+    let archetype = e.vm.space.heap.get(p).unwrap().archetype.unwrap();
+    e.set(archetype, "bCanCrouch", Value::Bool(false));
+    e.run(p).unwrap();
+    assert_eq!(e.get(p, "bCanCrouch"), Value::Bool(false));
+}
+
+/// Review of #781, item 2: an aim-offset node name that differs looks the node up on the mesh's tree. Found and a
+/// `WillowAnimNodeAimOffset`: kept; found of another class, or absent: None.
+#[test]
+fn a_differing_aim_offset_name_is_looked_up_on_the_mesh() {
+    for (wanted, want_found, aim_class) in [("Wanted", true, true), ("Wanted", false, false), ("Absent", false, true)] {
+        let mut e = env();
+        let (b, five) = e.body("Body");
+        let p = e.pawn(b);
+        let Value::Object(Some(mesh)) = e.get(p, "Mesh") else { panic!() };
+        let tree = e.vm.space.alloc(e.tree, "Tree", Some(mesh), Origin::Runtime).unwrap();
+        let class = if aim_class {
+            e.aim
+        } else {
+            class(&mut e.vm, "Toy.OtherAnimNode", Some(e.bare), &[("NodeName", PropKind::Name)])
+        };
+        let node = e.vm.space.alloc(class, "Node", Some(mesh), Origin::Runtime).unwrap();
+        let (none, named) = (Value::Name(ow_object::ids::NameId::NONE), e.name("Wanted"));
+        e.set(tree, "NodeName", none);
+        e.set(node, "NodeName", named);
+        e.set(mesh, "Animations", Value::Object(Some(tree)));
+        let ticks = vec![tree, node];
+        e.set(mesh, "AnimTickArray", Value::array(ticks.iter().map(|&o| Value::Object(Some(o))).collect()));
+        ow_world::world::tree_lookup::record_copy(&e.vm, tree, [node]).unwrap();
+        let n = e.name(wanted);
+        e.set(five[0], "AimOffsetName", n);
+        e.run(p).unwrap();
+        let got = e.get(p, "AimOffset");
+        if want_found {
+            assert_eq!(got, Value::Object(Some(node)), "{wanted}: found");
+        } else {
+            assert_eq!(got, Value::Object(None), "{wanted} aim class {aim_class}: None");
+        }
+    }
+}
+
+/// Review of #781, item 3 (the hub's ruling): `WillowPawn.SetDefaultStance` dispatches on the receiver's class.
+#[test]
+fn the_willow_pawn_body_dispatches_on_the_receiver() {
+    let mut e = env();
+    let (b, five) = e.body("Body");
+    let p = e.pawn(b);
+    e.vm.call(e.pawn_default, Some(p), vec![]).unwrap();
+    assert_eq!(e.get(p, "CurrentStance"), Value::Object(Some(five[0])), "a player pawn gets the player rule");
+    let ai = e.make(e.ai, "Enemy");
+    match e.vm.call(e.pawn_default, Some(ai), vec![]) {
+        Err(VmError::NotYet(n)) => assert_eq!((n.missing, &*n.what), (Missing::NotRead, AI_PAWN)),
+        other => panic!("{other:?}"),
+    }
+    let other = class(&mut e.vm, "Toy.OtherPawn", Some(e.bare), &[]);
+    let o = e.make(other, "Other");
+    let before = e.writes();
+    assert_eq!(e.vm.call(e.pawn_default, Some(o), vec![]).unwrap().ret, Value::None);
+    assert_eq!(e.writes(), before, "nothing");
 }
 
 // 2.
