@@ -479,11 +479,21 @@ fn n_check_for_perch(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 /// Binds the natives of this module in `ParityMode::Off` (module documentation); `actions::Pack` calls it before it
 /// binds its own `NotYet` for the latent moves, which then keep only the ones left unbound here.
-pub(crate) fn register(vm: &mut Vm, bind: fn(&mut Vm, &str, NativeFn) -> Result<(), VmError>) -> Result<(), VmError> {
-    if vm.parity != ParityMode::Off {
-        return Ok(());
+pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
+    // Called directly (not through a fn pointer), so `actions::bind`'s #[track_caller] names this file (lane
+    // SHADOW-AUDIT-FOLLOWUPS-2).
+    for (path, body) in bodies(vm) {
+        super::actions::bind(vm, path, body)?;
     }
-    let bodies: [(&str, NativeFn); 14] = [
+    Ok(())
+}
+
+/// The paths [`register`] binds and their bodies: the 14 stock natives in `ParityMode::Off`, none under Reference.
+pub(crate) fn bodies(vm: &Vm) -> Vec<(&'static str, NativeFn)> {
+    if vm.parity != ParityMode::Off {
+        return Vec::new();
+    }
+    let bodies: [(&'static str, NativeFn); 14] = [
         (SLEEP, Rc::new(n_sleep)),
         (INTERRUPT, Rc::new(n_interrupt)),
         (WAIT_FOR_PATH, Rc::new(n_wait_for_path)),
@@ -499,8 +509,5 @@ pub(crate) fn register(vm: &mut Vm, bind: fn(&mut Vm, &str, NativeFn) -> Result<
         (LOOK_AT_PLAYER, Rc::new(n_look_at_player)),
         (CHECK_FOR_PERCH, Rc::new(n_check_for_perch)),
     ];
-    for (path, body) in bodies {
-        bind(vm, path, body)?;
-    }
-    Ok(())
+    bodies.into_iter().collect()
 }

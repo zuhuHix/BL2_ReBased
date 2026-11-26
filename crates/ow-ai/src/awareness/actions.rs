@@ -762,7 +762,10 @@ fn willow_base_kind(path: &'static str) -> NativeFn {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pack;
 
-fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
+/// Binds `f` to the declared native `path` when nothing binds it yet. `#[track_caller]`, so the shadow audit names the
+/// file that called it (lane SHADOW-AUDIT-FOLLOWUPS-2); `movement.rs` calls it directly for the same reason.
+#[track_caller]
+pub(crate) fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
@@ -821,7 +824,7 @@ impl NativePack for Pack {
         bind_locomotion(vm)?;
         // W7-AI part 3 (decision 2026-11-19-16): the waits, target records and mind queries of NATIVE_AI_MOVEMENT.md,
         // Off only; the latent moves it does not bind keep the NotYet below.
-        super::movement::register(vm, bind)?;
+        super::movement::register(vm)?;
         for path in LATENT_MOVES {
             bind(
                 vm,

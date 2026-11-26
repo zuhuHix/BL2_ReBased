@@ -1081,7 +1081,7 @@ pub(crate) fn shared_wrapper_shadow(s: &ow_vm::api::NativeShadow) -> bool {
 
 /// `Actor.Trace`'s native key, as the shadow audit records it.
 #[cfg(test)]
-const ACTOR_TRACE_KEY: &str = "Actor.Trace(vector,vector,vector,vector,bool,vector,tracehitinfo,int,bool,object)";
+pub(crate) const ACTOR_TRACE_KEY: &str = "Actor.Trace(vector,vector,vector,vector,bool,vector,tracehitinfo,int,bool,object)";
 
 #[cfg(test)]
 mod tests;

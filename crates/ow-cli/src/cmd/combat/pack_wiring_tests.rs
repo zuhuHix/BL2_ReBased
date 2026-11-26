@@ -6,12 +6,16 @@
 //!
 //! The packages are invented (AGENTS.md rule 9). They declare, as the game's do, the natives the packs bind by their
 //! declaration (`kernel::natives::bind` and `ow_combat::hit::bind` bind only declared functions), and the two script
-//! functions the inventory pack overrides, so every pack registers here as it does in the installed run.
+//! functions the inventory pack overrides, so every pack registers here as it does in the installed run. They also
+//! declare `ResolveContext`, `AddAttributeModifier` and `Actor.Trace` with their game parameters (lane
+//! SHADOW-AUDIT-FOLLOWUPS-2), so the test meets the three allowed shadows itself, and fails if `ow_combat::hit::bind`
+//! loses `#[track_caller]`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use ow_core::ParityMode;
-use ow_package::testkit::script::{Asm, FunctionSpec, ScriptToy};
+use ow_package::testkit::reflect::toy_struct;
+use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT, FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{NativePack, audit_new_vms};
 use ow_vm::error::VmError;
 
@@ -48,13 +52,48 @@ fn willow_game() -> Vec<u8> {
     t.build()
 }
 
+/// A native with these declared parameters (each `(kind, name, extra flags, type reference)`).
+fn native_with(t: &mut ScriptToy, owner: i32, name: &str, params: &[(&str, &str, u64, i32)]) {
+    let declared: Vec<Param> =
+        params.iter().map(|&(kind, n, flags, type_ref)| Param { flags, type_ref, ..Param::new(kind, n) }).collect();
+    t.function(owner, name, &declared, None, &[], &FunctionSpec::new(NATIVE, name), |_| None);
+}
+
 /// `Engine`: the classes the world's set-up looks up, and `AttributeEffect` with the script `ApplyAttributeEffects()`.
+/// Also the three keys two packs bind to one implementation each (`combat::shared_wrapper_shadow`):
+/// `AttributeDefinitionBase.ResolveContext(object)`, `AttributeDefinitionBase.AddAttributeModifier(object,object,bool)`
+/// and `Actor.Trace` with the game's ten parameters (the `Vector` and `TraceHitInfo` structs invented here).
 fn engine() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "Function"]);
+    let mut t = ScriptToy::new(&["Object", "Bool", "Int", "Float", "Struct"]);
     let object = t.class("Object", 0);
-    t.class("Actor", object);
+    let vector = toy_struct(&mut t, object, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
+    let info = toy_struct(&mut t, object, "TraceHitInfo", None);
+    t.prop("Float", info, "ToyField", 0, 0);
+    let actor = t.class("Actor", object);
+    native_with(&mut t, actor, "Trace", &[
+        ("Struct", "HitLocation", CPF_OUT, vector),
+        ("Struct", "HitNormal", CPF_OUT, vector),
+        ("Struct", "TraceEnd", 0, vector),
+        ("Struct", "TraceStart", CPF_OPT, vector),
+        ("Bool", "bTraceActors", CPF_OPT, 0),
+        ("Struct", "Extent", CPF_OPT, vector),
+        ("Struct", "HitInfo", CPF_OPT | CPF_OUT, info),
+        ("Int", "ExtraTraceFlags", CPF_OPT, 0),
+        ("Bool", "bTraceBulletListeners", CPF_OPT, 0),
+        ("Object", "BulletListenerSource", CPF_OPT, object),
+    ]);
     let effect = t.class("AttributeEffect", object);
     script_function(&mut t, effect, "ApplyAttributeEffects");
+    let attribute = t.class("AttributeDefinitionBase", object);
+    native_with(&mut t, attribute, "ResolveContext", &[("Object", "ContextSource", 0, object)]);
+    native_with(&mut t, attribute, "AddAttributeModifier", &[
+        ("Object", "Context", 0, object),
+        ("Object", "Modifier", 0, object),
+        ("Bool", "bAllowDuplicate", 0, 0),
+    ]);
     t.build()
 }
 
@@ -77,8 +116,19 @@ fn the_slice_gate_s_packs_register_together_with_no_duplicate_key() {
     // The packs the equip, pickup and cast links add, on the same VM.
     ow_inventory::manager::Pack.register(&mut world.vm).expect("the inventory pack");
     ow_skills::action_skill::Pack.register(&mut world.vm).expect("the action skill pack");
-    let shadows: Vec<_> = world.vm.native_shadows().into_iter().filter(|s| !shared_wrapper_shadow(s)).collect();
+    let all = world.vm.native_shadows();
+    let shadows: Vec<_> = all.iter().filter(|s| !shared_wrapper_shadow(s)).collect();
     assert!(shadows.is_empty(), "keys one pack bound and another gave up: {shadows:#?}");
+    // Both allowance arms are met here, each key once: the helper's #[track_caller] names the action skill file.
+    let mut allowed: Vec<&str> = all.iter().filter(|s| shared_wrapper_shadow(s)).map(|s| s.key.as_str()).collect();
+    allowed.sort_unstable();
+    let mut want = vec![
+        ow_inventory::equip::natives::ADD_MODIFIER,
+        super::super::ACTOR_TRACE_KEY,
+        ow_inventory::equip::natives::RESOLVE_CONTEXT,
+    ];
+    want.sort_unstable();
+    assert_eq!(allowed, want, "the three allowed shadows, met by this test's packs");
     // The key answers with the kernel pack's rule: its declaration check, not a placeholder's NotRead.
     let class = world.vm.find_class("WillowGame.WillowPawn").unwrap();
     let pawn = world.vm.instantiate(class, "Pawn").unwrap();

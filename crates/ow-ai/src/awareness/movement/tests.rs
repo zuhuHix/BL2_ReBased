@@ -536,26 +536,17 @@ fn the_mind_queries_answer_what_the_note_settles() {
     assert_eq!(missing(den_not_read()), Missing::NotRead);
 }
 
-/// `register` binds the stock paths in Off and nothing under Reference.
+/// `register` binds the stock paths in Off and nothing under Reference (its list, [`bodies`]).
 #[test]
 fn register_binds_the_stock_paths_in_off_only() {
-    thread_local! {
-        static BOUND: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    }
-    fn record(_: &mut Vm, path: &str, _: NativeFn) -> Result<(), VmError> {
-        BOUND.with(|b| b.borrow_mut().push(path.to_string()));
-        Ok(())
-    }
     let mut r = start();
-    register(&mut r.vm, record).unwrap();
-    let off = BOUND.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let off: Vec<&str> = bodies(&r.vm).into_iter().map(|(p, _)| p).collect();
     assert_eq!(off.len(), 14);
     for path in [SLEEP, WAIT_FOR_PATH, FOLLOW_PATH, FINISH_PATH, WAIT_FOR_TURN, WAIT_FOR_STOP, TARGET_RECORD, POP_OP_DEN] {
-        assert!(off.iter().any(|p| p == path), "{path}");
+        assert!(off.iter().any(|p| *p == path), "{path}");
     }
     r.vm.parity = ParityMode::Reference;
-    register(&mut r.vm, record).unwrap();
-    assert!(BOUND.with(|b| b.borrow().is_empty()), "nothing under Reference");
+    assert!(bodies(&r.vm).is_empty(), "nothing under Reference");
 }
 
 /// Review r1 of #397: `bParent` on a component with a parent is `NotYet` (the den's records are not modelled); without

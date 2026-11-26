@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SHADOW-AUDIT-FOLLOWUPS-2 (2026-11-26, pc-hummer, code, on fix/shadow-audit-followups-2, stacked on #753's head
+0df0617d):** AI-assisted (Claude Code, Opus 5.5). The all-packs host test declares `ResolveContext`,
+`AddAttributeModifier` and `Actor.Trace`, and asserts it meets exactly the three allowed shadows. ow-ai's local `bind` is
+`#[track_caller]`, and `movement.rs` calls it directly. ow-combat `pools.rs`' two read-only checks use
+`is_bound_unaudited`. A VM test shows `is_bound_unaudited` records nothing.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,782 passed / 0 failed / 59 ignored. `crate_edges_test.py`: OK.
+- Mutation check: with `#[track_caller]` removed from `ow_combat::hit::bind` and `bind_fn`, the host test fails
+  ("keys one pack bound and another gave up"); restored, it passes. No binding changed, so the slice gate was not run.
+
 **IMPL-NEW-TEMPLATE-COPY (2026-11-26, pc-hummer, on fix/rust-new-template-copy from main 8fa9839d):** AI-assisted
 (Claude Code, Opus 5.5). Off `new` with a template copies it (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, option
 B): the template's slots, transient fields (`PropertyDecl::TRANSIENT` 0x2000, by fit) from the class default, and the

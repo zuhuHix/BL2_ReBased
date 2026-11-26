@@ -5,12 +5,12 @@
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
-use ow_core::ParityMode;
+use ow_core::{ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_object::heap::ObjectSpace;
 use ow_object::value::Value;
 
-use super::{NativeShadow, Vm, audit_new_vms};
+use super::{FunctionDecl, NativeShadow, Vm, audit_new_vms};
 use crate::func_name::{self, KEY};
 
 fn vm() -> Vm {
@@ -63,4 +63,18 @@ fn audit_new_vms_turns_the_audit_on_for_this_thread_s_new_vms() {
     }
     assert_eq!(on.native_shadows().len(), 1);
     assert!(off.native_shadows().is_empty());
+}
+
+/// `is_bound_unaudited` (lane SHADOW-AUDIT-FOLLOWUPS-2): a read-only check records nothing under the audit, where
+/// `is_bound` from the same file records the shadow.
+#[test]
+fn is_bound_unaudited_records_nothing_under_the_audit() {
+    let mut vm = vm();
+    vm.audit_native_shadows();
+    func_name::register(&mut vm).unwrap();
+    let f = vm.declare_function(FunctionDecl::native(ObjectPath::parse("Core.Object.GetFuncName").unwrap(), KEY)).unwrap();
+    assert!(vm.is_bound_unaudited(f));
+    assert!(vm.native_shadows().is_empty(), "nothing recorded");
+    assert!(vm.is_bound(f));
+    assert_eq!(vm.native_shadows().len(), 1, "is_bound from another file is recorded");
 }
