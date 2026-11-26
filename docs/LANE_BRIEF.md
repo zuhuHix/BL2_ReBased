@@ -1,24 +1,17 @@
-# Lane brief: the rules every subagent needs, on one page
+# Lane brief: what a lane or sub-agent needs on top of `AGENTS.md`
 
-For subagents and short tasks. This page condenses the binding rules of `AGENTS.md` (which `CLAUDE.md` imports),
-`docs/LEGAL.md` and `docs/NATIVE_ANALYSIS.md`; it replaces none of them. Read it first, then open the long documents only for the part
-your task touches. If this page and a long document disagree, the long document wins; say so in your report.
+For lanes, sub-agents and short tasks. `AGENTS.md` holds the rules and is normally already in your context (Claude
+Code loads it through `CLAUDE.md`, Codex directly). If you cannot see its section "Rules that do not bend", read
+`AGENTS.md` first: this page repeats only the two lines a brief must carry. Open `docs/LEGAL.md`,
+`docs/NATIVE_ANALYSIS.md` and the other long documents only for the part your task touches. If this page and a long
+document disagree, the long document wins; say so in your report.
 
-## Never
-1. Put game-derived data in a tracked file, commit message, PR, issue or doc: no assets, package dumps, extracted
-   manifests, script listings, decompiler or disassembler output, pseudo-code, recovered headers, analysis databases.
-   Game-derived output goes under ignored `local/` (`local/analysis/` for native analysis). Names of game objects,
-   counts, constants and formulas may be written in docs, as `docs/verification/` already does.
-2. Paste, translate line by line or auto-convert decompiled code. Use leaked source. Copy code from GPL tools
-   (Legendary Explorer, UE Explorer, UPKUtils).
-3. Invent bytecode, struct or serialization offsets. Recover them from the packages and check them with structural
-   oracles; label what is fitted rather than proven `UNVERIFIED`.
-4. Loosen a bounds check to make something work. Fix the cause.
-5. Add a tool, dependency or licence (`THIRD_PARTY.md`, `LICENSE`): that is the maintainer's decision.
-6. Kill a process by image name (`taskkill /IM`, `Stop-Process -Name`, `pkill`, `killall`), or any process you did not
-   start. Stop only a PID your own run started, after checking its command line. Never delete a lock you do not hold.
-   Put this rule in every worker and sub-agent brief.
-7. Hand an error back unread, or claim more than you checked.
+## Two rules that bind you and go into every brief you write
+- **Process safety (rule 10).** Never kill a process by image name (`taskkill /IM`, `Stop-Process -Name`, `pkill`,
+  `killall`), or any process you did not start. Stop only a PID your own run started, after checking its command
+  line. Never delete a lock you do not hold.
+- **Tools, in this order:** bl-sdk live reads and hooks of the running game (the RTSE way), then REA (the `rea` MCP
+  server) for decoding, then Ghidra for `Borderlands2.exe`.
 
 ## Clean room (native code)
 - An analyst reads disassembly or decompiler output locally and writes an own-words note in
@@ -30,46 +23,25 @@ your task touches. If this page and a long document disagree, the long document 
   `Borderlands2.exe` (a fixed 330 s startup limit), so use Ghidra for that binary.
 
 ## Evidence
-- Tools, in this order: bl-sdk live reads and hooks of the running game (the RTSE way), then REA (the `rea` MCP
-  server) for decoding, then Ghidra for `Borderlands2.exe`. Put this line in every worker and sub-agent brief.
-- Live game first: if a value, a native's inputs and outputs, a before/after state or an event order can be seen
-  in the running game, get it there (`tools/real_game/`, pyunrealsdk; method in
-  `docs/verification/REALGAME_GROUND_TRUTH.md`). Read code only for what cannot be observed.
-- A rule read from native code or script, and not seen in the running game, stays `UNVERIFIED` in code and docs.
-  A confirmed rule says how it was confirmed (which capture, which matching number).
-- "Reproduces a live row" is not "verified in the native". Count agreement is not full compatibility.
-- Fixtures in `tests/` are synthetic only: invented values, built with the existing `package()` / `tag()` helpers.
-
-## Files that need care
-- `src/package.cpp`, `src/container.*`, `CMakeLists.txt`, and their Rust counterparts `crates/ow-container/`,
-  `crates/ow-package/`, `Cargo.toml` and `rust-toolchain.toml`: edit when the work needs it, then list each one in
-  your final message with what changed, why, and what is verified. A new third-party crate is a new dependency
-  (Never 5).
-- Real-game runs: only when your brief says so. Back up the saves first; afterwards the saves, config and SDK
-  settings must be byte-identical (restore from the backup what the game rewrote, and say so).
-- One heavy run per machine: `%LOCALAPPDATA%\OpenWillow\ue_run.lock` (`tools/ue_lock.ps1`; `OPENWILLOW_UE_LOCK`
-  overrides it). Despite its name it now guards real-game runs (the real-game helpers take it themselves) and, once
-  they exist, Rust host runs. The UE5 host it was written for left the tree on 2026-11-14.
+- A rule read from native code or script, and not seen in the running game, stays `UNVERIFIED` in code and docs
+  (rule 7). A confirmed rule says how it was confirmed: which capture, which matching number.
+- "Reproduces a live row" is not "verified in the native".
+- A real-game run only when your brief says so (`AGENTS.md`, "Finding out what the game does").
 
 ## Gates
-Run the commands in `docs/verification/GATES.md` for the parts you touched, paste the output with numbers, and
-compare with the baseline there. Report automated checks separately from in-game checks.
-
-## Records
-- Each decision is its own file, `docs/decisions/YYYY-MM/YYYY-MM-DD-NN-slug.md` (`DECISIONS.md` gives the rules). Read
-  recent entries with `python tools/decisions_index.py --tail N` or `--grep WORD`.
-- Look up natives with `python tools/native_index_find.py <name>`; do not open `docs/verification/NATIVE_INDEX.md` whole.
+Run the commands in `docs/verification/GATES.md` for the parts you touched, paste the output with numbers, and compare
+with the baseline there. The general gates, the standing baselines and the newest rows are at its top; the Rust host's
+gates and "Tests outside ctest" come after the rows. The archive it names is history. Report automated checks
+separately from in-game checks.
 
 ## How to finish a lane
 Right before you report a branch ready, rebase it on the latest `origin/main` and rerun your light checks, so it lands
-without conflicts (`docs/TOOLING.md`, "Landing PRs in a batch"). Unless your brief says otherwise, do not commit, push or edit `README.md`, `ROADMAP.md`, `AGENTS.md` or
-`docs/TOOLING.md`, and do not change an existing decision file. Your decision goes in one new file under
-`docs/decisions/` (`python tools/decisions_index.py --name "<title>"` prints its name), and
-`python tools/decisions_index.py --check --baseline origin/main` is one of your light checks. Write `local/p2/<lane>/handoff.md` with:
+without conflicts (`docs/TOOLING.md`, "Landing PRs in a batch"). Unless your brief says otherwise, do not commit, push
+or edit `README.md`, `ROADMAP.md`, `AGENTS.md` or `docs/TOOLING.md`, and do not change an existing decision file. Your
+decision goes in one new file under `docs/decisions/` (`python tools/decisions_index.py --name "<title>"` prints its
+name), and `python tools/decisions_index.py --check --baseline origin/main` is one of your light checks. Write
+`local/p2/<lane>/handoff.md` with:
 - the changed tracked paths, and the gate output with numbers;
 - what is verified and how, and what is `UNVERIFIED`;
-- a proposed commit message, and the path of your new decision file (dated, opening "AI-assisted (Claude)");
+- a proposed commit message, and the path of your new decision file (dated, opening "AI-assisted (<tool>)");
 - the open items.
-
-Keep diffs small and explainable: the maintainer must be able to explain the code. Prefer the simpler, obviously
-correct version over the clever one.

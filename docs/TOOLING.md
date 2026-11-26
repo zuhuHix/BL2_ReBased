@@ -15,30 +15,23 @@ with the UE5 host (2026-11-14)" at the end.
 
 ## Main tools at a glance (maintainer, 2026-10-22)
 
-Reach for these first, roughly in this order, before writing a one-off decoder. Every rule below
-(outputs under ignored `local/`, nothing game-derived in git, UNVERIFIED until confirmed in the game)
-still applies.
+Reach for these first, roughly in this order, before writing a one-off decoder. The rules still apply: outputs under
+ignored `local/`, nothing game-derived in git, `UNVERIFIED` until confirmed in the game.
 
 | Need | Tool | Where / how |
 |---|---|---|
-| A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, the way the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor works (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, `openwillow_realgame` SDK mod); see "Driving the real game" below |
-| Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
-| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 (Linux desktop: 12.2 + OpenJDK 27, see THIRD_PARTY.md) | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1` |
+| A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, as the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor does (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, the `openwillow_realgame` SDK mod); "Driving the real game" below |
+| Decoding: native functions, binary formats, movies, runtime call tracing | **REA** (npm `rea-agents` 6.0.0, through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/`. For `Borderlands2.exe` itself see docs/NATIVE_ANALYSIS.md, "Using REA on Borderlands2.exe" |
+| Headless executable analysis | Ghidra 12.1.4 + Temurin JDK 21 (Linux desktop: 12.2 + OpenJDK 27, see THIRD_PARTY.md) | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1`, `tools/ghidra/run.ps1` |
 | Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
-| Package identity, properties, scene records | `ow-package` (ours; the C++ build is the reference, the Rust port is not started) | "`ow-package`: the package reader" below |
+| Package identity, properties, scene records | `ow-package` (ours; the C++ build is the reference until the Rust crates match it) | "`ow-package`: the package reader" below |
 | UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |
 | The game's object dumps as an oracle | OpenBLCMM datapack | `tools/blcmm_dumps.py`, THIRD_PARTY.md |
-| BL2's Scaleform UI movies | Ruffle (desktop and web builds), our overlay pages served by `tools/hud_overlay/serve.py` in a browser | "BL2's UI movies in the browser (overlay pages)" below |
-| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `%USERPROFILE%\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
+| BL2's Scaleform UI movies | Ruffle (desktop and web builds), with our overlay pages served by `tools/hud_overlay/serve.py` | "BL2's UI movies in the browser (overlay pages)" below |
+| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a behaviour reference to check against | Behaviour reference only. Not installed in `%USERPROFILE%\Tools` and not yet in THIRD_PARTY.md: that entry is an open maintainer decision (2026-10-22). Record its version and licence there before relying on it, and copy no code |
 
-REA is recorded in THIRD_PARTY.md ("REA (Reverse Engineer Anything) MCP server": 4.1.0 on 2026-10-07, updated to 6.0.0 on
-2026-10-08). Gibbed has no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open (2026-10-22).
-
-**Outputs whose consumer was the UE5 host.** Several preparers below still write fields that only the retired UE5 host
-read: `/Game/...` content paths (for example `prepare_weapon_paint.py --mesh` and `--mesh-folder`, the Phaselock
-target's `host_target.json`), `*-runtime.json` files for its walking tests, and the editor job files under `local/slice/` and
-`local/phaselock/`. Manifests such as the mover's and the minimap's were passed to it by command-line switches. They are kept as they are, so the data stays reproducible; the Rust host will define its own import and
-will not inherit these shapes by default.
+REA is recorded in THIRD_PARTY.md ("REA (Reverse Engineer Anything) MCP server": 4.1.0 on 2026-10-07, 6.0.0 since
+2026-10-08).
 
 ## External tools
 
@@ -46,6 +39,25 @@ External tools are optional local dependencies. Keep their binaries outside the
 repository and write every game-derived export under the ignored `local/`
 directory. Do not add a binary, an extracted asset or a generated manifest to
 git.
+
+Rules (`AGENTS.md`, "External tools and extraction", gives their short form):
+
+- Use mature community tools as extraction backends when they save real time, locally and only against the user's
+  own legitimately obtained installation. **UModel / UE Viewer comes first** for UE3 meshes, textures, animations and
+  sounds. The verified local candidate is build 1590 from the official `gildor2/UEViewer` repository; its path differs
+  per machine, so pass `-UModel` or an environment variable. UPK Explorer and other tools are secondary, and only once
+  their BL2 support, distribution terms and output quality have been checked.
+- Before relying on a tool this project has not tested, run a small, timeboxed, representative benchmark, before
+  changing any architecture. Record version, source or URL, licence, command line, elapsed time, successes, failures,
+  unsupported types, duplicates, output size and output location. Adding the tool is still a maintainer decision
+  (`AGENTS.md` rule 6).
+- Exports are payloads, not truth. Check object identity, package references, materials, LODs, animations, collision
+  and map placement before using them in the host. UModel material files are heuristic and do not prove that a
+  host material reproduces the game's.
+- Package identity, object-path resolution, cross-package references, scene manifests, provenance and reproducible
+  verification stay in our own code.
+- Never assume a batch exported every object without an inventory, and do not claim "all assets work" unless
+  successes, failures, unsupported categories and duplicates are enumerated.
 
 ### UModel / UE Viewer
 
@@ -1882,3 +1894,9 @@ records of its runs stay useful as a behaviour reference; nothing it showed coun
   was CMake before the UE module. There is no UE module to build now.
 
 All of the paths in this list were removed on 2026-11-14.
+
+**Outputs whose consumer was the UE5 host.** Several preparers above still write fields that only the retired UE5 host
+read: `/Game/...` content paths (for example `prepare_weapon_paint.py --mesh` and `--mesh-folder`, the Phaselock
+target's `host_target.json`), `*-runtime.json` files for its walking tests, and the editor job files under `local/slice/` and
+`local/phaselock/`. Manifests such as the mover's and the minimap's were passed to it by command-line switches. They are kept as they are, so the data stays reproducible; the Rust host will define its own import and
+will not inherit these shapes by default.
