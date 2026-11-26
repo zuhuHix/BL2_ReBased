@@ -24,9 +24,12 @@ use ow_vm::error::VmError;
 use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
-const KINDS: [&str; 6] = ["Object", "Float", "Struct", "Array", "Int", "Byte"];
+const KINDS: [&str; 7] = ["Object", "Float", "Struct", "Array", "Int", "Byte", "Bool"];
 /// The holder's fields, each naming one export.
-const HELD: [&str; 6] = ["Attr", "BaseAttr", "Def", "ParentAttr", "OwnAttr", "Broken"];
+const HELD: [&str; 12] = [
+    "Attr", "BaseAttr", "Def", "ParentAttr", "OwnAttr", "Broken", "NestAttr", "OperandAttr", "IfTrueAttr", "DefaultAttr",
+    "AfterAttr", "ParentClass",
+];
 
 /// The invented `Engine.upk`.
 fn engine(categories: bool) -> Vec<u8> {
@@ -42,6 +45,32 @@ fn engine(categories: bool) -> Vec<u8> {
     t.prop("Object", init, "BaseValueAttribute", 0, attribute);
     t.prop("Object", init, "InitializationDefinition", 0, definition);
     t.prop("Float", init, "BaseValueScaleConstant", 0, 0);
+    // The definition's four parts, as the evaluator reads them (the hub's point (b) on #811).
+    let formula = toy_struct(&mut t, definition, "AttributeInitializationFormula", None);
+    t.prop("Bool", formula, "bEnabled", 0, 0);
+    for f in ["Multiplier", "Level", "Power", "Offset"] {
+        t.prop("Struct", formula, f, 0, init);
+    }
+    let expr = toy_struct(&mut t, definition, "AttributeExpressionData", None);
+    t.prop("Object", expr, "AttributeOperand1", 0, attribute);
+    t.prop("Object", expr, "AttributeOperand2", 0, attribute);
+    let cond_entry = toy_struct(&mut t, definition, "ConditionalExpression", None);
+    toy_array_of(&mut t, cond_entry, "Expressions", "Struct", expr);
+    t.prop("Struct", cond_entry, "BaseValueIfTrue", 0, init);
+    let conditional = toy_struct(&mut t, definition, "ConditionalInitialization", None);
+    t.prop("Bool", conditional, "bEnabled", 0, 0);
+    toy_array_of(&mut t, conditional, "ConditionalExpressionList", "Struct", cond_entry);
+    t.prop("Struct", conditional, "DefaultBaseValue", 0, init);
+    let variance = toy_struct(&mut t, definition, "RandomVariance", None);
+    t.prop("Bool", variance, "bEnabled", 0, 0);
+    let range = toy_struct(&mut t, definition, "RangeRestriction", None);
+    for f in ["bEnableMinValueRestriction", "bEnableMaxValueRestriction"] {
+        t.prop("Bool", range, f, 0, 0);
+    }
+    t.prop("Struct", definition, "ValueFormula", 0, formula);
+    t.prop("Struct", definition, "ConditionalInitialization", 0, conditional);
+    t.prop("Struct", definition, "RandomVariance", 0, variance);
+    t.prop("Struct", definition, "RangeRestriction", 0, range);
     let class = t.class("AIClassDefinition", object);
     let entry = toy_struct(&mut t, class, "AttributeStartingValue", None);
     t.prop("Object", entry, "Attribute", 0, attribute);
@@ -88,8 +117,15 @@ fn engine(categories: bool) -> Vec<u8> {
     let own_attr = t.p.add_export(attribute, "Attr_Own", empty(&none));
     // Cut short: its load fails.
     let broken = t.p.add_export(attribute, "Attr_Broken", ints(&[0]));
+    let mut nested: Vec<i32> = ["Attr_Nest", "Attr_Operand", "Attr_IfTrue", "Attr_Default", "Attr_After"]
+        .into_iter()
+        .map(|n| t.p.add_export(attribute, n, empty(&none)))
+        .collect();
+    // An exported AI class (empty lists): a parent the child names as an unloaded handle (the hub's point (a)).
+    nested.push(t.p.add_export(class, "AIClass_Parent", empty(&none)));
     let mut h = ints(&[0]);
-    for (f, r) in HELD.into_iter().zip([a, base_attr, def, parent_attr, own_attr, broken]) {
+    let targets = [a, base_attr, def, parent_attr, own_attr, broken].into_iter().chain(nested);
+    for (f, r) in HELD.into_iter().zip(targets) {
         h.extend(t.p.object_tag(f, r));
     }
     h.extend_from_slice(&none);
@@ -282,7 +318,7 @@ fn a_non_empty_category_list_is_not_read_before_any_definition_loads() {
 #[test]
 fn a_failed_load_is_logged_and_the_walk_goes_on() {
     let mut x = fx();
-    let [_, _, _, _, own, broken] = x.held[..] else { unreachable!() };
+    let (own, broken) = (x.held[4], x.held[5]);
     let archetype = x.make("Engine.ToyPawn");
     let entries = vec![x.entry(broken, None, None), x.entry(own, None, None)];
     x.set(archetype, "AttributeStartingValues", Value::array(entries));
@@ -300,4 +336,88 @@ fn reference_does_nothing() {
     assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 0);
     assert_eq!(x.vm.log.len(), logged);
     assert!(x.unloaded(x.held[0]));
+}
+
+/// `v` with the field at `path` (names separated by dots, through nested structs) set to `x`.
+fn put(vm: &Vm, v: &mut Value, path: &str, x: Value) {
+    let (head, rest) = match path.split_once('.') {
+        Some((h, r)) => (h, Some(r)),
+        None => (path, None),
+    };
+    let s = v.struct_mut().unwrap();
+    let (i, _) = vm.space.classes.struct_layout(s.ty).unwrap().field(vm.space.names.find(head).unwrap()).unwrap();
+    match rest {
+        Some(r) => put(vm, &mut s.fields[i as usize], r, x),
+        None => s.fields[i as usize] = x,
+    }
+}
+
+/// The hub's point (b) on #811: the walk follows a definition into the nested data the preflight walks. A formula
+/// term's attribute and its definition; that definition's conditional: an expression operand and the entry's
+/// `BaseValueIfTrue`, then an entry with no expressions (always holds), so the entry after it and `DefaultBaseValue`
+/// are not reached and stay unloaded.
+#[test]
+fn the_walk_follows_nested_formulas_and_conditionals() {
+    let mut x = fx();
+    let h = x.held.clone();
+    let (nest, operand, if_true, default, after) = (h[6], h[7], h[8], h[9], h[10]);
+    let inner = x.make("Engine.AttributeInitializationDefinition");
+    let outer = x.make("Engine.AttributeInitializationDefinition");
+    // The outer definition's formula: Multiplier names `nest` and the inner definition.
+    let mut formula = {
+        let c = x.vm.space.heap.get(outer).unwrap().class;
+        let p = x.vm.space.prop(c, "ValueFormula").unwrap();
+        x.vm.space.read(outer, PropAddr::scalar(p)).unwrap().clone()
+    };
+    put(&x.vm, &mut formula, "bEnabled", Value::Bool(true));
+    put(&x.vm, &mut formula, "Multiplier.BaseValueAttribute", Value::Object(Some(nest)));
+    put(&x.vm, &mut formula, "Multiplier.InitializationDefinition", Value::Object(Some(inner)));
+    x.set(outer, "ValueFormula", formula);
+    // The inner definition's conditional.
+    let mut conditional = {
+        let c = x.vm.space.heap.get(inner).unwrap().class;
+        let p = x.vm.space.prop(c, "ConditionalInitialization").unwrap();
+        x.vm.space.read(inner, PropAddr::scalar(p)).unwrap().clone()
+    };
+    let entry_ty = x.vm.space.classes.struct_by_path("Engine.AttributeInitializationDefinition.ConditionalExpression").unwrap();
+    let expr_ty = x.vm.space.classes.struct_by_path("Engine.AttributeInitializationDefinition.AttributeExpressionData").unwrap();
+    let mut expr = x.vm.space.classes.default_value(&PropKind::Struct(expr_ty)).unwrap();
+    put(&x.vm, &mut expr, "AttributeOperand1", Value::Object(Some(operand)));
+    let blank = x.vm.space.classes.default_value(&PropKind::Struct(entry_ty)).unwrap();
+    let mut first = blank.clone();
+    put(&x.vm, &mut first, "Expressions", Value::array(vec![expr]));
+    put(&x.vm, &mut first, "BaseValueIfTrue.BaseValueAttribute", Value::Object(Some(if_true)));
+    let always = blank.clone();
+    let mut later = blank;
+    put(&x.vm, &mut later, "BaseValueIfTrue.BaseValueAttribute", Value::Object(Some(after)));
+    put(&x.vm, &mut conditional, "bEnabled", Value::Bool(true));
+    put(&x.vm, &mut conditional, "ConditionalExpressionList", Value::array(vec![first, always, later]));
+    put(&x.vm, &mut conditional, "DefaultBaseValue.BaseValueAttribute", Value::Object(Some(default)));
+    x.set(inner, "ConditionalInitialization", conditional);
+    // A starting value whose BaseValue names the outer definition.
+    let archetype = x.make("Engine.ToyPawn");
+    let e = x.entry(h[4], None, Some(outer));
+    x.set(archetype, "AttributeStartingValues", Value::array(vec![e]));
+    preload_from(&mut x.vm, archetype).unwrap();
+    for (name, o) in [("the formula term", nest), ("the operand", operand), ("BaseValueIfTrue", if_true)] {
+        assert!(!x.unloaded(o), "{name} loaded");
+    }
+    assert!(x.unloaded(after), "past the always entry: not reached");
+    assert!(x.unloaded(default), "the default: not reached");
+}
+
+/// The hub's point (a) on #811: a child class whose `AttributeParentClass` is an unloaded handle; the walk loads that
+/// parent (logged) and reads its lists.
+#[test]
+fn an_unloaded_parent_class_is_followed() {
+    let mut x = fx();
+    let parent = x.held[11];
+    assert!(x.unloaded(parent));
+    let class = x.make("Engine.AIClassDefinition");
+    x.set(class, "AttributeParentClass", Value::Object(Some(parent)));
+    let archetype = x.make("Engine.ToyPawn");
+    x.set(archetype, "AIClass", Value::Object(Some(class)));
+    assert_eq!(preload_from(&mut x.vm, archetype).unwrap(), 1, "the parent class");
+    assert!(!x.unloaded(parent));
+    assert!(x.lines().iter().any(|l| l.contains("AIClass_Parent")));
 }

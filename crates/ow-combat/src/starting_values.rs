@@ -15,8 +15,15 @@
 //! 3. the starting values, parents first, then the archetype's own list: each entry's `Attribute` (an object), and its
 //!    `BaseValue` read with the evaluator's own data reader (`ow_attr::eval::init_data`): its `BaseValueAttribute` and
 //!    `InitializationDefinition`;
-//! 4. each attribute found, and its `ContextResolverChain` entries and `ValueResolverChain` entries up to the first
-//!    None; the initialization definitions.
+//! 4. what `SetBaseValue`'s own preflight walks (`ow_attr::eval::preflight_set_base_value`; the hub's point (b) on
+//!    #811): each attribute found (the destination, a base-value attribute, an expression operand), with its
+//!    `ContextResolverChain` entries and its `ValueResolverChain` entries up to the first None; and each
+//!    initialization definition, followed into the nested data its evaluation reaches: the enabled formula's four
+//!    terms, else the enabled conditional's entries (each expression's two attribute operands, its `BaseValueIfTrue`;
+//!    the scan stops at an entry with no expressions, else `DefaultBaseValue`), the enabled variance's two bounds and
+//!    the enabled range limits, recursively to the preflight's own depth. A part that does not read as the evaluator
+//!    reads it is left: the native's preflight then refuses it with its own typed error, so what this walk does not
+//!    cover still shows.
 //!
 //! Each unloaded object is loaded through the store and logged, "harness input: preload <path> (a SetBaseValue
 //! definition the game keeps resident; UNVERIFIED)", then its outcome. A failed load is logged and left, so the native's
@@ -164,33 +171,115 @@ pub fn preload_from(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
         want_struct_array(vm, archetype_class, "AttributeStartingValues")?;
         found.extend(entries(vm, archetype)?);
     }
-    // Step 4: each attribute with its resolvers, and each initialization definition.
+    // Step 4: what SetBaseValue's preflight walks, for each entry.
     for [attribute, base_attribute, definition] in found {
-        for attr in [attribute, base_attribute].into_iter().flatten() {
-            if !preload(vm, attr, &mut loaded) {
-                continue;
-            }
-            let mut resolvers: Vec<ObjRef> = Vec::new();
-            if let Ok(Value::Array(rs)) = read(vm, attr, "ContextResolverChain") {
-                resolvers.extend(rs.iter().filter_map(object));
-            }
-            if let Ok(Value::Array(rs)) = read(vm, attr, "ValueResolverChain") {
-                for r in rs.iter() {
-                    match object(r) {
-                        Some(r) => resolvers.push(r),
-                        None => break,
-                    }
-                }
-            }
-            for r in resolvers {
-                preload(vm, r, &mut loaded);
-            }
+        if let Some(a) = attribute {
+            attribute_and_resolvers(vm, a, &mut loaded);
         }
-        if let Some(d) = definition {
-            preload(vm, d, &mut loaded);
-        }
+        init_walk(vm, base_attribute, definition, 0, &mut loaded);
     }
     Ok(loaded)
+}
+
+/// The SetBaseValue preflight's depth (`ow_attr::eval`'s `PREFLIGHT_DEPTH`); deeper data is left to its refusal.
+const DEPTH: usize = 32;
+
+/// `attr` loaded, then its context resolvers and its value resolvers up to the first None.
+fn attribute_and_resolvers(vm: &mut Vm, attr: ObjRef, loaded: &mut usize) {
+    if !preload(vm, attr, loaded) {
+        return;
+    }
+    let mut resolvers: Vec<ObjRef> = Vec::new();
+    if let Ok(Value::Array(rs)) = read(vm, attr, "ContextResolverChain") {
+        resolvers.extend(rs.iter().filter_map(object));
+    }
+    if let Ok(Value::Array(rs)) = read(vm, attr, "ValueResolverChain") {
+        for r in rs.iter() {
+            match object(r) {
+                Some(r) => resolvers.push(r),
+                None => break,
+            }
+        }
+    }
+    for r in resolvers {
+        preload(vm, r, loaded);
+    }
+}
+
+/// One initialization data value (its attribute and its definition), followed as the preflight follows it (module
+/// documentation, step 4). A part that does not read is left.
+fn init_walk(vm: &mut Vm, attribute: Option<ObjRef>, definition: Option<ObjRef>, depth: usize, loaded: &mut usize) {
+    if depth > DEPTH {
+        return;
+    }
+    if let Some(a) = attribute {
+        attribute_and_resolvers(vm, a, loaded);
+    }
+    let Some(d) = definition else { return };
+    if !preload(vm, d, loaded) {
+        return;
+    }
+    let space_field = |vm: &Vm, v: &Value, name: &str| ow_attr::eval::field(&vm.space, v, name).ok().cloned();
+    let flag = |vm: &Vm, v: &Value, name: &str| matches!(space_field(vm, v, name), Some(Value::Bool(true)));
+    let data = |vm: &Vm, v: &Value, name: &str| {
+        space_field(vm, v, name).and_then(|x| ow_attr::eval::init_data(&vm.space, &x).ok())
+    };
+    let mut parts = Vec::new();
+    let mut operands: Vec<ObjRef> = Vec::new();
+    let (Ok(formula), Ok(conditional)) = (read(vm, d, "ValueFormula"), read(vm, d, "ConditionalInitialization")) else {
+        return;
+    };
+    if flag(vm, &formula, "bEnabled") {
+        for name in ["Multiplier", "Level", "Power", "Offset"] {
+            parts.extend(data(vm, &formula, name));
+        }
+    } else if flag(vm, &conditional, "bEnabled") {
+        let mut always = false;
+        if let Some(Value::Array(list)) = space_field(vm, &conditional, "ConditionalExpressionList") {
+            for entry in list.iter() {
+                let exprs = match space_field(vm, entry, "Expressions") {
+                    Some(Value::Array(e)) => e,
+                    _ => continue,
+                };
+                for e in exprs.iter() {
+                    if let Some(first) = space_field(vm, e, "AttributeOperand1").as_ref().and_then(object) {
+                        operands.push(first);
+                        if let Some(second) = space_field(vm, e, "AttributeOperand2").as_ref().and_then(object) {
+                            operands.push(second);
+                        }
+                    }
+                }
+                parts.extend(data(vm, entry, "BaseValueIfTrue"));
+                if exprs.is_empty() {
+                    always = true;
+                    break;
+                }
+            }
+        }
+        if !always {
+            parts.extend(data(vm, &conditional, "DefaultBaseValue"));
+        }
+    }
+    if let Ok(variance) = read(vm, d, "RandomVariance")
+        && flag(vm, &variance, "bEnabled")
+    {
+        parts.extend(data(vm, &variance, "LowerBound"));
+        parts.extend(data(vm, &variance, "UpperBound"));
+    }
+    if let Ok(range) = read(vm, d, "RangeRestriction") {
+        if flag(vm, &range, "bEnableMinValueRestriction") {
+            parts.extend(data(vm, &range, "MinValue"));
+        }
+        if flag(vm, &range, "bEnableMaxValueRestriction") {
+            parts.extend(data(vm, &range, "MaxValue"));
+        }
+    }
+    for a in operands {
+        attribute_and_resolvers(vm, a, loaded);
+    }
+    for p in parts {
+        init_walk(vm, p.base_value_attribute, p.initialization_definition, depth + 1, loaded);
+    }
 }
 
 /// The preload for the archetype at `archetype_path` in `package` (a copy of its export, as the spawn makes one,
