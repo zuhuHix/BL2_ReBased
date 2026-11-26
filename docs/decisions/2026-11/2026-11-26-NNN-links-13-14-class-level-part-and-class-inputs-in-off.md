@@ -17,8 +17,12 @@ game.** Reference is unchanged.
     - the old refusal is gone, and the status-effect step (step 3) keeps its `NotRead`;
   - **the hub's ruling 1:** `hit::adopt` writes the mind's `CharacterClass` := the pawn's `AIClass` before
     `InitializeCharacterClass`, and logs it. This narrows decision 2026-11-19-26 by that one write;
-  - **the hub's ruling 2:** the player set-up (`run/player.rs`) runs `ApplyCharacterClassDefaults` with the
-    controller's `Pawn` set to the player's pawn, logged once, and the `Pawn` stays set;
+  - **the hub's ruling 2, the player side, deferred:** the code that sets the controller's `Pawn` during the player
+    set-up (`run/player.rs`, logged, kept afterwards) stays in, behind the Off-only harness setting
+    `PlayerPawnDuringSetUp`, which is off by default and which no set-up turns on. In the hub's words: "deferred, hub
+    ruling on IMPL-LINKS-13-14: setting the Pawn runs WillowPlayerPawn.SetUpTradeInteraction, whose
+    PawnInteractionProxy.Initialize calls SetCollisionSize, SetHardAttach and SetBase on the proxy, outside
+    NATIVE_ACTOR_SETBASE.md's seven tables; turned on once those are read (queue 0aq).";
   - **the hub's ruling 3:** no cap on link 13's swings (nothing to code);
   - **`AdjustDamage`'s entry reset** (`ow-combat` `damage`):
     - the summary is zeroed and both eight-byte tag lists set to 255;
@@ -37,24 +41,20 @@ game.** Reference is unchanged.
   - the toy AI class's seven init-data fields, with struct defaults 1, the real class defaults;
   - the toy summary struct, renamed `DamageEventSummary` and given its lists.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock):
-  - the base f2748772 has 7 ok / 14, X 58.3%;
-  - this change has **6 ok / 14, X 51.2%**;
-  - link 1 goes from ok to `Actor.SetCollisionSize`'s `NotRead` (NATIVE_GO_DOWN_PATH.md). Links 3, 4, 5, 13 and 14
-    stop there too, instead of at LINK34's base-search floor trace.
-
-  **Cause:** with the ruled `Pawn` set, `WillowPlayerController.ApplyCharacterClassDefaults` reaches
-  `WillowPlayerPawn.SetUpTradeInteraction`. That spawns a `PawnInteractionProxy`, whose `Initialize` calls
-  `SetCollisionSize`, then `SetHardAttach`, then `SetBase` on the proxy, a class outside #795's seven tables. A local
-  probe with those three as no-ops (reverted, never committed) puts every row back to the base's. So the class-level
-  effects on the enemies cannot be measured past LINK34's floor trace yet.
-- **For the hub:**
-  - whether to accept link 1's regression until those three natives are read for the proxy;
-  - or to rule a stand-in for the trade proxy's set-up.
+  - **with the player side deferred: 7 ok / 14, X = 8.167/14 = 58.3%, every row as on the base f2748772:**
+    - links 1, 2 and 8 to 12: ok;
+    - links 3, 4, 5, 13 and 14: LINK34's base-search floor trace, `NotRead`;
+    - link 6: `SetBase`'s prefixed `NotRead`, because this stack does not hold #795's implementation;
+    - link 7: the HUD `LayerAbsent`;
+  - the first version, with the `Pawn` set, went to 6 ok, 51.2%. Link 1 reached `SetCollisionSize`'s `NotRead` on
+    the trade proxy, and links 3, 4, 5, 13 and 14 stopped there too. That is the reason for the deferral. A local
+    probe with the three proxy natives as no-ops (reverted) had put every row back as well;
+  - the class-level effects on the enemies cannot be measured past the floor trace yet.
 - **Tests:**
   - `links1314` (6): the reset, `GetController`, the credited player, ammo theft, the iterators, and the
     preconditions, each write-free;
-  - `run` (2): the adopt's `CharacterClass` with its line, Off only; the player's `Pawn`, logged and kept, and
-    Reference unchanged;
+  - `run` (3): the adopt's `CharacterClass` with its line, Off only; the deferred setting off by default and
+    refused in Reference; with it on, the player's `Pawn` logged and kept, and Reference unchanged;
   - `ow-world` pools `class_part` (5): the thirteen values in order, a folded stack, the gates, an unloaded
     definition, and Reference;
   - `levelup` (1): missing and mistyped fields.
