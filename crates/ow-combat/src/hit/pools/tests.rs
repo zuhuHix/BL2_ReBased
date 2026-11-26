@@ -109,6 +109,9 @@ fn package() -> Vec<u8> {
     for name in ["HealthResourcePool", "UnrecordedPool", "AmmoResourcePool"] {
         t.class(name, pool);
     }
+    // The shield hook's provider (lane IMPL-MAYA9-NATIVES): a controller with a pawn.
+    let controller = t.class("Controller", actor);
+    t.prop("Object", controller, "Pawn", 0, object);
     let manager = t.class("ResourcePoolManager", actor);
     t.prop("Object", manager, "Owner", 0, object);
     let payload = property_payload(&t.none, 16, 0, &ints(&[pool]));
@@ -122,9 +125,21 @@ fn package() -> Vec<u8> {
 /// `WillowGame.upk` (invented): the three recorded pool classes the installed game declares there, and a further
 /// shield subclass, each over the Engine package's `ResourcePool`.
 fn willow_package() -> Vec<u8> {
-    let mut t = ScriptToy::new(&["Int"]);
+    let mut t = ScriptToy::new(&["Int", "Byte", "Bool", "Object", "Array"]);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let pool = t.p.add_import("Core", "Class", engine, "ResourcePool");
+    // This toy store's Object is Engine's (`package`).
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let actor = t.p.add_import("Core", "Class", engine, "Actor");
+    // The shield hook's walk (lane IMPL-MAYA9-NATIVES): a pawn's first equipped item, a shield and its definition.
+    let pawn = t.class("WillowPawn", actor);
+    ow_package::testkit::reflect::toy_array_of(&mut t, pawn, "EquippedItems", "Object", object);
+    let definition = t.class("ShieldDefinition", object);
+    t.prop("Byte", definition, "ShieldPrimeMechanism", 0, 0);
+    let shield = t.class("WillowShield", object);
+    t.prop("Object", shield, "ShieldDef", 0, object);
+    t.prop("Bool", shield, "bPrimed", 0, 0);
+    native(&mut t, shield, "ShieldPrimedStateChanged", &[], None);
     t.class("AmmoResourcePool", pool);
     t.class("ExperienceResourcePool", pool);
     let shield = t.class("ShieldResourcePool", pool);
@@ -288,8 +303,8 @@ fn shield_and_unknown_hooks_refuse_after_the_stamp_without_other_pool_mutations(
         let mut x = Fx::new(ParityMode::Off);
         x.time(21.5);
         // The Engine decoy `AmmoResourcePool` refuses: only the installed package's identity is recorded.
+        // The shield's hook has its rule now (lane IMPL-MAYA9-NATIVES): `shield_hook_tests`.
         for class in [
-            "WillowGame.ShieldResourcePool",
             "UnrecordedPool",
             "WillowGame.FurtherPool",
             "AmmoResourcePool",
@@ -521,4 +536,125 @@ fn reference_keeps_its_stamp_and_existing_unbound_natives() {
             assert!(!x.vm().has_native(key), "Reference binding changed: {key}");
         }
     });
+}
+
+/// NATIVE_MAYA9_AND_AFTER.md section 3.2, test 7 (lane IMPL-MAYA9-NATIVES): the shield's idle-reset hook.
+mod shield_hook_tests {
+    use super::*;
+
+    /// A shield pool on a controller whose pawn wears a shield of mechanism `mechanism`, `bPrimed` = `primed`.
+    fn shield_pool(x: &mut Fx, mechanism: u8, primed: bool) -> (ObjRef, ObjRef) {
+        let pool = x.make("WillowGame.ShieldResourcePool");
+        let definition = x.make("Object");
+        let controller = x.make("Controller");
+        let pawn = x.make("WillowGame.WillowPawn");
+        let shield = x.make("WillowGame.WillowShield");
+        let def = x.make("WillowGame.ShieldDefinition");
+        x.set(pool, "Definition", Value::Object(Some(definition)));
+        x.set(pool, "AssociatedProvider", Value::Object(Some(controller)));
+        x.set(controller, "Pawn", Value::Object(Some(pawn)));
+        x.set(pawn, "EquippedItems", Value::array(vec![Value::Object(Some(shield))]));
+        x.set(shield, "ShieldDef", Value::Object(Some(def)));
+        x.set(shield, "bPrimed", Value::Bool(primed));
+        x.set(def, "ShieldPrimeMechanism", Value::Byte(mechanism));
+        (pool, shield)
+    }
+
+    fn events(x: &mut Fx) -> Rc<RefCell<u32>> {
+        let n = Rc::new(RefCell::new(0u32));
+        let seen = n.clone();
+        let f = x.vm().find_function("WillowGame.WillowShield.ShieldPrimedStateChanged").unwrap();
+        x.vm()
+            .register_native_for(f, Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| {
+                *seen.borrow_mut() += 1;
+                Ok(Value::None)
+            }))
+            .unwrap();
+        n
+    }
+
+    #[test]
+    fn the_table_by_mechanism_with_its_edges_and_a_nan() {
+        let nan = f32::NAN;
+        // (mechanism, C, Min, Max, F) -> primed.
+        let cases = [
+            (1, 10.0, 0.0, 10.0, true, true),
+            (1, 9.0, 0.0, 10.0, true, false),
+            (2, 0.0, 0.0, 10.0, true, true),
+            (2, 5.0, 0.0, 10.0, false, true),
+            (2, 5.0, 0.0, 10.0, true, false),
+            (3, 0.0, 0.0, 10.0, true, true),
+            (3, 0.5, 0.0, 10.0, true, false),
+            (4, nan, nan, nan, false, true),
+            (5, 0.5, 0.0, 10.0, true, true),
+            (5, 0.0, 0.0, 10.0, true, false),
+            (6, 0.5, 0.0, 10.0, true, true),
+            (6, 0.5, 0.0, 10.0, false, false),
+            (1, nan, 0.0, 10.0, true, false),
+            (3, nan, 0.0, 10.0, true, false),
+            (5, nan, 0.0, 10.0, true, false),
+            (0, 5.0, 0.0, 10.0, true, false),
+            (7, 5.0, 0.0, 10.0, true, false),
+        ];
+        for (m, c, min, max, f, want) in cases {
+            assert_eq!(primed(m, c, min, max, f), want, "{m} {c} {min} {max} {f}");
+        }
+    }
+
+    #[test]
+    fn a_change_writes_bprimed_and_raises_the_event_once() {
+        run(|| {
+            let mut x = Fx::new(ParityMode::Off);
+            x.time(3.0);
+            let n = events(&mut x);
+            let (pool, shield) = shield_pool(&mut x, 4, false);
+            x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap();
+            assert_eq!(x.value(shield, "bPrimed"), Value::Bool(true));
+            assert_eq!(*n.borrow(), 1);
+            assert_eq!(x.value(pool, "PoolIdleDelayStartTime"), Value::Float(3.0), "the stamp");
+            // No change: no event.
+            x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap();
+            assert_eq!(*n.borrow(), 1);
+        });
+    }
+
+    #[test]
+    fn no_definition_or_no_shield_does_nothing_after_the_stamp() {
+        run(|| {
+            let mut x = Fx::new(ParityMode::Off);
+            x.time(4.0);
+            let n = events(&mut x);
+            let (pool, shield) = shield_pool(&mut x, 4, false);
+            x.set(pool, "Definition", Value::Object(None));
+            x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap();
+            assert_eq!(x.value(shield, "bPrimed"), Value::Bool(false));
+            let (pool, shield) = shield_pool(&mut x, 4, false);
+            let pawn = {
+                let c = get(x.vm(), pool, "AssociatedProvider").unwrap().unwrap();
+                let Value::Object(Some(c)) = c else { panic!() };
+                let Value::Object(Some(p)) = get(x.vm(), c, "Pawn").unwrap().unwrap() else { panic!() };
+                p
+            };
+            x.set(pawn, "EquippedItems", Value::array(vec![]));
+            x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap();
+            assert_eq!(x.value(shield, "bPrimed"), Value::Bool(false));
+            assert_eq!(x.value(pool, "PoolIdleDelayStartTime"), Value::Float(4.0));
+            assert_eq!(*n.borrow(), 0);
+        });
+    }
+
+    #[test]
+    fn a_shield_without_a_definition_is_refused_before_the_stamp() {
+        run(|| {
+            let mut x = Fx::new(ParityMode::Off);
+            x.time(5.0);
+            let (pool, shield) = shield_pool(&mut x, 4, false);
+            x.set(shield, "ShieldDef", Value::Object(None));
+            let before = x.value(pool, "PoolIdleDelayStartTime");
+            let err = x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap_err();
+            let VmError::NotYet(n) = &err else { panic!("{err}") };
+            assert_eq!((n.missing.clone(), &*n.what), (ow_core::Missing::NotRead, SHIELD_NO_DEFINITION));
+            assert_eq!(x.value(pool, "PoolIdleDelayStartTime"), before, "no stamp");
+        });
+    }
 }
