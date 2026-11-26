@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINK1-RIGID-BODY-CLASS-TABLE (2026-11-26, pc-hummer, on fix/rust-link1-rigid-body-class-table from main
+4bd8d4f):** AI-assisted (Claude Code, Opus 5.5). `InitializeRBPhysics` answers a live pawn by
+NATIVE_LINK1_RIGID_BODY_LAYER.md's class table, every refusal before the first write; a template keeps the physics
+`LayerAbsent`. `cargo test --workspace -j 8 --no-fail-fast` 3,836 passed / 0 failed / 59 ignored; `crate_edges_test.py`
+OK. Installed Off strict `--slice-gate` (release build, under the machine lock), main and this change: 6 ok / 8 NotYet,
+47.0% on both. Links 1, 3, 4, 5, 13 and 14 move from the physics `LayerAbsent` to refusal L ("Actor.GetBoundingCylinder:
+the colliding components' bounds"): Maya's body mesh and cylinder are not in the attach record (the body composition's
+attach publishes none). Not `GetPhysXLevel`, as predicted. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-MAYA-PAWN-FROM-ARCHETYPE (2026-11-26, pc-hummer, on fix/maya-pawn-from-archetype from main 5f43a0b9):**
 AI-assisted (Claude Code, Opus 5.5). In Off, with a `PlayerClass`, the bridge spawns the player pawn from the class's
 pawn archetype through the world's spawn (NATIVE_MAYA_PAWN_SPAWN_SOURCE.md route B). The old `Mesh` /
