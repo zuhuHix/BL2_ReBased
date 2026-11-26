@@ -60,6 +60,20 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-LINKS-3-4-TAIL (2026-11-26, pc-hummer, on fix/rust-links-3-4-tail, stacked on #815 at 15a2953):** AI-assisted
+(Claude Code, Opus 5.5). #812's rows for links 3 and 4, Off: the plain reads, `IsFriendlyFire`'s interface argument by
+option (B) (pending the hub's ruling), `AdjustDamage`'s hit-region cap with `HitRegionCapReduction` fed back,
+`GetDisplayNameAtGrade`, `NotifyKilledEnemy`'s gates, `IsActionSkillRunning`, the dialog globals' `Get` with a logged
+set-up preload of `Dialog`, and the shield stage and protection timer as a plan. `cargo test --workspace` 4,106 passed /
+0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the
+machine lock, on 576b0e46): 8 ok / 6 not ok, 9.000/14 = 64.3% (#815: 67.9%). **Link 3 runs through the hit-region cap,
+`GetDisplayNameAtGrade`, `NotifyKilledEnemy`, `IsActionSkillRunning` and the dialog globals** and stops later in its hit
+at "engine query WorldController { index: 0 }" (an attribute context resolver needs the world's controller list; by fit
+`AddKillStreakScore`'s attribute reads, which #812 did not read), a `NotYet` after partial writes. That sticky stop of
+the shared combat run also stops link 4 at its spawn step (0/2; on #815 the unbound-native error left that step ok),
+which is the half step lost; link 4's own next stop (the shield stage's plan) is not measured. Link 5 is blocked by 3;
+13 and 14 behind 4; link 7 at the decoy line check; 1, 2, 6 and 8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue, rebased onto main f80b68e, which has
 #808 and #810):** AI-assisted (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting
 values' definitions, Off, in the note's three phases (#811 as landed): discovery (each spawn kind's archetype copied
