@@ -48,6 +48,7 @@ fn engine() -> Vec<u8> {
     }
     let actor = t.class("Actor", object);
     let pawn = t.class("Pawn", actor);
+    t.prop("Object", pawn, "InvManager", 0, actor);
     t.class("Vehicle", pawn);
     let controller = t.class("Controller", actor);
     t.prop("Object", controller, "Pawn", 0, pawn);
@@ -94,6 +95,10 @@ fn willow_game_with(field: Option<&str>) -> Vec<u8> {
     t.class("ToyPlayerPawnSubclass", player);
     let player = t.class("WillowPlayerController", controller);
     native(&mut t, player, "GetInventoryPawn", &[], Some(("Object", pawn)));
+    native(&mut t, player, "GetPawnInventoryManager", &[], Some(("Object", object)));
+    // GetPawnInventoryManager's answer class (invented here as a plain class of the package).
+    let actor = t.p.add_import("Core", "Class", engine, "Actor");
+    t.class("WillowInventoryManager", actor);
     let globals = t.class("WillowGlobals", object);
     native(&mut t, globals, "RemovePickup", &[Param { type_ref: object, ..Param::new("Object", "inPickup") }], None);
     let pickup = t.class("WillowPickup", dropped);
@@ -314,6 +319,7 @@ fn reference_binds_nothing() {
         TOUCH_PICKUP_TRACE,
         GET_PICKUPABLE_INVENTORY,
         GET_PICKUPABLE_INVENTORY_DEFINITION,
+        GET_PAWN_INVENTORY_MANAGER,
         PICKUPABLE_IS_ENABLED[0],
         PICKUPABLE_IS_ENABLED[1],
     ] {
@@ -490,4 +496,60 @@ fn a_non_bool_b_pickupable_is_a_script_error() {
     let message = enabled_script(x.call(ENABLED_WILLOW, pickup, vec![]));
     assert!(message.contains("not a bool"), "{message}");
     assert_eq!(marks(&x.vm), before);
+}
+
+// ---- GetPawnInventoryManager (lane IMPL-GETPAWNINVENTORYMANAGER, NATIVE_CONTROLLER_HELPERS.md) ----------------------
+
+const PAWN_MANAGER: &str = "WillowGame.WillowPlayerController.GetPawnInventoryManager";
+
+/// The rule for an on-foot pawn: no pawn, None; the pawn's `InvManager` when it is a `WillowInventoryManager`, else
+/// None (an empty slot, or another class). Nothing is written, drawn, loaded or interned.
+#[test]
+fn get_pawn_inventory_manager_answers_an_on_foot_pawn_s_manager() {
+    let mut x = fx(ParityMode::Off);
+    let controller = x.obj("WillowGame.WillowPlayerController");
+    let maya = x.obj("WillowGame.WillowPlayerPawn");
+    let manager = x.obj("WillowGame.WillowInventoryManager");
+    let other = x.obj("Engine.Actor");
+    let ask = |x: &mut Fx| {
+        let before = marks(&x.vm);
+        let r = x.call(PAWN_MANAGER, controller, vec![]).unwrap();
+        assert_eq!(marks(&x.vm), before, "nothing written, drawn, loaded or interned");
+        r
+    };
+    assert_eq!(ask(&mut x), Value::Object(None), "no pawn");
+    x.set(controller, "Pawn", Value::Object(Some(maya)));
+    assert_eq!(ask(&mut x), Value::Object(None), "no manager");
+    x.set(maya, "InvManager", Value::Object(Some(manager)));
+    assert_eq!(ask(&mut x), Value::Object(Some(manager)));
+    x.set(maya, "InvManager", Value::Object(Some(other)));
+    assert_eq!(ask(&mut x), Value::Object(None), "not a WillowInventoryManager");
+}
+
+/// The note's refusals: a vehicle (or any pawn whose first native class is not an on-foot Willow pawn) is the
+/// `NotRead` naming it; a pawn the store has not loaded is the not-loaded `NotRead`. Nothing is counted.
+#[test]
+fn get_pawn_inventory_manager_refuses_a_vehicle_and_a_cold_pawn() {
+    let mut x = fx(ParityMode::Off);
+    let controller = x.obj("WillowGame.WillowPlayerController");
+    let car = x.obj("Engine.Vehicle");
+    x.set(controller, "Pawn", Value::Object(Some(car)));
+    let before = marks(&x.vm);
+    match x.call(PAWN_MANAGER, controller, vec![]) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(marks(&x.vm), before);
+            assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD_HELPERS), "{n}");
+            assert!(n.what.starts_with(&format!("{INVENTORY_MANAGER_OTHER} Engine.Vehicle ")), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+    let (cold_pawn, _) = cold(&mut x, "WillowGame.WillowPlayerPawn");
+    x.vm.space.heap.get_mut(cold_pawn).unwrap().slots.clear();
+    x.set(controller, "Pawn", Value::Object(Some(cold_pawn)));
+    let before_cold = marks(&x.vm);
+    match x.call(PAWN_MANAGER, controller, vec![]) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.what.as_ref(), INVENTORY_MANAGER_UNLOADED),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(marks(&x.vm), before_cold);
 }
