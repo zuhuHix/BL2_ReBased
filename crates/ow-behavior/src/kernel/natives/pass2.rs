@@ -69,6 +69,21 @@ pub const NO_ANSWERS: &str =
 pub const NO_ANSWERS_LAYER: &str = "the mission tracker's answers";
 pub const WAYPOINT: &str = "pass 2 of IntializeBehaviorProviderForConsumer: the waypoint hooks";
 
+/// `what` naming the object it is about (lane IMPL-PASS2-CONDITION-PRELOAD: the runner could not tell which object a
+/// not-loaded refusal meant): `"<what>: <path>"`, the store handle's path, else the object's stock path; `what` alone
+/// for an object with neither (a run-time object).
+fn naming(vm: &Vm, what: &str, o: ObjRef) -> String {
+    let path = vm
+        .defs
+        .handle_path(o)
+        .filter(|p| !p.is_empty())
+        .or_else(|| provider::stock_path(vm, o).ok().filter(|p| !p.is_empty()));
+    match path {
+        Some(path) => format!("{what}: {path}"),
+        None => what.to_string(),
+    }
+}
+
 /// A condition class other than the one read.
 pub fn other_condition(class: &str) -> String {
     format!(
@@ -278,7 +293,7 @@ fn tracker(vm: &Vm, consumer: ObjRef) -> Result<(bool, Option<ObjRef>), VmError>
 fn verdict(vm: &Vm, condition: ObjRef) -> Result<bool, VmError> {
     if let Some(objective) = object(vm, condition, "LinkedObjective")? {
         if !resident(vm, objective)? {
-            return Err(not_read(OBJECTIVE_NOT_LOADED));
+            return Err(not_read(naming(vm, OBJECTIVE_NOT_LOADED, objective)));
         }
         if boolean(vm, objective, "bRememberItemsWithinObjective")? {
             return Err(not_read(PER_INSTANCE));
@@ -378,7 +393,7 @@ pub(super) fn plan(vm: &Vm, consumer: ObjRef, definition: ObjRef) -> Result<Vec<
         let condition = *condition;
         // 1, 2, 3.
         if !resident(vm, condition)? {
-            return Err(not_read(CONDITION_NOT_LOADED));
+            return Err(not_read(naming(vm, CONDITION_NOT_LOADED, condition)));
         }
         if !is_named(vm, condition, CONDITION_CLASS)? {
             return Err(not_read(other_condition(
@@ -562,7 +577,7 @@ pub fn reevaluate_conditions(vm: &mut Vm, mission: &str) -> Result<(), VmError> 
     };
     for condition in stored {
         if !resident(vm, condition)? {
-            return Err(not_read(CONDITION_NOT_LOADED));
+            return Err(not_read(naming(vm, CONDITION_NOT_LOADED, condition)));
         }
         let verdict = verdict(vm, condition)?;
         let known = linked_states(vm, condition)?;

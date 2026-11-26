@@ -9,7 +9,13 @@
 //! 1. the body class itself (the archetype's `BodyClass`);
 //! 2. (a) the `DefaultHitRegion`, only when the `HitRegionList` holds it; (b) each `HitRegionList` entry, then its
 //!    `OverrideDeathDef`; (c) each `ScrapedStances` entry; (e) `DeathDef`; (f) `PlayerEventDef`;
-//! 3. after each of those, its `BehaviorProviderDefinition`.
+//! 3. after each of those, its `BehaviorProviderDefinition`;
+//! 4. **pass 2's objects** (lane IMPL-PASS2-CONDITION-PRELOAD, the same ruling; NATIVE_BEHAVIOR_KERNEL_PASS2.md section
+//!    4): after each definition, each `BehaviorSequences` entry's `CustomEnableCondition`, in sequence order, then that
+//!    condition's `LinkedObjective` when it is set (step 7 reads its `bRememberItemsWithinObjective` when the world has
+//!    a tracker). Exactly what pass 2 needs resident: its `LinkedMission` is identified by path, and read only when that
+//!    mission is Complete (only the bridge's own mission can be), so it is not loaded; neither is anything the
+//!    condition or the objective references in turn.
 //!
 //! Step (d), the pawn's instance-data hit regions, adds nothing for component entries: the body composition refuses a
 //! component with a hit region, so its entries hold none. It is the only writer of `InstanceDataState.Data` in the
@@ -26,7 +32,9 @@ use ow_object::ids::ObjRef;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::{object_path, object_slot, objects_of, present};
+use ow_object::value::Value;
+
+use super::{object_path, object_slot, objects_of, present, struct_field};
 
 /// The log line of one body-class preload.
 pub(crate) fn body_class_preload_line(path: &str) -> String {
@@ -61,7 +69,40 @@ fn load_readable(vm: &mut Vm, o: ObjRef, what: &str, loaded: &mut usize) -> Resu
     Ok(false)
 }
 
-/// The preload (module documentation). Answers the number of objects loaded, which is logged when it is not 0.
+/// Step 4 on the readable definition `def`: its sequences' conditions, then each condition's `LinkedObjective`, each
+/// once (`seen`). Answers nothing; the loads are counted in `loaded`.
+fn preload_conditions(vm: &mut Vm, def: ObjRef, seen: &mut Vec<ObjRef>, loaded: &mut usize) -> Result<(), VmError> {
+    let class = vm.space.heap.get(def)?.class;
+    let Some(p) = vm.space.prop(class, "BehaviorSequences") else {
+        return Ok(());
+    };
+    let sequences = vm.space.read(def, ow_object::ids::PropAddr::scalar(p))?.clone();
+    let mut conditions: Vec<ObjRef> = Vec::new();
+    for item in sequences.elements().unwrap_or(&[]) {
+        if let Some(Value::Object(Some(c))) = struct_field(vm, item, "CustomEnableCondition") {
+            conditions.push(c);
+        }
+    }
+    for condition in conditions {
+        if seen.contains(&condition) {
+            continue;
+        }
+        seen.push(condition);
+        if !load_readable(vm, condition, "pass-2 condition", loaded)? {
+            continue;
+        }
+        if let Some(objective) = object_slot(vm, condition, "LinkedObjective")?
+            && !seen.contains(&objective)
+        {
+            seen.push(objective);
+            load_readable(vm, objective, "linked objective", loaded)?;
+        }
+    }
+    Ok(())
+}
+
+/// The preload (module documentation). Answers the number of objects loaded, which is logged when it is not 0, with
+/// pass 2's share on its own line.
 pub(crate) fn preload_body_class_definitions(vm: &mut Vm, archetype: ObjRef) -> Result<usize, VmError> {
     let mut loaded = 0;
     let Some(body) = object_slot(vm, archetype, "BodyClass")? else {
@@ -80,6 +121,7 @@ pub(crate) fn preload_body_class_definitions(vm: &mut Vm, archetype: ObjRef) -> 
         holders.push(d);
     }
     let mut seen: Vec<ObjRef> = Vec::new();
+    let mut pass2 = 0;
     let mut visit = |vm: &mut Vm, o: ObjRef, what: &str, loaded: &mut usize| -> Result<bool, VmError> {
         if seen.contains(&o) {
             return Ok(present(vm, o)?);
@@ -92,7 +134,9 @@ pub(crate) fn preload_body_class_definitions(vm: &mut Vm, archetype: ObjRef) -> 
             && !seen.contains(&def)
         {
             seen.push(def);
-            load_readable(vm, def, "behavior provider definition", loaded)?;
+            if load_readable(vm, def, "behavior provider definition", loaded)? {
+                preload_conditions(vm, def, &mut seen, &mut pass2)?;
+            }
         }
         Ok(true)
     };
@@ -117,7 +161,10 @@ pub(crate) fn preload_body_class_definitions(vm: &mut Vm, archetype: ObjRef) -> 
     if loaded > 0 {
         vm.log.push(format!("harness input: set-up preload: {loaded} body-class definition objects loaded"));
     }
-    Ok(loaded)
+    if pass2 > 0 {
+        vm.log.push(format!("harness input: set-up preload: {pass2} pass-2 condition objects loaded"));
+    }
+    Ok(loaded + pass2)
 }
 
 #[cfg(test)]
