@@ -59,6 +59,11 @@ fn engine() -> Vec<u8> {
     t.prop("Object", actor, "Base", 0, actor);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
     t.prop("Float", actor, "LifeSpan", 0, 0);
+    // The shrink step's reads (NATIVE_LINK7_HUD_TARGETING.md section 7): the HUD's WorldInfo and its NetMode, the
+    // owner's Player.
+    let world_info = t.class("WorldInfo", actor);
+    t.prop("Byte", world_info, "NetMode", 0, 0);
+    t.prop("Object", actor, "WorldInfo", 0, world_info);
     let pawn = t.class("Pawn", actor);
     t.prop("Object", pawn, "DrivenVehicle", 0, actor);
     t.prop("Bool", pawn, "bIsInjured", 0, 0);
@@ -68,6 +73,7 @@ fn engine() -> Vec<u8> {
     let player = t.class("PlayerController", controller);
     let hud = t.class("HUD", actor);
     t.prop("Object", player, "myHUD", 0, hud);
+    t.prop("Object", player, "Player", 0, object);
     t.prop("Object", hud, "PlayerOwner", 0, player);
     let dropped = t.class("DroppedPickup", actor);
     let inventory = t.class("WillowInventory", actor);
@@ -123,6 +129,7 @@ fn willow_game() -> Vec<u8> {
         t.prop("Bool", pickup, b, 0, 0);
     }
     t.prop("Float", pickup, "PickupShrinkDuration", 0, 0);
+    native(&mut t, pickup, "BeginShrinking", &[], None);
     let hud_definition = t.class("HUDDefinition", object);
     t.prop("Float", hud_definition, "PickupRange", 0, 0);
     let willow_hud = t.class("WillowHUD", hud);
@@ -132,6 +139,7 @@ fn willow_game() -> Vec<u8> {
         t.prop("Object", willow_hud, o, 0, pickup);
     }
     t.prop("Object", willow_hud, "SavedLookAtInventory", 0, actor);
+    t.prop("Int", willow_hud, "MaxNumPickups", 0, 0);
     let globals = t.class("WillowGlobals", object);
     toy_array_of(&mut t, globals, "PickupList", "Object", pickup);
     t.prop("Object", globals, "TheGlobalsDefinition", 0, object);
@@ -273,6 +281,15 @@ fn fx_with(warm_player_pawn: bool) -> Fx {
         }),
     )
     .unwrap();
+    let e3 = events.clone();
+    vm.register_native(
+        "WillowPickup.BeginShrinking()",
+        Rc::new(move |c: &mut NativeCall<'_>| {
+            e3.borrow_mut().seen.push((format!("Shrink {:?}", c.this.unwrap()), None));
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
     let globals = make(&mut vm, "WillowGame.WillowGlobals");
     let gd = make(&mut vm, "WillowGame.GlobalsDefinition");
     let hud = make(&mut vm, "WillowGame.WillowHUD");
@@ -314,6 +331,10 @@ fn fx_with(warm_player_pawn: bool) -> Fx {
     x.set(hud, "PlayerOwner", Value::Object(Some(controller)));
     x.set(hud, "WPlayerOwner", Value::Object(Some(controller)));
     x.set(hud, "HUDDef", Value::Object(Some(hud_definition)));
+    // The shrink step: a server world and a limit of 200 (the installed class default; invented here).
+    let info = x.obj("Engine.WorldInfo");
+    x.set(hud, "WorldInfo", Value::Object(Some(info)));
+    x.set(hud, "MaxNumPickups", Value::Int(200));
     let defaults = x.vm.defs.class_default(&mut x.vm.space, PICKUP).unwrap();
     x.set(defaults, "PickupShrinkDuration", Value::Float(5.0));
     x
@@ -612,19 +633,48 @@ fn the_particle_offset_is_turned_and_flagged() {
     assert!(nonzero && offset == [0.0, 0.0, 80.0], "{offset:?}");
 }
 
-/// The shrink bookkeeping: a counted pickup living longer than the default's PickupShrinkDuration is
-/// `NotYet { NotRead }` (open question 3), before any write.
+/// NATIVE_LINK7_HUD_TARGETING.md test 4, the shrink step: three pickups with `LifeSpan` 20, 18 and 5 and the duration
+/// 15; with `MaxNumPickups` 1 `BeginShrinking` is raised on the 18, after the other writes; with 2 nothing; in a
+/// client world, or with no `WorldInfo`, nothing; an owner with a `Player` is the split-screen `NotRead` before any write.
 #[test]
-fn the_shrink_bookkeeping_is_not_yet_before_any_write() {
-    let mut x = fx();
-    let p = x.pickup([150.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-    x.set(p, "LifeSpan", Value::Float(30.0));
-    x.set(x.hud, "ClosestPickup", Value::Object(Some(p)));
+fn the_shrink_step_raises_begin_shrinking_on_the_shortest_counted() {
+    let shrinks = |x: &Fx| x.seen().into_iter().filter(|(e, _)| e.starts_with("Shrink")).map(|(e, _)| e).collect::<Vec<_>>();
+    let setup = |max: i32| {
+        let mut x = fx();
+        let defaults = x.vm.defs.class_default(&mut x.vm.space, PICKUP).unwrap();
+        x.set(defaults, "PickupShrinkDuration", Value::Float(15.0));
+        let mut made = Vec::new();
+        for (i, life) in [20.0f32, 18.0, 5.0].into_iter().enumerate() {
+            let p = x.pickup([150.0, 40.0 * i as f32 + 500.0, 0.0], [0.0; 3]);
+            x.set(p, "LifeSpan", Value::Float(life));
+            made.push(p);
+        }
+        x.set(x.hud, "MaxNumPickups", Value::Int(max));
+        (x, made)
+    };
+    let (mut x, made) = setup(1);
+    x.tick().unwrap();
+    assert_eq!(shrinks(&x), [format!("Shrink {:?}", made[1])], "the 18");
+    let (mut x, _) = setup(2);
+    x.tick().unwrap();
+    assert!(shrinks(&x).is_empty(), "two counted, not above 2");
+    let (mut x, _) = setup(1);
+    let info = x.obj("Engine.WorldInfo");
+    x.set(info, "NetMode", Value::Byte(3));
+    x.set(x.hud, "WorldInfo", Value::Object(Some(info)));
+    x.tick().unwrap();
+    assert!(shrinks(&x).is_empty(), "a client world");
+    let (mut x, _) = setup(1);
+    x.set(x.hud, "WorldInfo", Value::Object(None));
+    x.tick().unwrap();
+    assert!(shrinks(&x).is_empty(), "no WorldInfo");
+    let (mut x, made) = setup(1);
+    let player = x.obj("Engine.Actor");
+    x.set(x.controller, "Player", Value::Object(Some(player)));
+    x.set(x.hud, "ClosestPickup", Value::Object(Some(made[2])));
     let n = not_yet(x.tick());
-    assert_eq!(n.missing, Missing::NotRead);
-    assert!(n.what.contains("open question 3") && !n.what.contains(PARTIAL_WRITES), "{n}");
-    assert_eq!(x.get(p, "bHasPickupParticleOffset"), Value::Bool(false), "nothing written");
-    assert_eq!(x.slot("ClosestPickup"), Some(p), "nothing written");
+    assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, SPLIT_SCREEN));
+    assert_eq!(x.slot("ClosestPickup"), Some(made[2]), "nothing written");
 }
 
 /// The headless world: the view, the bounds and the line check are each `NotYet { LayerAbsent }`, before any write;
@@ -774,7 +824,7 @@ fn a_missing_handler_is_found_before_any_write() {
     assert_eq!(x.slots(), (None, None));
 }
 
-/// The shrink refusal comes after the winner's checks: with a long-lived pickup and a winner beyond a quarter of the
+/// The shrink step comes after the winner's checks: with a long-lived pickup and a winner beyond a quarter of the
 /// range, the missing collision answers first.
 #[test]
 fn the_shrink_refusal_comes_after_the_line_check() {

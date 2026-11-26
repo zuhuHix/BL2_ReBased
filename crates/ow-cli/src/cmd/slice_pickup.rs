@@ -272,6 +272,9 @@ fn drop_at(vm: &mut Vm, class: ClassId, weapon: ObjRef, spawner: ObjRef, at: [f3
     let location = place(vm, spawner, at)?;
     let request = ow_world::actors::SpawnRequest::new(Some(class)).with_no_collision_fail(true).with_location(location);
     let pickup = ow_world::actors::spawn(vm, spawner, &request)?.ok_or_else(|| error("the pickup class did not spawn"))?;
+    // The hub's ruling 2 on #806 (lane IMPL-LINK7-HUD-TARGETING): the pickup is registered as its PostBeginPlay would
+    // register it, since the pickup world never begins play (logged; UNVERIFIED).
+    ow_inventory::hud_harness::register_pickup(vm, pickup)?;
     call(vm, pickup, "InitializeFromInventory", &[Value::Object(Some(weapon)), Value::Object(None), Value::Bool(true)])?;
     enter_pickup_state(vm, pickup)?;
     Ok(pickup)
@@ -363,6 +366,11 @@ fn build_with(
     *wrote = true;
     let pickup = drop(vm, class, weapon, pawn, AIMED_AT)?;
     level_world_info(vm, pickup, &[controller, pawn])?;
+    // The hub's ruling 1 on #806 (lane IMPL-LINK7-HUD-TARGETING): the harness HUD, made before any begin play (this
+    // world never begins play), with the setting on.
+    if ow_inventory::hud_harness::harness_on(vm) {
+        ow_inventory::hud_harness::harness_hud(vm, controller)?;
+    }
     let decoy = if decoy {
         // The decoy's gun, after the first gun's drop: the same steps.
         let w = gun(vm, line, false, prepare, init, wrote)?;
@@ -435,8 +443,14 @@ fn look(vm: &mut Vm, p: &Pickup) -> Result<(), VmError> {
     if touched != Some(decoy) {
         return Err(error(format!("look: Maya's CurrentTouchedPickupable is {touched:?}, not the decoy")));
     }
-    use ow_inventory::pickup_targeting::{Headless, Outcome, look as target};
-    match target(vm, p.controller, &mut Headless)? {
+    use ow_inventory::hud_harness::HarnessHost;
+    use ow_inventory::pickup_targeting::{Outcome, look as target};
+    // The hub's rulings 3 and 4 on #806 (lane IMPL-LINK7-HUD-TARGETING): the eye-point view and the line check under
+    // NoLevel (each logged; UNVERIFIED). The harness HUD was made at the pickup world's set-up (ruling 1).
+    let mut host = HarnessHost::for_world(vm);
+    let outcome = target(vm, p.controller, &mut host);
+    vm.log.extend(host.inputs.iter().map(|l| l.to_string()));
+    match outcome? {
         Outcome::Hover { winner, .. } if winner == p.pickup => {}
         other => return Err(error(format!("look: the targeting did not choose the aimed gun ({other:?})"))),
     }

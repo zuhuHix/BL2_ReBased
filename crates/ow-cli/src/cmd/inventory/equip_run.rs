@@ -648,7 +648,34 @@ pub(crate) fn pickup_world(
     // Link 6 after SetBase (lane IMPL-LINK6-AFTER-TAKE, the hub's ruling on NATIVE_ACTOR_SETBASE.md 4.2): the audio
     // stand-in turned on (it logs its own harness line), UNVERIFIED.
     ow_inventory::link6::enable_audio_stand_in(&mut world.vm)?;
+    // Link 7's harness HUD (lane IMPL-LINK7-HUD-TARGETING, the hub's ruling 1 on #806): its HUDDef is the globals
+    // definition's HUDDefinition, preloaded here (the game has it resident once the HUD's movie step ran).
+    preload_hud_definition(&mut world.vm, definition)?;
+    ow_inventory::hud_harness::enable_hud_targeting_harness(&mut world.vm)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
+}
+
+/// The log line of [`preload_hud_definition`].
+pub(crate) fn hud_preload_line(path: &str) -> String {
+    format!("harness input: set-up preload: {path} (UNVERIFIED: the HUD definition the game has resident)")
+}
+
+/// The globals definition's `HUDDefinition`, loaded through the store at the pickup world's set-up and logged before
+/// its load; one already resident, or a None field, is left as it is (lane IMPL-LINK7-HUD-TARGETING). The harness
+/// HUD itself refuses a definition the store has not loaded and never loads one. Answers whether it loaded.
+pub(crate) fn preload_hud_definition(vm: &mut Vm, definition: ObjRef) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(definition)?.class;
+    let Some(p) = vm.space.prop(class, "HUDDefinition") else { return Ok(false) };
+    let Value::Object(Some(hud)) = vm.space.read(definition, PropAddr::scalar(p))?.clone() else { return Ok(false) };
+    if !vm.defs.is_unloaded(&vm.space, hud) {
+        return Ok(false);
+    }
+    let path = vm.defs.handle_path(hud).unwrap_or_else(|| format!("{hud:?}"));
+    vm.log.push(hud_preload_line(&path));
+    let r = vm.defs.ensure_loaded(&mut vm.space, hud);
+    vm.log.extend(vm.defs.take_log());
+    r.map_err(VmError::from)?;
+    Ok(true)
 }
 
 /// The log line of the at-rest ruling's set-up.

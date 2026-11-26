@@ -47,9 +47,13 @@
 //! - **Suspension:** the owner's `Dead` state is checked first; when it holds, the pawn's suspend query is not asked.
 //!   The query is answered only for the concrete class `WillowPlayerPawn` driving nothing (the note: "no"). Any other
 //!   pawn, a subclass included, and a driven vehicle are refused (open question 1).
-//! - **The shrink bookkeeping** (section 8) is checked whenever the pass has a pawn, suspended or not, over every
-//!   counted pickup. When a counted pickup outlives the default's `PickupShrinkDuration` the tick is refused (open
-//!   question 3).
+//! - **The shrink bookkeeping** (section 8; its rule read in NATIVE_LINK7_HUD_TARGETING.md section 7, lane
+//!   IMPL-LINK7-HUD-TARGETING) runs whenever the pass has a pawn, suspended or not, over every counted pickup. It is
+//!   enabled when the HUD has a `WorldInfo` whose `NetMode` is not the client's (3) and the owner is not a split-screen
+//!   player (a `Player` of None: no; a set one needs the engine's local-player count, [`SPLIT_SCREEN`] `NotRead`).
+//!   Each counted pickup whose `LifeSpan` is above the `WillowPickup` default's `PickupShrinkDuration` counts; the one
+//!   with the smallest such `LifeSpan` is tracked. When the count is above the HUD's `MaxNumPickups` (by fit),
+//!   `BeginShrinking` is raised on it, resolved and checked in the plan and raised after the other writes.
 //! - **No pawn:** the native refills `ClosestPickup` over the HUD's `PostRenderedActors`. That slot has no reader on the
 //!   targeting path (the note: "not needed"), so Off leaves it emptied.
 //! - **The pickup's rotation** for the particle offset uses the same sine table as the view (the engine's rotation
@@ -69,6 +73,36 @@ use crate::equip::{bad, field, object_of, object_prop, required, write};
 
 /// The record these rules follow.
 pub const RECORD: &str = "NATIVE_PICKUP_TARGETING.md";
+/// The split-screen test's refusal for an owner with a `Player` (NATIVE_LINK7_HUD_TARGETING.md section 7).
+pub const SPLIT_SCREEN: &str = "the shrink bookkeeping's split-screen test: an owner with a Player needs the engine's \
+     local-player count";
+/// The record of the shrink rule.
+pub const RECORD_SHRINK: &str = "NATIVE_LINK7_HUD_TARGETING.md (section 7)";
+
+/// The hub's ruling on review of #806 (NATIVE_LINK7_HUD_TARGETING.md section 8): the line check under a `NoLevel`
+/// service answers no hit, `crate::hud_harness::HarnessHost` applying it (a VM service; its presence turns it on). Off
+/// only; the slice's two `NoLevel` worlds turn it on.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoLevelLineCheck;
+
+/// The set-up line of [`enable_no_level_line_check`].
+pub const NO_LEVEL_LINE_INPUT: &str = "harness input: the world turns on the pickup targeting's no-hit line check for a \
+     world with no level geometry (the hub's ruling on review of #806; UNVERIFIED)";
+
+/// Turns [`NoLevelLineCheck`] on, logging [`NO_LEVEL_LINE_INPUT`] (Off only, else a registration refusal; twice is a
+/// registration refusal too).
+pub fn enable_no_level_line_check(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Err(VmError::Registration {
+            key: "NoLevelLineCheck".to_string(),
+            reason: "the no-hit line check is an Off harness setting; Reference keeps the refusal",
+        });
+    }
+    vm.add_service(NoLevelLineCheck)?;
+    vm.log.push(NO_LEVEL_LINE_INPUT.to_string());
+    Ok(())
+}
+
 /// The text that marks a refusal after the pass's first write.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
@@ -108,6 +142,18 @@ pub trait Host {
     fn bounds_height(&mut self, vm: &Vm, pickup: ObjRef) -> Result<f32, VmError>;
     /// The first actor the world line check from `from` to `to` hits, None when it hits nothing.
     fn line_blocker(&mut self, vm: &Vm, from: [f32; 3], to: [f32; 3]) -> Result<Option<ObjRef>, VmError>;
+    /// [`Host::line_blocker`] for the line check of section 5, told the owner's `pawn` and the `target` pickup (a
+    /// host that must ignore them; lane IMPL-LINK7-HUD-TARGETING). By default the plain line check.
+    fn line_blocker_for(
+        &mut self,
+        vm: &Vm,
+        from: [f32; 3],
+        to: [f32; 3],
+        _pawn: ObjRef,
+        _target: ObjRef,
+    ) -> Result<Option<ObjRef>, VmError> {
+        self.line_blocker(vm, from, to)
+    }
 }
 
 /// The headless world: no camera, no component bounds, no collision (module documentation).
@@ -541,6 +587,8 @@ struct Plan {
     flagged: Vec<ObjRef>,
     /// The tail after the scoring writes (sections 6 and 7); None when the pass ends earlier.
     tail: Option<Tail>,
+    /// The shrink step's event: the pickup and its checked `BeginShrinking` call, raised last.
+    shrink: Option<(ObjRef, Checked)>,
     outcome: Outcome,
 }
 
@@ -556,6 +604,7 @@ struct Tail {
 
 /// The HUD's state the pass reads first.
 struct HudState {
+    hud: ObjRef,
     owner: Option<ObjRef>,
     definition: Option<ObjRef>,
     recipient: Option<ObjRef>,
@@ -565,6 +614,7 @@ struct HudState {
 
 fn hud_state(vm: &Vm, hud: ObjRef) -> Result<HudState, VmError> {
     Ok(HudState {
+        hud,
         owner: object_field(vm, hud, "PlayerOwner")?,
         definition: object_field(vm, hud, "HUDDef")?,
         recipient: object_field(vm, hud, "WPlayerOwner")?,
@@ -582,7 +632,7 @@ pub fn tick(vm: &mut Vm, hud: ObjRef, globals: &dyn Globals, host: &mut dyn Host
 }
 
 fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -> Result<Plan, VmError> {
-    let ended = |outcome| Plan { closest: None, flagged: Vec::new(), tail: None, outcome };
+    let ended = |outcome| Plan { closest: None, flagged: Vec::new(), tail: None, shrink: None, outcome };
     let (Some(owner), Some(hud_definition)) = (h.owner, h.definition) else { return Ok(ended(Outcome::Idle)) };
     let view = host.view(vm, owner)?;
     let Some(pawn) = object_field(vm, owner, "Pawn")? else { return Ok(ended(Outcome::NoPawn)) };
@@ -607,14 +657,20 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
     let mut closest: Option<(f32, ObjRef)> = None;
     let mut flagged = Vec::new();
     let mut best: (f32, Option<ObjRef>) = (0.0, None);
-    let mut shrinking = false;
+    // The shrink step's count and the tracked pickup (smallest LifeSpan above the duration).
+    let mut counted = 0i64;
+    let mut tracked: Option<(f32, ObjRef)> = None;
     for entry in &list {
         let Some(p) = object_of(entry, WHAT)? else { continue };
         if !vm.space.classes.is_child_of(class_of(vm, p)?, pickup_class) || !flag(vm, p, "bPickupable")? {
             continue;
         }
-        if float(vm, p, "LifeSpan")? > shrink_duration {
-            shrinking = true;
+        let life = float(vm, p, "LifeSpan")?;
+        if life > shrink_duration {
+            counted += 1;
+            if tracked.is_none_or(|(t, _)| life < t) {
+                tracked = Some((life, p));
+            }
         }
         if suspended {
             continue;
@@ -669,14 +725,40 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -
         }
         Some(w) => winner_tail(vm, h, w, v, look, look_flat, range, hover_particle)?,
     };
-    // The shrink refusal comes after the winner's and the event's checks (review r1 of #467, the note's plan order).
-    if shrinking {
-        return Err(refused(
-            "the shrink bookkeeping: a counted pickup outlives the WillowPickup default's PickupShrinkDuration, and the \
-             enable query and the HUD's limit are open question 3 (section 8)",
-        ));
+    // The shrink step after the winner's and the event's checks (review r1 of #467, the note's plan order).
+    let shrink = shrink_step(vm, h, owner, counted, tracked.map(|t| t.1))?;
+    Ok(Plan { closest: closest.map(|c| c.1), flagged, tail: Some(tail), shrink, outcome })
+}
+
+/// The shrink bookkeeping (module documentation): the `BeginShrinking` event to raise, if any. Every field it reads is
+/// declared with its kind, else a data error. Reads only.
+fn shrink_step(
+    vm: &mut Vm,
+    h: &HudState,
+    owner: ObjRef,
+    counted: i64,
+    tracked: Option<ObjRef>,
+) -> Result<Option<(ObjRef, Checked)>, VmError> {
+    let max = match required(vm, h.hud, "MaxNumPickups", WHAT)? {
+        Value::Int(i) => i64::from(i),
+        other => return Err(bad(WHAT, format!("MaxNumPickups is {}, not an int", other.kind_name()))),
+    };
+    let Some(info) = object_field(vm, h.hud, "WorldInfo")? else { return Ok(None) };
+    let client = match required(vm, info, "NetMode", WHAT)? {
+        Value::Byte(b) => b == 3,
+        other => return Err(bad(WHAT, format!("NetMode is {}, not a byte", other.kind_name()))),
+    };
+    if client {
+        return Ok(None);
     }
-    Ok(Plan { closest: closest.map(|c| c.1), flagged, tail: Some(tail), outcome })
+    if object_field(vm, owner, "Player")?.is_some() {
+        return Err(NotYet::not_read(SPLIT_SCREEN, RECORD_SHRINK).into());
+    }
+    let Some(p) = tracked.filter(|_| counted > max) else { return Ok(None) };
+    let f = method_of(vm, p, "BeginShrinking")?;
+    vm.prepare_call(f)?;
+    vm.check_call(f, Vec::new())?;
+    Ok(Some((p, Checked { f, args: Vec::new() })))
 }
 
 /// The recipient's handler `name`, resolved and checked in the plan (reviews r1 and r3 of #467):
@@ -723,7 +805,7 @@ fn checked_winner(
     let to_w = sub(location(vm, w)?, v);
     if length(horizontal(to_w)) > range * 0.25 {
         let from = sub(add(v, to_w), scale(unit_or_as_is(to_w), 25.0));
-        if let Some(hit) = host.line_blocker(vm, from, v)?
+        if let Some(hit) = host.line_blocker_for(vm, from, v, pawn, w)?
             && hit != w
             && Some(hit) != object_field(vm, w, "Base")?
         {
@@ -777,6 +859,7 @@ fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outc
     for p in plan.flagged {
         write(vm, p, "bHasPickupParticleOffset", Value::Bool(true), WHAT)?;
     }
+    let shrink = plan.shrink;
     let Some(tail) = plan.tail else { return Ok(plan.outcome) };
     write(vm, hud, "SavedLookAtInventory", obj(tail.seen_item), WHAT)?;
     if let Some(hover) = tail.hover_before {
@@ -800,6 +883,9 @@ fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outc
     }
     if let Some(seen) = tail.seen_item_after {
         write(vm, hud, "SavedLookAtInventory", obj(seen), WHAT)?;
+    }
+    if let Some((p, call)) = shrink {
+        vm.call(call.f, Some(p), call.args)?;
     }
     Ok(plan.outcome)
 }

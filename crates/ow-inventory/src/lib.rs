@@ -22,5 +22,6 @@ pub mod pickup_cost;
 pub mod link6;
 pub mod pickup_take;
 pub mod pickup_targeting;
+pub mod hud_harness;
 pub mod sort;
 pub mod spawn;

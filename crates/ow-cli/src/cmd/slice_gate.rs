@@ -1377,6 +1377,14 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
         return;
     }
     r.harness.push(ow_world::world::set_physics::BASE_STAND_IN_INPUT.to_string());
+    // The pickup targeting's no-hit line check under the same ruling's NoLevel service (the hub's ruling on review r1
+    // of #806, lane IMPL-LINK7-HUD-TARGETING).
+    if let Err(e) = ow_inventory::pickup_targeting::enable_no_level_line_check(&mut world.vm) {
+        r.stop = Some(classify_error("setup", &e));
+        ran[i] = Some(r);
+        return;
+    }
+    r.harness.push(ow_inventory::pickup_targeting::NO_LEVEL_LINE_INPUT.to_string());
     // The set-up's game info (lane LINK-6-PICKUP-GAMEINFO, `equip_run::pickup_game_info`), when it installed one.
     if world.vm.log.iter().any(|l| l == crate::cmd::inventory::equip_run::GAME_INFO_INPUT) {
         r.harness.push(crate::cmd::inventory::equip_run::GAME_INFO_INPUT.to_string());
@@ -1472,6 +1480,8 @@ fn phaselock_world(
     // The base search's stand-in under its harness setting (the hub's ruling on review of #798, R1).
     ow_world::world::set_physics::enable_no_level_base_search(&mut world.vm)?;
     harness.push(ow_world::world::set_physics::BASE_STAND_IN_INPUT.to_string());
+    ow_inventory::pickup_targeting::enable_no_level_line_check(&mut world.vm)?;
+    harness.push(ow_inventory::pickup_targeting::NO_LEVEL_LINE_INPUT.to_string());
     // The pickup worlds' empty scene layer (lane HARNESS-LINK9-SETUP, the hub's ruling on #623): a harness input, so
     // `Actor.AttachComponent` (the phaselock light's attach) makes only its script-visible writes.
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
