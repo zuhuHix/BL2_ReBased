@@ -13,7 +13,11 @@
 //! matched by its text). In order, the first refusal met is the answer:
 //! 1. `Animations` declared as an object (checked by the caller); None is nothing at all;
 //! 2. the tree root resident ([`not_loaded`], which names the object's role and path), declaring `NodeInitTag` as an int; the component declares `InitTag` as
-//!    an int (the tag field's name is the bone-transform note's fit, **UNVERIFIED**) and `AnimTickArray` as an array.
+//!    an int (the tag field's name is the bone-transform note's fit, **UNVERIFIED (fitted)**) and `AnimTickArray` as
+//!    an array. The note's other names are fits too, **UNVERIFIED (fitted)**: the fields past `CachedNumDesiredBones`
+//!    that it places by a 4-byte shift (`bIsIssuingNotifies`, `bReverseAnimSeqSearchOrder`,
+//!    `bAutoGenerateAdditiveSeqName` and `AddAnimSeqName`), and the list names `AnimSets` (the component's) and
+//!    `Sequences` (the set's) (review of #751, LOW 1).
 //!    The tick list is the component's `AnimTickArray` (the copy fills the component's and the root's alike);
 //! 3. each tick-list entry in order: None skipped; a store handle not loaded is [`TICK_NODE_NOT_LOADED`]. By its
 //!    **exact** class: one of [`EMPTY_STEP`], nothing; `Engine.AnimNodeSequence` or `WillowGame.WillowAnimNodeSequence`,
