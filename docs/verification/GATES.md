@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANIM-NODE-INIT-D-CORRECTIONS (2026-11-26, pc-hummer, code, on fix/anim-node-init-d-corrections from main
+afde0d73):** AI-assisted (Claude Code, Opus 5.5). `anim_node_init.rs` kind D follows #747: the additive override runs
+at init (the auto-name `Add_None` interned only at the write, the re-set, a read-only lookup), and the notifies guard
+needs a non-None `AnimSeqName`.
+- `cargo test --workspace -j 8 --no-fail-fast`: 3,781 passed / 0 failed / 58 ignored. `crate_edges_test.py`: OK.
+- Installed Off strict `--slice-gate` (release build, under the machine lock), base afde0d73 and this change: 6 ok / 8
+  NotYet on both, 42.9%. **Link 1 moved earlier:** from "UpdateAnimations: the tree nodes' ticks" to the additive
+  lookup's not-loaded `NotRead` for `Anim_Siren.Base_Siren`, an anim set on Maya's mesh that is not loaded when the
+  tree is initialised (links 3, 4, 5, 13 and 14 behind it). Whether a harness preload should stand in for the game's
+  streamed load is the hub's call. Links 6 and 7 unchanged. UNVERIFIED in game.
+
 **IMPL-UPDATEANIMATIONS-TREE-TICKS (2026-11-26, pc-hummer, on fix/rust-updateanimations-tree-ticks from main
 afde0d73):** AI-assisted (Claude Code, Opus 5.5). `UpdateAnimations`' per-node step in Off from
 NATIVE_UPDATEANIMATIONS_TREE_TICKS.md (`ow_world::world::tree_ticks`): the tag, nothing on the 28 empty-step classes,
