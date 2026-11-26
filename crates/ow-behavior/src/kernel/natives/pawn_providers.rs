@@ -30,8 +30,9 @@
 //!    [`NOT_LOADED`] (`NotRead`). Then the kernel's gate: a None definition is dropped; a definition outside the
 //!    provider classes is the decoder's `VmError::Script`; one whose `BehaviorSequences` is empty is dropped;
 //! 7. per kept definition, in list order: a repeat (its stock path met earlier in the list, as the kernel rule
-//!    compares) is the kernel rule's `NotRead`; then its first sequence with a `CustomEnableCondition` (a plain read
-//!    of the field) is the kernel rule's pass-2 `LayerAbsent`, with the same text and layer;
+//!    compares) is the kernel rule's `NotRead`; then pass 2's plan (`pass2`, NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4,
+//!    lane IMPL-BEHAVIOR-KERNEL-PASS2), whose refusals come here, before any write (it replaces the pass-2
+//!    `LayerAbsent`);
 //! 8. `ReplicatedBehaviorConsumerState.bNeedToApplyThisState` set: [`APPLY_REPLICATED`] (`NotRead`).
 //!
 //! **The commit:** register the pawn by `RegisterBehaviorConsumer`'s allocator (owner `Kernel`) and write its `PID`
@@ -48,7 +49,7 @@ use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
 use super::{
-    INVALID_PID, Owner, Process, borrow, claim_in, conditioned, free_pid, handle_pid, kernel, provider_into,
+    INVALID_PID, Owner, Process, borrow, claim_in, free_pid, handle_pid, kernel, provider_into,
     provider_twice, registered_twice, to_vm, with_pid,
 };
 use crate::provider::{self, PROVIDER_CLASSES, class_path_of, stock_path};
@@ -275,18 +276,6 @@ fn sequences(vm: &Vm, d: ObjRef) -> Result<Vec<Value>, VmError> {
     array_field(vm, d, "BehaviorSequences")
 }
 
-/// The name of the first of `sequences` with a `CustomEnableCondition` (a plain read), as the decoder names it.
-fn first_conditioned(vm: &Vm, sequences: &[Value]) -> Option<String> {
-    sequences.iter().find_map(|s| match provider::field(&vm.space, s, "CustomEnableCondition") {
-        Some(Value::Object(Some(_))) => Some(match provider::field(&vm.space, s, "BehaviorSequenceName") {
-            Some(Value::Name(n)) => vm.space.names.text(*n).into_owned(),
-            Some(Value::Str(t)) => t.to_string(),
-            _ => String::new(),
-        }),
-        _ => None,
-    })
-}
-
 /// The preflight (module documentation): `Ok(None)` for nothing to do. Reads only.
 fn preflight(vm: &Vm, pawn: ObjRef) -> Result<Option<Plan>, VmError> {
     let class = vm.space.heap.get(pawn)?.class;
@@ -334,9 +323,11 @@ fn preflight(vm: &Vm, pawn: ObjRef) -> Result<Option<Plan>, VmError> {
         if paths.contains(&path) {
             return Err(provider_twice());
         }
-        if let Some(name) = first_conditioned(vm, seqs) {
-            return Err(conditioned(&name, &path));
-        }
+        // Pass 2's plan (NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4, lane IMPL-BEHAVIOR-KERNEL-PASS2), read only: its
+        // refusals come here, before any write. The commit plans again (the same reads, after the earlier
+        // definitions' writes).
+        let _ = seqs;
+        super::pass2::plan(vm, pawn, *d)?;
         paths.push(path);
     }
     // 8.

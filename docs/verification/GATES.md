@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-BEHAVIOR-KERNEL-PASS2 (2026-11-26, pc-hummer, on fix/rust-behavior-kernel-pass2 from main c345fdb0):**
+AI-assisted (Claude Code, Opus 5.5). Off pass 2 of `IntializeBehaviorProviderForConsumer`
+(NATIVE_BEHAVIOR_KERNEL_PASS2.md section 4): link, register, react, behind `ow-vm`'s mission-condition service; the
+slice's verdict is the one verdict.
+`cargo test --workspace -j 8 --no-fail-fast` 3,863 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed
+Off strict `--slice-gate` (release build, under the machine lock) on local merges with E's #770 + #773: before and
+after 6 ok, X 51.2%, unchanged. Links 1, 3, 4, 5, 13 and 14 stop at the unbound `Pawn.IsPlayerPawn()`, which
+`ApplyBodyClassStartingValues` calls before `InitializeBehaviorProviders`. No real-game run.
+
 **IMPL-GETPAWNINVENTORYMANAGER + #773 LOWs (2026-11-26, pc-hummer, on fix/getpawninventorymanager-and-773-lows: #774
 @ d35bcbb8 with #773 merged):** AI-assisted (Claude Code, Opus 5.5). `GetPawnInventoryManager` bound in Off (an on-foot
 pawn's `InvManager`); the #773 LOWs (the `Owner` check tested, PhysX tests 6 and 7, a composed socket test). `cargo test

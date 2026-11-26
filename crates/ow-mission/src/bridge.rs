@@ -1101,6 +1101,9 @@ impl MissionScript {
         // the C++ timing, the pack registered with the director's provider (review r2, item 5).
         if vm.parity == ParityMode::Off {
             ow_vm::api::NativePack::register(&natives::Pack, vm)?;
+            // The answers the kernel's pass 2 asks (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 1): the one
+            // verdict over this bridge's mission (`crate::conditions`).
+            crate::conditions::install(vm, &self.inner.mission)?;
         }
         const BOUND: [(&str, Body); 33] = [
             ("WillowGame.MissionTracker.ActivateMission", MissionScript::n_activate),
@@ -3462,6 +3465,16 @@ impl MissionScript {
         let tracker = self.inner.o.tracker;
         for observer in observers {
             self.run(vm, |vm| call_by_name(vm, observer, name, vec![Value::Object(Some(tracker))]).map(|_| ()))?;
+        }
+        // Off (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 2): then the kernel-registered conditions stored under
+        // this mission, a separate list the walk above never reaches, are re-evaluated through the one verdict. The
+        // bridge has changed its own state by then, so a refusal is marked "stopped after partial writes".
+        if vm.parity == ParityMode::Off {
+            let mission = self.inner.mission.definition();
+            ow_behavior::kernel::natives::reevaluate_conditions(vm, mission).map_err(|e| match e {
+                VmError::NotYet(n) => VmError::NotYet(n.after_partial_writes()),
+                other => other,
+            })?;
         }
         Ok(())
     }

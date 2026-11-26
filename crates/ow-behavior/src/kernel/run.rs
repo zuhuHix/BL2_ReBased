@@ -540,7 +540,7 @@ fn flag(vm: &Vm, data: &Value, name: &str, function: &str) -> Result<bool, VmErr
 
 /// Whether `world`'s `NetMode` is `NM_Client`, by that value's position in the enum `NetMode` is declared with
 /// (review r1 of #439, item 4), never a constant.
-fn is_client(vm: &Vm, world: ObjRef, function: &str) -> Result<bool, VmError> {
+pub(crate) fn is_client(vm: &Vm, world: ObjRef, function: &str) -> Result<bool, VmError> {
     let class = vm.space.heap.get(world)?.class;
     let p = vm.space.prop(class, "NetMode").ok_or_else(|| {
         script(function, format!("{} declares no NetMode", ow_attr::eval::class_path(&vm.space, world)))

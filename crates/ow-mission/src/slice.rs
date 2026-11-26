@@ -125,7 +125,6 @@ const COMBAT_FOLLOW_UP: &str = "the combat chain wired into the Fire slice (foll
 const SETTLE: usize = 16;
 
 /// The mission status bits a condition looks up, by `Status::index` (the C++ `statusFields`).
-const STATUS_FIELDS: [&str; 4] = ["bNotStarted", "bActive", "bReadyToTurnIn", "bComplete"];
 
 /// What the host must do or show, in order (the C++ `HostEvent::Kind`).
 #[non_exhaustive]
@@ -680,52 +679,17 @@ impl FireMissionSlice {
         Ok(())
     }
 
-    /// One `BehaviorSequenceEnableByMission` verdict from the tracker's current state (module documentation).
+    /// One `BehaviorSequenceEnableByMission` verdict from the tracker's current state: the one verdict of
+    /// `crate::conditions` (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 3), which the kernel's pass 2 asks too.
+    /// A mission other than the slice's own is NotStarted, as `GetMissionStatus` answers; the slice's completed set no
+    /// longer counts as Complete here (decision 2026-11-26-NNN). An objective outside its mission is reported and
+    /// false.
     fn condition_holds(&self, vm: &mut Vm, condition: ObjRef) -> Result<bool, MissionError> {
-        let m = &self.inner.mission;
-        let linked = ref_path(vm, prop(&vm.space, condition, "LinkedMission")?.as_ref())?;
-        let own = linked == m.path();
-        let truth = |vm: &Vm, v: Option<&Value>| v.is_some_and(|v| v.truth(&vm.space.names));
-        let specific = truth(vm, prop(&vm.space, condition, "bIsObjectiveSpecific")?.as_ref());
-        let mut verdict = if !specific {
-            let state = if own {
-                STATUS_FIELDS[usize::from(m.status().index())]
-            } else if self.inner.state.borrow().completed.contains(&linked) {
-                "bComplete"
-            } else {
-                "bNotStarted"
-            };
-            let states = prop(&vm.space, condition, "MissionStatesToLinkTo")?;
-            truth(vm, states.as_ref().and_then(|v| field(&vm.space, v, state)))
-        } else {
-            let objective = ref_path(vm, prop(&vm.space, condition, "LinkedObjective")?.as_ref())?;
-            if objective.is_empty() {
-                return Ok(false);
-            }
-            let state = if own { m.objective_state(&objective) } else { "NotStarted" };
-            if state.is_empty() {
-                self.error(format!("enable condition names an objective outside its mission: {objective}"));
-                return Ok(false);
-            }
-            let states = prop(&vm.space, condition, "ObjectiveStatesToLinkTo")?;
-            let bit = format!("b{state}");
-            truth(vm, states.as_ref().and_then(|v| field(&vm.space, v, &bit)))
-        };
-        if verdict
-            && let Some(Value::Array(list)) = prop(&vm.space, condition, "ObjectiveSetRestrictions")?
-            && !list.is_empty()
-        {
-            verdict = false;
-            if own {
-                for set in list.iter() {
-                    if m.set_active(&ref_path(vm, Some(set))?) {
-                        verdict = true;
-                        break;
-                    }
-                }
-            }
+        let v = crate::conditions::verdict(vm, &self.inner.mission, condition)?;
+        if let Some(objective) = v.outside {
+            self.error(format!("enable condition names an objective outside its mission: {objective}"));
         }
-        Ok(verdict)
+        Ok(v.value)
     }
 
     /// What every mission notification does to the registered dummy (module documentation).

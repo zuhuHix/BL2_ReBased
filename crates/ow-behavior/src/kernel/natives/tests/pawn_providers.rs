@@ -199,22 +199,6 @@ fn is_layer_absent(m: &Missing) -> bool {
     matches!(m, Missing::LayerAbsent(_))
 }
 
-/// Like [`Pawns::refused`], for a `LayerAbsent` of any layer.
-fn refused_layer(x: &mut Pawns, pawn: ObjRef) -> String {
-    let before = counters(&x.t.vm);
-    let text = match x.run(pawn) {
-        Err(VmError::NotYet(n)) => {
-            assert!(is_layer_absent(&n.missing), "{n}");
-            n.to_string()
-        }
-        other => panic!("expected NotYet, got {other:?}"),
-    };
-    assert_eq!(counters(&x.t.vm), before, "{text}: nothing counted");
-    assert!(!ow_core::notyet::is_partial_writes(&text), "{text}");
-    assert_eq!(x.pid(pawn), INVALID_PID, "{text}");
-    assert_eq!(process_of(&x.t.vm, pawn).unwrap(), None, "{text}");
-    text
-}
 
 // 1.
 #[test]
@@ -291,7 +275,7 @@ fn a_stance_with_one_enabled_sequence_registers_and_runs_pass_one() {
 
 // 6, and Maya's shape (section 2.3): the conditioned events definition refuses with nothing written.
 #[test]
-fn a_conditioned_player_event_definition_is_the_pass_two_layer_absent() {
+fn a_conditioned_player_event_definition_with_an_unloaded_condition_is_refused() {
     let mut x = pawns(ParityMode::Off, true, true);
     let cond = x.def("TestCond", CONDITIONAL);
     let ok = x.def("TestPassOk", PASS_OK);
@@ -310,9 +294,10 @@ fn a_conditioned_player_event_definition_is_the_pass_two_layer_absent() {
     let default = x.holding(x.region, "HitRegion_Body", Some(empty));
     x.set(b, "DefaultHitRegion", Value::Object(Some(default)));
     let p = x.pawn(Some(b));
-    let text = refused_layer(&mut x, p);
-    assert!(text.contains("pass 2 of IntializeBehaviorProviderForConsumer: sequence Gated of"), "{text}");
-    assert!(text.contains("has a CustomEnableCondition"), "{text}");
+    // Pass 2's plan (lane IMPL-BEHAVIOR-KERNEL-PASS2) replaces the pass-2 LayerAbsent: its step 1, the condition a
+    // store handle not loaded yet (the preflight loads nothing), is the not-loaded NotRead, before any write.
+    let text = x.refused(p, Missing::NotRead);
+    assert!(text.contains("a CustomEnableCondition the store has not loaded"), "{text}");
     assert!(x.t.seen().is_empty(), "pass 1 never ran");
 }
 
@@ -487,8 +472,8 @@ fn preflight_seven_takes_the_first_definition_that_refuses() {
     let b = x.body_class();
     x.list(b, "ScrapedStances", &[Some(s1), Some(s2), Some(s3)]);
     let p = x.pawn(Some(b));
-    let text = refused_layer(&mut x, p);
-    assert!(text.contains("has a CustomEnableCondition"), "{text}");
+    let text = x.refused(p, Missing::NotRead);
+    assert!(text.contains("a CustomEnableCondition the store has not loaded"), "{text}");
     // A repeat first, then a conditioned definition: the repeat.
     let mut y = pawns(ParityMode::Off, true, true);
     let cond = y.def("TestCond", CONDITIONAL);

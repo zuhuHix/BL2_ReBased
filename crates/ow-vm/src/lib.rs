@@ -13,6 +13,7 @@ pub mod census;
 pub mod error;
 pub mod interp;
 pub mod latent;
+pub mod mission_conditions;
 pub mod natives_core;
 pub mod path_name;
 pub mod func_name;
