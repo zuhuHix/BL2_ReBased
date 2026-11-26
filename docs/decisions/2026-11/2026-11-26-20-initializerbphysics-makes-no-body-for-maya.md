@@ -30,4 +30,9 @@ bounds check changed.
   - (b): the smallest record, if ever needed, makes the `BodyInstance` or `PhysicsAssetInstance` objects without
     simulation.
 - **Next** (a prediction, not a run): `SetupSkeletalMeshPhysicsForPhysXEffects`' unbound `Engine.GetPhysXLevel`.
+- **Review r1 (#763):**
+  - `SetPushesRigidBodies`' refusal is folded into the preflight, so every refusal comes before the first write;
+  - 2.A's refusal L for an unrecorded live entry, and the template receiver's physics `LayerAbsent`, stay; no write
+    on a template's components;
+  - the cloth bool's declaration is listed (fitted); the component count is corrected; three tests added.
 - **Clean room:** a different lane implements this note.

@@ -68,7 +68,8 @@ the component set-up, with **fixed** true unless the pawn's `Physics` is `PHYS_R
 ### 2.3 Maya's case
 
 The pawn's `Physics` is not `PHYS_RigidBody`, so **fixed** is true and every attached entry is visited:
-- the four non-primitive components: nothing;
+- the five non-primitive components, of four classes (two light environments, the special move, the dialog and the
+  status effects): nothing;
 - the cylinder (attachment 13): no shape, so nothing;
 - **the body mesh (attachment 0, `SkeletalMeshComponent`):**
   - its template has `bUseSingleBodyPhysics` 0, `bHasPhysicsAssetInstance` false and `bEnableSoftBodySimulation`
@@ -122,19 +123,33 @@ bools and an array the port has. The rule replaces 2.A's attached-entry `LayerAb
 - then each `Attachments` entry whose component is attached (the attach record under the same owner), the same rule,
   recursively, in array order.
 
+**2.A's other cases stay** (review r1 of #763, the hub's rulings):
+- **a live entry not in the attach record** (attachment unknown): refusal L's `LayerAbsent`, as 2.A says, found in the
+  preflight;
+- **a template receiver** (`Origin::Default`, attached by `bAttached`): **the physics `LayerAbsent`, as 2.A rules**.
+  The skeletal rule's writes are not made on a template's or a class default's components. The slice's case is the
+  live pawn.
+
 **Preflight** (write-free and load-free, over the whole walk and its recursion, before any write):
-- every class, flag and field above declared with its kind (`bDisableAllRigidBody`, `bUseSingleBodyPhysics`,
-  `bHasPhysicsAssetInstance`, `bSkelCompFixed`, `bEnableSoftBodySimulation`, `ClothSim`, `ClothMeshIndexData`,
-  `SkeletalMesh`, `Attachments` and its `Component` member), else `VmError::Script`;
+- every class, flag and field above declared with its kind, else `VmError::Script`:
+  - `bDisableAllRigidBody`, `bHasPhysicsAssetInstance`, `bSkelCompFixed` and `bEnableSoftBodySimulation`, bools;
+  - `bUseSingleBodyPhysics`, an int; `ClothSim`, a struct (a pointer); `ClothMeshIndexData`, an array of ints;
+  - `SkeletalMesh`, an object; `Attachments`, an array of structs with a `Component` member, an object;
+  - the mesh's cloth bool, **`bClothMetal` (fitted, UNVERIFIED)**, a bool on `SkeletalMesh`, read only when `ClothSim`
+    is zero and the component has a mesh;
 - every entry, attachment component and `SkeletalMesh` resident, else `NotYet { NotRead }` (a load is a write);
-- every refusal above checked before the first write. The game writes component by component, so a refusal on a later
-  component would follow writes on earlier ones. The port refuses up front instead, and so needs no partial-writes
-  prefix. (That ordering difference is the port's; nothing on Maya's path refuses.)
+- refusal L for a live entry not in the record, and the template receiver's `LayerAbsent` (above);
+- **`SetPushesRigidBodies`' own refusal, folded in** (the hub's ruling): with `bPushesRigidBodies` set and an attached
+  `CollisionComponent`, 2.A's physics `LayerAbsent` (the pushing body), and refusal L's convention when it is not in
+  the record. It is checked here, before the walk writes;
+- **every refusal comes before the first write.** The game writes component by component, so a refusal on a later
+  component, or on the pushing body, would follow writes on earlier ones. The port refuses up front instead, and so
+  needs no partial-writes prefix. (That ordering difference is the port's; nothing on Maya's path refuses.)
 
 **The physics scene.** The game asks for one first. The port has none, and treats it as present: the rule above is what
 the game does with one.
 
-**Then `SetPushesRigidBodies`**, as 2.A already rules (Maya: nothing).
+**Then `SetPushesRigidBodies`**, as 2.A already rules, with its refusal already checked (Maya: nothing).
 
 ### 3.2 (b) The smallest record, for the cases that do make bodies
 
@@ -170,6 +185,11 @@ With 3.1 bound (and #760 for the attach):
 8. An attached component of an unread class (a toy native component class): the `NotRead` naming it.
 9. A cloth bool set on the mesh with `ClothSim` zero: the cloth `NotRead`.
 10. A `GearLikenessMeshComponent` with no `SkeletalMesh`: the writes, no cloth step (the mesh test is guarded).
+11. **The pushing body first:** an attached skeletal entry with every flag off, and `bPushesRigidBodies` set with an
+    attached `CollisionComponent`: the physics `LayerAbsent`, and `bSkelCompFixed` **not** written.
+12. **A live entry not in the attach record** (with `bAttached` false): refusal L's `LayerAbsent`, nothing written.
+13. **A template receiver** (`Origin::Default`) whose skeletal entry has `bAttached` set: the physics `LayerAbsent`, and
+    the template's `bSkelCompFixed` unchanged.
 
 ## Open questions
 
