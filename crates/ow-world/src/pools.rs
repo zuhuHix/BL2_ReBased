@@ -1121,19 +1121,24 @@ pub fn pool_for_resource(
 ) -> Result<Created, VmError> {
     let manager = ensure_manager(vm, mgr, owner)?;
     let reference = match (manager, resource) {
-        (Some(m), Some(res)) => match map_slot(vm, m, res)? {
-            Some(i) if i < POOL_SLOTS => {
-                let guid = match slot(&vm.space, m, i)? {
-                    Some(p) => byte(&vm.space, p, "PoolGUID")?,
-                    None => INVALID_BYTE,
-                };
-                resolve(&vm.space, PoolRef::new(Some(m), i, guid, None))?.0
-            }
-            _ => PoolRef::INVALID,
-        },
+        (Some(m), Some(res)) => existing_pool(vm, m, res)?,
         _ => PoolRef::INVALID,
     };
     Ok(Created { manager, reference })
+}
+
+/// The pool manager `m` already holds for `res`, by the resource map, resolved (invalid when none). Reads only.
+fn existing_pool(vm: &Vm, m: ObjRef, res: ObjRef) -> Result<PoolRef, VmError> {
+    Ok(match map_slot(vm, m, res)? {
+        Some(i) if i < POOL_SLOTS => {
+            let guid = match slot(&vm.space, m, i)? {
+                Some(p) => byte(&vm.space, p, "PoolGUID")?,
+                None => INVALID_BYTE,
+            };
+            resolve(&vm.space, PoolRef::new(Some(m), i, guid, None))?.0
+        }
+        _ => PoolRef::INVALID,
+    })
 }
 
 /// `ResourcePoolManager.RecalculateBaseValues(Mgr)` (NATIVE_LEVEL_UP_ATTRIBUTES.md section 2, UNVERIFIED; observed
@@ -1618,6 +1623,44 @@ fn natives() -> [(&'static str, Body); 26] {
     ]
 }
 
+/// [`controller_pool`]'s refusal for a controller driving a vehicle with no pool for the resource.
+pub const VEHICLE_POOL_LOOKUP: &str =
+    "the pool lookup of a vehicle that provides pools (Controller.GetResourcePoolForResourceDefinition)";
+
+/// The refusals [`controller_pool`] raises before its first write, checked on the state as it is, reading only (lane
+/// IMPL-UPDATEAMMOCOUNTS, review r1 of #789): a controller whose pawn is a vehicle with no pool its existing manager
+/// already holds for `resource` ([`VEHICLE_POOL_LOOKUP`], `NotRead`), and, with an existing manager, a missing
+/// [`PoolMaps`] service (its `LayerAbsent`). A None resource, or a lookup that would make a manager first, is clear
+/// here: the refusals after that make (a creation's) come after a write.
+pub fn controller_pool_preflight(vm: &Vm, controller: ObjRef, resource: Option<ObjRef>) -> Result<(), VmError> {
+    let Some(res) = resource else {
+        return Ok(());
+    };
+    let mgr = object(&vm.space, controller, "ResourcePoolManager")?;
+    let found = match mgr {
+        Some(m) => existing_pool(vm, m, res)?.data.is_some(),
+        None => false,
+    };
+    if !found
+        && let Some(pawn) = object(&vm.space, controller, "Pawn")?
+        && is_a(&vm.space, pawn, "Vehicle")?
+    {
+        return Err(NotYet::not_read(VEHICLE_POOL_LOOKUP, RECORD).into());
+    }
+    Ok(())
+}
+
+/// The value of `controller`'s pool for `resource` by [`controller_pool`] with `create`: its `CurrentValue` (a float)
+/// through the resolved handle, else 0 (lane IMPL-UPDATEAMMOCOUNTS: `UpdateAmmoCounts`' lookup,
+/// NATIVE_UPDATE_AMMO_COUNTS_AND_TAKE.md section 3.1).
+pub fn controller_pool_value(vm: &mut Vm, controller: ObjRef, resource: ObjRef, create: bool) -> Result<f32, VmError> {
+    let r = controller_pool(vm, controller, Some(resource), create)?;
+    match resolve(&vm.space, r)?.1 {
+        Some(p) => float(&vm.space, p, "CurrentValue"),
+        None => Ok(0.0),
+    }
+}
+
 /// `Controller.GetResourcePoolForResourceDefinition(Resource, bCreatePoolIfOneDoesntExist)` (section 1.5,
 /// medium-high): with a resource, and a manager or `create`, the controller's manager is made if necessary and the
 /// map lookup tried; a controller whose pawn is a vehicle is `NotYet` (the vehicle's pool provider is not read);
@@ -1646,11 +1689,7 @@ pub fn controller_pool(
                 return Ok(found.reference);
             }
         }
-        return Err(NotYet::not_read(
-            "the pool lookup of a vehicle that provides pools (Controller.GetResourcePoolForResourceDefinition)",
-            RECORD,
-        )
-        .into());
+        return Err(NotYet::not_read(VEHICLE_POOL_LOOKUP, RECORD).into());
     }
     let found = pool_for_resource(vm, mgr, Some(controller), Some(res))?;
     let spawned = if mgr.is_none() { found.manager } else { None };

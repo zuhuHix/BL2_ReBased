@@ -13,10 +13,12 @@
 //! - the eight definition fields declared as objects on its class, and the eight caches as floats on the controller's,
 //!   else `VmError::Script`;
 //! - each set definition resident, else [`AMMO_NOT_LOADED`] (`NotRead`);
-//! - all eight lookups' own refusal checked against the state before the call (the hub's correction on #785): the
-//!   lookup refuses before it writes only for a controller whose pawn is a vehicle (`pools::controller_pool`), so that
-//!   is checked once here, [`VEHICLE_POOL`] (`NotRead`). A later lookup's refusal (a pool definition's load, a
-//!   creation) comes after a write and carries the prefix.
+//! - all eight lookups' own pre-write refusals checked against the state before the call (the hub's correction on
+//!   #785), through `pools::controller_pool_preflight` (review r1 of #789), which mirrors `pools::controller_pool`: a
+//!   controller whose pawn is a vehicle and whose existing manager holds no pool for that definition is
+//!   [`VEHICLE_POOL`] (`NotRead`); one whose manager already holds the pool is not refused; with an existing manager,
+//!   a missing pool-map service is its `LayerAbsent`. A later lookup's refusal (a pool definition's load, a creation)
+//!   comes after a write and carries the prefix.
 //!
 //! The commit, in [`AMMO`]'s order, per set definition: the controller's pool through
 //! `pools::controller_pool(.., create = true)` (the lookup with creation, NATIVE_COMBAT_GROUNDWORK.md 1.5: a missing
@@ -72,8 +74,7 @@ pub const AMMO_NOT_LOADED: &str = "UpdateAmmoCounts: an ammo definition the stor
 pub const DLC_ITEM_SET: &str = "IsDLCRequirementMet: the DLC item set's own check";
 pub const BALANCE_NOT_LOADED: &str = "IsDLCRequirementMet: a balance definition the store has not loaded (a load is a write)";
 pub const OTHER_INVENTORY: &str = "IsDLCRequirementMet: the DLC check of";
-pub const VEHICLE_POOL: &str =
-    "the pool lookup of a vehicle that provides pools (Controller.GetResourcePoolForResourceDefinition)";
+pub const VEHICLE_POOL: &str = ow_world::pools::VEHICLE_POOL_LOOKUP;
 pub const BODY_POSE: &str = "WillowPickup.GetSaveRotation: a rigid-body pickup's body pose";
 pub const PHYSICS_LAYER: &str = "a physics layer (rigid bodies)";
 /// The eight ammo kinds, in the native's order: (the definition field on `GlobalsDefinition`, the cache field on
@@ -124,6 +125,8 @@ fn update_ammo_counts(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Bool(b) => *b,
         other => return Err(bad(AMMO_WHAT, format!("bSilent holds {}, not a bool", other.kind_name()))),
     };
+    // "No globals: nothing" (3.1). `world_globals`' only `LayerAbsent` is the world's missing globals object, so this
+    // also covers a world whose globals were never set up (no `WorldQuery::set_globals`), not only a game without one.
     let globals = match crate::globals::world_globals(c.vm) {
         Ok(g) => g,
         Err(VmError::NotYet(n)) if matches!(n.missing, ow_core::Missing::LayerAbsent(_)) => return Ok(Value::None),
@@ -137,14 +140,9 @@ fn update_ammo_counts(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 const AMMO_WHAT: &str = "WillowPlayerController.UpdateAmmoCounts";
 
 /// The value of `controller`'s pool for `ammo` by the lookup with creation (module documentation): its `CurrentValue`
-/// through the resolved handle, else 0.
+/// through the resolved handle, else 0 (`pools::controller_pool_value`, tested in `ow-world`'s pool tests).
 fn pool_value(vm: &mut Vm, controller: ObjRef, ammo: ObjRef) -> Result<f32, VmError> {
-    let r = ow_world::pools::controller_pool(vm, controller, Some(ammo), true)?;
-    let (_, pool) = ow_world::pools::resolve(&vm.space, r)?;
-    match pool {
-        Some(p) => float_field(vm, p, "CurrentValue", AMMO_WHAT),
-        None => Ok(0.0),
-    }
+    ow_world::pools::controller_pool_value(vm, controller, ammo, true)
 }
 
 /// The pool lookup [`update_ammo`] uses: (the controller, the ammo definition) to the value.
@@ -178,14 +176,9 @@ fn ammo_plan(vm: &Vm, controller: ObjRef, definition: ObjRef) -> Result<Vec<(Obj
             planned.push((a, cache, kind));
         }
     }
-    // The lookups' own refusal before any write: a controller whose pawn is a vehicle.
-    if !planned.is_empty()
-        && let Some(Value::Object(Some(pawn))) = read(vm, controller, "Pawn")?
-    {
-        let class = vm.space.heap.get(pawn)?.class;
-        if vm.space.classes.by_path("Engine.Vehicle").is_some_and(|v| vm.space.classes.is_child_of(class, v)) {
-            return Err(NotYet::not_read(VEHICLE_POOL, ow_world::pools::RECORD).into());
-        }
+    // The lookups' own pre-write refusals, each against the state before the call (review r1 of #789).
+    for (ammo, _, _) in &planned {
+        ow_world::pools::controller_pool_preflight(vm, controller, Some(*ammo))?;
     }
     Ok(planned)
 }

@@ -9,8 +9,11 @@ is unchanged.
 - **What was decided (Off only):**
   - `ow-inventory` `pickup_take` binds five keys:
     - `UpdateAmmoCounts`:
-      - the preflight checks the eight definitions' declarations and residency, and the pool lookup's own refusal
-        (a vehicle pawn), against the state before the call;
+      - the preflight checks the eight definitions' declarations and residency, then each lookup's own pre-write
+        refusals against the state before the call, through `pools::controller_pool_preflight` (review r1 of #789),
+        which mirrors `pools::controller_pool`: a vehicle pawn is refused only when its controller's existing manager
+        holds no pool for that definition, and with an existing manager a missing pool-map service is its
+        `LayerAbsent`;
       - the commit runs the lookup with creation, raises `ScriptAnnounceAmmoGain(kind, gain)` on a non-silent rise,
         then writes the cache;
       - a refusal after a write carries the prefix;
@@ -50,12 +53,17 @@ is unchanged.
   - seven ammo definitions were preloaded (one was already resident), and the at-rest line was logged at the key;
   - link 7's stop is unchanged; only its harness list gained the set-up lines. Every other row is unchanged.
 - **Tests** (invented classes and one invented package):
-  - `pickup_take` (14):
+  - `pickup_take` (18 after review r1 of #789):
     - `UpdateAmmoCounts`: the order, gains, silence, None, fall and equal;
-    - the preflight refusals, which leave the counters, `class_code_loads` and the name table unchanged;
+    - the preflight refusals, which leave the counters, `class_code_loads` and the name table unchanged, and a
+      missing pool map refused by the preflight;
     - the mistyped declarations, the lookup refusal's prefix, and the native through the globals;
-    - `GetSaveRotation`'s cases and the ruling;
-    - `IsDLCRequirementMet`, `GetResourcePoolContext`, `EvaluateExpressions`, and Reference;
+    - `GetSaveRotation`'s cases and the ruling, and NATIVE_PICKUP_SAVE_ROTATION.md section 6 tests 5 and 6;
+    - `IsDLCRequirementMet`, `GetResourcePoolContext`, `EvaluateExpressions` (empty lists, and And and Or over two
+      expressions on a toy attribute), and Reference;
+  - `ow-world` pools (2): the preflight (a vehicle pawn whose manager holds the pool is not refused, one without it
+    is, reading only) and `pools::controller_pool_value` through the real lookup with creation (a missing pool is
+    made and its value read, 0 in the fixture);
   - `actor_take` (9):
     - `ComponentList`'s filter and its guard;
     - `MakeNoise` and `IsUsingVehicle`;

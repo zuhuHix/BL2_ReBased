@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
+use ow_attr::api::ExprMode;
 use ow_core::notyet::Missing;
 use ow_core::{ObjectPath, ParityMode};
 use ow_defs::DefStore;
@@ -63,7 +64,7 @@ fn fx_in(mode: ParityMode) -> Fx {
     let props = vec![decl(&mut vm, "Controller", o.clone()), decl(&mut vm, "DrivenVehicle", o.clone())];
     let pawn = vm.space.classes.define("Engine.Pawn", Some(actor), props).unwrap();
     vm.space.classes.define("Engine.Vehicle", Some(pawn), vec![]).unwrap();
-    let props = vec![decl(&mut vm, "Pawn", o.clone())];
+    let props = vec![decl(&mut vm, "Pawn", o.clone()), decl(&mut vm, "ResourcePoolManager", o.clone())];
     let controller = vm.space.classes.define("Engine.Controller", Some(actor), props).unwrap();
     let caches: Vec<_> = AMMO.iter().map(|(_, cache, _)| decl(&mut vm, cache, PropKind::Float)).collect();
     let pc = vm.space.classes.define("WillowGame.WillowPlayerController", Some(controller), caches).unwrap();
@@ -546,4 +547,145 @@ fn reference_binds_nothing() {
     for key in [UPDATE_AMMO_COUNTS, GET_SAVE_ROTATION, IS_DLC_REQUIREMENT_MET, GET_RESOURCE_POOL_CONTEXT, EVALUATE_EXPRESSIONS] {
         assert!(!x.vm.has_native(key), "{key}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of #789: the LOW test gaps
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A world for `EvaluateExpressions` over real expressions (the name parts' attribute fixture, cut down): a weapon
+/// whose float stack attribute `Bonus` is 5, an attribute reading it through the weapon context resolver, and the
+/// expression struct. Answers the VM, the weapon, the attribute and the struct.
+fn expr_world() -> (Vm, ObjRef, ObjRef, StructId) {
+    let mut space = ObjectSpace::new();
+    let object = space.classes.define("Core.Object", None, vec![]).unwrap();
+    let d = |space: &mut ObjectSpace, name: &str, kind: PropKind| PropertyDecl::new(space.names.intern(name), kind);
+    let o = PropKind::Object { class: object };
+    let objs = PropKind::Array(Box::new(o.clone()));
+    let byte = PropKind::Byte { enum_: None };
+    let decls = vec![d(&mut space, "ContextResolverChain", objs.clone()), d(&mut space, "ValueResolverChain", objs)];
+    let base = space.classes.define("Engine.AttributeDefinitionBase", Some(object), decls).unwrap();
+    let attribute = space.classes.define("Engine.AttributeDefinition", Some(base), vec![]).unwrap();
+    let decls = vec![d(&mut space, "PropertyName", PropKind::Name)];
+    let value_resolver = space.classes.define("Engine.ObjectPropertyAttributeValueResolver", Some(object), decls).unwrap();
+    let context_resolver = space.classes.define("Engine.WeaponAttributeContextResolver", Some(object), vec![]).unwrap();
+    let fields = vec![
+        d(&mut space, "AttributeOperand1", o.clone()),
+        d(&mut space, "ComparisonOperator", byte.clone()),
+        d(&mut space, "Operand2Usage", byte.clone()),
+        d(&mut space, "AttributeOperand2", o.clone()),
+        d(&mut space, "ConstantOperand2", PropKind::Float),
+    ];
+    let expr = space.classes.define_struct("Test.AttributeExpressionData", None, fields).unwrap();
+    let actor = space.classes.define("Engine.Actor", Some(object), vec![]).unwrap();
+    let engine_weapon = space.classes.define("Engine.Weapon", Some(actor), vec![]).unwrap();
+    let decls_m = vec![d(&mut space, "Type", byte), d(&mut space, "Value", PropKind::Float)];
+    let modifier = space.classes.define("Core.AttributeModifier", Some(object), decls_m).unwrap();
+    let decls = vec![
+        d(&mut space, "Bonus", PropKind::FloatAttribute).with_flags(PropertyDecl::STACK_ATTRIBUTE),
+        d(&mut space, "BonusBaseValue", PropKind::FloatAttribute).with_flags(PropertyDecl::PLAIN_ATTRIBUTE),
+        d(&mut space, "BonusModifierStack", PropKind::Array(Box::new(PropKind::Object { class: modifier }))),
+    ];
+    let weapon_class = space.classes.define("WillowGame.WillowWeapon", Some(engine_weapon), decls).unwrap();
+    let (v, b, k) = (space.names.intern("Bonus"), space.names.intern("BonusBaseValue"), space.names.intern("BonusModifierStack"));
+    space.classes.link_attribute(weapon_class, v, b, k).unwrap();
+    let alloc = |space: &mut ObjectSpace, c: ClassId, n: &str| space.alloc(c, n, None, Origin::Runtime).unwrap();
+    let weapon = alloc(&mut space, weapon_class, "Weapon_0");
+    let c = alloc(&mut space, context_resolver, "Context_0");
+    let r = alloc(&mut space, value_resolver, "Value_0");
+    let a = alloc(&mut space, attribute, "Bonus_0");
+    let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(AttributeSystem::standard().unwrap()), ParityMode::Off);
+    let put = |vm: &mut Vm, o: ObjRef, name: &str, v: Value| {
+        let p = vm.space.prop(vm.space.heap.get(o).unwrap().class, name).unwrap();
+        vm.space.write(o, PropAddr::scalar(p), v).unwrap();
+    };
+    put(&mut vm, weapon, "Bonus", Value::Float(5.0));
+    put(&mut vm, weapon, "BonusBaseValue", Value::Float(5.0));
+    let name = Value::Name(vm.space.names.intern("Bonus"));
+    put(&mut vm, r, "PropertyName", name);
+    put(&mut vm, a, "ContextResolverChain", Value::array(vec![Value::Object(Some(c))]));
+    put(&mut vm, a, "ValueResolverChain", Value::array(vec![Value::Object(Some(r))]));
+    (vm, weapon, a, expr)
+}
+
+/// `attribute > constant` as a script row.
+fn above(vm: &Vm, ty: StructId, attribute: ObjRef, constant: f32) -> Value {
+    let mut v = vm.space.classes.struct_defaults(ty).unwrap();
+    let layout = vm.space.classes.struct_layout(ty).unwrap();
+    let at = |name: &str| layout.field(vm.space.names.find(name).unwrap()).unwrap().0 as usize;
+    let (a, c, k) = (at("AttributeOperand1"), at("ComparisonOperator"), at("ConstantOperand2"));
+    let s = v.struct_mut().unwrap();
+    s.fields[a] = Value::Object(Some(attribute));
+    s.fields[c] = Value::Byte(4);
+    s.fields[k] = Value::Float(constant);
+    v
+}
+
+/// Note 6.10: And and Or over two expressions on the weapon's `Bonus` (5): one holding (> 3), one not (> 7).
+#[test]
+fn evaluate_expressions_and_or_over_two_expressions() {
+    let (mut vm, weapon, bonus, ty) = expr_world();
+    let (yes, no) = (above(&vm, ty, bonus, 3.0), above(&vm, ty, bonus, 7.0));
+    let both = [yes.clone(), no.clone()];
+    let mut run = |mode, rows: &[Value]| expressions(&mut vm, mode, Some(weapon), rows, None).unwrap();
+    assert!(!run(ExprMode::And, &both), "And: one fails");
+    assert!(run(ExprMode::Or, &both), "Or: one holds");
+    assert!(run(ExprMode::And, &[yes.clone(), yes]), "And: both hold");
+    assert!(!run(ExprMode::Or, &[no.clone(), no]), "Or: neither holds");
+}
+
+/// A toy pickup class under `Core.Object` declaring `Rotation`, `Physics` and `CollisionComponent` with these kinds.
+fn toy_pickup(x: &mut Fx, path: &str, rotation: PropKind, physics: PropKind) -> ObjRef {
+    let object = x.vm.space.classes.by_path("Core.Object").unwrap();
+    let decls = vec![
+        PropertyDecl::new(x.vm.space.names.intern("Rotation"), rotation),
+        PropertyDecl::new(x.vm.space.names.intern("Physics"), physics),
+        PropertyDecl::new(x.vm.space.names.intern("CollisionComponent"), PropKind::Object { class: object }),
+    ];
+    x.vm.space.classes.define(path, Some(object), decls).unwrap();
+    x.make(path)
+}
+
+/// NATIVE_PICKUP_SAVE_ROTATION.md section 6, test 5: an `EPhysics` enum with no `PHYS_RigidBody` is a data error,
+/// with no class-code load (the helper's marks).
+#[test]
+fn get_save_rotation_needs_phys_rigid_body_by_name() {
+    let mut x = fx();
+    let names = ["PHYS_None", "PHYS_Walking"].iter().map(|n| x.vm.space.names.intern(n)).collect();
+    let short = x.vm.space.classes.define_enum("Test.ShortPhysicsPickup.EShortPhysics", names).unwrap();
+    let rotator = x.rotator;
+    let p = toy_pickup(&mut x, "Test.ShortPhysicsPickup", PropKind::Struct(rotator), PropKind::Byte { enum_: Some(short) });
+    script(x.save_rotation(p).unwrap_err());
+}
+
+/// Section 6, test 6: `Physics` or `Rotation` of the wrong kind is a data error.
+#[test]
+fn get_save_rotation_needs_the_kinds() {
+    let mut x = fx();
+    let actor = x.vm.space.classes.by_path("Engine.Actor").unwrap();
+    let physics = x.vm.space.classes.decl(x.vm.space.prop(actor, "Physics").unwrap()).unwrap().kind.clone();
+    let rotator = x.rotator;
+    let p = toy_pickup(&mut x, "Test.IntPhysicsPickup", PropKind::Struct(rotator), PropKind::Int);
+    script(x.save_rotation(p).unwrap_err());
+    let p = toy_pickup(&mut x, "Test.IntRotationPickup", PropKind::Int, physics);
+    script(x.save_rotation(p).unwrap_err());
+}
+
+/// Review r1 of #789: with an existing manager, a world without the pool-map service is the lookup's `LayerAbsent`,
+/// raised by the preflight before any lookup or write (this fixture registers no pool pack).
+#[test]
+fn a_missing_pool_map_is_refused_by_the_preflight() {
+    let mut x = fx();
+    let pc = x.make("WillowGame.WillowPlayerController");
+    let manager = x.make("Core.Object");
+    x.set(pc, "ResourcePoolManager", Value::Object(Some(manager)));
+    let (d, _) = x.definition();
+    let before = x.marks();
+    let (r, asked) = x.update(pc, d, false, &[]);
+    match r.unwrap_err() {
+        VmError::NotYet(n) => assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(asked.is_empty(), "no lookup ran");
+    assert_eq!(x.marks(), before);
 }
