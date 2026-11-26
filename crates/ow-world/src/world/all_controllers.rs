@@ -100,6 +100,4 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_iterator(KEY, all_controllers())
 }
 
-#[cfg(test)]
-#[path = "all_controllers_tests.rs"]
-mod tests;
+// Tests: `world/tests.rs`, module `link6` (they need the world fixture).

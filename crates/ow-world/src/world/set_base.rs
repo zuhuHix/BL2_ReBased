@@ -10,8 +10,10 @@
 //! `NotRead` stands, and this binding does not lift it.
 //!
 //! **The preflight** (write-free and load-free; each field read with its declared kind, else `VmError::Script`; each
-//! base, old base and actor the loop walk reaches resident, else [`NOT_LOADED`]), steps 1 to 5 in order, then step 8's
-//! math cases:
+//! base, old base and actor the loop walk reaches resident, else [`NOT_LOADED`]). First the receiver's declarations
+//! the commit reads, as the note lists them (`Role` an enum byte, `bHardAttach`, `RelativeLocation`,
+//! `RelativeRotation`, `BaseSkelComponent`, `BaseBoneName`; review of #800, item 7), then steps 1 to 5 in order, then
+//! step 8's math cases (a base `Rotation` part missing or not an int is `VmError::Script`, item 6):
 //! 1. a `NewBase` of `StaticMeshCollectionActor` / `BlockingMeshCollectionActor` (by class names already in the name
 //!    table, along its class chain): [`COLLECTION`] (`NotRead`; its replacement actor's lookup is not read);
 //! 2. `NewBase`'s `Base` chain reaching the receiver: nothing (a loop that never reaches it is `VmError::Script`);
@@ -179,8 +181,17 @@ fn role_is(vm: &Vm, o: ObjRef, wanted: &str) -> Result<bool, VmError> {
     Ok(usize::from(raw) == at)
 }
 
-fn is_zero_rotation(vm: &Vm, r: &Value) -> bool {
-    ["Pitch", "Yaw", "Roll"].iter().all(|p| matches!(struct_field(vm, r, p), Some(Value::Int(0)) | None))
+/// Whether the rotator `r` is zero: each of `Pitch`, `Yaw` and `Roll` an int (review of #800, item 6: a missing or
+/// non-int part is `VmError::Script`, not 0).
+fn is_zero_rotation(vm: &Vm, r: &Value) -> Result<bool, VmError> {
+    let mut zero = true;
+    for p in ["Pitch", "Yaw", "Roll"] {
+        match struct_field(vm, r, p) {
+            Some(Value::Int(i)) => zero &= i == 0,
+            other => return Err(script(format!("the base's Rotation.{p} is {other:?}, not an int"))),
+        }
+    }
+    Ok(zero)
 }
 
 fn is_normalised(vm: &Vm, r: &Value) -> bool {
@@ -216,8 +227,10 @@ struct Plan {
     pose: bool,
 }
 
-/// The checks of the receiver and the new base that step 8 needs (also run again after `Detach`).
-fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, VmError> {
+/// The receiver's declarations the commit reads (`Role` an enum byte, `bHardAttach`, `BaseSkelComponent`,
+/// `BaseBoneName`, `RelativeLocation`, `RelativeRotation`), checked up front as the note lists them (review of #800,
+/// item 7), before any step can answer.
+fn check_receiver(vm: &Vm, receiver: ObjRef) -> Result<(), VmError> {
     check_actor(vm, receiver)?;
     object(vm, receiver, "BaseSkelComponent")?;
     name_of(vm, receiver, "BaseBoneName")?;
@@ -225,6 +238,13 @@ fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, Vm
     for f in ["RelativeLocation", "RelativeRotation"] {
         structure(vm, receiver, f)?;
     }
+    role_is(vm, receiver, "ROLE_Authority")?;
+    Ok(())
+}
+
+/// The checks of the receiver and the new base that step 8 needs (also run again after `Detach`).
+fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, VmError> {
+    check_receiver(vm, receiver)?;
     let Some(new) = new else { return Ok(false) };
     check_actor(vm, new)?;
     if flag(vm, new, "bWorldGeometry")? {
@@ -238,7 +258,7 @@ fn check_pose(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>) -> Result<bool, Vm
     if pose {
         let base_rotation = structure(vm, new, "Rotation")?;
         let rotation = structure(vm, receiver, "Rotation")?;
-        if !is_zero_rotation(vm, &base_rotation) || !is_normalised(vm, &rotation) {
+        if !is_zero_rotation(vm, &base_rotation)? || !is_normalised(vm, &rotation) {
             return Err(NotYet::not_read(TURNED, RECORD).into());
         }
     }
@@ -251,7 +271,7 @@ fn plan(vm: &Vm, receiver: ObjRef, new: Option<ObjRef>, skel: Option<ObjRef>, at
     if !native.as_deref().is_some_and(|n| READ_CLASSES.iter().any(|c| c.eq_ignore_ascii_case(n))) {
         return Err(NotYet::not_read(NOT_RESOLVED, RECORD).into());
     }
-    check_actor(vm, receiver)?;
+    check_receiver(vm, receiver)?;
     let old = object(vm, receiver, "Base")?;
     if let Some(o) = old {
         check_actor(vm, o)?;
@@ -406,6 +426,4 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "set_base_tests.rs"]
-mod tests;
+// Tests: `world/tests.rs`, module `link6` (they need the world fixture).

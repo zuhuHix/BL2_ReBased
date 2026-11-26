@@ -194,7 +194,7 @@ pub fn enable_audio_stand_in(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Err(VmError::Registration {
             key: "AudioStandIn".to_string(),
-            reason: "the audio stand-in is an Off harness setting; Reference keeps the LayerAbsent",
+            reason: "the audio stand-in is an Off harness setting; Reference does not bind PlayAkEvent",
         });
     }
     vm.add_service(AudioStandIn)?;
@@ -246,8 +246,10 @@ fn remove_pickup(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             (_, PropKind::Array(inner)) if matches!(*inner, PropKind::Object { .. }) => {}
             _ => return Err(bad(WHAT, "Attached is not declared as an array of objects")),
         }
-        // The interface by names and classes already in the tables (nothing interned, no class code loaded).
-        let iface = vm.space.names.find("IBehaviorConsumer").and_then(|_| vm.space.classes.by_path(CONSUMER));
+        // The interface by its path in the class table (a lookup: nothing interned, no class code loaded). Review of
+        // #800, item 2: a name-table guard here refused every consumer, since a loaded class's name need not be in the
+        // VM's name table.
+        let iface = vm.space.classes.by_path(CONSUMER);
         let Some(iface) = iface else {
             return Err(NotYet::not_read(CONSUMER_UNRESOLVED, RECORD_AFTER).into());
         };
