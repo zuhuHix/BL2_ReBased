@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
+(Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
+flags, the swept-box test (well-formed values only) and the `Owner` chains both ways; the touch trace's `Owner`-chain
+correction; the `holds_no_geometry` guard kept. `cargo test --workspace -j 8 --no-fail-fast` 4,083 passed / 0 failed /
+59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock), base
+f80b68e7 against this head: both **8 ok / 14, X = 8.5/14 = 60.7%**, every row's stop the same. Links 6 and 7 have the
+same steps. Links 3, 4, 5, 13 and 14 stay past the floor trace and stop at the spawn's `SetBaseValue`. UNVERIFIED in
+game. Decision 2026-11-26-NNN.
+
 **ANALYST-LINK7-LINE-CHECK (2026-11-26, pc-hummer, docs only, on docs/native-link7-line-check from main c1058de6,
 rebased onto f80b68e7):**
 AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK7_LINE_CHECK.md reads the HUD targeting's line check: a point line
