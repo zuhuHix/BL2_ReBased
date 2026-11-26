@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, docs only, on docs/native-link67-pickup-gun-init from main
+8fa9839d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_PICKUP_GUN_INIT.md reads the pickup gun's init in the
+game. `InitializeInternal` reaches `InitMeshes`, which sets the shared gestalt mesh on both meshes, long before the
+drop, whose `AttachMeshToPickup` copies the initialised third-person mesh. It gives links 6 and 7's harness recipe:
+link 8's preparation and `init` phase on each gun before `drop_at`, all covered on main. It predicts the `touch` stop:
+source f's stored-bounds `LayerAbsent` without the mesh layer, `WORLD_TRANSFORM` (scale 0.92) with it. It corrects the
+"run-time mesh" claim in two notes. No code changed, so no measured number moved; the slice gate was not run for this
+lane. UNVERIFIED in game.
+
 **SHADOW-AUDIT-FOLLOWUPS (2026-11-26, pc-hummer, code, on fix/shadow-audit-followups from main c8d70e3f):**
 AI-assisted (Claude Code, Opus 5.5). `ow_combat::hit::bind` and `bind_fn` are `#[track_caller]`. Three read-only
 callers use `Vm::is_bound_unaudited`. The allowance names `ow-skills/src/action_skill.rs`, plus `Actor.Trace`, which the

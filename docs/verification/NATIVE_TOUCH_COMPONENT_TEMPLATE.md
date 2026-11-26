@@ -172,6 +172,10 @@ These are two VM changes, both **the hub's call**:
    `NotYet { LayerAbsent }`, "Actor.GetBoundingCylinder: a skeletal mesh component's bounds", layer "a skeletal
    mesh's stored bounds".** The composite build's bounds were not read (NATIVE_INIT_GESTALT_MESH_DATA.md's chain).
 
+   *Corrected 2026-11-26 in NATIVE_LINK67_PICKUP_GUN_INIT.md section 6 (decision 2026-11-26-NNN): on the gestalt path
+   the mesh is the gestalt definition's shared `GestaltSkeletalMesh`, a package export. Source f's `LayerAbsent` comes
+   only from a missing mesh layer; with the layer, the stop is `WORLD_TRANSFORM` (the third-person scale 0.92).*
+
 ## 4. The rest of `touch` after the bounds
 
 The `Pickup` state's `Touch` casts the toucher to a pawn (not a vehicle), asks `ValidTouch`, and on true calls the
