@@ -141,6 +141,9 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     // no online subsystem; UNVERIFIED against a logged-in game. Off only, so a Reference run is unchanged.
     if mode == ParityMode::Off {
         ow_world::world::online::register_offline_engine(&mut world.vm)?;
+        // The engine object's PhysX level (NATIVE_GETPHYSXLEVEL_AND_AFTER.md 2.A; lane SOCKETS-PUBLISH-AND-PHYSX-LEVEL):
+        // a harness setting, the shipped default 0. UNVERIFIED: the game's value is the player's own setting.
+        ow_world::world::physx_level::set_physx_level(&mut world.vm, ow_world::world::physx_level::HARNESS_PHYSX_LEVEL)?;
         // GetMaterial, SetParent, SetVectorParameterValue and GetInstancedMaterialInstanceConstant (#744), which
         // maya:8's player part reaches; ow-world's placeholder for the last left (lane PLACEHOLDER-SHADOWS).
         // Keep-existing, Off only.
