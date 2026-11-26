@@ -10,7 +10,7 @@ OK. Installed Off strict `--slice-gate` (release build,
 under the machine lock) on a local merge of #751 + #752 at 9e4025f0 + this: 6 ok / 8 NotYet, 42.9%. Links 1, 3, 4, 5,
 13 and 14 move from #752's init refusal on `Anim_Siren.Base_Siren` past `UpdateAnimations` to
 `WillowPawn.InitializeRBPhysics`' entry check, "a component the store has not loaded" (not the predicted physics
-`LayerAbsent`). UNVERIFIED in game. Decision 2026-11-26-NNN.
+`LayerAbsent`). UNVERIFIED in game. Decision 2026-11-26-13.
 
 **ANALYST-LINK67-PICKUP-GUN-INIT (2026-11-26, pc-hummer, docs only, on docs/native-link67-pickup-gun-init from main
 8fa9839d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK67_PICKUP_GUN_INIT.md reads the pickup gun's init in the
