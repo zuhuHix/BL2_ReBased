@@ -88,6 +88,12 @@ fn engine() -> Vec<u8> {
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
     t.class("SkeletalMeshComponent", primitive);
+    t.class("StaticMeshComponent", primitive);
+    // Two classes the walk meets as live actors with a wrong or missing declaration (review of #818, item 5).
+    let odd = t.class("ToyOddActor", object);
+    t.prop("Object", odd, "CollisionComponent", 0, object);
+    t.prop("Int", odd, "Components", 0, 0);
+    t.class("ToyBareActor", object);
     let pawn = t.class("Pawn", actor);
     t.prop("Float", pawn, "BaseEyeHeight", 0, 0);
     for b in ["bIgnoreAllTraces", "bStationary"] {
@@ -581,6 +587,69 @@ fn the_fixed_note_s_section_6_4a_cases() {
     let (mut x, hud, target, mut host) = line_world();
     x.colliding("Engine.ToyPawnChild", [60.0, 0.0, 40.0], 20.0, 20.0);
     assert!(not_yet(line(&x, &mut host, hud, target)).1.contains("the trace filter of Engine.ToyPawnChild"));
+}
+
+/// The review of #818, items 1 to 6 and 8: overflowing box limits are malformed, even when another axis would clear;
+/// a primitive a terrain lists but an exact pickup owns is the pickup's (passed over); a mover's static mesh, whose
+/// bounds the rule does not answer, is the hash admission's refusal; an exact WillowPlayerPawn is passed over whatever
+/// the chain says; `Components` and `CollisionComponent` must be declared with their kinds; a slotless entry of a
+/// non-primitive class is skipped; an actor whose Owner is the HUD is passed over (the reverse walk).
+#[test]
+fn the_review_of_818_cases() {
+    use ow_world::trace_filter::HASH_ADMISSION;
+    // 1. A centre and radius each finite whose sum overflows; the box is far away on Z.
+    let (mut x, hud, target, mut host) = line_world();
+    let (m, c) = x.colliding("Engine.StaticMeshActor", [3.0e38, 0.0, 9000.0], 20.0, 20.0);
+    x.set(m, "bWorldGeometry", Value::Bool(true));
+    x.set(c, "CollisionRadius", Value::Float(3.0e38));
+    assert!(not_yet(line(&x, &mut host, hud, target)).1.starts_with(LINE_MALFORMED));
+    // 2. A terrain lists a cylinder an exact WillowPickup owns: the pickup's row passes it over.
+    let (mut x, hud, target, mut host) = line_world();
+    let pickup = x.obj("WillowGame.WillowPickup");
+    x.set(pickup, "bCollideActors", Value::Bool(true));
+    let (_, c) = x.colliding("Engine.Terrain", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(c, "Owner", Value::Object(Some(pickup)));
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // 3. A mover on the line whose primitive is a static mesh (bounds not answered): the hash admission, not a layer.
+    let (mut x, hud, target, mut host) = line_world();
+    let (mover, _) = x.colliding("Engine.InterpActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    let mesh = x.obj("Engine.StaticMeshComponent");
+    for f in ["BlockZeroExtent", "CollideActors"] {
+        x.set(mesh, f, Value::Bool(true));
+    }
+    x.set(mesh, "Owner", Value::Object(Some(mover)));
+    x.set(mover, "CollisionComponent", Value::Object(Some(mesh)));
+    let (m, what) = not_yet(line(&x, &mut host, hud, target));
+    assert_eq!(m, Missing::NotRead);
+    assert!(what.contains(HASH_ADMISSION), "{what}");
+    // 4. The HUD's Owner a slotless stand-in, and an exact WillowPlayerPawn on the line: passed over.
+    let (mut x, hud, target, mut host) = line_world();
+    let class = x.w.vm.find_class("Engine.Actor").unwrap();
+    let lazy = x.w.vm.space.alloc_stand_in(class, "Lazy", Origin::Default { class }).unwrap();
+    x.set(hud, "Owner", Value::Object(Some(lazy)));
+    x.colliding("WillowGame.WillowPlayerPawn", [60.0, 0.0, 40.0], 50.0, 50.0);
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // 5. Components declared as an int, and an actor that declares neither field: data errors.
+    for class in ["Engine.ToyOddActor", "Engine.ToyBareActor"] {
+        let (mut x, hud, target, mut host) = line_world();
+        let odd = x.obj(class);
+        x.w.actors().borrow_mut().place(odd).unwrap();
+        assert!(matches!(host.line_blocker_for(&x.w.vm, FROM, TO, hud, target), Err(VmError::Script { .. })), "{class}");
+    }
+    // 6. A slotless entry of a non-primitive class in Components: skipped.
+    let (mut x, hud, target, mut host) = line_world();
+    let a = x.obj("Engine.Actor");
+    let class = x.w.vm.find_class("WillowGame.HUDDefinition").unwrap();
+    let slotless = x.w.vm.space.alloc_stand_in(class, "Slotless", Origin::Default { class }).unwrap();
+    x.set(a, "Components", Value::array(vec![Value::Object(Some(slotless))]));
+    x.w.actors().borrow_mut().place(a).unwrap();
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
+    // 8. An actor whose Owner is the HUD (the reverse walk), world geometry on the line: passed over.
+    let (mut x, hud, target, mut host) = line_world();
+    let (owned, _) = x.colliding("Engine.StaticMeshActor", [60.0, 0.0, 40.0], 20.0, 20.0);
+    x.set(owned, "bWorldGeometry", Value::Bool(true));
+    x.set(owned, "Owner", Value::Object(Some(hud)));
+    assert_eq!(line(&x, &mut host, hud, target).unwrap(), None);
 }
 
 /// (a): a primitive held only in `Components` is walked too; (c) malformed values; (d) an unloaded part is named.
