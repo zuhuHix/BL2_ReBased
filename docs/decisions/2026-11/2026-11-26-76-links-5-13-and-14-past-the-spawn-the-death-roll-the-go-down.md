@@ -28,4 +28,14 @@ check changed.
     state's `NotifySkillEvent` and `ResolveContext`, both read but unbound in the combat world; link 14 is not reached.
 - **Needs the hub:** the `MountDeathNotify` order (run a raised event at the raise); an Off no-op stand-in for the
   telemetry call.
+- **Review r1 (#821):**
+  - the controller-pool query takes the read-only `existing_pool` path (not `controller_pool`, which writes), with
+    `VmError::Script` for declarations and typed `NotRead`s for unloaded links and the vehicle fallback; a later probe
+    found the combat world's `ControllerList` empty;
+  - the injured and gun factors: a load-free class check, resident reads, typed fields;
+  - `NotifySkillEvent`: not a no-op (dirty bit, trailing bookkeeping); a typed `NotRead` before the dirty-bit write;
+  - `ResolveContext`'s binding: the prefix only after a real write, the kind kept; link 13's prediction now stops at
+    `NotifySkillEvent`, then the unbound `AddAttributeModifier`;
+  - the telemetry identifier's declarations; the probe labels spelled out; NATIVE_ATTR_RESOLVERS.md's open list
+    updated; `ClearDenStats` labelled by fit in the body.
 - **Clean room:** a different lane implements this note.

@@ -149,8 +149,8 @@ routine), with the resolver's own range.
     - it does not sum.
   - Constraint: the stand-in's rule is the native's (section 5); only the Off route through the note is missing.
 - **Open** (not read):
-  - the controller virtual that gives the pool provider;
-  - which provider method is asked (read as "the pool for this resource");
+  - ~~the controller virtual that gives the pool provider~~ (read since: NATIVE_LINKS_5_13_14_TAIL.md section 3);
+  - ~~which provider method is asked~~ (read since: the controller's own pool for the resource, the same section);
   - add, remove and set-base of the four classes;
   - the cast class of Currency, beyond the medium reading above.
 - **bl-sdk reads that would confirm the rules** (none run):
