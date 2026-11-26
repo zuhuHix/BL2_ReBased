@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SETDEFAULTPHYSICS-AND-MIND-RECALC (2026-11-26, pc-hummer, on fix/rust-setdefaultphysics from main 7494393):**
+AI-assisted (Claude Code, Opus 5.5). `SetDefaultPhysics`' three queries, the `WillowMind` recalculation in the game's
+order with its own part, the spawn's balance input and archetype record, Off. `cargo test --workspace -j 8
+--no-fail-fast` 3,939 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`
+(release build, under the machine lock): this branch alone 7 ok / 7 not ok, 58.3%, links 3, 4, 5, 13 and 14 at step 0's
+"a resolver the store has not loaded" (as on main); merged locally with #791 (fix/rust-resolver-chain-loads @ 411688c),
+7 ok / 7 not ok, 58.3%, the same links at `Actor.SetPhysics`' "the base search for a walking-type mode", the note's
+first predicted stop, with **no** partial-writes prefix (the note expected one). The picks logged: 
+`PawnBalance_PrimalBeast_Monglet` for the baby and `PawnBalance_PrimalBeastAdult` for the adult. Links 6 and 7 unchanged; 1, 2 and
+8 to 12 ok. UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **ANALYST-LINK6-REMOVEPICKUP-AND-AFTER (2026-11-26, pc-hummer, docs only, on docs/native-link6-after-take from main
 54c9cf0):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINK6_AFTER_TAKE.md reads `RemovePickup` (the events go to the
 pickup's `Base` as a behavior consumer, none on the slice; then the `PickupList` removal) and `WorldInfo.AllControllers`.
