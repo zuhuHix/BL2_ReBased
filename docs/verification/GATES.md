@@ -11,7 +11,7 @@ build, under the machine lock): 6 ok / 8 not ok, 51.2%, as on main 785c2a4; link
 `CustomEnableCondition`, so links 3 and 4 do not reach their spawns. A `--combat-run` probe of link 3's and link 4's
 spawns (after `player:8`): both stop at step 0, the resolver itself being an unloaded store handle (prefixed, after
 the spawn's writes). With an earlier version that loaded the resolver, both passed it and stopped at
-`WillowPawn.SetDefaultPhysics` "past its gates", as the note predicts. UNVERIFIED in game. Decision 2026-11-26-NNN.
+`WillowPawn.SetDefaultPhysics` "past its gates", as the note predicts. UNVERIFIED in game. Decision 2026-11-26-44.
 
 **IMPL-MAYA9-NATIVES (2026-11-26, pc-hummer, on fix/rust-maya9-natives, rebased onto main 1fed25cc):** AI-assisted (Claude
 Code, Opus 5.5). `WillowPlayerPawn.SetDefaultStance` / `WillowPawn.SetDefaultStance`, the `ShieldResourcePool`

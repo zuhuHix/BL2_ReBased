@@ -15,7 +15,7 @@
 //!   ("unsupported condition attribute"), so it is `NotYet { NotRead }` here too. The attribute is the resolver's
 //!   outer, checked as the Noun resolver checks it: an outer that is not an attribute definition listing this
 //!   resolver in its `ValueResolverChain` is `NotYet { NotRead }`.
-//! - `ParityMode::Off` (lane IMPL-TARGETABLE-RESOLVER, decision 2026-11-26-NNN; clean room: implemented from
+//! - `ParityMode::Off` (lane IMPL-TARGETABLE-RESOLVER, decision 2026-11-26-44; clean room: implemented from
 //!   docs/verification/NATIVE_TARGETABLE_RESOLVER.md section 5 alone, the executable not read; **UNVERIFIED in the
 //!   running game**). Get and get-base answer the same, in order, the first answer met:
 //!   0. a resolver the store has not loaded: [`RESOLVER_NOT_LOADED`] (the hub's ruling on review of #783: the get
