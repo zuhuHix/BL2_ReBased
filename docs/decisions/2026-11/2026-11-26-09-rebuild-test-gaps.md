@@ -17,7 +17,8 @@ section 5 out.
   gives bone names (a numbered `Spine_2` as the reader's text), a mesh export of the package gives the skeleton, and the
   lists equal the decoded form's (0, 1, 2, 3 and 255, 0, 255, 1). Nothing is interned;
 - `aim_offset_rebuild_tests.rs`: test 7 adds the literal case, a 257-bone skeleton with a 256-component profile, which
-  is the bone limit's refusal;
+  is refused past a byte (both limits share one text, so the malformed-list case, not this one, shows the bone limit
+  comes first; review of #750);
 - `blend_setters.rs`: `register`'s comment says four keys (the feather blend's was added in #745).
 
 **Gates.** `cargo test --workspace -j 8` and `crate_edges_test.py` (counts in the GATES row). No slice gate: no rule
