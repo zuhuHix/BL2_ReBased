@@ -113,6 +113,8 @@ fn package() -> Vec<u8> {
     }
     let base = t.class("BehaviorBase", object);
     let behavior = t.class("ToyBehavior", base);
+    // Review of #808: a field the toy Writer behaviour writes (a heap write the write-aware policy counts).
+    t.prop("Int", behavior, "ToyWrites", 0, 0);
     let with_ref = |kind: &str, name: &str, flags: u64, type_ref: i32| Param { flags, type_ref, ..Param::new(kind, name) };
     let apply = [
         with_ref("Object", "SelfObject", 0, object),
@@ -321,6 +323,12 @@ fn toy_with(mode: ParityMode, extra: &[(&str, &[u8])]) -> Toy {
             if me == "Waiter" {
                 next = with(c.vm, &next, "NextExecutionDelayTime", Value::Float(1.0));
             }
+            if me == "Writer" {
+                let this = c.this.unwrap();
+                let class = c.vm.space.heap.get(this)?.class;
+                let p = c.vm.space.prop(class, "ToyWrites").unwrap();
+                c.vm.space.write(this, ow_object::ids::PropAddr::scalar(p), Value::Int(1))?;
+            }
             c.set_out(1, next)?;
             Ok(Value::None)
         }),
@@ -445,6 +453,32 @@ fn a_wait_request_outside_a_thread_is_not_yet() {
         e => panic!("expected NotYet, got {e}"),
     }
     assert_eq!(t.log.borrow().len(), 1, "B did not run");
+}
+
+/// Review of #808, item 1: [`run_behaviors_counted`] prefixes a refusal only after a counted write. The first behaviour
+/// refusing, or a write-free behaviour before the refusal: no prefix; a writing behaviour before it: the prefix. The
+/// native's own policy is unchanged (the test above: a dispatch before a refusal prefixes it).
+#[test]
+fn the_counted_walk_prefixes_only_after_a_write() {
+    let prefixed = |t: &mut Toy, names: &[Option<&str>]| -> bool {
+        let list = t.behaviors(names);
+        match run_behaviors_counted(&mut t.vm, &list, None, None).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert!(n.what.contains("open question 1"), "{n}");
+                n.what.contains(PARTIAL_WRITES)
+            }
+            e => panic!("expected NotYet, got {e}"),
+        }
+    };
+    let mut t = toy(ParityMode::Off);
+    assert!(!prefixed(&mut t, &[Some("Waiter")]), "the first behaviour refuses: nothing written");
+    assert!(!prefixed(&mut t, &[Some("B"), Some("Waiter")]), "a write-free behaviour before the refusal");
+    assert!(prefixed(&mut t, &[Some("Writer"), Some("Waiter")]), "a heap write before the refusal");
+    // A walk that completes: every behaviour ran.
+    t.log.borrow_mut().clear();
+    let list = t.behaviors(&[Some("A"), None, Some("B")]);
+    run_behaviors_counted(&mut t.vm, &list, None, None).unwrap();
+    assert_eq!(t.log.borrow().len(), 2);
 }
 
 /// Reference binds none of these (R3): the C++ has no such rule.

@@ -273,11 +273,29 @@ struct Walk {
     record: Option<Value>,
     /// Whether a behavior has been dispatched: from then on a failure is [`partial`].
     begun: bool,
+    /// The write-aware policy ([`run_behaviors_counted`]): the counters (heap writes, random draws, load transitions)
+    /// at the walk's start; a failure is then [`partial`] only when one of them moved. None: the native's own policy,
+    /// partial from the first dispatch.
+    counted: Option<(u64, u64, u64)>,
+}
+
+fn counters(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
 }
 
 impl Walk {
     fn new(self_object: Option<ObjRef>, instigator: Option<ObjRef>, other: Option<ObjRef>, event_data: Option<Value>) -> Self {
-        Walk { self_object, instigator, other, event_data, record: None, begun: false }
+        Walk { self_object, instigator, other, event_data, record: None, begun: false, counted: None }
+    }
+
+    /// `e` as this walk's policy marks it after a dispatch began: [`partial`] under the native's policy; under the
+    /// write-aware one only when a counted write happened since the walk's start.
+    fn fail(&self, vm: &Vm, e: VmError) -> VmError {
+        match self.counted {
+            Some(start) if counters(vm) == start => e,
+            _ if self.begun => partial(e),
+            _ => e,
+        }
     }
 
     /// The shared record, from `first`'s record parameter: its plain zero value (every field zero, struct defaults
@@ -302,10 +320,10 @@ impl Walk {
     /// from here on is [`partial`].
     fn dispatch(&mut self, vm: &mut Vm, behavior: ObjRef, p: &Prepared) -> Result<(), VmError> {
         if self.record.is_none() {
-            self.start(vm, p).map_err(|e| if self.begun { partial(e) } else { e })?;
+            self.start(vm, p).map_err(|e| self.fail(vm, e))?;
         }
         self.begun = true;
-        self.run(vm, behavior, p).map_err(partial)
+        self.run(vm, behavior, p).map_err(|e| self.fail(vm, e))
     }
 
     /// The arguments of `p`'s `ApplyBehavior` for this walk now.
@@ -370,6 +388,29 @@ fn entries_of(list: &Value, function: &str) -> Result<Vec<ObjRef>, VmError> {
         Value::None => Ok(Vec::new()),
         other => Err(script(function, format!("Behaviors holds {}, not an array", other.kind_name()))),
     }
+}
+
+/// `BehaviorBase.RunBehaviors(behaviors, self_object, instigator)` for a native caller that must not report a refusal
+/// as a partial write unless one happened (lane IMPL-COMBAT-MUSIC-AND-AFTER, review of #808, item 1:
+/// `ApplyGradeCustomizations`' spawn customisations): the native's preflight and walk over a copy of the list, with
+/// the write-aware policy (a refusal is prefixed only after a counted write: a heap write, a random draw or a load
+/// transition since the walk began). The list is a copy, so a behaviour that changes the source array does not change
+/// this walk (the native rereads its argument).
+pub fn run_behaviors_counted(
+    vm: &mut Vm,
+    behaviors: &Value,
+    self_object: Option<ObjRef>,
+    instigator: Option<ObjRef>,
+) -> Result<(), VmError> {
+    let mut walk = Walk::new(self_object, instigator, None, None);
+    walk.counted = Some(counters(vm));
+    let now = entries_of(behaviors, RUN_BEHAVIORS)?;
+    walk.preflight(vm, &now)?;
+    for behavior in now {
+        let p = prepare(vm, behavior).map_err(|e| walk.fail(vm, e))?;
+        walk.dispatch(vm, behavior, &p)?;
+    }
+    Ok(())
 }
 
 fn run_behaviors(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
