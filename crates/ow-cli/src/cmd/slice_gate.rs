@@ -725,6 +725,9 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
         // The hub's ruling on review of #802 (lane IMPL-PAWN-INTERACTION-PROXY): SetCollisionSize's touch update in
         // the combat world finds nothing (UNVERIFIED stand-in; it logs its own set-up line).
         ow_world::world::proxy_natives::enable_nothing_touched(&mut world.vm)?;
+        // The hub's ruling on review of #801 (lane IMPL-COMBAT-MUSIC-AND-AFTER): the combat music threat model past
+        // its gates is a logged no-op (UNVERIFIED stand-in; it logs its own set-up line).
+        ow_combat::combat_music::enable_threat_model_no_op(&mut world.vm)?;
         let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
         Run::with_bridge(world, Some(bridge))
     };
