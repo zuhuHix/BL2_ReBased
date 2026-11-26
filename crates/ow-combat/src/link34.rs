@@ -242,9 +242,9 @@ fn name_in(v: &Value, vm: &Vm, field: &str) -> Option<NameId> {
 pub fn surface(vm: &Vm, pawn: ObjRef, hit: &Value) -> Result<u8, VmError> {
     resident(vm, pawn, NOT_LOADED)?;
     let (reference, _) = read(vm, pawn, "ShieldArmor", MOMENTUM)?;
-    if let Ok(r) = ow_world::pools::read_ref(&vm.space, &reference)
-        && let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)?
-    {
+    // A mistyped reference is an error (as `default_physics`' shield read, review of #792, item 7).
+    let r = ow_world::pools::read_ref(&vm.space, &reference)?;
+    if let (_, Some(pool)) = ow_world::pools::resolve(&vm.space, r)? {
         resident(vm, pool, NOT_LOADED)?;
         if float(vm, pool, "CurrentValue", MOMENTUM)? > 0.0 {
             return Ok(3);

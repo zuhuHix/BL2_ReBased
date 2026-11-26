@@ -117,6 +117,10 @@ fn willow() -> Vec<u8> {
     // The pawn's surface reads.
     let willow_pawn = t.class("WillowPawn", pawn);
     let shield_ref = toy_struct(&mut t, willow_pawn, "ToyShieldRef", None);
+    t.prop("Object", shield_ref, "PoolManager", 0, object);
+    t.prop("Byte", shield_ref, "PoolIndexInManager", 0, 0);
+    t.prop("Byte", shield_ref, "PoolGUID", 0, 0);
+    t.prop("Object", shield_ref, "Data", 0, object);
     t.prop("Struct", willow_pawn, "ShieldArmor", 0, shield_ref);
     for f in ["MyHitRegionHelper", "BodyClass"] {
         t.prop("Object", willow_pawn, f, 0, object);

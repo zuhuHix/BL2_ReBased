@@ -420,7 +420,7 @@ fn the_preflight_order_and_the_flight_modes() {
     let pawn = x.ai(WALKING, false, NONE);
     x.mind(pawn, None);
     x.set(pawn, "bBlockActors", Value::Bool(true));
-    assert_eq!(x.not_read(pawn), BASE_SEARCH, "SetPhysics first, before the collision copy");
+    assert_eq!(x.absent(pawn), BASE_TRACE, "SetPhysics first (its base search), before the collision copy");
     let mut x = fx();
     let pawn = x.ai(NONE, false, WALKING);
     x.mind(pawn, Some(4));
