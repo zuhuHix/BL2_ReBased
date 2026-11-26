@@ -62,10 +62,12 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue from main c1058de):** AI-assisted
 (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting values' definitions, Off.
-`cargo test --workspace` 4,057 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
-`--slice-gate` (release build, under the machine lock): 8 ok / 6 not ok, 8.500/14 = 60.7%. **Links 3, 4, 5, 13 and 14
-move past `SetBaseValue`**: both spawns now stop at the unbound `BaseBalanceDefinition.ApplyGradeCustomizations(object,int)`
-(graded error, as an unbound native is; #808 binds it), as the note's section 8 predicts. The preload loaded the AI
+`cargo test --workspace` 4,059 passed / 0 failed / 59 ignored (with the hub's points on #811: the walk follows what
+`SetBaseValue`'s preflight walks, nested formulas and conditionals included, and an unloaded parent class);
+`crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under the machine lock, rerun after those
+points): 8 ok / 6 not ok, 8.500/14 = 60.7%. **Links 3, 4, 5, 13 and 14 move past `SetBaseValue`**: both spawns now stop
+at the unbound `BaseBalanceDefinition.ApplyGradeCustomizations(object,int)` (graded error, as an unbound native is;
+#808 binds it), measured here; the note's section 8 predicted it. The preload loaded the AI
 classes' starting-value attributes (`Attribute_EnemyNonWeaponDamageMultiplier`,
 `Attribute_DamageToVehiclesOnCollisionMultiplier`, `Attribute_HealthMultiplier`, `Attribute_ExperienceMultiplier`),
 their resolvers and the XP multiplier definitions, each logged. Link 7 is at the HUD's pickup targeting (#810 is not on

@@ -19,6 +19,15 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
     before the class it is on loads. A class whose `AttributeStartingValuesNew` is declared and non-empty is
     `NotRead` ("the starting-value categories' layout"), decided before any definition loads (the note's open
     question 2 is unanswered, so the categories are not read);
+  - **the hub's points on #811** (the fixed note to follow): (a) the archetypes are found at set-up from the run's own
+    list, and a child's `AttributeParentClass` that is an unloaded handle is followed (loaded, logged, its lists
+    read); (b) the walk covers what `SetBaseValue`'s preflight walks: every attribute it reaches (the destination, a
+    base-value attribute, an expression operand) with its resolvers, and each initialization definition followed into
+    the nested data its evaluation reaches (the enabled formula's four terms, else the enabled conditional's entries
+    up to the first always-holding one and then `DefaultBaseValue`, the enabled variance bounds and range limits),
+    recursively to the preflight's depth. A part that does not read as the evaluator reads it is left uncovered, and
+    the native's preflight then refuses it with its own typed error; (c) the stop after `SetBaseValue` was the note's
+    prediction; this lane's installed gate measured it (below);
   - a store that holds no such package (a toy world) has nothing to spawn and nothing to preload;
   - `SetBaseValue` is unchanged: its preflight still refuses an unloaded handle.
 - **The note's open question 1** (set-up preload or a counted load in the spawn) was taken as the hub's brief says, a
@@ -28,7 +37,9 @@ executable. No session was run. Every rule is UNVERIFIED in the running game.
   objects loaded, parents first, the value resolver after the None left, a second run loading and logging nothing),
   the archetype's own list, a mistyped list and a missing `AIClass` with nothing loaded, a non-empty category list
   refused before any definition loads (and an empty one passing), a failed load logged with the walk going on, and
-  Reference doing nothing. **Not tested:** test 7 (the effect through a spawn); the installed gate shows it.
+  Reference doing nothing; and, for the hub's points, an unloaded parent class followed, and a nested formula term and
+  conditional (an operand and a `BaseValueIfTrue` loaded; the entry after an always-holding one and the default not
+  reached, not loaded). **Not tested:** test 7 (the effect through a spawn); the installed gate shows it.
 - **Measured:** see the GATES row of this lane.
 - **Verified:** the tests on invented data. **Not verified:** everything in the running game.
 - **Sensitive files:** none.
