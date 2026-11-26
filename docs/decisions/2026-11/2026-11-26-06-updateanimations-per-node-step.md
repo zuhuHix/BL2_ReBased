@@ -9,8 +9,10 @@ running game.**
 := the tree's `NodeInitTag` + 1, then one argument-less virtual per `AnimTickArray` node. That slot in all 31 anim-node
 classes of the chain of Maya's tree: 28 share an empty body. The sequence family (`AnimNodeSequence`,
 `WillowAnimNodeSequence`, `WillowAnimNodeSequenceAdditiveBlend`) runs "set animation" with None through the class table,
-keeping the name, and zeroes `CachedNumDesiredBones`. The additive blend's override auto-names `Add_<name>` (an intern)
-and looks it up through the component's anim sets.
+keeping the name, and zeroes `CachedNumDesiredBones`; the reset is skipped only when `bIsIssuingNotifies` is set and
+the current name differs from the asked None. The additive blend's override auto-names `Add_<name>` (an intern) when
+`bAutoGenerateAdditiveSeqName` is set, then, whatever the flag, re-sets its additive sequence by `AddAnimSeqName` and
+looks it up through the component's anim sets (review #747 r1: the re-set was first read as inside the flag branch).
 
 **What it settles.** NATIVE_BONE_TRANSFORM_LAYER.md section 6.4 refused the step as `NotPorted` because it was unread.
 It is not a tick: a narrow Off answer exists (NATIVE_UPDATEANIMATIONS_TREE_TICKS.md section 5), with refusals for a set
@@ -18,8 +20,9 @@ It is not a tick: a narrow Off answer exists (NATIVE_UPDATEANIMATIONS_TREE_TICKS
 
 **A correction.** NATIVE_ANIM_NODE_INIT.md section 2 D groups `WillowAnimNodeSequenceAdditiveBlend` with the plain
 sequence. Its initialisation also calls the overridden "set animation", so Maya's one auto-name additive node (its class
-default sets `bAutoGenerateAdditiveSeqName`) gets `Add_None` there too. The port's init (#575, kind D) does not write
-it. Whether to fix it is the hub's call.
+default sets `bAutoGenerateAdditiveSeqName`) gets `Add_None` there too, and all three re-set their additive sequence.
+The port's init (#575, kind D) does not write it. It also skips the reset on `bIsIssuingNotifies` alone, where the
+guard needs the name to differ too. Whether to fix either is the hub's call.
 
 **Field names.** `class_layout.py`, with every read past `CachedNumDesiredBones` 4 bytes beyond the computed place (by
 fit the 16-byte alignment of the `BoneAtom` struct). It is checked by the arrays, names and flags landing on declared
@@ -27,4 +30,5 @@ properties. The shift is UNVERIFIED (fitted). `SkeletalMeshComponent` and `AnimS
 stop the tool).
 
 **Predicted next stop:** `InitializeRBPhysics`' physics `LayerAbsent` once this is implemented. If Maya's anim sets
-are store handles at `UpdateAnimations`, the earlier stop is the lookup's not-loaded `NotRead`. No code changed.
+are store handles at `UpdateAnimations`, the earlier stop is the lookup's not-loaded `NotRead`; if a set on her list
+holds `ADD_Idle` (her two flag-false additive nodes' name), the link-up `NotRead`. No code changed.

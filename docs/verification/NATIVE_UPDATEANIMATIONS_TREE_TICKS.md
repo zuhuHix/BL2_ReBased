@@ -47,13 +47,16 @@ narrow Off answer exists.
   fit only.
 - **Maya's data** (`ow-package --exports` / `--properties`, local, counts only):
   - her tree template (`GD_PlayerShared.Character.AnimTree_Player`, in `GD_Siren_Streaming_SF.upk`) holds 99 objects
-    of 28 classes. 46 are of the sequence family: 42 `AnimNodeSequence`, 1 `WillowAnimNodeSequence` and 3
-    `WillowAnimNodeSequenceAdditiveBlend`;
+    of 28 classes. 46 of these template objects are of the sequence family: 42 `AnimNodeSequence`, 1
+    `WillowAnimNodeSequence` and 3 `WillowAnimNodeSequenceAdditiveBlend`. The tick list built from the copied tree may
+    hold fewer: the port's init class table (`anim_node_init.rs`) has no row for `WillowAnimNodeSequence` and would
+    refuse it, yet init passes on her tree, so that node is likely not in the tick list (not checked);
   - no sequence node tags `AnimSeq`, so each holds its archetype's value. NATIVE_ANIM_NODE_INIT.md section 2 D records
     `AnimSeq` None on her sequence nodes at that point;
   - of the three additive nodes, two tag `bAutoGenerateAdditiveSeqName` false, and **one does not tag it**. The class
     default (`Default__WillowAnimNodeSequenceAdditiveBlend` in `WillowGame.upk`) sets it **true**, so that node takes the
-    auto-name path below.
+    auto-name path below. That node already tags `AddAnimSeqName` = `Add_None`, so the name is in the table and the
+    intern is in practice a find; the other two tag `AddAnimSeqName` = `ADD_Idle`.
 
 ## 2. What UpdateAnimations does
 
@@ -74,7 +77,8 @@ On an `AnimNodeSequence`, `WillowAnimNodeSequence` or `WillowAnimNodeSequenceAdd
 1. `AnimSeqName` is kept aside;
 2. the node's **"set animation" with the name None**, through the class table:
    - **`AnimNodeSequence`'s** (the other two classes share it, the additive one calls it first in its override):
-     - with `bIsIssuingNotifies` set and the node's current name not None: nothing at all;
+     - with `bIsIssuingNotifies` set **and** the node's current name not the asked one (here: not None): nothing at
+       all. With the flag clear, or the name already None, the steps below run;
      - otherwise `AnimSeqName` := None, `AnimSeq` := None and `AnimLinkupIndex` := -1. With the name None no sequence is
        looked up;
      - only if `AnimSeq` was set before: the node's two caches are emptied (`CachedBoneAtoms`, `CachedCurveKeys`,
@@ -83,23 +87,29 @@ On an `AnimNodeSequence`, `WillowAnimNodeSequence` or `WillowAnimNodeSequenceAdd
    - **`WillowAnimNodeSequenceAdditiveBlend`'s override,** after the base above:
      - with `bAutoGenerateAdditiveSeqName` set: a name is built from the text "Add_" and the asked name's text ("None"
        here), so **`Add_None`, entered in the name table** (a name intern), and `AddAnimSeqName` := it;
-     - then its "set additive animation" with `AddAnimSeqName`: `AddAnimSeqName` := the name, `AddAnimSeq` := None and
-       `AddAnimLinkupIndex` := -1;
+     - then, **whatever the flag** (the call comes after the flag's branch, not inside it), its "set additive
+       animation" with `AddAnimSeqName` (the auto-built name, or the node's own value when the flag is clear):
+       `AddAnimSeqName` := the name, `AddAnimSeq` := None and `AddAnimLinkupIndex` := -1;
      - when the name is not None, the node's `SkelComponent` is set, that component's `SkeletalMesh` is set and its
        anim-set list (by fit `AnimSets`) is not empty: **the component's sequence lookup** (section 4). A found
        sequence becomes `AddAnimSeq`, then its link-up index for the mesh (not read) becomes `AddAnimLinkupIndex`;
 3. `AnimSeqName` := the kept name;
 4. `CachedNumDesiredBones` := 0.
 
-**Net effect:** the node keeps its name and holds no sequence (link-up -1). An additive node with the auto-name flag
-also names its additive sequence `Add_<asked name>` and looks that name up.
+**Net effect:** the node keeps its name and holds no sequence (link-up -1), unless it is issuing notifies under
+another name. Every additive node also re-sets its additive sequence by `AddAnimSeqName` and looks that name up; with
+the auto-name flag that name is first set to `Add_<asked name>`.
 
 **A correction to NATIVE_ANIM_NODE_INIT.md section 2 D.** The sequence family's initialisation calls the same "set
 animation" with None through the class table, as here. So for `WillowAnimNodeSequenceAdditiveBlend` the initialisation
 also runs the override above: the auto-name, the intern and the lookup. That note's D lists the additive class with
 the plain sequence and leaves the override out. In the port, the initialisation it implements (#575,
-`anim_node_init.rs` kind D) does not write `AddAnimSeqName`, `AddAnimSeq` or `AddAnimLinkupIndex` for Maya's
-auto-name node. **Its fix is the hub's call;** the rules in section 5 are the same for both callers.
+`anim_node_init.rs` kind D) does not write `AddAnimSeqName`, `AddAnimSeq` or `AddAnimLinkupIndex` for any of Maya's
+three additive nodes (the override's re-set runs on all three, the auto-name on one). **A second disagreement:** that
+note's D ("unless `bIsIssuingNotifies` is set: nothing at all") and the port's kind D skip the reset on the flag alone.
+The guard read here also needs the current name to differ from the asked None: a node issuing notifies whose
+`AnimSeqName` is None still gets `AnimSeq` := None and `AnimLinkupIndex` := -1 in the game, not in the port. **Both
+fixes are the hub's call;** the rules in section 5 are the same for both callers.
 
 ## 4. The component's sequence lookup
 
@@ -133,15 +143,19 @@ path on loaded classes, as the init note's class table does.
    - any other class: `NotYet { NotRead }`, "UpdateAnimations: the per-node step of <class>".
 4. Per sequence node, the fields read are declared with their kinds (`AnimSeqName` a name, `AnimSeq` an object,
    `AnimLinkupIndex` an int, `bIsIssuingNotifies` a bool, `CachedNumDesiredBones` a byte), else `VmError::Script`:
-   - `bIsIssuingNotifies` set: on the plain step nothing changes, except `CachedNumDesiredBones` := 0. For the
-     additive node with the auto-name flag set, the asked name's source is not settled with the flag set:
-     `NotYet { NotRead }`, "UpdateAnimations: the additive auto-name while issuing notifies";
+   - `bIsIssuingNotifies` set **and** `AnimSeqName` not None: on the plain step nothing changes, except
+     `CachedNumDesiredBones` := 0. For the additive node with the auto-name flag set, the asked name's source is not
+     settled in that case: `NotYet { NotRead }`, "UpdateAnimations: the additive auto-name while issuing notifies".
+     With `AnimSeqName` None the node is treated as if the flag were clear;
    - `AnimSeq` set: `NotYet { NotRead }`, "UpdateAnimations: the steps after a sequence node's sequence changes" (the
      meta-data call). The init note refuses the same case with its own text.
-5. Per additive node with `bAutoGenerateAdditiveSeqName` set:
-   - the declarations (`AddAnimSeqName` a name, `AddAnimSeq` an object, `AddAnimLinkupIndex` an int);
+5. Per additive node, **whatever `bAutoGenerateAdditiveSeqName`**:
+   - the declarations (`bAutoGenerateAdditiveSeqName` a bool, `AddAnimSeqName` a name, `AddAnimSeq` an object,
+     `AddAnimLinkupIndex` an int);
+   - the name looked up: the text `Add_None` with the flag set, else the node's own `AddAnimSeqName`. None: no lookup;
    - the lookup's gate (`SkelComponent`, its `SkeletalMesh`, its anim-set list), read without loading;
-   - when the gate passes, the lookup of the text `Add_None`, read only. Each set is resident (else the not-loaded
+   - when the gate passes and the name is not None, the lookup of that name, read only. Each set is resident (else the
+     not-loaded
      `NotRead`), each of its `Sequences` resident, matched by `SequenceName` text, case-insensitively as names compare.
      A **match** is `NotYet { NotRead }`, "UpdateAnimations: an additive sequence's mesh link-up". No match: None.
      The set's native map is replaced by that walk, labelled UNVERIFIED (the map's agreement with the list is a fit).
@@ -150,9 +164,10 @@ path on loaded classes, as the init note's class table does.
 by this order none can come):
 1. the component's tag field := the root's `NodeInitTag` + 1;
 2. per sequence node in tick order: `AnimSeqName` := None, `AnimSeq` := None and `AnimLinkupIndex` := -1 (unless
-   `bIsIssuingNotifies`); for an auto-name additive node, intern `Add_None`, then `AddAnimSeqName` := it,
-   `AddAnimSeq` := None and `AddAnimLinkupIndex` := -1; then `AnimSeqName` := the kept name and `CachedNumDesiredBones`
-   := 0.
+   `bIsIssuingNotifies` is set and `AnimSeqName` is not None); for **every** additive node: with the auto-name flag,
+   intern `Add_None` and `AddAnimSeqName` := it; then `AddAnimSeqName` := that name (or the node's own value),
+   `AddAnimSeq` := None and `AddAnimLinkupIndex` := -1; then `AnimSeqName` := the kept name and
+   `CachedNumDesiredBones` := 0.
 
 Writes that leave a field at the value it held still count as writes, as in the game.
 
@@ -166,10 +181,16 @@ Writes that leave a field at the value it held still count as writes, as in the 
 `WillowAnimNode_WeaponRecoil`. Their packages qualify them as in the init note's table (`Engine.`, `GearboxFramework.`
 for `AnimNodeSpecialMoveBlend`, `WillowGame.` for the `Willow` ones).
 
-**What Maya's tree does** (a prediction from the data, not a run): the tag; nothing on her other 53 template objects; on
-her 46 sequence nodes `AnimSeq` is None and `bIsIssuingNotifies` clear, so the plain step's writes. On her one
-auto-name additive node: `Add_None`, and the lookup over her mesh's anim sets after `UpdateAnimSets` appended them.
-No sequence of hers is named `Add_None` (an expectation, not checked), so `AddAnimSeq` stays None.
+**What Maya's tree does** (a prediction from the data, not a run): the tag; nothing on her empty-step nodes; on each
+sequence-family node in her tick list (at most the 46 template objects of section 1) `AnimSeq` is None and
+`bIsIssuingNotifies` clear, so the plain step's writes. On her three additive nodes, the re-set and the lookup over
+her mesh's anim sets after `UpdateAnimSets` appended them:
+- the auto-name node (`_76`): `Add_None`, already in the name table from its own tag, so the intern is a find. No
+  sequence of hers is named `Add_None` (an expectation, not checked), so `AddAnimSeq` stays None;
+- the two flag-false nodes (`_1`, `_10`): `ADD_Idle`, their tagged value. In the local name dump only
+  `Anim_Siren.RocketLauncher_Siren` holds a sequence of that name. If that set is on her mesh's list at this point, the
+  lookup matches and the stop is the link-up `NotRead`; if not, `AddAnimSeq` stays None. Which sets the list holds was
+  not read (the holds' anim-set lists did not decode).
 
 ## 6. Tests for the implementer
 
@@ -179,13 +200,19 @@ table unchanged:
 2. a tick list of empty-step classes (a toy `AnimNodeBlendList` and `WillowAnimNodeFeatherBlend`): only the tag;
 3. a plain sequence node with `AnimSeq` None: `AnimSeqName` unchanged at the end, `AnimSeq` None,
    `AnimLinkupIndex` -1, `CachedNumDesiredBones` 0;
-4. the same with `bIsIssuingNotifies` set: `AnimSeq` and `AnimLinkupIndex` unchanged, `CachedNumDesiredBones` 0;
+4. the same with `bIsIssuingNotifies` set and `AnimSeqName` a non-None name: `AnimSeq` and `AnimLinkupIndex`
+   unchanged, `CachedNumDesiredBones` 0; with `bIsIssuingNotifies` set and `AnimSeqName` None: the writes of test 3
+   (`AnimLinkupIndex` from a non -1 value to -1);
 5. `AnimSeq` set: the meta-data `NotRead`, nothing written (the tag included);
-6. an additive node with the auto-name flag clear: the plain step only; with it set and no `SkelComponent`:
-   `AddAnimSeqName` `Add_None` (interned once, at the write), `AddAnimSeq` None, `AddAnimLinkupIndex` -1;
-7. the lookup: a mesh with two anim sets, the second holding a sequence named `Add_None`: the link-up `NotRead`; with
-   `bReverseAnimSeqSearchOrder` set and the match only in the first set, the same; no match anywhere: None. A lazy
-   anim set: the not-loaded `NotRead`;
+6. an additive node with the auto-name flag clear, a toy `AddAnimSeqName` and no `SkelComponent`: the plain step, then
+   `AddAnimSeqName` unchanged, `AddAnimSeq` None, `AddAnimLinkupIndex` -1, nothing interned; with it set and no
+   `SkelComponent`: `AddAnimSeqName` `Add_None`, `AddAnimSeq` None, `AddAnimLinkupIndex` -1. The fixture's name
+   table lacks `Add_None`, so the intern is seen once, at the write (in Maya's data it is a find);
+7. the lookup, for an auto-name node and for a flag-clear node with a toy `AddAnimSeqName`: a mesh with two anim
+   sets, the second holding a sequence of the looked-up name: the link-up `NotRead`; with
+   `bReverseAnimSeqSearchOrder` set and the match only in the first set, the same; no match anywhere: None. A
+   flag-clear node with `AddAnimSeqName` None: no lookup, so a lazy anim set is not read. A lazy anim set otherwise:
+   the not-loaded `NotRead`;
 8. an unknown node class in the tick list: its `NotRead`, nothing written;
 9. a lazy tick-list entry: the not-loaded `NotRead`;
 10. malformed declarations (`AnimSeqName` not a name, `NodeInitTag` not an int): `VmError::Script`;
@@ -197,9 +224,13 @@ After `UpdateAnimations`, `UpdateAnimSets` returns and `ApplyBodyClassStartingVa
 (NATIVE_LINK1_TAIL_SETTERS.md section 1): `SetupSkeletalMeshPhysics`, its five collision setters (bound, #739), then
 `InitializeRBPhysics` (bound, #742). Her components are in the attach record, so **the predicted next stop is
 `InitializeRBPhysics`' physics `LayerAbsent`**, "WillowPawn.InitializeRBPhysics: a component's rigid body".
-- If her mesh's anim sets are still store handles at `UpdateAnimations`, the stop is earlier: the lookup's not-loaded
-  `NotRead` on her one auto-name additive node. Preloading them (the holds' anim sets, appended by `UpdateAnimSets`)
-  would be a harness input, **the hub's call**;
+- the stop is earlier if the lookup meets something not resident. `GetWeaponHoldDef`'s port (`weapon_hold.rs`)
+  already refuses a hold definition that is not resident, so the holds are loaded before this point; what can remain
+  is an anim set on her mesh's list that is a store handle (a hold's set not loaded with its hold, or a set from the
+  mesh template's own list), or a resident set whose `Sequences` hold a handle. Then the stop is the lookup's
+  not-loaded `NotRead` on her first additive node in tick order. Preloading those would be a harness input, **the
+  hub's call**;
+- if `ADD_Idle` matches in a set on her list (section 5's prediction), the stop is the link-up `NotRead`;
 - if a collision setter refuses first (a body present, a reattach refusal), that setter's refusal.
 
 ## Open questions
@@ -211,12 +242,15 @@ After `UpdateAnimations`, `UpdateAnimSets` returns and `ApplyBodyClassStartingVa
    - the virtual called on the old sequence's `MetaData` objects;
    - the found sequence's mesh link-up;
    - the lookup's fallback switch;
-   - which name the additive override builds from when `bIsIssuingNotifies` keeps the old name.
-4. **The hub's call:** NATIVE_ANIM_NODE_INIT.md D's missing additive override (section 3), and an anim-set preload if
-   the lookup needs one.
+   - which name the additive override builds from when `bIsIssuingNotifies` keeps the old name (issuing, name not
+     None);
+   - which anim sets her mesh's list holds at `UpdateAnimations` (it decides whether `ADD_Idle` matches).
+4. **The hub's call:** NATIVE_ANIM_NODE_INIT.md D's missing additive override and its issuing-notifies guard (section
+   3), and an anim-set preload if the lookup needs one.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
-1. After Maya spawns, read her additive sequence nodes' `AddAnimSeqName`. Expect `Add_None` on the one with the class
-   default's flag, and the template's value on the other two.
+1. After Maya spawns, read her additive sequence nodes' `AddAnimSeqName` and `AddAnimSeq`. Expect `Add_None` on the
+   one with the class default's flag, and the template's `ADD_Idle` on the other two; `AddAnimSeq` set on those two
+   only if a set on her list holds `ADD_Idle`.
 2. Read a sequence node's `AnimSeq` right after `UpdateAnimSets`. Expect None until the first real tick binds it.
