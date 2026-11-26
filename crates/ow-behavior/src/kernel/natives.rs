@@ -46,9 +46,10 @@
 //! | `ChangeBehaviorSequenceActivationStatus` | routed; kernel: Enable / Disable / Toggle through the provider | Off | UNVERIFIED (section C) |
 //! | `BeginNondeterministicProviderRegistration` | nothing a script sees; the handle is not written | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 2, 4) |
 //! | `WillowWeapon.OnCreate` | the weapon's own `ConsumerHandle`; kernel: `OnCreate` fired on every provider (the broadcast's shared step); a crate: its route body or the stub; unowned or released: nothing; a `Providers` array `NotRead` | Off | UNVERIFIED (NATIVE_WEAPON_ON_CREATE.md) |
+//! | `WillowPawn.InitializeBehaviorProviders` | `PID` -1 only: register the pawn, then its body class's provider definitions (six sources, in order) by the `IntializeBehaviorProviderForConsumer` rule; a write-free preflight first (module `pawn_providers`) | Off | UNVERIFIED (NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md section 2) |
 //! | `ForceUnregisterBehaviorConsumer` | kernel: the process goes (its providers, so their threads and pending work, with it) and its `PID` is kept out of the allocator; a crate's handle `NotYet`; the handle always comes back -1 | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 3, 4) |
 //!
-//! **Reference mode** binds only what the C++ reference binds (the first five rows); the last five stay unbound
+//! **Reference mode** binds only what the C++ reference binds (the first five rows); the last six stay unbound
 //! there, as in the C++, so the VM's stub policy answers them. The other kernel natives (`Publish*OutputVariable`,
 //! `ProcessReplicated*`, ...) are bound in neither mode: their rules are not read, so the stub policy answers them
 //! (decision 2026-11-16-50 lists them).
@@ -77,8 +78,14 @@ use ow_vm::error::VmError;
 use crate::kernel::{PayloadElement, Provider};
 use crate::provider::{self, BehaviorError, stock_path};
 
+mod pawn_providers;
 #[cfg(test)]
 mod tests;
+
+pub use pawn_providers::{
+    AI_PAWN, APPLY_REPLICATED, INITIALIZE_BEHAVIOR_PROVIDERS, NOT_LOADED as PROVIDERS_NOT_LOADED,
+    RECEIVER_NOT_LOADED as PROVIDERS_RECEIVER_NOT_LOADED, RECORD_PAWN_PROVIDERS,
+};
 
 /// The decision that records this pack.
 pub const RECORD: &str =
@@ -217,6 +224,9 @@ impl NativePack for Pack {
             bind(vm, FORCE_UNREGISTER, Rc::new(force_unregister))?;
             // WillowWeapon.OnCreate (NATIVE_WEAPON_ON_CREATE.md; lane IMPL-WEAPON-ONCREATE).
             bind(vm, ON_CREATE, Rc::new(on_create))?;
+            // WillowPawn.InitializeBehaviorProviders (NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md; lane
+            // IMPL-INITIALIZE-BEHAVIOR-PROVIDERS).
+            bind(vm, INITIALIZE_BEHAVIOR_PROVIDERS, Rc::new(pawn_providers::native))?;
             // Running behavior lists outside the kernel (NATIVE_RUN_BEHAVIORS.md; decision 2026-11-19-54).
             super::run::register(vm)?;
             // The behavior-variable setters (NATIVE_SET_BEHAVIOR_VARIABLE.md; decision 2026-11-19-159).
@@ -425,11 +435,7 @@ fn register_consumer(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             let k = kernel(c.vm)?;
             let mut k = borrow(&k)?;
             if k.processes.values().any(|p| p.consumer == o) {
-                return Err(NotYet::not_read(
-                    "RegisterBehaviorConsumer of a consumer the kernel already registered",
-                    RECORD_HANDLE,
-                )
-                .into());
+                return Err(registered_twice());
             }
             let pid = free_pid(&k, 0)?;
             claim_in(&mut k, pid, Owner::Kernel)?;
@@ -739,6 +745,28 @@ fn parameters(vm: &mut Vm, arg: Value) -> Result<Vec<PayloadElement>, VmError> {
     Ok(out)
 }
 
+/// `RegisterBehaviorConsumer`'s refusal of a consumer the kernel already registered.
+fn registered_twice() -> VmError {
+    NotYet::not_read("RegisterBehaviorConsumer of a consumer the kernel already registered", RECORD_HANDLE).into()
+}
+
+/// The kernel rule's refusal of a provider registered twice on one consumer.
+fn provider_twice() -> VmError {
+    NotYet::not_read("a provider registered twice on one consumer", RECORD_SECTION_C).into()
+}
+
+/// The kernel rule's pass-2 refusal of sequence `sequence` of provider `path`, which has a `CustomEnableCondition`.
+fn conditioned(sequence: &str, path: &str) -> VmError {
+    NotYet::layer_absent(
+        format!(
+            "pass 2 of IntializeBehaviorProviderForConsumer: sequence {sequence} of {path} has a CustomEnableCondition"
+        ),
+        "the condition's owner (the mission tracker's observers)",
+        RECORD_SECTION_C,
+    )
+    .into()
+}
+
 // IntializeBehaviorProviderForConsumer(ConsumerHandle, ProviderDefinition), on a kernel process (section C).
 fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmError> {
     let Some(definition) = provider_arg(c)? else {
@@ -748,8 +776,15 @@ fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmErro
         )
         .into());
     };
-    let path = stock_path(c.vm, definition).map_err(to_vm)?;
-    let k = kernel(c.vm)?;
+    provider_into(c.vm, pid, definition)
+}
+
+/// The kernel rule of `IntializeBehaviorProviderForConsumer` for the loaded or unloaded `definition` on process `pid`
+/// (section C): the repeat refusal, then decode, the pass-2 condition refusal and pass 1. Nothing for a `pid` the
+/// kernel holds no process for. `WillowPawn.InitializeBehaviorProviders` runs it once per definition.
+fn provider_into(vm: &mut Vm, pid: i32, definition: ObjRef) -> Result<Value, VmError> {
+    let path = stock_path(vm, definition).map_err(to_vm)?;
+    let k = kernel(vm)?;
     let (consumer, known) = {
         let k = borrow(&k)?;
         let Some(process) = k.processes.get(&pid) else {
@@ -761,23 +796,11 @@ fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmErro
         )
     };
     if known {
-        return Err(NotYet::not_read(
-            "a provider registered twice on one consumer",
-            RECORD_SECTION_C,
-        )
-        .into());
+        return Err(provider_twice());
     }
-    let mut p = Provider::new(c.vm, definition).map_err(to_vm)?;
+    let mut p = Provider::new(vm, definition).map_err(to_vm)?;
     if let Some(s) = p.data().sequences.iter().find(|s| s.condition.is_some()) {
-        return Err(NotYet::layer_absent(
-            format!(
-                "pass 2 of IntializeBehaviorProviderForConsumer: sequence {} of {path} has a CustomEnableCondition",
-                s.name
-            ),
-            "the condition's owner (the mission tracker's observers)",
-            RECORD_SECTION_C,
-        )
-        .into());
+        return Err(conditioned(&s.name, &path));
     }
     p.set_consumer(Some(consumer));
     // Pass 1 runs with the provider in its slot, lent out, so a behavior that reaches its own provider is refused
@@ -789,7 +812,7 @@ fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmErro
         .processes
         .get(&pid)
         .map_or(0, |p| p.providers.len().saturating_sub(1));
-    let result = p.register_consumer(c.vm).map_err(to_vm);
+    let result = p.register_consumer(vm).map_err(to_vm);
     let mut k = borrow(&k)?;
     if let Some(process) = k.processes.get_mut(&pid) {
         match &result {

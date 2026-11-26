@@ -115,17 +115,21 @@ fn object_of(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> 
 /// `Origin::Default`, and it records each object it builds in that cache (review r1 of #702).
 fn ready(vm: &Vm, c: ClassId, needs_default: bool) -> Result<(), VmError> {
     let defined = vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined());
-    let built = !needs_default
-        || vm
-            .space
-            .heap
-            .handles()
-            .into_iter()
-            .any(|o| vm.space.heap.get(o).is_ok_and(|x| x.class == c && matches!(x.origin, Origin::Default { .. })));
+    let built = !needs_default || default_built(vm, c);
     if defined && vm.class_code_loaded(c) && built {
         return Ok(());
     }
     Err(NotYet::not_read(class_not_ready(&class_path(vm, c)), RECORD).into())
+}
+
+/// Whether the default object of exactly `c` is already built in the heap (an object of `Origin::Default`), by a
+/// load-free scan ([`ready`]). `super::material_instances` asks it too.
+pub(super) fn default_built(vm: &Vm, c: ClassId) -> bool {
+    vm.space
+        .heap
+        .handles()
+        .into_iter()
+        .any(|o| vm.space.heap.get(o).is_ok_and(|x| x.class == c && matches!(x.origin, Origin::Default { .. })))
 }
 
 /// What the commit does, every check passed.
