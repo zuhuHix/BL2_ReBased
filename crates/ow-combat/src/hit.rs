@@ -1543,7 +1543,8 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
 pub fn adopt_class_line(vm: &Vm, class: ObjRef) -> String {
     let named = vm.defs.handle_path(class).unwrap_or_else(|| crate::hit::access::class_name(vm, class));
     format!(
-        "harness input: the AI adopt sets the mind's CharacterClass to the pawn's AIClass {named}, as WillowMind.Possess          does (hub ruling on #796; UNVERIFIED)"
+        "harness input: the AI adopt sets the mind's CharacterClass to the pawn's AIClass {named}, as WillowMind.Possess \
+         does (hub ruling on #796; UNVERIFIED)"
     )
 }
 

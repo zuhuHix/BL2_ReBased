@@ -58,6 +58,15 @@ game.** Reference is unchanged.
   - `ow-world` pools `class_part` (5): the thirteen values in order, a folded stack, the gates, an unloaded
     definition, and Reference;
   - `levelup` (1): missing and mistyped fields.
-- **Not in this change:** the index rows #796 adds for the five reads. Their port cells get filled once #796 lands;
-  this branch edits only the `Controller` recalculation and `AdjustDamage` rows.
+- **Review of #803 (fix round):**
+  - the `CharacterClass` write is now tested by its effect. The toy route does not recalculate (its
+    `ApplyCharacterClassDefaults` is cut to the health step), so a new Off-only `levelup::run_class_part` runs
+    step 1 alone, with the same plan and writes the recalculation uses;
+  - after an Off spawn, the AI pawn's `NormalImpactDamageModifier` and its base are 1, from the toy class's 1 x 1 data;
+    with the mind's class cleared the part does not apply. Removing the adopt's write fails this test (checked by
+    hand);
+  - with the deferred setting on, Maya's toy modifiers are written; off (the default), the part does not apply;
+  - the player set-up's `Pawn` gate also checks Off. Reference never reaches that set-up, so this is defence in depth;
+  - two harness strings are single-spaced again;
+  - the five read rows #796 added now carry their port cells.
 - **Sensitive files:** none.
