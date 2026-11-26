@@ -2,6 +2,20 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-BOUNDING-CYLINDER-AND-AFTER (2026-11-26, pc-hummer, on fix/rust-bounding-cylinder, stacked on fix/rust-links-13-14
+e00e3de):** AI-assisted (Claude Code, Opus 5.5). NATIVE_BOUNDING_CYLINDER_AND_AFTER.md (#799 at its r1 fix fc8d2c42) in
+Off:
+- the translated bounds (no Absolute flag, Owner the receiver, zero rotations and `PrePivot`, unit scale);
+- `TraceComponent`, with the hub's miss stand-in behind an Off-only setting that the slice's combat world turns on,
+  logged;
+- `TryFullBodyGib`, `GetParent`, the shield getters, `ShakeView`, `DoForceFeedbackWaveform`'s gates, and
+  `GetCombatMusicManager`'s field.
+
+`cargo test --workspace -j 8 --no-fail-fast` 4,015 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed
+Off strict `--slice-gate` (release build, under the machine lock): 7 ok / 14, X = 8.167/14 = 58.3%, every row's stop as
+on the base. Links 3, 4, 5, 13 and 14 stop at LINK34's base-search floor trace, before the swing reaches this code.
+UNVERIFIED in game. Decision 2026-11-26-NNN.
+
 **IMPL-LINKS-13-14-CLASS-INPUTS (2026-11-26, pc-hummer, on fix/rust-links-13-14, stacked on fix/rust-link34-after-mind
 f2748772, itself on #792's head 464346d):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_13_14.md (#796 at its r1
 fix 2bedfd46) in Off:
