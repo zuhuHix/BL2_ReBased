@@ -11,8 +11,10 @@
 //!    `OverrideDeathDef`; (c) each `ScrapedStances` entry; (e) `DeathDef`; (f) `PlayerEventDef`;
 //! 3. after each of those, its `BehaviorProviderDefinition`.
 //!
-//! Step (d), the pawn's instance-data hit regions, adds nothing: the body composition refuses a component with a hit
-//! region, so its entries hold none. `ApplyBodyClassStartingValues` itself is script, and its other bound native,
+//! Step (d), the pawn's instance-data hit regions, adds nothing for component entries: the body composition refuses a
+//! component with a hit region, so its entries hold none. It is the only writer of `InstanceDataState.Data` in the
+//! port, so no other kind of entry is there; for another kind the union's hit-region field has no meaning this
+//! preload could rely on, so it is not read (review of #779). `ApplyBodyClassStartingValues` itself is script, and its other bound native,
 //! `SetDeathDefinition`, reads the `DeathDef` already listed. A definition's sequences' own references (conditions,
 //! behaviors) are not loaded: the preflight does not read them, and the commit's decode loads what it needs.
 //!
