@@ -682,7 +682,7 @@ impl FireMissionSlice {
     /// One `BehaviorSequenceEnableByMission` verdict from the tracker's current state: the one verdict of
     /// `crate::conditions` (lane IMPL-BEHAVIOR-KERNEL-PASS2, the hub's ruling 3), which the kernel's pass 2 asks too.
     /// A mission other than the slice's own is NotStarted, as `GetMissionStatus` answers; the slice's completed set no
-    /// longer counts as Complete here (decision 2026-11-26-NNN). An objective outside its mission is reported and
+    /// longer counts as Complete here (decision 2026-11-26-33). An objective outside its mission is reported and
     /// false.
     fn condition_holds(&self, vm: &mut Vm, condition: ObjRef) -> Result<bool, MissionError> {
         let v = crate::conditions::verdict(vm, &self.inner.mission, condition)?;
