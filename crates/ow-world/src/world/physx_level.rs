@@ -156,3 +156,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
 #[cfg(test)]
 #[path = "physx_level_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "physx_level_script_tests.rs"]
+mod script_tests;

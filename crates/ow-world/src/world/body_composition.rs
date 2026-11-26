@@ -980,7 +980,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     return Err(not_read(HIT_REGION));
                 }
                 // The attach: the parent's first, then the owner retry with no socket name (an actor attach, which
-                // answers true). Only the actor attach is ever written.
+                // answers true). Only the actor attach is ever written. Every made component declares `Owner`: an
+                // actor attach writes it, and a socket-attached one takes its parent's before it is published
+                // (`writes`; review of #773, which removed a later copy of this check).
                 require_prop(vm, class, "Owner")?;
                 let socket = field(vm, &cd, "MeshSocketName", "ComponentData")?;
                 let has_socket = !is_none_name(vm, &socket);
@@ -1107,13 +1109,6 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
     // checked here, before the first write.
     if made.iter().any(|m| matches!(m, Made::Component { .. })) {
         crate::actors::record_ready(vm)?;
-    }
-    // A socket-attached component takes its parent's `Owner` before it is published (`writes`), so its class must
-    // declare one; the record needs it for every component.
-    for m in &made {
-        if let Made::Component { class, .. } = m {
-            require_prop(vm, *class, "Owner")?;
-        }
     }
     Ok(Some(Plan { attachments, made, authority, entry_struct }))
 }

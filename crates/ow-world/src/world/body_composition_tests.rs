@@ -272,6 +272,16 @@ fn env_opts(opts: Opts) -> Env {
         t.prop("Struct", socket, "RelativeRotation", 0, rotator);
         t.prop("Struct", socket, "RelativeScale", 0, vector);
         t.prop("Bool", skeletal, "bSkipAllUpdateWhenPhysicsAsleep", 0, 0);
+        // InitializeRBPhysics' class table reads these (review of #773, LOW c: the composed socket test).
+        for flag in ["bDisableAllRigidBody", "bHasPhysicsAssetInstance", "bSkelCompFixed", "bEnableSoftBodySimulation"] {
+            t.prop("Bool", skeletal, flag, 0, 0);
+        }
+        t.prop("Int", skeletal, "bUseSingleBodyPhysics", 0, 0);
+        let pointer = toy_struct(&mut t, skeletal, "ToyPointer", None);
+        t.prop("Int", pointer, "Dummy", 0, 0);
+        t.prop("Struct", skeletal, "ClothSim", 0, pointer);
+        toy_array_of(&mut t, skeletal, "ClothMeshIndexData", "Int", 0);
+        t.prop("Bool", skel_mesh, "bClothMetal", 0, 0);
         // The animation classes the lookups read (NATIVE_ANIM_NODE_LOOKUP.md), with only the fields they read.
         let node = t.class("AnimNode", object);
         t.prop("Name", node, "NodeName", 0, 0);
@@ -518,6 +528,9 @@ fn env_opts(opts: Opts) -> Env {
         ("bStatic", PropKind::Bool),
         ("bTickIsDisabled", PropKind::Bool),
         ("bDeleteMe", PropKind::Bool),
+        // InitializeRBPhysics' pawn fields (review of #773, LOW c).
+        ("Physics", PropKind::Byte { enum_: None }),
+        ("bPushesRigidBodies", PropKind::Bool),
     ]);
     let body = class(&mut vm, "WillowGame.BodyClassDefinition", object, &[
         ("BodyComposition", PropKind::Struct(composition)),
