@@ -2,6 +2,18 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-COMBAT-TAIL-LINKS-3-4 (2026-11-26, pc-hummer, docs only, on docs/native-links-3-4-tail from main
+d118d2bb, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_LINKS_3_4_TAIL.md reads links 3
+and 4 past the spawn's
+`SetBaseValue` (lane E's). A local probe (installed Off strict `--slice-gate` runs under the machine lock, lane E's
+`fix/rust-combat-music` and `fix/rust-links-13-14` merged locally, each stop stood in, reverted and not committed)
+gives both chains. Link 3: the pipeline getters (read, unbound), `IsFriendlyFire`'s interface value (a port gap),
+the hit-region cap (`AddDamageToHitRegion`, read here: no cap on the slice), `GetDisplayNameAtGrade`,
+`NotifyKilledEnemy` and `IsActionSkillRunning` (read here), then the combat world's unbound dialog globals getter.
+Link 4: the getters and `IsPlayingAny`, the shield stage and the protection timer (read, not ported), the resistance
+(#796's ruling), then `DoForceFeedbackWaveform`'s residency check before its gates (an order fix). No code changed, so
+no measured number moved. UNVERIFIED in game.
+
 **ANALYST-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on docs/native-spawn-setbasevalue, on main d118d2bb):**
 AI-assisted (Claude Code, Opus 5.5). Docs only: NATIVE_SPAWN_SETBASEVALUE.md, the index rows and decision 2026-11-26-68;
 no code, so no test numbers change. The installed Off strict `--slice-gate` on #807's head 0a9cfdaf (the base of the
