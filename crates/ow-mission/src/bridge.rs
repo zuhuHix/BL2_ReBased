@@ -455,6 +455,14 @@ pub const PLAYER_PAWN_CLASS: &str = "WillowGame.WillowPlayerPawn";
 /// The plan, and its loads of those sub-objects, run before the pawn is made; each copy whose class declares `Owner`
 /// gets the pawn there, as the dummy's copies do. A refusal after a write (a plan load, the pawn) is marked "stopped
 /// after partial writes" by #518's counters. UNVERIFIED in the running game (public UE3 component instancing).
+///
+/// **The spawn's component attach** (lane BRIDGE-PAWN-ATTACH, the hub's ruling on #757, decision 2026-11-26-NNN): the
+/// pawn then takes the step every spawned actor takes (`ow_world::actors::component_attach`, NATIVE_SPAWN_COMPONENT_
+/// ATTACH.md). Its preflight ([`plan`](ow_world::actors::component_attach::plan)) runs on the class default with the
+/// instancing plan, before the pawn is made; its writes ([`apply`](ow_world::actors::component_attach::apply)) run on
+/// the copies after the `Owner` writes above, so the attach record's entries, published last, are current (an `Owner`
+/// write after publication would make one stale). The copies in `Components` thus land in the attach record under
+/// the pawn. UNVERIFIED in the running game.
 fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
     let before = ow_world::pools::Counters::read(vm);
     let made = (|| -> Result<ObjRef, VmError> {
@@ -463,13 +471,16 @@ fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, 
         vm.log.extend(vm.defs.take_log());
         let default = default.map_err(VmError::Def)?;
         let plan = ow_world::actors::plan_components(vm, default)?;
+        let attach = ow_world::actors::component_attach::plan(vm, default, &plan)?;
         let pawn = ow_vm::interp::instantiate_from_defaults(vm, class)?;
-        for (_, copy) in ow_world::actors::apply_plan(vm, &plan, pawn)? {
+        let pairs = ow_world::actors::apply_plan(vm, &plan, pawn)?;
+        for &(_, copy) in &pairs {
             let c = vm.space.heap.get(copy)?.class;
             if let Some(owner) = vm.space.prop(c, "Owner") {
                 vm.space.write(copy, PropAddr::scalar(owner), Value::Object(Some(pawn)))?;
             }
         }
+        ow_world::actors::component_attach::apply(vm, pawn, &attach, &pairs)?;
         Ok(pawn)
     })();
     Ok(made.map_err(|e| ow_world::pools::after_counted_writes(vm, before, e))?)

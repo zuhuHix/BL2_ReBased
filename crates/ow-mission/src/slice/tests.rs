@@ -466,7 +466,11 @@ fn willowgame() -> Vec<u8> {
     let status = t.class("Behavior_AttemptStatusEffect", object);
     t.prop("Object", status, "StatusEffect", 0, object);
     let willow_pawn = t.class("WillowPawn", engine_pawn);
-    t.class("WillowPlayerPawn", engine_pawn);
+    // The player pawn declares the arrays the spawn's component attach reads (lane BRIDGE-PAWN-ATTACH); its class
+    // default holds no component, so the attach has nothing to do.
+    let player_pawn = t.class("WillowPlayerPawn", engine_pawn);
+    toy_array_of(&mut t, player_pawn, "Components", "Object", object);
+    toy_array_of(&mut t, player_pawn, "AllComponents", "Object", object);
     t.class("WillowAIPawn", willow_pawn);
     t.build()
 }
