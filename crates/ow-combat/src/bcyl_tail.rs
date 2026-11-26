@@ -352,9 +352,12 @@ pub fn force_feedback(vm: &Vm, controller: ObjRef, waveform: Option<ObjRef>) -> 
     let input = object(vm, controller, "PlayerInput", WHAT)?;
     let manager = object(vm, controller, "ForceFeedbackManager", WHAT)?;
     let info = object(vm, controller, "PlayerReplicationInfo", WHAT)?;
+    // The waveform's `Scale` checked on its class, loading nothing; the waveform itself must be resident only past the
+    // gates, where `Scale` is written (NATIVE_LINKS_3_4_TAIL.md section 9, row 6; lane IMPL-LINKS-3-4-TAIL).
     if let Some(w) = waveform {
-        resident(vm, w)?;
-        if !matches!(read(vm, w, "Scale", WHAT)?, (_, PropKind::Float)) {
+        let class = vm.space.heap.get(w)?.class;
+        let kind = vm.space.prop(class, "Scale").and_then(|p| vm.space.classes.decl(p)).map(|d| d.kind.clone());
+        if !matches!(kind, Some(PropKind::Float)) {
             return Err(bad(WHAT, "the waveform's Scale is not declared as a float"));
         }
     }
@@ -366,6 +369,9 @@ pub fn force_feedback(vm: &Vm, controller: ObjRef, waveform: Option<ObjRef>) -> 
     }
     if manager.is_none() || info.is_none() {
         return Ok(());
+    }
+    if let Some(w) = waveform {
+        resident(vm, w)?;
     }
     // Decided before the waveform's `Scale` write, so nothing is written.
     Err(NotYet::not_read(FEEDBACK_PLAY, RECORD).into())

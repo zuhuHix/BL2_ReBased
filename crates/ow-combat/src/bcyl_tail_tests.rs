@@ -309,6 +309,17 @@ fn force_feedback_s_gates() {
     assert_eq!(x.get(waveform, "Scale"), Value::Float(0.0));
     let bare = x.make("Core.Object");
     assert!(matches!(force_feedback(&x.vm, pc, Some(bare)), Err(VmError::Script { .. })), "a waveform with no Scale");
+    // NATIVE_LINKS_3_4_TAIL.md section 9, row 6 (test 6): a waveform not built (a stand-in short of its slots) answers
+    // nothing with no gamepad, nothing loaded; past the gates its residency refuses first.
+    let class = x.vm.space.classes.by_path("Test.ToyWaveform").unwrap();
+    let lazy = x.vm.space.alloc_stand_in(class, "Lazy", ow_object::heap::Origin::Default { class }).unwrap();
+    x.set(input, "bUsingGamepad", Value::Bool(false));
+    let before = x.marks();
+    force_feedback(&x.vm, pc, Some(lazy)).unwrap();
+    assert_eq!(x.marks(), before, "no gamepad: nothing, nothing loaded");
+    x.set(input, "bUsingGamepad", Value::Bool(true));
+    let what = not_read(force_feedback(&x.vm, pc, Some(lazy)).unwrap_err());
+    assert_ne!(what, FEEDBACK_PLAY, "the residency check comes first: {what}");
 }
 
 /// Test 8: `GetCombatMusicManager`.
