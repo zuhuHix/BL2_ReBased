@@ -60,7 +60,7 @@
 //!   Nothing is written, loaded or drawn.
 //!
 //! - **`WillowPlayerController.GetPawnInventoryManager()`** (lane IMPL-GETPAWNINVENTORYMANAGER, decision
-//!   2026-11-26-NNN), coded from NATIVE_CONTROLLER_HELPERS.md, "WillowPlayerController.GetPawnInventoryManager" alone
+//!   2026-11-26-36), coded from NATIVE_CONTROLLER_HELPERS.md, "WillowPlayerController.GetPawnInventoryManager" alone
 //!   (high confidence; the vehicle seats medium), UNVERIFIED. It writes and loads nothing:
 //!   - no `Pawn`: None;
 //!   - the pawn's first native class `WillowGame.WillowPawn` or `WillowGame.WillowPlayerPawn` (whose "vehicle/base"

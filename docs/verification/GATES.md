@@ -8,7 +8,7 @@ pawn's `InvManager`); the #773 LOWs (the `Owner` check tested, PhysX tests 6 and
 --workspace -j 8 --no-fail-fast` 3,876 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict
 `--slice-gate` (release build, under the machine lock), the merge and this branch: 6 ok / 8 not ok, 51.2% on both. Link
 6 passes `HasRoomInInventoryFor` and stops at `UpdateAmmoCounts`' `NotRead` (after partial writes), as predicted; every
-other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-36.
 
 **IMPL-BODYCLASS-PRELOAD (2026-11-26, pc-hummer, on fix/preload-bodyclass-definitions from main 0847259):**
 AI-assisted (Claude Code, Opus 5.5). The `maya` step's Off harness preloads exactly the body-class objects
