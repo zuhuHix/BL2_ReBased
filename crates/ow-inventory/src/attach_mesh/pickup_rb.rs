@@ -98,18 +98,18 @@ const IMPACT_FIELDS: [(&str, Want); 4] = [
 
 /// #518's canonical write counters, snapshot when the native is entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WriteCounters {
+pub(crate) struct WriteCounters {
     heap: u64,
     draws: u64,
     loads: u64,
 }
 
 impl WriteCounters {
-    pub(super) fn of(vm: &Vm) -> Self {
+    pub(crate) fn of(vm: &Vm) -> Self {
         WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
     }
 
-    pub(super) fn mark(&self, vm: &Vm, e: VmError) -> VmError {
+    pub(crate) fn mark(&self, vm: &Vm, e: VmError) -> VmError {
         match e {
             VmError::NotYet(n) if WriteCounters::of(vm) != *self => n.after_partial_writes().into(),
             other => other,

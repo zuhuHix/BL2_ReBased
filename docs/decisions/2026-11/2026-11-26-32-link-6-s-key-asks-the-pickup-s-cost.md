@@ -29,13 +29,16 @@ did not read the executable. No session was run. Every rule is UNVERIFIED in the
   - no pack bound any of the three keys before (checked by grep). The all-packs wiring test passes.
 - **Review of #774:**
   - a raised `SpendGoldenKey` is a write, so an error of a later raise is now marked "stopped after partial writes",
-    kind and record kept, as the crate's other natives mark one after their first write. The first raise's error
-    stays unmarked;
+    kind and record kept, as the crate's other natives mark one after their first write;
+  - round 2: so is an error of the first raise, or of `AddCurrencyOnHand`, when #518's counters moved since the
+    native was entered (a handler that wrote, drew or loaded before refusing), as `pickup_rb`'s `WriteCounters` marks
+    one. A first raise that refuses without writing stays unmarked;
   - the two natives' shared refusals name the asking native ("CanAffordToPickUpPickupable: ..." or
     "PayForPickupable: ...");
-  - tests: a toy handler refusing on its second call (marked) and on its first (not), and `PayForPickupable` on a lazy
-    pickupable, an unread cost class and a lazy replication info. Dropping the mark, or passing the other name, fails
-    them.
+  - tests: a toy handler refusing on its second call (marked) and on its first (not); a first `SpendGoldenKey` or
+    `AddCurrencyOnHand` that writes and then refuses (marked) or refuses without writing (not); and `PayForPickupable`
+    on a lazy pickupable, an unread cost class and a lazy replication info. Dropping either mark, or passing the
+    other name, fails them.
 - **Reference:** unchanged; it binds none of the three.
 - **The slice gate** (installed, Off, strict, release build, under the machine lock; main c345fdb and this change): 6
   ok / 8 not ok, 51.2% on both.
