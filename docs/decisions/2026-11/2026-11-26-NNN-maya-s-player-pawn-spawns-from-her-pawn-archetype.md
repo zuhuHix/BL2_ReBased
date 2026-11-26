@@ -45,3 +45,13 @@ A local probe (temporary log lines, reverted) showed two pawns made in one gate 
 controller has no `PlayerClass`, is the class-default pawn; the probe did not show which world made it. So the
 archetype route reaches the note's predicted stop (section 7, item 3), the same 2.A `LayerAbsent` the class-default
 pawn reached after #760, now on the archetype's own components.
+
+**Review of #760's LOWs** (a separate commit, on the class-default pawn of decisions 2026-11-26-16 and -17):
+1. a failure of the component attach's writes now frees the pawn and its copies, and drops any attach-record entries
+   already published for it, as the earlier failure paths free them. The pawn is not cached and nothing has
+   registered it, unlike the spawn's actor, which stays once it is in the level list;
+2. a test of a refusal from the attach's own preflight: the class default's sub-object with `bAttached` set is its
+   `NotRead`, with no pawn made or cached.
+
+The reviewer of #760 noted that the release rule above is already in NATIVE_INITIALIZE_BODY_COMPOSITION.md section
+4.5 and its preflight. The hub's ruling brings `body_composition.rs` into line with that note.

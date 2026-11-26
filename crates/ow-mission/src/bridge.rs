@@ -568,7 +568,22 @@ fn player_pawn_with_components(vm: &mut Vm, class_path: &str) -> Result<ObjRef, 
             let _ = vm.space.free(pawn);
             return Err(e);
         }
-        ow_world::actors::component_attach::apply(vm, pawn, &attach, &pairs)?;
+        // A failure of the attach writes frees the pawn and its copies too, as the failure paths above do (review of
+        // #760, LOW 1): the pawn is not cached yet, so leaving it would orphan it. Attach-record entries already
+        // published for it are dropped with it. Unlike the spawn, which leaves its actor once it is in the level list,
+        // nothing here has registered the pawn.
+        if let Err(e) = ow_world::actors::component_attach::apply(vm, pawn, &attach, &pairs) {
+            if let Some(layer) = vm.service::<ow_world::actors::SceneLayer>()
+                && let Ok(mut layer) = layer.try_borrow_mut()
+            {
+                layer.forget(pawn);
+            }
+            for &(_, copy) in &pairs {
+                let _ = vm.space.free(copy);
+            }
+            let _ = vm.space.free(pawn);
+            return Err(e);
+        }
         Ok(pawn)
     })();
     Ok(made.map_err(|e| ow_world::pools::after_counted_writes(vm, before, e))?)

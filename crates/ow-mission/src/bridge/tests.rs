@@ -2400,3 +2400,35 @@ fn an_archetype_not_in_memory_is_refused_before_anything_is_made() {
     assert_eq!((vm.defs.load_transitions(), vm.space.heap.handles().len()), (loads, objects), "nothing loaded or made");
     assert_eq!(s.inner.state.borrow().player_pawn, None);
 }
+
+/// A refusal from the component attach's own preflight (review of #760, LOW 2): the class default's sub-object with
+/// `bAttached` set is the attach's `NotRead` (`component_attach::ATTACHED`), met after the instancing plan and before
+/// the pawn is made. No pawn object is made and none is cached.
+#[test]
+fn an_attach_plan_refusal_makes_and_caches_no_player_pawn() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let vm = env.vm();
+    let own = willow(vm, "Default__WillowPlayerPawn.ToyPawnComp0");
+    set(&mut vm.space, own, "bAttached", Value::Bool(true)).unwrap();
+    let pawn_class = vm.find_class(crate::bridge::PLAYER_PAWN_CLASS).unwrap();
+    let runtime = ow_object::heap::Origin::Runtime;
+    let pawns = |vm: &Vm| {
+        vm.space
+            .heap
+            .handles()
+            .into_iter()
+            .filter(|&o| vm.space.heap.get(o).is_ok_and(|x| x.class == pawn_class && x.origin == runtime))
+            .count()
+    };
+    let before = pawns(vm);
+    match s.player_pawn(vm) {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(n.what.ends_with(ow_world::actors::component_attach::ATTACHED), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(s.inner.state.borrow().player_pawn, None, "no pawn cached");
+    assert_eq!(pawns(vm), before, "no pawn made");
+}
