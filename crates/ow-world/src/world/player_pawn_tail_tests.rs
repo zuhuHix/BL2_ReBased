@@ -73,6 +73,7 @@ fn fx_in(mode: ParityMode) -> Fx {
         decl(&mut vm, "ClothMeshIndexData", PropKind::Array(Box::new(PropKind::Int))),
         decl(&mut vm, "SkeletalMesh", PropKind::Object { class: mesh }),
         decl(&mut vm, "Attachments", PropKind::Array(Box::new(PropKind::Struct(attachment)))),
+        decl(&mut vm, "AttachedToSkelComponent", PropKind::Object { class: base }),
     ];
     let skeletal = vm.space.classes.define("Engine.SkeletalMeshComponent", Some(mesh_component), props).unwrap();
     let gear = vm.space.classes.define("WillowGame.GearLikenessMeshComponent", Some(skeletal), vec![]).unwrap();
@@ -610,4 +611,23 @@ fn a_skeletal_class_missing_a_field_is_a_data_error() {
         other => panic!("{other:?}"),
     }
     assert!(!x.fixed(made[0]));
+}
+
+/// Review of #770: an `Attachments` component not in the attach record whose `AttachedToSkelComponent` is the entry is
+/// the "cannot tell" `NotRead`, with nothing written; one back-linked elsewhere (or not at all) is still not visited
+/// (test 7).
+#[test]
+fn an_unrecorded_back_linked_attachment_is_not_read() {
+    let mut x = fx();
+    let (p, made) = pawn_with(&mut x, &[("Engine.SkeletalMeshComponent", "Body")]);
+    let head = x.part("WillowGame.GearLikenessMeshComponent", "Head", p, false);
+    x.set(head, "AttachedToSkelComponent", Value::Object(Some(made[0])));
+    x.attach(made[0], &[head]);
+    assert_eq!(not_read_what(x.rb(p).unwrap_err()), (UNRECORDED_ATTACHMENT.to_string(), RECORD_LAYER));
+    assert!(!x.fixed(made[0]) && !x.fixed(head), "nothing written");
+    // Back-linked to another component: not visited, as before.
+    let other = x.part("Engine.SkeletalMeshComponent", "Other", p, false);
+    x.set(head, "AttachedToSkelComponent", Value::Object(Some(other)));
+    x.rb(p).unwrap();
+    assert!(x.fixed(made[0]) && !x.fixed(head));
 }

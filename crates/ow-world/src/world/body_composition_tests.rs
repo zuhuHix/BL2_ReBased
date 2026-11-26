@@ -1117,8 +1117,10 @@ fn a_second_build_refuses_on_the_old_recorded_mesh() {
     }
 }
 
-/// The record is checked before the first write: a borrowed scene layer is refused by the preflight, with nothing
-/// written.
+/// A borrowed scene layer refuses the build before any write. Through `Vm::call` it is the VM's own
+/// `check_none_borrowed` that refuses first (review of #770), so this pins the write-free refusal, not the preflight's
+/// `record_ready`, which stays as the build's own guard (as in the spawn's component update) for a caller that does not
+/// come through `Vm::call`.
 #[test]
 fn a_borrowed_attach_record_refuses_before_any_write() {
     let mut e = env();
