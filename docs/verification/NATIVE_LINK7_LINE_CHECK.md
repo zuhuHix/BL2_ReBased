@@ -1,6 +1,6 @@
 # Link 7's line check: the HUD targeting's trace, what it tests and what it passes over (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK7-LINE-CHECK (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-LINK7-LINE-CHECK (decision 2026-11-26-71), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/lc/` and
 `local/analysis/hud/`. This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing
 structure. Values are decimal. **Every rule here is UNVERIFIED in the running game.**
