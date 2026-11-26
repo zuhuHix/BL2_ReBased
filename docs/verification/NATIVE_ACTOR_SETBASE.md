@@ -1,6 +1,6 @@
 # Actor.SetBase, and link 6's take after it (2026-11-26)
 
-AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE (decision 2026-11-26-NNN), the analyst half of the
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-ACTOR-SETBASE (decision 2026-11-26-52), the analyst half of the
 clean room: **another lane implements this note.** Raw output stays under ignored `local/analysis/setbase/`. This note
 is in our own words: no decompiler output, pseudo-code, addresses, offsets or listing structure. **Every rule here is
 UNVERIFIED in the running game.**
