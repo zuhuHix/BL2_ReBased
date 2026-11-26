@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-FLOOR-TRACE-FLAGS (2026-11-26, pc-hummer, docs only, on docs/native-floor-trace-flags from main
+153ac950, rebased onto c1058de6):** AI-assisted (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md reads the base search's floor trace:
+the flags (8415: pawns, movers, the BSP, volumes, other actors, blocking only, world geometry, terrain; one result
+added, no stop at the first hit), a box swept with the actor's collision cylinder (not a line), the actor as source.
+It reads what it can hit (world geometry always; pawns, movers, volumes and other actors through the source's
+blocked-by test) and the source's exclusion: its own primitives, its `Owner` chain and the actors it owns. That
+confirms #798's R2 and corrects the walkers' "base chain" to the `Owner` chain (NATIVE_SPAWN_TRACE_FILTER.md,
+NATIVE_TOUCH_PICKUP_TRACE.md, `trace_filter::chain_of`). Lane E's geometric clearance is right in order but too
+narrow in region; a box test is proposed. No probe; no code changed, so no measured number moved. UNVERIFIED in game.
+
 **IMPL-PAWN-INTERACTION-PROXY (2026-11-26, pc-hummer, on fix/rust-pawn-interaction-proxy from main 50114dc):**
 AI-assisted (Claude Code, Opus 5.5). `SetCollisionSize` with the touch update's nothing-touched stand-in (hub ruling on
 review of #802), `SetHardAttach` for four classes, and `SetBase`'s eighth class and identity case, Off. `cargo test

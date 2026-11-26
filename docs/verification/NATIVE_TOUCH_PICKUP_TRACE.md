@@ -54,7 +54,8 @@ The implementation is one line check through the world's single-line routine. Th
    - **Then the actor collision hash**, walked because bits 2, 128 and 8192 are in the walk mask. Each candidate
      primitive passes the walker's tests in NATIVE_SPAWN_TRACE_FILTER.md, for a zero-extent query
      (`BlockZeroExtent`).
-     - That walker passes over a primitive whose owner is the source actor or in its base chain. **The pickup's own
+     - That walker passes over a primitive whose owner is the source actor or in its base chain (corrected since:
+       the `Owner` chain, both ways, not `Base`; NATIVE_FLOOR_TRACE_FLAGS.md section 4). **The pickup's own
        primitives never block its touch.**
      - Then comes the owner's per-class filter, as in NATIVE_SPAWN_PLACEMENT.md section 7, step 3, now with a source
        actor.
@@ -190,7 +191,8 @@ each refusal before any write; the native writes nothing anyway.
    - `Clear` goes on to the actor walk.
 8. **The actor walk** over the live actors, the whole segment's box as the region, zero extent, with the flags of
    section 2 and the pickup as source actor. It follows `trace_filter`'s candidate steps, adding one step: a primitive
-   whose owner is the pickup, or in the pickup's `Base` chain, is not tested (NATIVE_SPAWN_TRACE_FILTER.md). The
+   whose owner is the pickup, or in the pickup's `Base` chain, is not tested (NATIVE_SPAWN_TRACE_FILTER.md; corrected
+   since: the pickup's `Owner` chain and the actors it owns, NATIVE_FLOOR_TRACE_FLAGS.md sections 4 and 6). The
    owner rows are those of section 2's table; a `bPawnsOnly` volume is a `NotRead` `NotYet`, "the source actor's
    volume test". Every unread point keeps its existing named refusal: the skip flag, terrain handling, hash admission,
    and an owner class with no row.

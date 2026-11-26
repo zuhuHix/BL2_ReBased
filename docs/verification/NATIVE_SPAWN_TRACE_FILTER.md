@@ -84,7 +84,8 @@ Each test can only reject, and a rejected primitive is simply not tested (no hit
 
 **The sweep walker** (the spawn's sweeps) runs the same chain, with three differences:
 - the skip flag is ignored when the query sets bit 30 (1073741824). The spawn's sweeps (8326) do not set it;
-- the walker also passes over a primitive whose owner is the query's source actor, or in its base chain. The spawn
+- the walker also passes over a primitive whose owner is the query's source actor, or in its base chain (corrected
+  since: the `Owner` chain, both ways, not `Base`; NATIVE_FLOOR_TRACE_FLAGS.md section 4). The spawn
   passes no source actor;
 - the blocking-flag step follows the sweep's own rules (NATIVE_SPAWN_PLACEMENT.md section 7).
 

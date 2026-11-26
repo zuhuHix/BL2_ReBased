@@ -46,14 +46,16 @@ NATIVE_ACTOR_SET_PHYSICS.md section 2 leaves one `Actor` step unidentified: "int
 `PHYS_Rotating` or `PHYS_Spider`, with no new floor, an actor virtual is called". It is now read.
 
 **It is the base search**, one body shared by all five pawn and actor tables read (no class overrides it). In order:
-1. **the floor query**, with a distance of **8.0**: a single line trace straight down by that distance, starting from
+1. **the floor query**, with a distance of **8.0**: a single line trace straight down by that distance (corrected
+   since: a box swept with the actor's collision cylinder, NATIVE_FLOOR_TRACE_FLAGS.md section 2), starting from
    the actor's `Location`. When the actor has a `CollisionComponent`, the start is offset by a translation the
    component holds (by fit, the component's own translation). The trace runs through the world's line check. Its
    answer is the actor hit and the hit normal, or none;
 2. **when that actor differs from the current `Base`**, the base setter is called with it and the normal: the same
    setter as the transition's "the base is cleared" step, with the floor in place of None.
 
-The trace's flags were not decoded, so **which kinds of objects it can hit is not read**.
+The trace's flags were not decoded, so **which kinds of objects it can hit is not read**. (Read since:
+NATIVE_FLOOR_TRACE_FLAGS.md sections 2 to 4: the flags, what it can hit, and the source actor's exclusion.)
 
 **Proposed Off answer** (in `Actor.SetPhysics`' preflight, replacing "the base search for a walking-type mode"):
 - no collision service in the world: `LayerAbsent`, "Actor.SetPhysics: the base search's floor trace", layer

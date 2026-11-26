@@ -296,7 +296,8 @@ never pushed): ok 4, notyet 9, error 1 of 14. Link 9 still passes 1 of 2 steps.
 
 1. **Not read:**
    - the world check's own body (how level and actor hits are merged, what actor a level hit returns, whether the
-     source actor's primitives are skipped, and what each added extra bit means);
+     source actor's primitives are skipped, and what each added extra bit means). Read since for the source actor:
+     its primitives, its `Owner` chain and the actors it owns are skipped (NATIVE_FLOOR_TRACE_FLAGS.md section 4);
    - the source virtual for classes other than `WillowAIPawn`;
    - the `HitInfo` fill;
    - the bullet listeners.
