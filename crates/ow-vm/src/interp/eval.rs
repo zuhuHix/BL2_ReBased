@@ -1061,11 +1061,15 @@ pub const RECORD_NEW: &str = "docs/verification/NATIVE_TOUCH_COMPONENT_TEMPLATE.
 pub const NEW_TEMPLATE_NOT_LOADED: &str = "new: a template the store has not loaded (a load is a write)";
 pub const NEW_DEFAULT_NOT_BUILT: &str = "new: a class default the store has not built (building it is a write)";
 pub const NEW_TEMPLATE_OTHER_CLASS: &str = "new: a template of another class";
+/// A class whose body did not decode: its flags cannot rule the instancing step out (with a template only).
 pub const NEW_INSTANCING: &str = "new: instancing a template's components";
 pub const NEW_CONFIG: &str = "new: a per-object configuration read";
-/// A template every check above passes: the copy (option B) is not ported yet.
-pub const NEW_TEMPLATE_COPY: &str =
-    "new: copying a template's values (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, option B)";
+/// The record of the component-instancing pass and the configuration read (decision 2026-11-26-08).
+pub const RECORD_INSTANCING: &str = "docs/verification/NATIVE_NEW_COMPONENT_INSTANCING.md (section 3)";
+/// The instancing pass's refusals (NATIVE_NEW_COMPONENT_INSTANCING.md section 3), met in the walk order.
+pub const NEW_CLASSIFY_NOT_LOADED: &str =
+    "new: classifying an object field whose class is not loaded (a load is a write)";
+pub const NEW_COMPONENT_INSTANCING: &str = "new: instancing a referenced component";
 /// The class flag bits the construction tests (by fit: "has components", per-object config).
 const CLASS_HAS_COMPONENTS: u32 = 0x0080_0000;
 const CLASS_PER_OBJECT_CONFIG: u32 = 0x0000_0400;
@@ -1079,9 +1083,13 @@ const CLASS_PER_OBJECT_CONFIG: u32 = 0x0000_0400;
 /// 2. a class whose chain reaches `Engine.Actor` (by name, no load): None, with the script error logged and no
 ///    object made;
 /// 3. a template (an object): a typed refusal before anything is made, the first of section 3.3's checks that
-///    fails ([`template_refusal`]); a template all of them pass is [`NEW_TEMPLATE_COPY`] (`NotPorted`);
-/// 4. otherwise the class defaults' values and the VM's generated name, the outer set as before. **The name and flags
-///    operands are evaluated and not applied** (today's naming; flags are not modelled).
+///    fails ([`template_preflight`]), then the class flags' rule on the would-be values ([`flags_preflight`]); a
+///    template all of them pass is copied ([`copy_template`], option B);
+/// 4. otherwise the class defaults' values and the VM's generated name, the outer set as before. With class flag bit
+///    23 or bit 10 set, the class default must be resident (else [`NEW_DEFAULT_NOT_BUILT`]) and its values go through
+///    the same [`flags_preflight`] first (NATIVE_NEW_COMPONENT_INSTANCING.md section 3, "Both paths"). A class whose
+///    body did not decode keeps the old path unchecked on this branch. **The name and flags operands are evaluated
+///    and not applied** (today's naming; flags are not modelled).
 ///
 /// **Reference** keeps the C++ evaluation: the C++ decoder reads four operands, so its template operand is the next
 /// statement or the call's next argument. So: the class first, then (for a class) the object and the outer, and then
@@ -1113,8 +1121,18 @@ fn new_object(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, V
         vm.log.push(format!("{}: new of the Actor class {} (use Spawn): None", f.path(), class_label(vm, class)));
         return Ok(Value::Object(None));
     }
+    let flags = class_flags(vm, class);
     if let Value::Object(Some(template)) | Value::Interface(Some(template)) = template {
-        return Err(template_refusal(vm, class, template).into());
+        let default = template_preflight(vm, class, template)?;
+        let flags = flags.ok_or_else(|| NotYet::not_read(NEW_INSTANCING, RECORD_NEW))?;
+        let slots = would_be_slots(vm, class, template, default)?;
+        flags_preflight(vm, class, flags, &slots)?;
+        return copy_template(vm, class, template, slots, outer).map(|o| Value::Object(Some(o)));
+    }
+    if let Some(flags) = flags.filter(|f| f & (CLASS_HAS_COMPONENTS | CLASS_PER_OBJECT_CONFIG) != 0) {
+        let default = built_default(vm, class).ok_or_else(|| NotYet::not_read(NEW_DEFAULT_NOT_BUILT, RECORD_NEW))?;
+        let slots = vm.space.heap.get(default)?.slots.clone();
+        flags_preflight(vm, class, flags, &slots)?;
     }
     let object = instantiate_from_defaults(vm, class)?;
     if let Value::Object(outer) = outer {
@@ -1143,39 +1161,186 @@ fn class_named(vm: &Vm, class: ClassId, path: &str) -> bool {
     false
 }
 
-/// Section 3.3's preflight for `New` with a template, read only: the first check that fails, in order. The class
-/// flags are the store's `ClassBody.class_flags`; a class with no code index entry (one defined by hand) has none set,
-/// and one whose body did not decode is refused with [`NEW_INSTANCING`] (its flags cannot rule the step out).
-fn template_refusal(vm: &Vm, class: ClassId, template: ObjRef) -> NotYet {
-    let not_read = |what: &'static str| NotYet::not_read(what, RECORD_NEW);
+/// The class flags, the store's `ClassBody.class_flags`: a class with no code index entry (one defined by hand) has
+/// none set; `None` for a class whose body did not decode.
+fn class_flags(vm: &Vm, class: ClassId) -> Option<u32> {
+    let code = vm.defs.code();
+    match code.key_of(class) {
+        None => Some(0),
+        Some(k) => code.class(k).body.as_ref().ok().map(|b| b.class_flags),
+    }
+}
+
+/// The class default object of `class` when it is resident with all its slots (read only; nothing is built).
+fn built_default(vm: &Vm, class: ClassId) -> Option<ObjRef> {
+    let slot_count = vm.space.classes.get_layout(class).map_or(0, |l| l.slot_count() as usize);
+    vm.space.heap.handles().into_iter().find(|&o| {
+        vm.space.heap.get(o).is_ok_and(|x| {
+            x.class == class
+                && matches!(x.origin, ow_object::heap::Origin::Default { .. })
+                && x.slots.len() >= slot_count
+        })
+    })
+}
+
+/// Section 3.3's preflight for `New` with a template, read only: the first check that fails, in order (a template not
+/// loaded, a class default not built, a template of another class), else the class default object the copy's
+/// transient fields come from. A class default with fewer slots than the class (a stand-in) counts as not built.
+fn template_preflight(vm: &Vm, class: ClassId, template: ObjRef) -> Result<ObjRef, NotYet> {
+    let not_read = |what: &'static str| Err(NotYet::not_read(what, RECORD_NEW));
     let short = vm.space.heap.get(template).is_ok_and(|t| {
         vm.space.classes.get_layout(t.class).is_some_and(|l| t.slots.len() < l.slot_count() as usize)
     });
     if vm.defs.is_unloaded(&vm.space, template) || vm.defs.is_failed(&vm.space, template) || short {
         return not_read(NEW_TEMPLATE_NOT_LOADED);
     }
-    let built = vm.space.heap.handles().into_iter().any(|o| {
-        vm.space
-            .heap
-            .get(o)
-            .is_ok_and(|x| x.class == class && matches!(x.origin, ow_object::heap::Origin::Default { .. }))
-    });
-    if !built {
+    let Some(default) = built_default(vm, class) else {
         return not_read(NEW_DEFAULT_NOT_BUILT);
-    }
+    };
     if vm.space.heap.get(template).map(|t| t.class).ok() != Some(class) {
         return not_read(NEW_TEMPLATE_OTHER_CLASS);
     }
-    let code = vm.defs.code();
-    let flags = match code.key_of(class) {
-        None => Some(0),
-        Some(k) => code.class(k).body.as_ref().ok().map(|b| b.class_flags),
-    };
-    match flags {
-        None => not_read(NEW_INSTANCING),
-        Some(f) if f & CLASS_HAS_COMPONENTS != 0 => not_read(NEW_INSTANCING),
-        Some(f) if f & CLASS_PER_OBJECT_CONFIG != 0 => not_read(NEW_CONFIG),
-        Some(_) => NotYet::not_ported(NEW_TEMPLATE_COPY, RECORD_NEW),
+    Ok(default)
+}
+
+/// The class flags' rule on the new object's would-be values `slots` (NATIVE_NEW_COMPONENT_INSTANCING.md section 3,
+/// decision 2026-11-26-NNN), read only, before anything is made. **UNVERIFIED in the running game.**
+/// - **bit 23** ("has components", by fit): every field of the class and its super classes (super class first, then
+///   declaration order, array elements in order, struct members recursively) whose kind is an object reference, a
+///   dynamic array of them or a struct holding them. A None value (an empty array) needs nothing, so its declared class
+///   is never walked. A non-None value classifies the field's declared class by its chain: a class the walk cannot
+///   reach without a load (declared, not defined) is [`NEW_CLASSIFY_NOT_LOADED`]; one reaching `Core.Component` (the
+///   census stand-in for a `ComponentProperty`, which the layout folds into `PropKind::Object`) is
+///   [`NEW_COMPONENT_INSTANCING`]; any other class is not a component field. With every component value None the
+///   pass writes nothing;
+/// - then **bit 10** ("per-object config", by fit): [`NEW_CONFIG`]. Without the bit, nothing.
+fn flags_preflight(vm: &Vm, class: ClassId, flags: u32, slots: &[Value]) -> Result<(), NotYet> {
+    if flags & CLASS_HAS_COMPONENTS != 0 {
+        let props = vm
+            .space
+            .classes
+            .props(class)
+            .map_err(|_| NotYet::not_read(NEW_CLASSIFY_NOT_LOADED, RECORD_INSTANCING))?;
+        for (p, d) in props {
+            for i in 0..d.array_dim.max(1) as usize {
+                if let Some(v) = slots.get(p.slot as usize + i) {
+                    walk_component_value(vm, &d.kind, v)?;
+                }
+            }
+        }
+    }
+    if flags & CLASS_PER_OBJECT_CONFIG != 0 {
+        return Err(NotYet::not_read(NEW_CONFIG, RECORD_INSTANCING));
+    }
+    Ok(())
+}
+
+/// One would-be value of kind `kind` in [`flags_preflight`]'s walk.
+fn walk_component_value(vm: &Vm, kind: &PropKind, v: &Value) -> Result<(), NotYet> {
+    match kind {
+        PropKind::Object { class } => {
+            if let Value::Object(Some(_)) = v {
+                classify_component_field(vm, *class)?;
+            }
+        }
+        PropKind::Array(inner) => {
+            for e in v.elements().unwrap_or(&[]) {
+                walk_component_value(vm, inner, e)?;
+            }
+        }
+        PropKind::Struct(s) => {
+            let (Some(layout), Some(value)) = (vm.space.classes.struct_layout(*s), v.as_struct()) else {
+                return Ok(());
+            };
+            for (first, d) in layout.fields() {
+                for i in 0..d.array_dim.max(1) as usize {
+                    if let Some(f) = value.fields.get(first as usize + i) {
+                        walk_component_value(vm, &d.kind, f)?;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A non-None object field's declared class: a component class (its chain reaches `Core.Component`) is refused, a
+/// chain the walk cannot follow without a load is refused, any other class passes. Loads nothing.
+fn classify_component_field(vm: &Vm, declared: ClassId) -> Result<(), NotYet> {
+    let mut cursor = Some(declared);
+    while let Some(c) = cursor {
+        let Some(layout) = vm.space.classes.get_layout(c).filter(|l| l.is_defined()) else {
+            return Err(NotYet::not_read(NEW_CLASSIFY_NOT_LOADED, RECORD_INSTANCING));
+        };
+        if layout.path().as_str().eq_ignore_ascii_case("Core.Component") {
+            return Err(NotYet::not_read(NEW_COMPONENT_INSTANCING, RECORD_INSTANCING));
+        }
+        cursor = layout.super_class();
+    }
+    Ok(())
+}
+
+/// The new object's would-be slots from a template (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, option B), built
+/// before anything is written:
+/// 1. every slot from the template (a slot holds its value, so an array or string is the object's own copy, its
+///    object references shared);
+/// 2. every slot of a property declared transient ([`PropertyDecl::TRANSIENT`]) from the class default `default`;
+/// 3. when the class declares `ObjectArchetype` as an object (`Core.Object`'s declaration, loaded from the store), that
+///    slot := the template.
+///
+/// [`PropertyDecl::TRANSIENT`]: ow_object::layout::PropertyDecl::TRANSIENT
+fn would_be_slots(vm: &Vm, class: ClassId, template: ObjRef, default: ObjRef) -> Result<Vec<Value>, VmError> {
+
+    let mut slots = vm.space.heap.get(template)?.slots.clone();
+    let defaults = &vm.space.heap.get(default)?.slots;
+    for (p, d) in vm.space.classes.props(class).map_err(HeapError::Layout)? {
+        if !d.is_transient() {
+            continue;
+        }
+        for s in p.slot as usize..(p.slot as usize + d.array_dim.max(1) as usize) {
+            if let (Some(to), Some(from)) = (slots.get_mut(s), defaults.get(s)) {
+                *to = from.clone();
+            }
+        }
+    }
+    let archetype_slot = vm.space.prop(class, "ObjectArchetype").filter(|&p| {
+        vm.space.classes.decl(p).is_some_and(|d| matches!(d.kind, PropKind::Object { .. }))
+    });
+    if let Some(slot) = archetype_slot.and_then(|p| slots.get_mut(p.slot as usize)) {
+        *slot = Value::Object(Some(template));
+    }
+    Ok(slots)
+}
+
+/// Option B's copy (NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3.2, decision 2026-11-26-NNN), after
+/// [`template_preflight`] and [`flags_preflight`] passed on [`would_be_slots`]' `slots`. **UNVERIFIED in the running
+/// game.** The writes: the object with the VM's generated name (the name intern and the object are the first writes),
+/// its slots, its heap archetype := the template, and the outer when one was given. The instancing pass writes nothing
+/// (every component value was None). Nothing is loaded. A failure after the object is made carries the partial-writes
+/// prefix when it is a `NotYet`.
+fn copy_template(
+    vm: &mut Vm,
+    class: ClassId,
+    template: ObjRef,
+    slots: Vec<Value>,
+    outer: Value,
+) -> Result<ObjRef, VmError> {
+    let object = vm.instantiate(class, "")?;
+    let finish = (|| -> Result<(), VmError> {
+        let o = vm.space.heap.get_mut(object)?;
+        o.slots = slots;
+        o.archetype = Some(template);
+        if let Value::Object(Some(outer)) = outer {
+            o.outer = Some(outer);
+        }
+        vm.space.heap.note_write();
+        Ok(())
+    })();
+    match finish {
+        Ok(()) => Ok(object),
+        Err(VmError::NotYet(n)) => Err(VmError::NotYet(n.after_partial_writes())),
+        Err(e) => Err(e),
     }
 }
 

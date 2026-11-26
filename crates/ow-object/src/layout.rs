@@ -168,6 +168,11 @@ impl PropertyDecl {
     pub const OUT: u64 = 0x100;
     /// Return value (`isReturn`).
     pub const RETURN: u64 = 0x400;
+    /// Transient: a run-time field, not saved and (for `New` with a template) reset from the class default. Bit 13 of
+    /// the low flag word, recovered from the installed packages (decision 2026-11-26-NNN): it is set on
+    /// `PrimitiveComponent`'s run-time state (`Tag`, `Bounds`, `SceneInfo`, the local-to-world matrices) and on none
+    /// of its editable fields (bit 0). By fit; UNVERIFIED in the running game.
+    pub const TRANSIENT: u64 = 0x2000;
     /// Stack attribute: the value property of an attribute triple. Bit 31 of the high flag word
     /// (NATIVE_ATTRIBUTES.md; `flags >> 63` in `src/interp.cpp`).
     pub const STACK_ATTRIBUTE: u64 = 1 << 63;
@@ -229,6 +234,9 @@ impl PropertyDecl {
     }
     pub fn is_optional(&self) -> bool {
         self.flags & Self::OPTIONAL != 0
+    }
+    pub fn is_transient(&self) -> bool {
+        self.flags & Self::TRANSIENT != 0
     }
     pub fn is_return(&self) -> bool {
         self.flags & Self::RETURN != 0
