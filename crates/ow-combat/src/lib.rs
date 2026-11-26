@@ -25,6 +25,7 @@ pub mod maya9;
 pub mod pawn_interface;
 pub mod run;
 pub mod spawn_balance;
+pub mod starting_values;
 pub mod spawn_positions;
 pub mod stance;
 pub mod xp;

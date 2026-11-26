@@ -1839,6 +1839,17 @@ impl DefStore {
         })
     }
 
+    /// The store's object for `reference` of package `from`, as [`DefStore::resolve_ref`] finds it but **not loaded**:
+    /// a path seen before is its object as it is; a new one is allocated unloaded (lane IMPL-SPAWN-SETBASEVALUE, review
+    /// r2 of #815: with [`DefStore::load_export_of_file`] a caller can then load `from`'s own copy). 0 is an error here.
+    pub fn handle_of_ref(&mut self, w: &mut ObjectSpace, from: PackageId, reference: i32) -> Result<ObjRef, DefError> {
+        if reference == 0 {
+            return Err(DefError::NotADefinition("reference 0 names no object".to_string()));
+        }
+        self.packages.get(from).object(reference).map_err(package_error)?;
+        self.run(w, |l| Ok(l.linker.handle_for_ref(l.cx, from, reference)?))
+    }
+
     /// Loads `obj` in place if it is one of the store's unloaded handles (module documentation) and returns it; a
     /// loaded definition is returned as it is. Strict: any object that is not a definition of this store (a run-time
     /// object, a class default object, a stand-in that stays one) is [`DefError::NotADefinition`], and a stale handle

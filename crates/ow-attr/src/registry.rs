@@ -208,6 +208,26 @@ impl AttributeSystem {
         eval::preflight_set_base_value(self, dest, data, cx)
     }
 
+    /// [`AttributeSystem::preflight_set_base_value`] with the number of objects it checked (review r2 of #815).
+    pub fn preflight_set_base_value_counted(&self, dest: ObjRef, data: &InitData, cx: &mut EvalCx<'_>) -> (Result<(), AttrError>, usize) {
+        eval::preflight_set_base_value_counted(self, dest, data, cx)
+    }
+
+    /// The objects [`AttributeSystem::preflight_set_base_value`] checks, in its order, each given to `visit` before its
+    /// fields are read (`visit` may load it; `false` leaves its dependants), without the preflight's class checks. A
+    /// definition already followed is not followed again; past the preflight's depth bound the walk stops with the
+    /// preflight's own refusal (review of #815, item 1). For a set-up preload that cannot drift from the preflight
+    /// (`ow_attr::eval::walk_set_base_value`).
+    pub fn walk_set_base_value(
+        &self,
+        dest: Option<ObjRef>,
+        data: &InitData,
+        cx: &mut EvalCx<'_>,
+        visit: &mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
+    ) -> Result<(), AttrError> {
+        eval::walk_set_base_value(self, dest, data, cx, visit)
+    }
+
     /// [`AttributeSystem::preflight_read`] loading nothing: the definition and its chains' resolver objects must be
     /// resident (a cold handle is `NotYet { NotRead }`), and the dispatch is checked as there.
     pub fn preflight_read_resident(&self, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {

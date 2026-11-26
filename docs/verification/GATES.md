@@ -60,6 +60,31 @@ A lane adds its row directly under the next line, above the newest row, in the f
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue, rebased onto main f80b68e, which has
+#808 and #810):** AI-assisted (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting
+values' definitions, Off, in the note's three phases (#811 as landed): discovery (each spawn kind's archetype copied
+once, logged, freed; its AI class chain loaded before its fields are read; a looping chain stops), the closure
+`SetBaseValue`'s preflight walks (one walk shared with the preflight, `ow-attr` `walk_set_base_value`), and the loads
+(logged; a failed one left). `cargo test --workspace` 4,090 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock, on 01035e1a): 8 ok / 6 not ok, 9.500/14 =
+67.9% (main: 60.7%). The set-up made 4 copies and loaded 16 objects, none failed, each logged. **Links 3, 4, 5, 13 and
+14 move past `SetBaseValue`, and both spawns now complete**: link 3 (`kill_enemy`) passes its spawn step (1/2) and
+stops at its hit, link 4 (`enemy_attacks_maya`) passes its spawn step (1/2) and stops at its first swing, both at the
+unbound `DamagePipeline.GetBarrelSourceTime()` (the note's section 5, first item). Link 5 is blocked by link 3; link 13
+is blocked by link 4's stop in strict mode (0/4 steps; it does not reach the native itself), and link 14 by 13. Link 7
+is at the line check's decoy `NotRead` (ruling 4); 1, 2, 6 and 8 to 12 ok, 8 ok as before. UNVERIFIED in game.
+Decision 2026-11-26-72. Review of #815, r1: the walk stops at the depth bound and follows a definition once;
+discovery reads each archetype through the store's own load (logged; its references stay handles), so no copy is made
+or left; data errors are `VmError::Script`; `AttributeStartingValuesNew` must be an array. `cargo test -p ow-attr -p
+ow-combat -p ow-cli` 892 passed / 0 failed / 12 ignored; `crate_edges_test.py` OK. Gate rerun on 867057a0: the same
+rows and 9.500/14 = 67.9%; the set-up logged 4 archetypes and loaded 20 objects (the AI classes the copy used to load
+unlogged now load in the walk, each logged), none failed. Review of #815, r2: each definition is checked once per call
+with its nesting height, by the preload and the native preflight alike (the same answers, linear work); the archetype
+is the named package's own copy (its handle, then `DefStore::load_export_of_file`); a slotless stand-in is skipped,
+logged; a skipped `AttributeStartingValuesNew` tag is a data error. `cargo test -p ow-defs -p ow-attr -p ow-combat -p
+ow-cli -p ow-world` 1,779 passed / 0 failed / 23 ignored; gate rerun on cdd6a70e: the same rows, 9.500/14 = 67.9%, 20 objects preloaded
+from the named packages' copies, none failed.
+
 **IMPL-FLOOR-TRACE-RULINGS (2026-11-26, pc-hummer, on fix/rust-floor-trace-rulings, on main f80b68e7):** AI-assisted
 (Claude Code, Opus 5.5). NATIVE_FLOOR_TRACE_FLAGS.md section 6.1 in Off: the floor trace's primitive walk with the read
 flags, the swept-box test (well-formed values only) and the `Owner` chains both ways; the touch trace's `Owner`-chain

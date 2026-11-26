@@ -1,0 +1,100 @@
+## 2026-11-26: The combat world preloads the attribute starting values' definitions
+
+AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-SPAWN-SETBASEVALUE, on main c1058de, rebased onto f80b68e. Clean room: implemented from
+docs/verification/NATIVE_SPAWN_SETBASEVALUE.md section 3 (#811 at 3aedca6, then as fixed at 0b0a1e6) alone; this lane did not read the
+executable. No session was run. Every rule is UNVERIFIED in the running game.
+
+- **What was decided** (Off only; Reference does nothing and logs nothing), in `ow-combat` `starting_values`, called
+  from the combat world's set-up (`ow-cli` `combat::world`):
+  - for every AI pawn archetype the run can spawn (`run::KINDS` with a pawn balance), a copy of the archetype's export
+    (made as the spawn makes one, freed after) is walked: its `AIClass`, then the `AttributeParentClass` chain (each
+    class loaded when it is a handle, after its declarations are checked), the starting values parents first and then
+    the archetype's own list. Each entry's `Attribute`, and its `BaseValue`'s `BaseValueAttribute` and
+    `InitializationDefinition` (read with the evaluator's own data reader), are loaded, with each attribute's
+    `ContextResolverChain` and its `ValueResolverChain` up to the first None;
+  - each load is logged as a harness input, "preload <path> (a SetBaseValue definition the game keeps resident;
+    UNVERIFIED)", then its outcome. A failed load is logged and left, so `SetBaseValue`'s own refusal shows it later;
+  - an undeclared field or one of another kind (`AIClass` and `AttributeParentClass` objects,
+    `AttributeStartingValues` an array of structs, an entry's `Attribute` an object) is `VmError::Script`, decided
+    before the class it is on loads. A class whose `AttributeStartingValuesNew` is declared and non-empty is
+    `NotRead` ("the starting-value categories' layout"), decided before any definition loads (the note's open
+    question 2 is unanswered, so the categories are not read);
+  - **the hub's points on #811** (the fixed note to follow): (a) the archetypes are found at set-up from the run's own
+    list, and a child's `AttributeParentClass` that is an unloaded handle is followed (loaded, logged, its lists
+    read); (b) the walk covers what `SetBaseValue`'s preflight walks: every attribute it reaches (the destination, a
+    base-value attribute, an expression operand) with its resolvers, and each initialization definition followed into
+    the nested data its evaluation reaches (the enabled formula's four terms, else the enabled conditional's entries
+    up to the first always-holding one and then `DefaultBaseValue`, the enabled variance bounds and range limits),
+    recursively to the preflight's depth. A part that does not read as the evaluator reads it is left uncovered, and
+    the native's preflight then refuses it with its own typed error; (c) the stop after `SetBaseValue` was the note's
+    prediction; this lane's installed gate measured it (below);
+  - a store that holds no such package (a toy world) has nothing to spawn and nothing to preload;
+  - `SetBaseValue` is unchanged: its preflight still refuses an unloaded handle.
+- **The fixed note (#811 r1, 0b0a1e6), its three phases:**
+  - discovery: each spawn kind's archetype is found by its package and path and copied once. The copy is logged as a
+    harness input, "set-up copy of <archetype> to read its starting values; UNVERIFIED", never placed, and freed
+    after. Each class of the chain is loaded (logged) before its fields are read, and a parent chain that comes back
+    to a class already seen now stops there instead of being a script error, as the note says;
+  - the closure: taken, not the bounded alternative. As the note recommends, `ow-attr`'s `check_definition` and
+    `check_init` now take a visitor in place of their refusal of an unloaded handle. `preflight_set_base_value`
+    refuses as before, through the same code. The new `AttributeSystem::walk_set_base_value` hands each object, in
+    the preflight's order and before its fields are read, to a callback (here: load and log), and does not make the
+    preflight's class checks. `ow-combat`'s hand-written mirror of the walk is removed, so the preload and the
+    preflight cannot drift apart. A field the preflight requires that is missing or of another kind is the
+    preflight's own error at set-up;
+  - the loads: unchanged (logged, a failed load logged and left).
+  - **The bounded alternative's remaining refusal**, named because this lane did not take that alternative: a nested
+    value naming an unloaded definition would still meet `SetBaseValue`'s preflight refusal, "a definition the
+    SetBaseValue preflight reaches is not loaded (a load is a write): an object of class <class>"
+    (`ow_attr::eval::PREFLIGHT_UNLOADED`). With the closure, that refusal is left only for a load that failed.
+    Outside the guarantee, as in the note: what the evaluation reaches beyond the preflight's walk (a resolver's own
+    definitions), which `ow-attr` loads during the evaluation under #572's partial-writes prefix.
+- **The note's open question 1** (set-up preload or a counted load in the spawn) was taken as the hub's brief says, a
+  set-up preload, the threshold-attribute preload's shape. The note's later stops (sections 4 and 5) are not
+  answered here: `ApplyGradeCustomizations` is #808's, and the rest need rulings or reads.
+- **Tests for the fixed note:** discovery through a package and path (the copy logged once and freed; the same
+  package's `AIClass` resolved by the copy's decode, its unloaded parent loaded and logged); an unloaded `AIClass` and
+  its unloaded parent loaded child first; a looping chain stopping with the same loads; and the note's test 4, where
+  the native's preflight refuses with `PREFLIGHT_UNLOADED` before the preload and passes after it. `ow-attr`'s
+  existing preflight tests pass unchanged on the shared walk.
+- **Tests** (an invented package, `starting_values_tests.rs`): the first note's tests 1 to 6. They cover the walk (seven
+  objects loaded, parents first, the value resolver after the None left, a second run loading and logging nothing),
+  the archetype's own list, a mistyped list and a missing `AIClass` with nothing loaded, a non-empty category list
+  refused before any definition loads (and an empty one passing), a failed load logged with the walk going on, and
+  Reference doing nothing; and, for the hub's points, an unloaded parent class followed, and a nested formula term and
+  conditional (an operand and a `BaseValueIfTrue` loaded; the entry after an always-holding one and the default not
+  reached, not loaded). **Not tested:** test 7 (the effect through a spawn); the installed gate shows it.
+- **Measured** (rebased onto main f80b68e, which has #808 and #810; the GATES row): 8 ok / 14, 9.500/14 = 67.9%
+  (main 60.7%). Both spawns complete, and links 3, 4 and 13 stop at the unbound `DamagePipeline.GetBarrelSourceTime()`,
+  as the note's sections 5 and 8 predicted; links 5 and 14 are blocked behind them. (Correction, review of #815: link
+  13 is blocked by link 4's stop in strict mode, 0/4 steps; it does not reach the native itself.)
+- **Review of #815, r1:**
+  - the walk past the preflight's depth bound stops whole with the preflight's own refusal (it used to drop the branch
+    and go on through its siblings, exponential for data referring back to its own definition), and follows each
+    initialization definition once (a visited list; the preflight itself is unchanged);
+  - discovery reads each spawn kind's archetype through the store's own load of the export, logged first ("preload
+    <archetype> (the spawn kind's archetype, read for its starting values; UNVERIFIED)"). Its references stay handles, so
+    the `AIClass` and its parents load in the walk, each logged, and a failed load is logged and left. No copy is made,
+    so nothing is left to free; a second discovery adds no object and no name. The archetype itself stays resident as
+    the store's object (a logged load);
+  - a data read's attribute-system error (a wrong-kind `BaseValue`, a definition without `ValueFormula`) is
+    `VmError::Script`; a declared `AttributeStartingValuesNew` that is not an array is one too, before any definition
+    loads;
+  - tests: a self-referential formula visited once and a 40-deep chain stopped by the bound; discovery by path (the
+    order of the lines, the counts after a second discovery); a broken `AIClass` export; both malformed-data cases.
+- **Review of #815, r2:**
+  - the shared walk keeps, per call, each initialization definition it checked with its nesting height, and the
+    definitions on the current path. A definition reached again refuses exactly when its depth plus its height passes
+    the bound (as walking it again would), else it is skipped; one on its own path is a cycle and refuses with the
+    bound's error at once. The native preflight keeps them too, so its answers are unchanged and its work is linear in
+    the definitions reached (a 20-definition chain naming the next in all four terms: 20 visits, not 4^19);
+  - the archetype is the named package's own export, as the spawn reads it: its handle, not loaded
+    (`DefStore::handle_of_ref`, new), then that file's copy loaded into it (`DefStore::load_export_of_file`, the store
+    rule the combat body walk uses; UNVERIFIED). On the installed packages the policy's holder of each archetype path is
+    another file, so this matters there;
+  - a stand-in short of its class's slots (a missing import's) is skipped with a logged line, not read;
+  - an `AttributeStartingValuesNew` whose tag the decoder skipped (`DefStore::is_skipped`) is `VmError::Script`;
+  - tests: the 20-chain's visit counts for the preload and the preflight (`preflight_set_base_value_counted`, new); the
+    named package's missing export; a slotless stand-in; a skipped categories tag.
+- **Verified:** the tests on invented data. **Not verified:** everything in the running game.
+- **Sensitive files:** none.

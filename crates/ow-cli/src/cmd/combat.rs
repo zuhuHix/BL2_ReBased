@@ -153,6 +153,10 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
         // bound as the cast's worlds bind it (Engine's function only, keep-existing); it needs the scene layer the
         // combat run installs. Off only.
         ow_inventory::attach_mesh::bind_engine_attach(&mut world.vm)?;
+        // The attribute starting values' definitions (NATIVE_SPAWN_SETBASEVALUE.md section 3, lane
+        // IMPL-SPAWN-SETBASEVALUE): preloaded at set-up for every AI archetype the run can spawn, each a logged,
+        // UNVERIFIED harness input, so SetBaseValue's preflight finds them resident. Off only.
+        ow_combat::starting_values::preload_kinds(&mut world.vm)?;
     }
     Ok(world)
 }

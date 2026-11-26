@@ -1253,52 +1253,155 @@ pub(crate) fn preflight_set_base_value(
     data: &InitData,
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
-    check_definition(sys, dest, true, cx)?;
-    check_init(sys, data, 0, cx)
+    preflight_set_base_value_counted(sys, dest, data, cx).0
+}
+
+/// [`preflight_set_base_value`] with the number of objects it checked (review r2 of #815: the work is linear in the
+/// definitions reached; for tests and diagnostics).
+pub(crate) fn preflight_set_base_value_counted(
+    sys: &AttributeSystem,
+    dest: ObjRef,
+    data: &InitData,
+    cx: &mut EvalCx<'_>,
+) -> (Result<(), AttrError>, usize) {
+    let mut visits = 0;
+    let mut refuse = |cx: &mut EvalCx<'_>, obj: ObjRef| {
+        visits += 1;
+        refuse_unloaded(cx, obj).map(|()| true)
+    };
+    let mut walk = SetBaseWalk { visit: &mut refuse, checks: true, done: Vec::new(), path: Vec::new() };
+    let r = check_definition(sys, dest, true, cx, &mut walk).and_then(|()| check_init(sys, data, 0, cx, &mut walk).map(|_| ()));
+    drop(walk);
+    (r, visits)
+}
+
+/// The walk of [`preflight_set_base_value`] with `visit` in place of its refusal of an unloaded handle (decision
+/// 2026-11-26-72, NATIVE_SPAWN_SETBASEVALUE.md section 3, step 5): the same objects in the same order, so a preload
+/// built on it cannot drift from the preflight. `visit` sees each object the preflight would check before its fields
+/// are read (it may load it) and answers whether its fields can be read; `false` leaves that object's dependants.
+/// The preflight's class checks (multi-context, implemented resolver classes, a None read-chain entry, the depth
+/// bound) are not made: what the walk passes over is left to the preflight's own refusal. A field the preflight
+/// requires that is missing or of the wrong kind is the same error here.
+pub(crate) fn walk_set_base_value(
+    sys: &AttributeSystem,
+    dest: Option<ObjRef>,
+    data: &InitData,
+    cx: &mut EvalCx<'_>,
+    visit: &mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
+) -> Result<(), AttrError> {
+    let mut walk = SetBaseWalk { visit, checks: false, done: Vec::new(), path: Vec::new() };
+    if let Some(dest) = dest {
+        check_definition(sys, dest, true, cx, &mut walk)?;
+    }
+    check_init(sys, data, 0, cx, &mut walk).map(|_| ())
+}
+
+/// What [`check_definition`] and [`check_init`] do at each object: `visit` it, and (`checks`) make the preflight's class
+/// checks.
+struct SetBaseWalk<'f> {
+    visit: &'f mut dyn FnMut(&mut EvalCx<'_>, ObjRef) -> Result<bool, AttrError>,
+    checks: bool,
+    /// The initialization definitions this call already checked, each with its nesting height: how many levels of
+    /// nested data lie below it (review r2 of #815, item 1). A definition reached again is not walked again: at depth
+    /// `d` it refuses exactly when `d` + its height passes the bound, as walking it again would, else it is skipped.
+    /// Both forms keep it, so a graph of definitions costs one check per definition, with the same answers.
+    done: Vec<(ObjRef, usize)>,
+    /// The definitions on the path from the root to here: one reached again on its own path is a cycle, which always
+    /// passes the depth bound, so it refuses with the bound's error at once.
+    path: Vec<ObjRef>,
+}
+
+fn too_deep() -> AttrError {
+    AttrError::BadData {
+        reason: format!("initialisation data nested deeper than {PREFLIGHT_DEPTH} (the SetBaseValue preflight)").into(),
+    }
 }
 
 /// One attribute definition: loaded, not multi-context, its resolvers loaded and implemented. `set` is the set-base
 /// form (the value chain stops at its first None entry); otherwise the read form (a None entry refuses).
-fn check_definition(sys: &AttributeSystem, attr: ObjRef, set: bool, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-    refuse_unloaded(cx, attr)?;
-    if is_multi_context(cx.world.parts().space, attr)? {
+fn check_definition(
+    sys: &AttributeSystem,
+    attr: ObjRef,
+    set: bool,
+    cx: &mut EvalCx<'_>,
+    w: &mut SetBaseWalk<'_>,
+) -> Result<(), AttrError> {
+    if !(w.visit)(cx, attr)? {
+        return Ok(());
+    }
+    if w.checks && is_multi_context(cx.world.parts().space, attr)? {
         return Err(multi_context_not_read(if set { "ResolveContexts" } else { "GetValue" }));
     }
     let chain = required(cx, attr, "ContextResolverChain")?;
     for entry in elements("ContextResolverChain", &chain)? {
-        if let Some(resolver) = object("ContextResolverChain entry", entry)? {
-            refuse_unloaded(cx, resolver)?;
+        if let Some(resolver) = object("ContextResolverChain entry", entry)?
+            && (w.visit)(cx, resolver)?
+            && w.checks
+        {
             sys.context_resolver(cx.world.parts().space, resolver)?;
         }
     }
     let chain = required(cx, attr, "ValueResolverChain")?;
     for entry in elements("ValueResolverChain", &chain)? {
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
-            if set {
+            if set || !w.checks {
                 break;
             }
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
-        refuse_unloaded(cx, resolver)?;
-        sys.value_resolver(cx.world.parts().space, resolver)?;
+        if (w.visit)(cx, resolver)? && w.checks {
+            sys.value_resolver(cx.world.parts().space, resolver)?;
+        }
     }
     Ok(())
 }
 
-/// An initialisation data value: its attribute, and its definition followed into the nested data it evaluates.
-fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+/// An initialisation data value: its attribute, and its definition followed into the nested data it evaluates. Answers
+/// the value's nesting height (0 without a definition, or for a definition with no nested data).
+fn check_init(
+    sys: &AttributeSystem,
+    data: &InitData,
+    depth: usize,
+    cx: &mut EvalCx<'_>,
+    w: &mut SetBaseWalk<'_>,
+) -> Result<usize, AttrError> {
+    // Past the depth bound both forms stop the whole walk with the same refusal (review of #815, item 1).
     if depth > PREFLIGHT_DEPTH {
-        return Err(AttrError::BadData {
-            reason: format!("initialisation data nested deeper than {PREFLIGHT_DEPTH} (the SetBaseValue preflight)").into(),
-        });
+        return Err(too_deep());
     }
     if let Some(attr) = data.base_value_attribute {
-        check_definition(sys, attr, false, cx)?;
+        check_definition(sys, attr, false, cx, w)?;
     }
     let Some(definition) = data.initialization_definition else {
-        return Ok(());
+        return Ok(0);
     };
-    refuse_unloaded(cx, definition)?;
+    // Each definition once per call (review r2 of #815, item 1).
+    if w.path.contains(&definition) {
+        return Err(too_deep());
+    }
+    if let Some(&(_, height)) = w.done.iter().find(|(d, _)| *d == definition) {
+        return if depth + height > PREFLIGHT_DEPTH { Err(too_deep()) } else { Ok(height) };
+    }
+    if !(w.visit)(cx, definition)? {
+        w.done.push((definition, 0));
+        return Ok(0);
+    }
+    w.path.push(definition);
+    let height = check_definition_data(sys, definition, depth, cx, w);
+    w.path.pop();
+    let height = height?;
+    w.done.push((definition, height));
+    Ok(height)
+}
+
+/// The nested data of `definition` (reached at `depth`), checked; its nesting height.
+fn check_definition_data(
+    sys: &AttributeSystem,
+    definition: ObjRef,
+    depth: usize,
+    cx: &mut EvalCx<'_>,
+    w: &mut SetBaseWalk<'_>,
+) -> Result<usize, AttrError> {
     let nested = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<InitData, AttrError> {
         let space = cx.world.parts().space;
         init_data(space, field(space, v, name)?)
@@ -1326,9 +1429,9 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
             };
             for e in &exprs {
                 if let Some(first) = e.attribute_operand1 {
-                    check_definition(sys, first, false, cx)?;
+                    check_definition(sys, first, false, cx, w)?;
                     if let Some(second) = e.attribute_operand2 {
-                        check_definition(sys, second, false, cx)?;
+                        check_definition(sys, second, false, cx, w)?;
                     }
                 }
             }
@@ -1354,10 +1457,11 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
     if enabled(cx, &range, "bEnableMaxValueRestriction")? {
         parts.push(nested(cx, &range, "MaxValue")?);
     }
+    let mut height = 0;
     for p in &parts {
-        check_init(sys, p, depth + 1, cx)?;
+        height = height.max(1 + check_init(sys, p, depth + 1, cx, w)?);
     }
-    Ok(())
+    Ok(height)
 }
 
 #[cfg(test)]
