@@ -9,7 +9,9 @@ deferred flag). It reads `SetCollisionSize` (the cylinder setter, a touch update
 `bNetDirty`), resolves `SetHardAttach` (`Actor`'s body; a no-op for the proxy) and extends NATIVE_ACTOR_SETBASE.md to
 an eighth table, `PawnInteractionProxy`, with step 8's hard-attach identity case. A local probe (an installed Off
 `--combat-run` of `maya:8` with the flag emulated, each stop stubbed, reverted and not committed) puts the next stop at
-the class-level part of #796 section 3. No code changed, so no measured number moved. UNVERIFIED in game.
+the class-level part of #796 section 3. No code changed, so no measured number moved. UNVERIFIED in game. **Review
+r1:** `SetHardAttach` bound for four classes only, the second `SetBase` preflighted after the first's writes, the
+identity case for any non-simulated hard-attached receiver; docs only.
 
 **IMPL-LINK6-AFTER-TAKE (2026-11-26, pc-hummer, on fix/rust-link6-after-take from main 7a67b9f):** AI-assisted
 (Claude Code, Opus 5.5). `Actor.SetBase` for the seven read classes, GetAmmoCount, SelectAkEvent, PlayAkEvent (the

@@ -103,7 +103,8 @@ This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`
   section 5;
 - `WillowPawn.SetDefaultStance` (also reached as `WillowPlayerPawn.SetDefaultStance` and `WillowAIPawn`'s);
 - `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`;
-  resolved since for `Actor`'s table and `PawnInteractionProxy`'s: NATIVE_PAWN_INTERACTION_PROXY.md section 4)
+  resolved since for the `Actor`, `Trigger`, `InteractionProxy` and `PawnInteractionProxy` tables:
+  NATIVE_PAWN_INTERACTION_PROXY.md section 4)
   and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up). `SetBase`'s
   implementation was resolved and read later for the inventory and pickup chain only, in NATIVE_ACTOR_SETBASE.md (its
   arguments are `NewBase`, `NewFloor`, `SkelComp` and `AttachName`). A pawn's call keeps this section's `NotRead`;

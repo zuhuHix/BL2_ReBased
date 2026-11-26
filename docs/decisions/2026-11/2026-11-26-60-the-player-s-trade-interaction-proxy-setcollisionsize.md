@@ -31,4 +31,13 @@ dependency, and no bounds check changed.
 - **Next** (from the probe): the class-level part of #796 section 3, which lane E is implementing.
 - **Hub ruling (review of #802):** the touch update may be a "nothing touched" stand-in behind an Off-only slice
   harness setting, logged and UNVERIFIED; without the setting it stays `LayerAbsent`; Reference is unchanged.
+- **Review r1 (#802):**
+  - rebased onto main eef4f83 (#800's `SetBase`); main's Implemented cell kept on the SetBase index row;
+  - `SetHardAttach` bound only for `Actor`, `Trigger`, `InteractionProxy` and `PawnInteractionProxy`, whose tables all
+    hold `Actor`'s body (the `InteractionProxy` and `Trigger` slots read in this round); other classes unresolved;
+  - the change with a `Base`: only the first `SetBase(None)` and the flag are preflighted; the second `SetBase` runs
+    its full preflight after them, with the prefix; a receiver destroyed in between gets `NotRead` (hub wording);
+  - the cylinder's field shift stated without a number; an unknown event name means no event, nothing interned;
+  - the identity case covers any hard-attached receiver that is not a simulated proxy;
+  - the SetBase index row names link 1's use; the implementation points named (`READ_CLASSES`, `check_pose`).
 - **Clean room:** a different lane implements this note.

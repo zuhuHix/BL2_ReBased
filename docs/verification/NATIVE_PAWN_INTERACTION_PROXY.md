@@ -20,10 +20,12 @@ This note reads them so the flag can turn on.
 - **The natives:** Ghidra 12.1.4, headless and read-only, under the machine lock. Read:
   - the execs of `Actor.SetCollisionSize`, `SetHardAttach` and `SetBase`;
   - the `CylinderComponent` size setter;
-  - the slots `SetHardAttach` and `SetBase` call, in the primary tables of `PawnInteractionProxy`, `InteractionProxy`,
-    `Trigger` and `Actor` (the NATIVE_COMPONENT_SKIP_FLAG.md section 6 method).
+  - the slots `SetHardAttach` and `SetBase` call, in the primary tables of `PawnInteractionProxy` and `Actor`, and in
+    review r1 of #802 also of `InteractionProxy` and `Trigger` (the NATIVE_COMPONENT_SKIP_FLAG.md section 6 method).
+    All four tables hold the same `SetHardAttach` body, `Actor`'s, and the same `SetBase` body, `Actor`'s.
 - **Field places:** the local copy of `tools/ghidra/class_layout.py`. The actor fields land exactly. The cylinder's two
-  floats sit a fixed 16 bytes past the tool's places, in the declared order; they are named by fit.
+  floats sit past the tool's places by a constant shift, in the declared order; they are named by fit (review r1 of
+  #802).
 - **`ow-package --def-dump`:** `Default__PawnInteractionProxy`, Maya's `CharClass_Siren` and its trade definition.
 - **A local probe** (temporary code, reverted, never committed): an installed Off `--combat-run` of `maya:8` on main
   03a8a09, under the machine lock, with a call trace.
@@ -78,7 +80,8 @@ This replaces NATIVE_GO_DOWN_PATH.md 4.1's outline, whose two unread steps are 2
   - declared, else `VmError::Script`: `CollisionComponent` (an object); on a cylinder, its `CollisionHeight`,
     `CollisionRadius` and `bNeedsReattach`; `bNetDirty`;
   - the deferred reattach's own preflight, through the existing planner (`component_setters`);
-  - the event resolved on the receiver's class (state-aware, load-free, as `SetPhysics`' events are);
+  - the event resolved on the receiver's class (state-aware, load-free, as `SetPhysics`' events are). A name not in
+    the name table means no event; nothing is interned (review r1 of #802);
   - **the touch update:** with no collision service in the world, `LayerAbsent`, "Actor.SetCollisionSize: the touch
     update", layer "collision (the world has no collision service)"; with one, `NotRead`, "Actor.SetCollisionSize: the
     touch update (its overlap rule is not read)". Both are decided here, before any write, so neither carries the
@@ -94,23 +97,32 @@ This replaces NATIVE_GO_DOWN_PATH.md 4.1's outline, whose two unread steps are 2
 ## 4. `Actor.SetHardAttach(optional bNewHardAttach)`
 
 The exec takes the current `bHardAttach` for an omitted argument and calls the class's implementation. The
-`PawnInteractionProxy` table holds `Actor`'s own body, the same function as `Actor`'s table. It resolves
-NATIVE_GO_DOWN_PATH.md 3.2's "not resolved" for this class:
+`PawnInteractionProxy`, `InteractionProxy`, `Trigger` and `Actor` tables all hold the same function, `Actor`'s own
+body (section 1). That resolves NATIVE_GO_DOWN_PATH.md 3.2's "not resolved" for those four classes only:
 - **the same value as now:** nothing;
 - **a change with no `Base`:** `bHardAttach` := the new value;
 - **a change with a `Base`:**
   - the current `BaseSkelComponent` and `BaseBoneName` are kept;
   - `SetBase(None)`;
   - then `bHardAttach` := the new value;
-  - then `SetBase(the old base, …, the kept component and bone)`. Both `SetBase` calls take NATIVE_ACTOR_SETBASE.md's
-    rule.
+  - then `SetBase(the old base, …, the kept component and bone)`. Both `SetBase` calls go through the receiver's
+    `SetBase` key, so they take NATIVE_ACTOR_SETBASE.md's rule only for a class on its list. Of the four,
+    `PawnInteractionProxy` (section 5) and `Actor` are on it. `InteractionProxy` and `Trigger` hold the same `SetBase`
+    body, but are not proposed for the list here; for them the inner `SetBase` keeps its `NotRead`.
 
 **Proposed Off answer:**
-- bind the key for a receiver whose first native class is one of NATIVE_ACTOR_SETBASE.md's tables or
-  `PawnInteractionProxy`. Other classes keep the unresolved `NotRead`;
+- bind the key only for a receiver whose first native class is `Actor`, `Trigger`, `InteractionProxy` or
+  `PawnInteractionProxy` (review r1 of #802). Every other class, NATIVE_ACTOR_SETBASE.md's other six tables included,
+  keeps the unresolved `NotRead`, decided first;
 - `bHardAttach` must be declared as a bool, else `VmError::Script`;
-- the change with a `Base` runs both `SetBase` preflights before the first write, the second on the state the first
-  would leave. A refusal from either stands with no prefix; one met after the first write carries it.
+- **the change with a `Base`** (hub wording, review r1 of #802):
+  - the preflight covers only the first `SetBase(None)` and the flag write. A refusal there stands with no prefix;
+  - the first `SetBase(None)` raises `Detach` and `BaseChange`, and on a proxy with `Base` None, `InteractionProxy`'s
+    `BaseChange` destroys it. So no preflight can predict what the second `SetBase` meets;
+  - after those writes, the second `SetBase` runs its full preflight. A refusal there carries the partial-writes
+    prefix;
+  - a receiver destroyed in between (`bDeleteMe` set) gets `NotRead`, "Actor.SetHardAttach: the receiver was
+    destroyed by its BaseChange", with the prefix.
 
 **On the slice:** the proxy's `bHardAttach` is already true, so this does nothing.
 
@@ -128,9 +140,12 @@ rule applies, and its class list gains `WillowGame.PawnInteractionProxy` as an e
 - step 6: no old base;
 - step 7: `Base` := Maya;
 - **step 8:** a hard-attached authority gets both computations. NATIVE_ACTOR_SETBASE.md 3.8 answers the second, the
-  full inverse of the base's transform, `NotRead` ("SetBase: the hard-attach relative transform").
+  full inverse of the base's transform, `NotRead` ("SetBase: the hard-attach relative transform"). It does so for any
+  hard-attached receiver that is not a simulated proxy.
 
-**Proposed Off answer, the identity case of step 8** (an extension of NATIVE_ACTOR_SETBASE.md 3.8):
+**Proposed Off answer, the identity case of step 8** (an extension of NATIVE_ACTOR_SETBASE.md 3.8). It applies to
+any hard-attached receiver that is not a simulated proxy: an authority or an autonomous proxy. Either one gets the
+same computations, so the same zero pose (review r1 of #802). A simulated proxy gets neither, as 3.8 says.
 - **when all of these hold:**
   - the receiver's `Location` equals the base's exactly, and its `Rotation` equals the base's;
   - the base's `Rotation` is zero;
@@ -142,6 +157,10 @@ rule applies, and its class list gains `WillowGame.PawnInteractionProxy` as an e
 - every field must be declared with its kind, else `VmError::Script`, as 3.8 already lists, plus `DrawScale`,
   `DrawScale3D` and `PrePivot` on the base;
 - UNVERIFIED in game.
+
+**Where it lands** (review r1 of #802): in `crates/ow-world/src/world/set_base.rs`, `READ_CLASSES` grows from seven
+entries to eight (`PawnInteractionProxy`), and the identity case goes into `check_pose`, ahead of the hard-attach
+`NotRead`.
 
 **Then steps 9 and 10:**
 - Maya's `Attached` gains the proxy, and she gets `Attach(proxy)`: `Actor`'s empty body;
@@ -178,9 +197,17 @@ Without the touch-update stand-in, the first stop is section 3's `LayerAbsent`.
    - the same value: nothing;
    - a change with no `Base`: the flag;
    - a change with a `Base`: `SetBase(None)`, the flag, then `SetBase(old)` with the kept component and bone;
-   - a receiver class outside the list: the unresolved `NotRead`.
+   - a refusal in the first `SetBase`'s preflight: nothing written, no prefix;
+   - the second `SetBase` refused (its receiver class not on SetBase's list, a toy `Trigger`): the first `SetBase`'s
+     writes and the flag kept, the refusal with the prefix;
+   - a toy `InteractionProxy` going from hard-attached to not: the first `SetBase(None)`'s `BaseChange` destroys it,
+     then the `NotRead` with the prefix, and no second `SetBase`;
+   - a toy `Trigger` and a toy `InteractionProxy`, each with no `Base`: the key is bound, the flag set;
+   - a receiver class outside the four (a toy `WillowWeapon`, which is on SetBase's list): the unresolved `NotRead`,
+     nothing written.
 3. **`SetBase` on a toy `PawnInteractionProxy`:**
-   - the identity case: `Base`, zero relative pose, the base's `Attached`, `Attach` then `BaseChange`;
+   - the identity case: `Base`, zero relative pose, the base's `Attached`, `Attach` then `BaseChange`; the same with
+     the receiver an autonomous proxy; a simulated proxy: no pose computation;
    - a receiver one unit away, a base with a non-zero `Rotation`, a base with `DrawScale` 2 or a non-zero `PrePivot`:
      the hard-attach `NotRead`, nothing written.
 4. **`InteractionProxy.BaseChange` after `SetBase(None)`:** the proxy is destroyed.
