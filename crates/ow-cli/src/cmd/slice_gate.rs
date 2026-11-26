@@ -11,7 +11,8 @@
 //! lines of the VM log, with their outcomes), so a row shows what the run supplied (rule 7; review of #431). A combat
 //! row first carries its world's set-up inputs, the `harness input:` lines logged while the world was built, each
 //! prefixed `world set-up: ` ([`SETUP_MARK`], lane GATE-SETUP-HARNESS-LINES); on the `--map` route the route's own
-//! notes come before those, on the first combat row only ([`row_harness`]).
+//! notes come before those, in full on the first combat row and as one `world set-up: route stand-ins as above` line
+//! on each later one ([`row_harness`]).
 //!
 //! `tools/check_slice_run_off.py` grades the rows; the gate is 14 ok, 0 notyet, 0 error.
 //!
@@ -658,10 +659,20 @@ pub fn setup_harness(log: &[String], route_notes: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// One combat row's `harness` list, in order: the map route's notes (the first combat link only, `route_notes`
-/// `Some`), then the world's set-up lines, then the lines the link's own steps logged.
-pub fn row_harness(route_notes: Option<&[String]>, setup: &[String], steps: &[String]) -> Vec<String> {
-    route_notes.unwrap_or_default().iter().chain(setup).chain(steps).cloned().collect()
+/// The line a later combat row carries for the map route's notes (the hub's ruling on review of #777): it runs on the
+/// same world, built with those stand-ins.
+pub const ROUTE_AS_ABOVE: &str = "world set-up: route stand-ins as above (the first combat row's route notes)";
+
+/// One combat row's `harness` list, in order: the map route's notes in full on the first combat row (`first`), or
+/// [`ROUTE_AS_ABOVE`] on a later one when the route left notes; then the world's set-up lines, then the lines the
+/// link's own steps logged.
+pub fn row_harness(route_notes: &[String], first: bool, setup: &[String], steps: &[String]) -> Vec<String> {
+    let route: Vec<String> = match (first, route_notes.is_empty()) {
+        (_, true) => Vec::new(),
+        (true, false) => route_notes.to_vec(),
+        (false, false) => vec![ROUTE_AS_ABOVE.to_string()],
+    };
+    route.into_iter().chain(setup.iter().cloned()).chain(steps.iter().cloned()).collect()
 }
 
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.
@@ -757,8 +768,7 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             .filter(|l| l.starts_with("harness input:"))
             .cloned()
             .collect();
-        let route = (Some(i) == first_combat).then_some(route_notes.as_slice());
-        r.harness = row_harness(route, &setup_lines, &step_lines);
+        r.harness = row_harness(&route_notes, Some(i) == first_combat, &setup_lines, &step_lines);
         r.new_rows = new_ids(&rows_before, run.row_ids());
         if LINKS[i].steps.is_empty()
             && let Some(need) = LINKS[i].needs.first().and_then(|n| LINKS.iter().position(|l| l.name == *n))
