@@ -94,7 +94,9 @@ In `ow-attr`'s `value_resolvers::targetable`, for the value and the base value a
 **Preflight**, write-free and load-free; the first refusal met is the answer:
 0. a resolver the store has not loaded: `NotRead`, "TargetableAttributeValueResolver: a resolver the store has not
    loaded (a load is a write)". The hub's ruling (review of #783): this note did not read whether the evaluator loads
-   the resolver first, so the get does not load it;
+   the resolver first, so the get does not load it. **Section 5.1 now reads that** (lane
+   ANALYST-EVALUATOR-LOADS-RESOLVER): with the store change it proposes, this step is a guard that the evaluator's
+   path no longer meets;
 1. `ValueToResolve` declared as a byte on the resolver's class, else `VmError::Script`; not 0: **0.0**;
 2. a None context: **0.0**;
 3. a context the store has not loaded (a handle, or a stand-in without its slots): `NotRead`,
@@ -117,6 +119,51 @@ In `ow-attr`'s `value_resolvers::targetable`, for the value and the base value a
 Nothing is written, so no answer carries the partial-writes prefix. The spawn's own writes come before, so a refusal
 here reaches the slice as "stopped after partial writes", as today's does. Add, remove and set-base keep their
 `NotRead`.
+
+### 5.1 Step 0: is the resolver resident with its attribute? (addendum, 2026-11-26)
+
+AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-EVALUATOR-LOADS-RESOLVER (decision 2026-11-26-NNN). Read with Ghidra
+12.1.4, headless and read-only, under the machine lock; raw output under ignored `local/analysis/resid/`. UNVERIFIED in
+the running game.
+
+**What the game's evaluator does.** The attribute-initialization evaluator reaches an attribute's value through two
+walks on the attribute definition (the field places land exactly on `AttributeDefinitionBase`):
+- the context walk over `ContextResolverChain`;
+- the value walk over `ValueResolverChain`.
+
+Each walk takes every non-None entry and calls its resolver's own virtual directly. **Neither walk loads anything,
+and neither checks that an entry is loaded.** The `ResolveContext` and `GetValueFromContext` execs reach the same two
+walks.
+
+**Why that is safe in the game.** The engine has no lazy object handle. The resolver is an object of the attribute's
+own package (here a subobject of `Targetable_Is_Champion`, in `Startup.upk`). It is referenced from the definition's
+chain, so the engine's package load creates and serializes it with the definition, before the definition can be read.
+That load order is the engine's standard package load, by fit, not read in this build. In addition, `Startup.upk` is
+loaded whole at start-up. **The resolver is resident whenever its attribute is**, so the game never meets step 0's
+case.
+
+**Proposed Off answer** (the port's store treats it so):
+- **when `ow-attr` loads an attribute definition** (its `ensure_loaded` on an `AttributeDefinitionBase`, where the
+  evaluator already loads), it loads the resolver objects of the definition's `ContextResolverChain` and
+  `ValueResolverChain` in the same step. That is one load of the definition with its resolvers, no new kind of write:
+  the evaluator was already allowed to load there;
+- **in a load-free scope** (`preflight_read_resident`, `load_free`), nothing changes. A resident attribute whose chain
+  still holds an unloaded handle refuses as today (`NotRead` naming it). Such a state can only come from a definition
+  loaded before this change, or from a synthetic store;
+- **step 0 stays** as a guard for a get reached outside the evaluator's path. On the links' path it is no longer met,
+  since the attribute's load brings the resolver with it;
+- no harness preload is needed: the evaluator's own load of the definition covers it.
+
+**Test sketch** (synthetic, with `package()` / `tag()`):
+1. A toy attribute definition whose `ValueResolverChain` holds a toy `TargetableAttributeValueResolver` export of the
+   same package, both unloaded:
+   - an evaluation loads the definition and the resolver together;
+   - the get answers by section 5 (0.0 on a mind context);
+   - no `NotRead` for step 0.
+2. The same with a `ContextResolverChain` entry: loaded with the definition.
+3. In a load-free scope with the definition resident and the resolver a handle: the existing `NotRead`, nothing loaded.
+4. A None chain entry: skipped by the load, as the game's walks skip it.
+5. #518's counters: the chain loads count with the definition's load, in the scope that allows it.
 
 ## 6. Tests (synthetic fixtures, for the implementing lane)
 
