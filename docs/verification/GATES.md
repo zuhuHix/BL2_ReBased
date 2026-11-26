@@ -66,7 +66,7 @@ targeting's line check from the view point with the HUD as the source, every pri
 the target and its `Base` kept, the bounds step with well-formed values. `cargo test --workspace -j 8 --no-fail-fast`
 4,089 passed / 0 failed / 59 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate` (release build, under
 the machine lock), base #816's head 056260f1 against this change: **9 ok / 14, X = 9.0/14 = 64.3%** (base 8 ok, 60.7%). Link 7
-passes; link 6 still passes; every other row as on main. UNVERIFIED in game. Decision 2026-11-26-NNN.
+passes; link 6 still passes; every other row as on main. UNVERIFIED in game. Decision 2026-11-26-75.
 
 **IMPL-SPAWN-SETBASEVALUE (2026-11-26, pc-hummer, on fix/rust-spawn-setbasevalue, rebased onto main f80b68e, which has
 #808 and #810):** AI-assisted (Claude Code, Opus 5.5). The combat world's set-up preload of the attribute starting
