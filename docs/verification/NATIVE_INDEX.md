@@ -149,7 +149,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.DoesObjectCostToUse | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | cost query behind Can/Pay | UNVERIFIED | medium-high | |
 | WillowPlayerReplicationInfo.GetCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path | UNVERIFIED | high | |
 | WillowPlayerReplicationInfo.AddCurrencyOnHand | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | pay path, rewards | UNVERIFIED | high | |
-| WillowPlayerController.GetPawnInventoryManager | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: weapon equip/reward | UNVERIFIED | high | |
+| WillowPlayerController.GetPawnInventoryManager | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: weapon equip/reward | UNVERIFIED | high | `crates/ow-inventory/src/pickup.rs`, Off: an on-foot pawn's `InvManager`, any other pawn class `NotRead` (decision 2026-11-26-NNN) |
 | WillowPlayerController.PlayUIAkEvent | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | presentation (fanfare sound) | UNVERIFIED | high | src/mission_script.cpp (no-op) |
 | WillowPlayerController.GetLevelForMission | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none | UNVERIFIED | low-medium | |
 | WillowPlayerController.LocalMissionDependenciesMet | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
