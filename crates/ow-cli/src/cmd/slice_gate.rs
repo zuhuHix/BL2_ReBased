@@ -643,6 +643,14 @@ fn bind(step: &str, bound: &[(String, usize)]) -> Result<String, String> {
 }
 
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.
+/// The marker a world set-up harness line carries in a row (lane GATE-SETUP-HARNESS-LINES).
+pub const SETUP_MARK: &str = "world set-up: ";
+
+/// The `harness input:` lines of a world's log before any link ran, each marked with [`SETUP_MARK`].
+pub fn setup_harness(log: &[String]) -> Vec<String> {
+    log.iter().filter(|l| l.starts_with("harness input:")).map(|l| format!("{SETUP_MARK}{l}")).collect()
+}
+
 fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
     let mut route_notes: Vec<String> = Vec::new();
     let mut setup = || -> Result<Run, ow_vm::error::VmError> {
@@ -680,6 +688,9 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             return;
         }
     };
+    // The world's own set-up harness lines (lane GATE-SETUP-HARNESS-LINES): every combat link runs on this one world,
+    // so each combat row carries them, marked as set-up, before its own steps' lines (the PhysX level among them).
+    let setup_lines = setup_harness(&run.world().vm.log);
     let mut bound: Vec<(String, usize)> = Vec::new();
     for i in 0..LINKS.len() {
         if !should_run(i, Driver::Combat, ran) {
@@ -732,6 +743,7 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             .filter(|l| l.starts_with("harness input:"))
             .cloned()
             .collect();
+        r.harness.splice(0..0, setup_lines.iter().cloned());
         if Some(i) == first_combat {
             r.harness.splice(0..0, route_notes.iter().cloned());
         }

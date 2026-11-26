@@ -78,9 +78,13 @@ fn level_prop(vm: &Vm, engine: ObjRef, what: &str) -> Result<ow_object::ids::Pro
     }
 }
 
+/// The harness line [`set_physx_level`] logs for a world with no engine object (lane GATE-SETUP-HARNESS-LINES).
+pub const NO_ENGINE_LINE: &str = "harness input: no engine object; PhysXLevel not set";
+
 /// The harness setting (module documentation): writes `level` into the engine object's `PhysXLevel` and logs it.
-/// Off only. A world with no engine object sets nothing and answers `Ok(false)`; a level outside 0 to 2, or an
-/// undeclared field, is refused before the write.
+/// Off only. A world with no engine object sets nothing, logs [`NO_ENGINE_LINE`] (lane GATE-SETUP-HARNESS-LINES, so
+/// the gate row shows the setting was not made) and answers `Ok(false)`; a level outside 0 to 2, or an undeclared
+/// field, is refused before the write.
 pub fn set_physx_level(vm: &mut Vm, level: i32) -> Result<bool, VmError> {
     let refused = |reason: &'static str| VmError::Registration { key: "PhysXLevel".to_string(), reason };
     if vm.parity == ow_core::ParityMode::Reference {
@@ -90,6 +94,7 @@ pub fn set_physx_level(vm: &mut Vm, level: i32) -> Result<bool, VmError> {
         return Err(refused("the PhysX level must be 0, 1 or 2 (the game's clamped range)"));
     }
     let Some(engine) = engine(vm)? else {
+        vm.log.push(NO_ENGINE_LINE.to_string());
         return Ok(false);
     };
     let p = level_prop(vm, engine, "the PhysX level setting")?;
