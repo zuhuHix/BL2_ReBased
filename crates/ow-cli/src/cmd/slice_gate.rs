@@ -742,6 +742,8 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Opt
             ));
         }
         ow_combat::combat_music::preload_manager_inputs(&mut world.vm)?;
+        // The dialog globals `AddKillStreakScore` reads (lane IMPL-LINKS-3-4-TAIL; a logged UNVERIFIED harness input).
+        ow_combat::links34_tail::preload_dialog_globals(&mut world.vm)?;
         // Lane IMPL-PLAYER-PAWN-FLAG: the player set-up's Pawn, deferred until #805's three natives, is on (UNVERIFIED;
         // it logs its own set-up line).
         ow_combat::run::enable_player_pawn_during_set_up(&mut world.vm)?;

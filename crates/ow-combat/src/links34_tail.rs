@@ -234,6 +234,41 @@ pub fn dialog_globals(vm: &Vm) -> Result<Option<ObjRef>, VmError> {
     Ok(is_a(vm, dialog, "WillowGame.WillowDialogGlobalsDefinition")?.then_some(dialog))
 }
 
+/// The harness line of [`preload_dialog_globals`].
+pub fn dialog_input_line(path: &str) -> String {
+    format!("harness input: preload {path} (the globals definition's Dialog, which the game keeps resident; UNVERIFIED)")
+}
+
+/// The combat world's set-up for [`dialog_globals`] (Off only): the globals definition's `Dialog` loaded when it is a
+/// handle the store has not loaded, logged ([`dialog_input_line`]); a failed load logged and left, so `Get`'s own
+/// refusal shows it. The number loaded. The same shape as the combat music manager's inputs (#808).
+pub fn preload_dialog_globals(vm: &mut Vm) -> Result<usize, VmError> {
+    const WHAT: &str = "the dialog globals' set-up";
+    if vm.parity != ParityMode::Off {
+        return Ok(0);
+    }
+    let Some(globals) = world_globals(vm)? else { return Ok(0) };
+    let Some(definition) = object(vm, globals, "TheGlobalsDefinition", WHAT)? else { return Ok(0) };
+    if vm.defs.is_unloaded(&vm.space, definition) || vm.defs.is_failed(&vm.space, definition) {
+        return Ok(0);
+    }
+    let Some(dialog) = object(vm, definition, "Dialog", WHAT)? else { return Ok(0) };
+    if !vm.defs.is_unloaded(&vm.space, dialog) {
+        return Ok(0);
+    }
+    let name = vm.defs.handle_path(dialog).unwrap_or_else(|| path(vm, dialog));
+    vm.log.push(dialog_input_line(&name));
+    let r = vm.defs.ensure_loaded(&mut vm.space, dialog);
+    vm.log.extend(vm.defs.take_log());
+    match r {
+        Ok(()) => Ok(1),
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {name}: failed ({e})"));
+            Ok(0)
+        }
+    }
+}
+
 /// Binds the natives in Off (keep-existing).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {

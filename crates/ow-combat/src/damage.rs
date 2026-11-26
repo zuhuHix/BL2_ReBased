@@ -519,8 +519,23 @@ fn adjust_damage_stages(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         }
     }
 
-    // 10. Shield: a victim with a valid shield pool is not modelled (said when it would apply).
-    if let Some(v) = victim
+    // 10, Off: the shield stage's plan (lane IMPL-LINKS-3-4-TAIL, NATIVE_LINKS_3_4_TAIL.md section 9); its pool write
+    // waits for stage 15's decision at the end of the pass, so a refusal of either writes nothing of both.
+    let mut shield_plan = None;
+    if vm.parity == ParityMode::Off
+        && let Some(v) = victim
+    {
+        let before = damage;
+        shield_plan = crate::shield_stage::plan_shield(vm, v, instigator, player_instigator, type_definition, damage)?;
+        if let Some(p) = &shield_plan {
+            damage = p.carry;
+            store(vm, &mut summary, "ShieldReduction", Value::Float(before - damage));
+            store(vm, &mut summary, "DamageDealtToShields", Value::Float(p.absorbed));
+        }
+    }
+    // 10 in Reference: a victim with a valid shield pool is not modelled (said when it would apply).
+    if vm.parity == ParityMode::Reference
+        && let Some(v) = victim
         && let Some(shield) = get(vm, v, "ShieldArmor")?
         && let Ok(r) = ow_world::pools::read_ref(&vm.space, &shield)
         && ow_world::pools::resolve(&vm.space, r)?.1.is_some()
@@ -532,8 +547,10 @@ fn adjust_damage_stages(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             Gap::NotPorted,
         )?;
     }
-    store(vm, &mut summary, "ShieldReduction", Value::Float(0.0));
-    store(vm, &mut summary, "DamageDealtToShields", Value::Float(0.0));
+    if shield_plan.is_none() {
+        store(vm, &mut summary, "ShieldReduction", Value::Float(0.0));
+        store(vm, &mut summary, "DamageDealtToShields", Value::Float(0.0));
+    }
 
     // Intrinsic armor: damage / (1 + 0.01 x the victim's IntrinsicArmor attribute) (section 3.3).
     {
@@ -631,7 +648,22 @@ fn adjust_damage_stages(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             Gap::NotPorted,
         )?;
     }
-    if is_player_controller(vm, victim_mind)? && instigator.is_some() && !player_instigator {
+    // 15, Off: the protection timer (lane IMPL-LINKS-3-4-TAIL), then stage 10's pool write.
+    if vm.parity == ParityMode::Off {
+        if let Some(v) = victim
+            && is_player_controller(vm, victim_mind)?
+            && instigator.is_some()
+            && !player_instigator
+        {
+            let before = damage;
+            damage = crate::shield_stage::protection(vm, v, damage, health, max_health)?;
+            store(vm, &mut summary, "ProtectionTimerReduction", Value::Float(before - damage));
+        }
+        if let Some(p) = &shield_plan {
+            crate::shield_stage::commit_shield(vm, p)?;
+        }
+    }
+    if vm.parity == ParityMode::Reference && is_player_controller(vm, victim_mind)? && instigator.is_some() && !player_instigator {
         left_out(
             vm,
             Some("protection"),
