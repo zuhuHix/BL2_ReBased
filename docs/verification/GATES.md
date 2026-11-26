@@ -9,7 +9,7 @@ order. `script_disasm.py --arg-check` (installed, counts only): 12,978 functions
 resolved, 0 with an extra argument (5 with four operands). `tests/script_disasm_test.py` OK. Installed Off strict
 `--slice-gate` (release build, under the machine lock), base 1709b8a8 and this change: 6 ok / 8 NotYet on both.
 Links 6 and 7 move from `touch`'s bounds template `NotRead` to `make`'s "new: instancing a template's components", so
-the step share goes from 47.0% to 42.9%; every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-NNN.
+the step share goes from 47.0% to 42.9%; every other row is unchanged. UNVERIFIED in game. Decision 2026-11-26-05.
 
 **IMPL-INITIALIZE-BEHAVIOR-PROVIDERS (2026-11-26, pc-hummer, on fix/rust-initialize-behavior-providers from main
 4c01c9a1):** AI-assisted (Claude Code, Opus 5.5). From NATIVE_INITIALIZE_BEHAVIOR_PROVIDERS.md in Off:

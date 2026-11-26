@@ -43,7 +43,7 @@ can carry a mesh:
    *Read 2026-11-26 in NATIVE_TOUCH_COMPONENT_TEMPLATE.md section 3 (decision 2026-11-26-02): the game's handler
    reads five operands, and a census of the packages fits that count.*
 
-   *Changed 2026-11-26 (lane NEW-FIVE-OPERANDS, decision 2026-11-26-NNN), so the four-operand reading above no longer
+   *Changed 2026-11-26 (lane NEW-FIVE-OPERANDS, decision 2026-11-26-05), so the four-operand reading above no longer
    holds:*
    - *both decoders read five operands. The argument-count check (`research/script_disasm.py --arg-check`) finds 0
      calls with an extra argument, and the same 12,968 of 12,978 functions decode. The template is now the fifth
