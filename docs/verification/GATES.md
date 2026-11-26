@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**MAYA9-SKIPPED-FLAG-LAYERABSENT (2026-11-26, pc-hummer, on fix/maya9-skipped-flag-layerabsent, stacked on #781 @
+9c41966):** AI-assisted (Claude Code, Opus 5.5). `FlagDefinition.ApplyFlagInitializationData` answers `LayerAbsent`
+when its `const out` argument aliases a property the store skipped (new read-only `NativeCall::arg_property`).
+`cargo test -p ow-combat -p ow-vm -j 8` 542 passed / 0 failed / 3 ignored; `crate_edges_test.py` OK. No slice-gate
+run: Maya's `DesignerFlagStartingValues` decodes, and link 1 stops before row 12. UNVERIFIED in game. Decision
+2026-11-26-NNN.
+
 **IMPL-MAYA9-NATIVES (2026-11-26, pc-hummer, on fix/rust-maya9-natives, rebased onto main 1fed25cc):** AI-assisted (Claude
 Code, Opus 5.5). `WillowPlayerPawn.SetDefaultStance` / `WillowPawn.SetDefaultStance`, the `ShieldResourcePool`
 idle-reset hook, `FlagDefinition.ApplyFlagInitializationData` and
