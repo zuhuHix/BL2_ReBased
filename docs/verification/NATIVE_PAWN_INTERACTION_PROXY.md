@@ -85,9 +85,11 @@ This replaces NATIVE_GO_DOWN_PATH.md 4.1's outline, whose two unread steps are 2
     prefix;
 - **commit:** the two cylinder writes, the reattach, the event, then `bNetDirty`. A refusal after the first write
   carries the prefix;
-- **for the hub, a possible stand-in:** a touch update that finds nothing, behind an Off-only slice harness setting,
-  logged and UNVERIFIED, as the base search's stand-in is (ruling on review of #798). For the proxy just spawned on Maya
-  in the combat world, nothing else collides near her at `maya:8`.
+- **hub ruling (review of #802): a "nothing touched" stand-in, behind a setting.** Under an Off-only slice harness
+  setting, the touch update finds nothing: no touch begins or ends, and one harness-input log line is written. It is
+  UNVERIFIED, as the base search's stand-in is (ruling on review of #798). Without the setting it stays the
+  `LayerAbsent` above. Reference is unchanged. For the proxy just spawned on Maya in the combat world, nothing else
+  collides near her at `maya:8`.
 
 ## 4. `Actor.SetHardAttach(optional bNewHardAttach)`
 
@@ -168,7 +170,8 @@ Without the touch-update stand-in, the first stop is section 3's `LayerAbsent`.
    - a toy actor with a `CylinderComponent` as its `CollisionComponent`:
      - the two sizes, `bNeedsReattach`, the event and `bNetDirty`, in order;
      - with no collision service: the `LayerAbsent`, nothing written;
-     - with the stand-in setting on: as above with one harness-input log line;
+     - (hub ruling) with the stand-in setting on: the writes as above, no touch begun or ended, and one
+       harness-input log line; with it off, the `LayerAbsent`; Reference with the setting on: unchanged;
    - a non-cylinder `CollisionComponent`: no size write, then the rest;
    - a mistyped field: `VmError::Script`.
 2. **`SetHardAttach`:**
@@ -191,7 +194,8 @@ Without the touch-update stand-in, the first stop is section 3's `LayerAbsent`.
    - the two cylinder fields' places;
    - the event's name;
    - the touch update's identity.
-4. **For the hub:** the touch-update stand-in (section 3).
+4. **Ruled by the hub on #802:** the touch update's "nothing touched" stand-in, behind an Off-only harness setting
+   (section 3).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 

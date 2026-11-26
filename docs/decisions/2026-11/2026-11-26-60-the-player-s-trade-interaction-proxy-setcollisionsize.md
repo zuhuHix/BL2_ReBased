@@ -29,5 +29,6 @@ dependency, and no bounds check changed.
   - `SetBase` on the proxy is `Actor`'s body: NATIVE_ACTOR_SETBASE.md's rule with an eighth table, and an exact
     identity case for the hard-attached relative pose.
 - **Next** (from the probe): the class-level part of #796 section 3, which lane E is implementing.
-- **Needs the hub:** whether the touch update may be a "nothing touched" stand-in behind an Off-only harness setting.
+- **Hub ruling (review of #802):** the touch update may be a "nothing touched" stand-in behind an Off-only slice
+  harness setting, logged and UNVERIFIED; without the setting it stays `LayerAbsent`; Reference is unchanged.
 - **Clean room:** a different lane implements this note.
